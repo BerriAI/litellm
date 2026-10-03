@@ -15,17 +15,28 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, ParamSpec, TypeVar
 
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
+    from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
 
+    from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
+    from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.mcp_server.tool_registry import MCPTool
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_Page = TypeVar("_Page", bound="PaginatedResult")
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_OUTCOME_VALUES: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(dict[str, JsonValue])
 
 
 class _OperationRoutes(UserDict[str, str]):
@@ -95,7 +106,7 @@ def _snapshot(manager: MCPServerManager, database_identity: str) -> CatalogSnaps
     )
 
 
-class TargetCatalog:
+class CatalogSnapshots:
     def __init__(self, manager: MCPServerManager) -> None:
         self.manager = manager
         self._refresh_lock = asyncio.Lock()
@@ -576,3 +587,845 @@ def global_manager() -> MCPServerManager:
 
 def public_catalog_operation(function: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
     return catalog_operation(global_manager)(function)
+
+
+async def paginate_catalog(
+    *,
+    method: str,
+    cursor: str | None,
+    caller_scope: str,
+    snapshot: str,
+    server_ids: tuple[str, ...],
+    fetch: Callable[[str, str | None], Awaitable[_Page]],
+    now: int,
+) -> tuple[tuple[_Page, ...], str | None, Mapping[str, JsonValue]]:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_PARAMS
+    from pydantic import ValidationError
+
+    from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+    from litellm.proxy._experimental.mcp_server.state_tokens import open_state, seal_state
+
+    ordered: Final = tuple(sorted(server_ids))
+    purpose: Final = "mcp.catalog.list.v1:" + method
+    if cursor is None:
+        state = _ListingState(
+            caller_scope=caller_scope,
+            snapshot=snapshot,
+            expires_at=now + 600,
+            positions=tuple(_UpstreamPosition(server_id=server_id) for server_id in ordered),
+        )
+    else:
+        opened: Final = open_state(cursor, purpose=purpose, now=now)
+        if isinstance(opened, Error):
+            raise MCPError(code=INVALID_PARAMS, message=opened.error.value)
+        try:
+            state = _ListingState.model_validate_json(json.dumps(opened.ok))
+        except ValidationError as error:
+            raise MCPError(code=INVALID_PARAMS, message="Invalid pagination state; start a fresh listing") from error
+        if (
+            state.caller_scope != caller_scope
+            or state.snapshot != snapshot
+            or tuple(position.server_id for position in state.positions) != ordered
+            or state.expires_at <= now
+        ):
+            raise MCPError(code=INVALID_PARAMS, message="Pagination scope or snapshot changed; start a fresh listing")
+
+    async def advance(position: _UpstreamPosition) -> tuple[_UpstreamPosition, _Page | None]:
+        if position.complete:
+            return position, None
+        result: Final = await fetch(position.server_id, position.cursor)
+        revision: Final = (result.meta or {}).get("revision")
+        available_revision: Final = revision if isinstance(revision, (str, int)) else None
+        if position.revision is not None and position.revision != available_revision:
+            raise MCPError(code=INVALID_PARAMS, message="Upstream snapshot changed; start a fresh listing")
+        following: Final = result.next_cursor or None
+        fingerprint: Final = hashlib.sha256(following.encode()).hexdigest() if following is not None else None
+        if fingerprint in position.seen:
+            raise MCPError(code=INVALID_PARAMS, message="Upstream repeated a pagination cursor; start a fresh listing")
+        if following is not None and len(position.seen) + 1 >= MCP_TOOL_LISTING_MAX_PAGES:
+            raise MCPError(code=INVALID_PARAMS, message="Upstream pagination limit reached; start a fresh listing")
+        return (
+            _UpstreamPosition(
+                server_id=position.server_id,
+                cursor=following,
+                complete=following is None,
+                revision=available_revision,
+                seen=position.seen + ((fingerprint,) if fingerprint is not None else ()),
+            ),
+            result,
+        )
+
+    results: Final = tuple([await advance(position) for position in state.positions])
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
+    pages: Final = tuple(result for _, result in results if result is not None)
+    page_outcomes: Final = (
+        _OUTCOME_VALUES.validate_python((result.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})) for result in pages
+    )
+    outcomes: Final = dict(state.failures) | dict(chain.from_iterable(outcome.items() for outcome in page_outcomes))
+    failures: Final = {
+        key: value for key, value in outcomes.items() if isinstance(value, dict) and value.get("tag") != "ok"
+    }
+    following_state: Final = state.model_copy(
+        update={
+            "positions": tuple(position for position, _ in results),
+            "failures": failures,
+        }
+    )
+    next_cursor: str | None = None
+    if any(not position.complete for position in following_state.positions):
+        sealed: Final = seal_state(
+            _JSON_VALUE.validate_json(following_state.model_dump_json()),
+            purpose=purpose,
+            expires_at=following_state.expires_at,
+            now=now,
+        )
+        if isinstance(sealed, Error):
+            raise MCPError(code=INVALID_PARAMS, message=sealed.error.value)
+        next_cursor = sealed.ok
+    return pages, next_cursor, MappingProxyType(outcomes)
+
+
+async def list_tools_page(
+    *,
+    cursor: str | None,
+    caller_scope: str,
+    snapshot: str,
+    server_ids: tuple[str, ...],
+    fetch: Callable[[str, str | None], Awaitable[ListToolsResult]],
+    now: int,
+) -> ListToolsResult:
+    from mcp.types import ListToolsResult
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
+    pages, next_cursor, outcomes = await paginate_catalog(
+        method="tools/list",
+        cursor=cursor,
+        caller_scope=caller_scope,
+        snapshot=snapshot,
+        server_ids=server_ids,
+        fetch=fetch,
+        now=now,
+    )
+    return ListToolsResult(
+        tools=list(chain.from_iterable(page.tools for page in pages)),
+        next_cursor=next_cursor,
+        _meta={SERVER_OUTCOMES_META_KEY: dict(outcomes)} if outcomes else None,
+    )
+
+
+class _UpstreamPosition(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    server_id: str
+    cursor: str | None = None
+    complete: bool = False
+    revision: str | int | None = None
+    seen: tuple[str, ...] = ()
+
+
+class _ListingState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    caller_scope: str
+    snapshot: str
+    expires_at: int
+    positions: tuple[_UpstreamPosition, ...]
+    failures: Mapping[str, JsonValue] = {}
+
+
+async def get_server_tools(
+    manager: MCPServerManager,
+    server: MCPServer,
+    mcp_auth_header: str | dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    add_prefix: bool = True,
+    raw_headers: dict[str, str] | None = None,
+    user_api_key_auth: UserAPIKeyAuth | None = None,
+    oauth2_headers: dict[str, str] | None = None,
+    client_ip: str | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    params: PaginatedRequestParams | None = None,
+) -> ListToolsResult:
+
+    from fastapi import HTTPException
+    from mcp.types import ListToolsResult
+
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError, MCPUpstreamAuthError
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        ServerListFault,
+        raise_classified_list_failure,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import upstream_failure_suffix
+    from litellm.proxy._experimental.mcp_server.tool_registry import (
+        global_mcp_tool_registry,
+    )
+    from litellm.proxy._experimental.mcp_server.utils import (
+        MCP_TOOL_PREFIX_SEPARATOR,
+        get_server_prefix,
+        normalize_server_name,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    if manager.skip_blocked_stdio_listing(server, "tool"):
+        return ListToolsResult(tools=[])
+
+    verbose_logger.debug("Connecting to url: %s", server.url)
+    verbose_logger.info("_get_tools_from_server for %s...", server.name)
+
+    client = None
+
+    try:
+        # Tool *listing* must not be blocked by missing per-user env vars —
+        # the server's tools should still appear so the client connects. The
+        # friendly "missing vars" error is raised only on the tool-*call*
+        # path (see _call_regular_mcp_tool).
+        resolved_static_headers: Final = await manager.resolve_static_headers_with_env_vars(
+            server, user_api_key_auth, raise_on_missing=False
+        )
+        if resolved_static_headers:
+            if extra_headers is None:
+                extra_headers = {}
+            extra_headers.update(resolved_static_headers)
+
+        # MCPJWTSigner: inject signed JWT for tools/list (the catalog scan's pre_call_hook
+        # carries no extra_headers bag, which the signer treats as not its call).
+        # Skip entirely when the signer is not configured (avoid an unnecessary
+        # dict copy on every list call), when the server has its own static
+        # Authorization header, when a per-user mcp_auth_header has already
+        # been resolved, or when the caller already supplied an Authorization
+        # entry in extra_headers (e.g. a per-user OAuth token resolved
+        # upstream) — admin-configured static auth and per-user OAuth must
+        # take precedence so the signer doesn't silently overwrite e.g. an
+        # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
+        # applies extra_headers after writing Authorization from auth_value, so
+        # an injected JWT would otherwise clobber the per-user token).
+        if user_api_key_auth is not None and not server.spec_path:
+            from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+                get_mcp_jwt_signer,
+                inject_mcp_jwt_headers_for_upstream,
+            )
+
+            static_headers: Final = server.static_headers or {}
+            has_static_authorization: Final = any(
+                isinstance(k, str) and k.lower() == "authorization" for k in static_headers
+            )
+            has_extra_authorization: Final = bool(extra_headers) and any(
+                isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
+            )
+
+            if (
+                get_mcp_jwt_signer() is not None
+                and not has_static_authorization
+                and not mcp_auth_header
+                and not has_extra_authorization
+            ):
+                extra_headers = await inject_mcp_jwt_headers_for_upstream(
+                    user_api_key_dict=user_api_key_auth,
+                    extra_headers=extra_headers,
+                    raw_headers=raw_headers,
+                    for_list_tools=True,
+                )
+
+        stdio_env: Final = manager.build_stdio_env(server, raw_headers)
+
+        # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
+        # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
+        # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
+        subject_token: Final = (
+            manager.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+            if server.auth_type == MCPAuth.oauth2_token_exchange
+            else None
+        )
+
+        client = await manager.create_mcp_client(
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+            stdio_env=stdio_env,
+            subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+
+        ## HANDLE OPENAPI TOOLS
+        if server.spec_path:
+            # OpenAPI tools were stored in the registry under the prefix
+            # active at registration time — fetch by that same prefix.
+            registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
+            registered: Final = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
+                global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix)
+            )
+            registered_names: Final = MappingProxyType(
+                {t.name.removeprefix(registry_prefix): t.name for t in registered}
+            )
+            guarded_openapi: Final = await manager.guard_tool_catalog(
+                server=server,
+                tools=[t.model_copy(update={"name": t.name.removeprefix(registry_prefix)}) for t in registered],
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+            )
+            # OpenAPI tools are stored in the registry with their prefix already
+            # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
+            # through create_prefixed_tools — that would add the prefix a second
+            # time producing "test_petstore-test_petstore-getinventory".
+            if not add_prefix:
+                return ListToolsResult(tools=list(guarded_openapi))
+            return ListToolsResult(
+                tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
+            )
+        else:
+            page: Final = (
+                await client.list_tools_page(params)
+                if params is not None
+                else ListToolsResult(tools=await manager.fetch_tools_with_timeout(client, server.name))
+            )
+            tools = page.tools
+            manager.remember_upstream_initialize_instructions(server, client)
+
+        guarded_tools: Final = await manager.guard_tool_catalog(
+            server=server,
+            tools=tools,
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+        )
+        from litellm.proxy._experimental.mcp_server.result_conversion import to_gateway_tool
+        from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name
+
+        prefixed_or_original_tools: Final = (
+            manager.create_prefixed_tools(list(guarded_tools), server, add_prefix=add_prefix)
+            if params is None
+            else [
+                to_gateway_tool(
+                    tool, add_server_prefix_to_name(tool.name, get_server_prefix(server)) if add_prefix else tool.name
+                )
+                for tool in guarded_tools
+            ]
+        )
+
+        return page.model_copy(update={"tools": prefixed_or_original_tools})
+
+    except MCPUpstreamAuthError as upstream_auth_error:
+        # Pass-through 401 must surface to single-server routes so the
+        # client triggers the upstream OAuth flow. The multi-server
+        # aggregator catches this explicitly to keep absorbing.
+        if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
+            raise MCPUpstreamAuthError(
+                status_code=upstream_auth_error.status_code,
+                www_authenticate=None,
+                server_name=upstream_auth_error.server_name,
+            ) from upstream_auth_error
+        raise
+    except HTTPException as e:
+        # A v2 resolver auth challenge (token_exchange's RFC 9728 401, authorization_code's
+        # browser-OAuth 401, or a 403) is raised at client-build time, inside this try. Route it
+        # through the same MCPUpstreamAuthError channel as pass-through so single-server routes
+        # surface the challenge (the client re-authenticates) while the aggregator keeps absorbing.
+        # Non-auth HTTP errors stay absorbed so one misconfigured server can't blank the listing.
+        if e.status_code in (401, 403):
+            headers: Final = e.headers or {}
+            challenge_header: Final = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
+            raise MCPUpstreamAuthError(
+                status_code=e.status_code,
+                www_authenticate=None if server.is_dcr_bridge else challenge_header,
+                server_name=server.name,
+            ) from e
+        verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
+        raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
+    except MCPServerListError:
+        raise
+    except Exception as e:
+        verbose_logger.warning(
+            "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, upstream_failure_suffix(e)
+        )
+        raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
+
+
+async def get_filtered_server_tools(
+    server: MCPServer,
+    *,
+    context: OperationContext,
+    allowed_mcp_servers: Sequence[MCPServer],
+    prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload],
+    params: PaginatedRequestParams | None = None,
+) -> tuple[ListToolsResult, ServerOutcome]:
+    from mcp.types import ListToolsResult
+
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk, classify_list_exception
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _get_byok_credential,
+        _get_user_oauth_extra_headers_from_db,
+        _prepare_mcp_server_headers,
+        apply_display_name_overrides,
+        filter_tools_by_allowed_tools,
+        filter_tools_by_key_team_permissions,
+        global_mcp_server_manager,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    user_api_key_auth, mcp_auth_header, _, mcp_server_auth_headers, oauth2_headers, raw_headers, client_ip = (
+        context.legacy_auth()
+    )
+    mcp_proxy_mode: Final = context.mcp_proxy_mode
+    if server is None:
+        return ListToolsResult(tools=[]), ServerListOk(tool_count=0)
+
+    server_auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        mcp_auth_header=mcp_auth_header,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+        scope_servers=list(allowed_mcp_servers),
+    )
+
+    # Prefer server-stored per-user OAuth when configured, so a stale
+    # Authorization header from the MCP client cannot override Redis/DB
+    # (same issue as call_tool in mcp_server_manager: VS Code caches tokens).
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+        to_server_spec,
+    )
+
+    # A server migrated to the v2 resolver gets its token from the resolver at connect
+    # time; building it here would double-resolve and be shadowed by the v2 graft. The
+    # preemptive 401 already challenged a missing token, so one exists for the connect.
+    migrated_to_v2: Final = to_server_spec(server) is not None
+    if (
+        not migrated_to_v2
+        and server.auth_type == MCPAuth.oauth2
+        and getattr(server, "needs_user_oauth_token", False)
+        and user_api_key_auth is not None
+    ):
+        db_headers: Final = await _get_user_oauth_extra_headers_from_db(
+            server,
+            user_api_key_auth,
+            prefetched_creds=prefetched_oauth_creds,
+        )
+        if db_headers:
+            extra_headers = db_headers
+
+    # If still no OAuth2 token, fall back to pre-fetched creds (non-stale-client path)
+    elif not migrated_to_v2 and extra_headers is None and server.auth_type == MCPAuth.oauth2:
+        extra_headers = await _get_user_oauth_extra_headers_from_db(
+            server,
+            user_api_key_auth,
+            prefetched_creds=prefetched_oauth_creds,
+        )
+
+    if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
+        server_auth_header = await _get_byok_credential(server, user_api_key_auth)
+
+    try:
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        if params is None:
+            page = ListToolsResult(
+                tools=await global_mcp_server_manager._get_tools_from_server(
+                    server=server,
+                    mcp_auth_header=server_auth_header,
+                    extra_headers=extra_headers,
+                    add_prefix=True,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                    user_api_key_auth=user_api_key_auth,
+                    oauth2_headers=oauth2_headers,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            )
+        else:
+            page = await get_server_tools(
+                global_mcp_server_manager,
+                server=server,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                add_prefix=True,  # Always add server prefix
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+                user_api_key_auth=user_api_key_auth,
+                oauth2_headers=oauth2_headers,
+                proxy_logging_obj=proxy_logging_obj,
+                params=params,
+            )
+        tools: Final = page.tools
+        filtered_tools = filter_tools_by_allowed_tools(tools, server)
+
+        filtered_tools = await filter_tools_by_key_team_permissions(
+            tools=filtered_tools,
+            server_id=server.server_id,
+            user_api_key_auth=user_api_key_auth,
+        )
+
+        if mcp_proxy_mode:
+            from litellm.proxy._experimental.mcp_server.tool_search import with_mcp_proxy_identity
+
+            filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
+        else:
+            filtered_tools = apply_display_name_overrides(filtered_tools, server)
+
+        verbose_logger.debug(
+            "Successfully fetched %s tools from server %s, %s after filtering",
+            len(tools),
+            server.name,
+            len(filtered_tools),
+        )
+        return page.model_copy(update={"tools": filtered_tools}), ServerListOk(tool_count=len(filtered_tools))
+    except MCPUpstreamAuthError as e:
+        # Absorb so one unauthenticated server does not empty every other server's
+        # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
+        # intentionally not done here: raising from this list handler cannot produce a
+        # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
+        # error). Single-server routes surface it via the request-scope preemptive
+        # check in _raise_preemptive_401_for_unauthenticated_servers instead.
+        verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
+        return ListToolsResult(tools=[]), classify_list_exception(e)
+    except Exception as e:
+        verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
+        return ListToolsResult(tools=[]), classify_list_exception(e)
+
+
+def _caller_scope(context: OperationContext, servers: Sequence[MCPServer]) -> str:
+    from litellm.proxy._experimental.mcp_server.utils import upstream_credential_headers
+
+    caller: Final = context.user_api_key_auth
+    headers: Final = context.raw_headers or {}
+    credential_names: Final = (
+        upstream_credential_headers(headers)
+        | frozenset({"authorization"})
+        | frozenset(map(str.lower, chain.from_iterable(server.extra_headers or () for server in servers)))
+    )
+    material: Final = (
+        caller.model_dump(include={"api_key", "user_id", "team_id", "org_id", "end_user_id", "user_role"}, mode="json")
+        if caller is not None
+        else None,
+        tuple(sorted(context.mcp_servers)) if context.mcp_servers is not None else None,
+        context.mcp_auth_header,
+        {key: dict(value) for key, value in (context.mcp_server_auth_headers or {}).items()},
+        dict(context.oauth2_headers or {}),
+        {key.lower(): value for key, value in headers.items() if key.lower() in credential_names},
+        context.client_ip,
+        context.protocol_version,
+        context.mcp_proxy_mode,
+    )
+    return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+async def aggregate_gateway_tools(
+    context: OperationContext,
+    params: PaginatedRequestParams,
+    allowed: Sequence[MCPServer],
+    prefetched: Mapping[str, OAuthCredentialPayload],
+) -> AggregateToolListing:
+    import time
+
+    from mcp.types import PaginatedRequestParams
+    from pydantic import TypeAdapter
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+        SERVER_OUTCOMES_META_KEY,
+        AggregateToolListing,
+        ServerOutcome,
+    )
+    from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key, global_mcp_server_manager
+
+    async with global_mcp_server_manager.catalog.operation() as snapshot:
+        servers: Final = {server.server_id: server for server in allowed}
+
+        async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+            result, outcome = await get_filtered_server_tools(
+                servers[server_id],
+                context=context,
+                allowed_mcp_servers=allowed,
+                prefetched_oauth_creds=prefetched,
+                params=PaginatedRequestParams(cursor=cursor),
+            )
+            if cursor is not None and outcome.tag != "ok":
+                from mcp.shared.exceptions import MCPError
+                from mcp.types import INVALID_PARAMS
+
+                raise MCPError(code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing")
+            return result.model_copy(
+                update={
+                    "meta": {
+                        **(result.meta or {}),
+                        SERVER_OUTCOMES_META_KEY: {
+                            _aggregate_server_key(servers[server_id]): outcome.model_dump(mode="json")
+                        },
+                    }
+                }
+            )
+
+        result: Final = await list_tools_page(
+            cursor=params.cursor,
+            caller_scope=_caller_scope(context, allowed),
+            snapshot=snapshot.identity,
+            server_ids=tuple(servers),
+            fetch=fetch,
+            now=int(time.time()),
+        )
+        return AggregateToolListing(
+            tools=result.tools,
+            outcomes=TypeAdapter(dict[str, ServerOutcome]).validate_python(
+                (result.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})
+            ),
+            next_cursor=result.next_cursor,
+        )
+
+
+async def list_gateway_tools(
+    context: OperationContext, params: PaginatedRequestParams, *, log_list_tools_to_spendlogs: bool = True
+) -> ListToolsResult:
+    from mcp.types import ListToolsResult
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY, outcome_wire_value
+    from litellm.proxy._experimental.mcp_server.operations import _list_mcp_tools
+
+    caller, auth, servers, server_headers, oauth_headers, headers, client_ip = context.legacy_auth()
+    listing: Final = await _list_mcp_tools(
+        user_api_key_auth=caller,
+        mcp_auth_header=auth,
+        mcp_servers=servers,
+        mcp_server_auth_headers=server_headers,
+        oauth2_headers=oauth_headers,
+        raw_headers=headers,
+        client_ip=client_ip,
+        params=params,
+        protocol_version=context.protocol_version,
+        log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
+        list_tools_log_source="mcp_protocol",
+    )
+    return ListToolsResult(
+        tools=listing.tools,
+        next_cursor=listing.next_cursor,
+        _meta={
+            SERVER_OUTCOMES_META_KEY: {key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()}
+        }
+        if listing.outcomes
+        else None,
+    )
+
+
+async def prepare_optional_list_client(
+    manager: MCPServerManager,
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    *,
+    mcp_auth_header: str | dict[str, str] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    raw_headers: dict[str, str] | None = None,
+    client_ip: str | None = None,
+) -> tuple[MCPClient, tuple[str, str | None]]:
+    headers: Final = (
+        dict(
+            chain(
+                extra_headers.items() if extra_headers else (),
+                server.static_headers.items() if server.static_headers else (),
+            )
+        )
+        or None
+    )
+    stdio_env: Final = manager.build_stdio_env(server, raw_headers)
+    subject_token: Final = manager.obo_subject_token(server, raw_headers, user_api_key_auth)
+    client: Final = await manager.create_mcp_client(
+        server=server,
+        mcp_auth_header=mcp_auth_header,
+        extra_headers=headers,
+        stdio_env=stdio_env,
+        subject_token=subject_token,
+        user_api_key_auth=user_api_key_auth,
+        raw_headers=raw_headers,
+        client_ip=client_ip,
+    )
+    credential_fingerprint: Final = await client.discovery_auth_fingerprint()
+    key: Final = manager.discovery_key(
+        server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+    )
+    return client, key
+
+
+async def list_gateway_catalog(
+    context: OperationContext, request: CatalogListRequest, *, log_list_tools_to_spendlogs: bool = True
+) -> CatalogListResult:
+    import time
+
+    from mcp.types import (
+        ListToolsRequest,
+        PaginatedRequestParams,
+    )
+
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._experimental.mcp_server.operations import (
+        _get_allowed_mcp_servers,
+        global_mcp_server_manager,
+        raise_denied_scoped_mcp_access,
+    )
+
+    context = replace(context, _caller=await MCPRequestHandler.refresh_catalog_authority(context.user_api_key_auth))
+    params: Final = request.params or PaginatedRequestParams()
+    if isinstance(request, ListToolsRequest):
+        return await list_gateway_tools(context, params, log_list_tools_to_spendlogs=log_list_tools_to_spendlogs)
+    caller: Final = context.user_api_key_auth
+    scope: Final = context.mcp_servers
+    client_ip: Final = context.client_ip
+    async with global_mcp_server_manager.catalog.operation() as snapshot:
+        allowed: Final = await _get_allowed_mcp_servers(
+            user_api_key_auth=caller, mcp_servers=scope, client_ip=client_ip
+        )
+        if scope and not allowed:
+            await raise_denied_scoped_mcp_access(
+                requested_names=list(scope), user_api_key_auth=caller, client_ip=client_ip
+            )
+        servers: Final = {server.server_id: server for server in allowed}
+
+        async def fetch(server_id: str, cursor: str | None) -> CatalogListResult:
+            server: Final = servers[server_id]
+            from mcp.shared.exceptions import MCPError
+            from mcp.types import INVALID_PARAMS
+
+            from litellm.proxy._experimental.mcp_server.faults.list_outcomes import classify_list_exception
+            from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key
+
+            try:
+                return await fetch_optional_catalog_page(context, request, server, allowed, cursor)
+            except Exception as error:
+                if cursor is not None:
+                    raise MCPError(
+                        code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing"
+                    ) from error
+                return combine_optional_catalog(
+                    request,
+                    (),
+                    None,
+                    {
+                        "litellm.ai/server_outcomes": {
+                            _aggregate_server_key(server): classify_list_exception(error).model_dump(mode="json")
+                        }
+                    },
+                )
+
+        pages, next_cursor, outcomes = await paginate_catalog(
+            method=request.method,
+            cursor=params.cursor,
+            caller_scope=_caller_scope(context, allowed),
+            snapshot=snapshot.identity,
+            server_ids=tuple(servers),
+            fetch=fetch,
+            now=int(time.time()),
+        )
+        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+            SERVER_OUTCOMES_META_KEY,
+            ServerOutcome,
+            outcome_wire_value,
+        )
+
+        typed_outcomes: Final = TypeAdapter(dict[str, ServerOutcome]).validate_python(outcomes)
+        return combine_optional_catalog(
+            request,
+            pages,
+            next_cursor,
+            _OUTCOME_VALUES.validate_python(
+                {SERVER_OUTCOMES_META_KEY: {key: outcome_wire_value(value) for key, value in typed_outcomes.items()}}
+            )
+            if outcomes
+            else None,
+        )
+
+
+async def fetch_optional_catalog_page(
+    context: OperationContext,
+    request: CatalogListRequest,
+    server: MCPServer,
+    allowed: Sequence[MCPServer],
+    cursor: str | None,
+) -> CatalogListResult:
+    from mcp.types import ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult, PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers, global_mcp_server_manager
+
+    caller, auth, _, server_headers, oauth_headers, raw_headers, client_ip = context.legacy_auth()
+    if global_mcp_server_manager.skip_blocked_stdio_listing(server, "catalog"):
+        if cursor is not None:
+            raise RuntimeError("Upstream catalog is unavailable")
+        return combine_optional_catalog(request, (), None, None)
+    auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=server_headers,
+        mcp_auth_header=auth,
+        oauth2_headers=oauth_headers,
+        raw_headers=raw_headers,
+        user_api_key_auth=caller,
+        scope_servers=list(allowed),
+    )
+    client, _ = await prepare_optional_list_client(
+        global_mcp_server_manager,
+        server,
+        caller,
+        mcp_auth_header=auth_header,
+        extra_headers=extra_headers,
+        raw_headers=raw_headers,
+        client_ip=client_ip,
+    )
+    page: Final = await client.list_page(request.model_copy(update={"params": PaginatedRequestParams(cursor=cursor)}))
+    if isinstance(page, ListPromptsResult):
+        return page.model_copy(
+            update={"prompts": global_mcp_server_manager.create_prefixed_prompts(page.prompts, server)}
+        )
+    if isinstance(page, ListResourcesResult):
+        return page.model_copy(
+            update={"resources": global_mcp_server_manager.create_prefixed_resources(page.resources, server)}
+        )
+    if isinstance(page, ListResourceTemplatesResult):
+        return page.model_copy(
+            update={
+                "resource_templates": global_mcp_server_manager.create_prefixed_resource_templates(
+                    page.resource_templates, server
+                )
+            }
+        )
+    raise RuntimeError("Unexpected catalog result type")
+
+
+def combine_optional_catalog(
+    request: CatalogListRequest,
+    pages: Sequence[CatalogListResult],
+    next_cursor: str | None,
+    meta: Mapping[str, JsonValue] | None,
+) -> CatalogListResult:
+    from mcp.types import (
+        ListPromptsRequest,
+        ListPromptsResult,
+        ListResourcesRequest,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+    )
+
+    if isinstance(request, ListPromptsRequest):
+        return ListPromptsResult(
+            prompts=list(chain.from_iterable(page.prompts for page in pages if isinstance(page, ListPromptsResult))),
+            next_cursor=next_cursor,
+            _meta=dict(meta) if meta is not None else None,
+        )
+    if isinstance(request, ListResourcesRequest):
+        return ListResourcesResult(
+            resources=list(
+                chain.from_iterable(page.resources for page in pages if isinstance(page, ListResourcesResult))
+            ),
+            next_cursor=next_cursor,
+            _meta=dict(meta) if meta is not None else None,
+        )
+    return ListResourceTemplatesResult(
+        resource_templates=list(
+            chain.from_iterable(
+                page.resource_templates for page in pages if isinstance(page, ListResourceTemplatesResult)
+            )
+        ),
+        next_cursor=next_cursor,
+        _meta=dict(meta) if meta is not None else None,
+    )

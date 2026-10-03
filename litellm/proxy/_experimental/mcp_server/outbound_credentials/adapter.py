@@ -3,7 +3,7 @@
 These edge functions translate v1's request objects into the resolver's typed inputs and map
 its typed errors onto the proxy's public exception contract. They import v1 and live outside the
 package's public surface so the resolver core (``resolver.py`` / ``types.py``) stays v1-free.
-Nothing wires them into ``_create_mcp_client`` yet.
+Nothing wires them into ``create_mcp_client`` yet.
 
 ``to_server_spec`` maps only the modes the resolver has gone live for, returning ``None`` for
 every other mode so the caller defers to v1 (parity-safe); it grows one branch per migrated mode.

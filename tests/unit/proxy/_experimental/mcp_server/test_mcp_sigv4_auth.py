@@ -410,7 +410,7 @@ class TestMCPServerManagerSigV4:
 
     @pytest.mark.asyncio
     async def test_create_mcp_client_with_sigv4(self):
-        """_create_mcp_client creates client with SigV4 auth when auth_type is aws_sigv4."""
+        """create_mcp_client creates client with SigV4 auth when auth_type is aws_sigv4."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
@@ -429,7 +429,7 @@ class TestMCPServerManagerSigV4:
         )
 
         manager = MCPServerManager()
-        client = await manager._create_mcp_client(server=server)
+        client = await manager.create_mcp_client(server=server)
 
         assert client.auth_type == MCPAuth.aws_sigv4
         assert client._aws_auth is not None
@@ -437,7 +437,7 @@ class TestMCPServerManagerSigV4:
 
     @pytest.mark.asyncio
     async def test_create_mcp_client_without_sigv4(self):
-        """_create_mcp_client does not create SigV4 auth for non-SigV4 servers."""
+        """create_mcp_client does not create SigV4 auth for non-SigV4 servers."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
@@ -454,7 +454,7 @@ class TestMCPServerManagerSigV4:
         )
 
         manager = MCPServerManager()
-        client = await manager._create_mcp_client(server=server)
+        client = await manager.create_mcp_client(server=server)
 
         assert client._aws_auth is None
 
@@ -485,7 +485,7 @@ class TestMCPServerManagerSigV4:
 
     @pytest.mark.asyncio
     async def test_create_mcp_client_with_role_assumption(self):
-        """_create_mcp_client passes aws_role_name to MCPSigV4Auth."""
+        """create_mcp_client passes aws_role_name to MCPSigV4Auth."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             MCPServerManager,
         )
@@ -514,7 +514,7 @@ class TestMCPServerManagerSigV4:
 
         manager = MCPServerManager()
         with patch("boto3.client", return_value=mock_sts):
-            client = await manager._create_mcp_client(server=server)
+            client = await manager.create_mcp_client(server=server)
 
         assert client._aws_auth is not None
         assert isinstance(client._aws_auth, MCPSigV4Auth)

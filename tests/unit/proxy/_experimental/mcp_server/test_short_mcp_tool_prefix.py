@@ -279,7 +279,7 @@ class TestManagerShortPrefix:
         manager = MCPServerManager()
         server = _make_server()
 
-        out = manager._create_prefixed_tools(_stub_tools(), server)
+        out = manager.create_prefixed_tools(_stub_tools(), server)
 
         short = compute_short_server_prefix(server.server_id)
         assert {t.name for t in out} == {f"{short}-get_repo", f"{short}-list_issues"}
@@ -289,7 +289,7 @@ class TestManagerShortPrefix:
         manager = MCPServerManager()
         server = _make_server()
         manager.registry[server.server_id] = server
-        manager._create_prefixed_tools(_stub_tools(), server)
+        manager.create_prefixed_tools(_stub_tools(), server)
 
         short = compute_short_server_prefix(server.server_id)
         resolved = manager._get_mcp_server_from_tool_name(f"{short}-get_repo")
@@ -301,7 +301,7 @@ class TestManagerShortPrefix:
         manager = MCPServerManager()
         server = _make_server()
         manager.registry[server.server_id] = server
-        manager._create_prefixed_tools(_stub_tools(), server)
+        manager.create_prefixed_tools(_stub_tools(), server)
 
         resolved = manager._get_mcp_server_from_tool_name("github_onprem-get_repo")
         assert resolved is server
@@ -310,7 +310,7 @@ class TestManagerShortPrefix:
         manager = MCPServerManager()
         server = _make_server()
 
-        out = manager._create_prefixed_tools(_stub_tools(), server)
+        out = manager.create_prefixed_tools(_stub_tools(), server)
 
         assert {t.name for t in out} == {
             "github_onprem-get_repo",

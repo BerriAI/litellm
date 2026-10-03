@@ -504,8 +504,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -540,8 +540,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -584,8 +584,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -631,8 +631,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -667,8 +667,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -708,8 +708,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -752,8 +752,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -790,8 +790,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -828,8 +828,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -875,8 +875,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,
@@ -919,8 +919,8 @@ class TestHookHeaderMergePriority:
             mock_client.call_tool = AsyncMock(return_value=MagicMock())
             return mock_client
 
-        with patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client):
-            with patch.object(manager, "_build_stdio_env", return_value=None):
+        with patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client):
+            with patch.object(manager, "build_stdio_env", return_value=None):
                 try:
                     await manager._call_regular_mcp_tool(
                         mcp_server=server,

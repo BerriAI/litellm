@@ -218,7 +218,7 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
         )
 
@@ -243,7 +243,7 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
         )
 
@@ -271,7 +271,7 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             hanging_create_client,
         )
 
@@ -350,13 +350,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -400,13 +400,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -451,13 +451,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -492,13 +492,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -546,13 +546,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -600,13 +600,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -648,13 +648,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )
@@ -692,13 +692,13 @@ class TestExecuteWithMcpClient:
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
+            "build_stdio_env",
             fake_build_stdio_env,
             raising=False,
         )
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             fake_create_client,
             raising=False,
         )

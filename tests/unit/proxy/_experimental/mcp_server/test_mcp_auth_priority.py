@@ -33,7 +33,7 @@ async def test_mcp_server_works_without_config_auth_value():
     manager = MCPServerManager()
 
     # Test that it works with only header auth
-    client = await manager._create_mcp_client(
+    client = await manager.create_mcp_client(
         server=server_without_config_auth,
         mcp_auth_header="Bearer token_from_header_only",
     )
@@ -70,7 +70,7 @@ async def test_mcp_server_config_auth_value_header_used(token_key, config_only_m
     await manager.load_servers_from_config(config)
 
     server = next(iter(manager.config_mcp_servers.values()))
-    client = await manager._create_mcp_client(server)
+    client = await manager.create_mcp_client(server)
 
     assert isinstance(client._resolved_auth, StaticHeaderAuth)
     emitted = next(client._resolved_auth.auth_flow(httpx2.Request("POST", server.url)))

@@ -1491,7 +1491,7 @@ def _extract_upstream_auth_failure(
     return upstream_auth_challenge(exc)
 
 
-def _upstream_failure_suffix(exc: BaseException) -> str:
+def upstream_failure_suffix(exc: BaseException) -> str:
     detail: Final = describe_upstream_http_failure(exc)
     return f"\n  upstream exchange: {detail}" if detail else ""
 
@@ -1970,9 +1970,9 @@ class MCPServerManager:
         self._template_discovery_cache = _DiscoveryCache[ResourceTemplate](
             discovery_ttl, discovery_clock, TypeAdapter(tuple[ResourceTemplate, ...])
         )
-        from litellm.proxy._experimental.mcp_server.catalog import TargetCatalog
+        from litellm.proxy._experimental.mcp_server.catalog import CatalogSnapshots
 
-        self.catalog = TargetCatalog(self)
+        self.catalog = CatalogSnapshots(self)
         self.registry: dict[str, MCPServer] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -2344,7 +2344,7 @@ class MCPServerManager:
             return current
         raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
-    def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
+    def remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
         raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
         if raw and str(raw).strip():
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(raw).strip()
@@ -2393,13 +2393,13 @@ class MCPServerManager:
         self._upstream_initialize_instructions_probed_at[server.server_id] = time.monotonic()
 
         try:
-            resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
+            resolved_static_headers: Final = await self.resolve_static_headers_with_env_vars(
                 server=server,
                 user_api_key_auth=None,
                 raise_on_missing=False,
             )
             extra_headers: dict[str, str] | None = dict(resolved_static_headers) if resolved_static_headers else None
-            client: Final = await self._create_mcp_client(
+            client: Final = await self.create_mcp_client(
                 server=server,
                 mcp_auth_header=None,
                 extra_headers=extra_headers,
@@ -2410,7 +2410,7 @@ class MCPServerManager:
                 return "ok"
 
             await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
-            self._remember_upstream_initialize_instructions(server, client)
+            self.remember_upstream_initialize_instructions(server, client)
         except Exception as e:
             verbose_logger.debug(
                 "Upstream initialize instructions prefetch failed for %s: %s",
@@ -3932,7 +3932,7 @@ class MCPServerManager:
         return None
 
     @staticmethod
-    def _extract_subject_token(
+    def extract_subject_token(
         oauth2_headers: Mapping[str, str] | None,
         raw_headers: Mapping[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
@@ -3949,7 +3949,7 @@ class MCPServerManager:
             return None
         return bearer
 
-    def _obo_subject_token(
+    def obo_subject_token(
         self,
         server: MCPServer,
         raw_headers: Mapping[str, str] | None,
@@ -3963,9 +3963,9 @@ class MCPServerManager:
         """
         if server.auth_type != MCPAuth.oauth2_token_exchange:
             return None
-        return self._extract_subject_token(None, raw_headers, user_api_key_auth)
+        return self.extract_subject_token(None, raw_headers, user_api_key_auth)
 
-    def _build_stdio_env(
+    def build_stdio_env(
         self,
         server: MCPServer,
         raw_headers: Mapping[str, str] | None = None,
@@ -4011,7 +4011,7 @@ class MCPServerManager:
         referenced: Final = collect_env_var_references(strings=static_headers.values())
         return bool(referenced & user_var_names)
 
-    async def _resolve_static_headers_with_env_vars(
+    async def resolve_static_headers_with_env_vars(
         self,
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
@@ -4183,7 +4183,7 @@ class MCPServerManager:
         Only OBO has a discovery challenge to raise; ID-JAG's failures are plain statuses whose body
         already names what the user has to do, so they map through ``raise_public`` as at egress.
         """
-        subject_token: Final = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+        subject_token: Final = self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         match server.auth_type:
             case MCPAuth.oauth2_token_exchange:
                 if not self._extract_bearer_token(oauth2_headers, None):
@@ -4211,7 +4211,7 @@ class MCPServerManager:
                     )
                 raise_public(err)
 
-    async def _create_mcp_client(
+    async def create_mcp_client(
         self,
         server: MCPServer,
         mcp_auth_header: str | dict[str, str] | None = None,
@@ -4267,196 +4267,24 @@ class MCPServerManager:
         *,
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
-    ) -> Sequence[MCPTool]:
-        """
-        Helper method to get tools from a single MCP server with prefixed names.
+    ) -> list[MCPTool]:
+        from litellm.proxy._experimental.mcp_server.catalog import get_server_tools
 
-        Args:
-            server (MCPServer): The server to query tools from
-            mcp_auth_header: Optional auth header for MCP server
-            catalog_auth_header: The header the client supplied, keying the caller's catalog slot;
-                defaults to ``mcp_auth_header``
-            record_listing: Record the served catalog into the caller's listed-tools slot; only a
-                listing actually served to the caller sets it
-
-        Returns:
-            List[MCPTool]: List of tools available on the server with prefixed names
-        """
-        from litellm.proxy._experimental.mcp_server.tool_registry import (
-            global_mcp_tool_registry,
-        )
-
-        if self._skip_blocked_stdio_listing(server, "tool"):
-            return []
-
-        verbose_logger.debug("Connecting to url: %s", server.url)
-        verbose_logger.info("_get_tools_from_server for %s...", server.name)
-
-        client = None
-        listed_caller: Final = ListedToolsCaller(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=_catalog_auth_header(mcp_auth_header, catalog_auth_header),
+        result: Final = await get_server_tools(
+            self,
+            server=server,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=add_prefix,
             raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
             oauth2_headers=oauth2_headers,
+            client_ip=client_ip,
+            proxy_logging_obj=proxy_logging_obj,
+            catalog_auth_header=catalog_auth_header,
+            record_listing=record_listing,
         )
-        listed_generation: Final = self._listed_tools_generations.get(server.server_id, 0)
-
-        try:
-            # Tool *listing* must not be blocked by missing per-user env vars —
-            # the server's tools should still appear so the client connects. The
-            # friendly "missing vars" error is raised only on the tool-*call*
-            # path (see _call_regular_mcp_tool).
-            resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
-                server, user_api_key_auth, raise_on_missing=False
-            )
-            if resolved_static_headers:
-                if extra_headers is None:
-                    extra_headers = {}
-                extra_headers.update(resolved_static_headers)
-
-            # MCPJWTSigner: inject signed JWT for tools/list (the catalog scan's pre_call_hook
-            # carries no extra_headers bag, which the signer treats as not its call).
-            # Skip entirely when the signer is not configured (avoid an unnecessary
-            # dict copy on every list call), when the server has its own static
-            # Authorization header, when a per-user mcp_auth_header has already
-            # been resolved, or when the caller already supplied an Authorization
-            # entry in extra_headers (e.g. a per-user OAuth token resolved
-            # upstream) — admin-configured static auth and per-user OAuth must
-            # take precedence so the signer doesn't silently overwrite e.g. an
-            # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
-            # applies extra_headers after writing Authorization from auth_value, so
-            # an injected JWT would otherwise clobber the per-user token).
-            if user_api_key_auth is not None and not server.spec_path:
-                from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
-                    get_mcp_jwt_signer,
-                    inject_mcp_jwt_headers_for_upstream,
-                )
-
-                static_headers: Final = server.static_headers or {}
-                has_static_authorization: Final = any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in static_headers
-                )
-                has_extra_authorization: Final = bool(extra_headers) and any(
-                    isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
-                )
-
-                if (
-                    get_mcp_jwt_signer() is not None
-                    and not has_static_authorization
-                    and not mcp_auth_header
-                    and not has_extra_authorization
-                ):
-                    extra_headers = await inject_mcp_jwt_headers_for_upstream(
-                        user_api_key_dict=user_api_key_auth,
-                        extra_headers=extra_headers,
-                        raw_headers=raw_headers,
-                        for_list_tools=True,
-                    )
-
-            stdio_env: Final = self._build_stdio_env(server, raw_headers)
-
-            # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
-            # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
-            # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
-            subject_token: Final = (
-                self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
-                if server.auth_type == MCPAuth.oauth2_token_exchange
-                else None
-            )
-
-            client = await self._create_mcp_client(
-                server=server,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
-                raw_headers=raw_headers,
-                client_ip=client_ip,
-            )
-
-            ## HANDLE OPENAPI TOOLS
-            if server.spec_path:
-                # OpenAPI tools were stored in the registry under the prefix
-                # active at registration time — fetch by that same prefix.
-                registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
-                registered: Final = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
-                    global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix)
-                )
-                registered_names: Final = MappingProxyType(
-                    {t.name.removeprefix(registry_prefix): t.name for t in registered}
-                )
-                guarded_openapi: Final = await self._guard_tool_catalog(
-                    server=server,
-                    tools=[t.model_copy(update={"name": t.name.removeprefix(registry_prefix)}) for t in registered],
-                    proxy_logging_obj=proxy_logging_obj,
-                    user_api_key_auth=user_api_key_auth,
-                    raw_headers=raw_headers,
-                )
-                # OpenAPI tools are stored in the registry with their prefix already
-                # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
-                # through _create_prefixed_tools — that would add the prefix a second
-                # time producing "test_petstore-test_petstore-getinventory".
-                self.record_listed_tools(
-                    server, guarded_openapi, listed_caller, listed_generation, record_listing=record_listing
-                )
-                if not add_prefix:
-                    return guarded_openapi
-                return [t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
-            else:
-                tools = await self._fetch_tools_with_timeout(client, server.name)
-                self._remember_upstream_initialize_instructions(server, client)
-
-            guarded_tools: Final = await self._guard_tool_catalog(
-                server=server,
-                tools=tools,
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_auth=user_api_key_auth,
-                raw_headers=raw_headers,
-            )
-            prefixed_or_original_tools: Final = self._create_prefixed_tools(
-                guarded_tools, server, add_prefix=add_prefix
-            )
-            self.record_listed_tools(
-                server, guarded_tools, listed_caller, listed_generation, record_listing=record_listing
-            )
-
-            return prefixed_or_original_tools
-
-        except MCPUpstreamAuthError as upstream_auth_error:
-            # Pass-through 401 must surface to single-server routes so the
-            # client triggers the upstream OAuth flow. The multi-server
-            # aggregator catches this explicitly to keep absorbing.
-            if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
-                raise MCPUpstreamAuthError(
-                    status_code=upstream_auth_error.status_code,
-                    www_authenticate=None,
-                    server_name=upstream_auth_error.server_name,
-                ) from upstream_auth_error
-            raise
-        except HTTPException as e:
-            # A v2 resolver auth challenge (token_exchange's RFC 9728 401, authorization_code's
-            # browser-OAuth 401, or a 403) is raised at client-build time, inside this try. Route it
-            # through the same MCPUpstreamAuthError channel as pass-through so single-server routes
-            # surface the challenge (the client re-authenticates) while the aggregator keeps absorbing.
-            # Non-auth HTTP errors stay absorbed so one misconfigured server can't blank the listing.
-            if e.status_code in (401, 403):
-                headers: Final = e.headers or {}
-                challenge_header: Final = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
-                raise MCPUpstreamAuthError(
-                    status_code=e.status_code,
-                    www_authenticate=None if server.is_dcr_bridge else challenge_header,
-                    server_name=server.name,
-                ) from e
-            verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
-            raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
-        except MCPServerListError:
-            raise
-        except Exception as e:
-            verbose_logger.warning(
-                "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
-            )
-            raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
+        return result.tools
 
     def clear_initialize_instructions(self) -> None:
         self._upstream_initialize_instructions_by_server_id.clear()
@@ -4498,10 +4326,10 @@ class MCPServerManager:
             return None
         auth: Final = caller.user_api_key_auth
         forwarded: Final = self._forwarded_header_values(server, caller.raw_headers) or None
-        header_env: Final = self._build_stdio_env(server, caller.raw_headers)
-        stdio_env: Final = None if header_env == self._build_stdio_env(server) else header_env
+        header_env: Final = self.build_stdio_env(server, caller.raw_headers)
+        stdio_env: Final = None if header_env == self.build_stdio_env(server) else header_env
         caller_bearer: Final = (
-            self._extract_subject_token(caller.oauth2_headers, caller.raw_headers, auth)
+            self.extract_subject_token(caller.oauth2_headers, caller.raw_headers, auth)
             if _consumes_caller_authorization(server) or server.auth_type == MCPAuth.oauth2_token_exchange
             else None
         )
@@ -4557,7 +4385,7 @@ class MCPServerManager:
         )
         self._listed_tools_by_server_id[server.server_id] = MappingProxyType(dict(entries))
 
-    def _discovery_key(
+    def discovery_key(
         self,
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
@@ -4594,7 +4422,7 @@ class MCPServerManager:
         if previous is None or previous.transport != row.transport:
             warn_if_mcp_stdio_blocked(row.alias or row.server_name, row.transport)
 
-    def _skip_blocked_stdio_listing(self, server: MCPServer, listing: str) -> bool:
+    def skip_blocked_stdio_listing(self, server: MCPServer, listing: str) -> bool:
         if not is_mcp_stdio_blocked(server.transport):
             return False
         verbose_logger.debug(
@@ -4612,40 +4440,26 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Prompt]:
-        if self._skip_blocked_stdio_listing(server, "prompt"):
+        if self.skip_blocked_stdio_listing(server, "prompt"):
             return []
         try:
-            headers: Final = (
-                dict(
-                    chain(
-                        extra_headers.items() if extra_headers else (),
-                        server.static_headers.items() if server.static_headers else (),
-                    )
-                )
-                or None
-            )
-            stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
-            client: Final = await self._create_mcp_client(
-                server=server,
+            from litellm.proxy._experimental.mcp_server.catalog import prepare_optional_list_client
+
+            client, key = await prepare_optional_list_client(
+                self,
+                server,
+                user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
+                extra_headers=extra_headers,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
-            )
-            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
-            key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
             )
 
             async def fetch() -> list[Prompt]:
                 return await client.list_prompts(raise_on_error=True)
 
             items: Final = await self._prompt_discovery_cache.get(key, fetch)
-            return self._create_prefixed_prompts(items, server, add_prefix=add_prefix)
+            return self.create_prefixed_prompts(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, error)
             return []
@@ -4660,40 +4474,26 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[Resource]:
-        if self._skip_blocked_stdio_listing(server, "resource"):
+        if self.skip_blocked_stdio_listing(server, "resource"):
             return []
         try:
-            headers: Final = (
-                dict(
-                    chain(
-                        extra_headers.items() if extra_headers else (),
-                        server.static_headers.items() if server.static_headers else (),
-                    )
-                )
-                or None
-            )
-            stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
-            client: Final = await self._create_mcp_client(
-                server=server,
+            from litellm.proxy._experimental.mcp_server.catalog import prepare_optional_list_client
+
+            client, key = await prepare_optional_list_client(
+                self,
+                server,
+                user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
+                extra_headers=extra_headers,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
-            )
-            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
-            key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
             )
 
             async def fetch() -> list[Resource]:
                 return await client.list_resources(raise_on_error=True)
 
             items: Final = await self._resource_discovery_cache.get(key, fetch)
-            return self._create_prefixed_resources(items, server, add_prefix=add_prefix)
+            return self.create_prefixed_resources(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
             return []
@@ -4708,40 +4508,26 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
     ) -> list[ResourceTemplate]:
-        if self._skip_blocked_stdio_listing(server, "resource template"):
+        if self.skip_blocked_stdio_listing(server, "resource template"):
             return []
         try:
-            headers: Final = (
-                dict(
-                    chain(
-                        extra_headers.items() if extra_headers else (),
-                        server.static_headers.items() if server.static_headers else (),
-                    )
-                )
-                or None
-            )
-            stdio_env: Final = self._build_stdio_env(server, raw_headers)
-            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
-            client: Final = await self._create_mcp_client(
-                server=server,
+            from litellm.proxy._experimental.mcp_server.catalog import prepare_optional_list_client
+
+            client, key = await prepare_optional_list_client(
+                self,
+                server,
+                user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
-                user_api_key_auth=user_api_key_auth,
+                extra_headers=extra_headers,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
-            )
-            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
-            key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
             )
 
             async def fetch() -> list[ResourceTemplate]:
                 return await client.list_resource_templates(raise_on_error=True)
 
             items: Final = await self._template_discovery_cache.get(key, fetch)
-            return self._create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
+            return self.create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resource_templates from server %s: %s", server.name, error)
             return []
@@ -4766,10 +4552,10 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(server.static_headers)
 
-        stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+        stdio_env: Final = self.build_stdio_env(server, raw_headers)
+        subject_token: Final = self.obo_subject_token(server, raw_headers, user_api_key_auth)
 
-        client: Final = await self._create_mcp_client(
+        client: Final = await self.create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
@@ -4803,10 +4589,10 @@ class MCPServerManager:
                 extra_headers = {}
             extra_headers.update(server.static_headers)
 
-        stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+        stdio_env: Final = self.build_stdio_env(server, raw_headers)
+        subject_token: Final = self.obo_subject_token(server, raw_headers, user_api_key_auth)
 
-        client: Final = await self._create_mcp_client(
+        client: Final = await self.create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
@@ -5315,7 +5101,7 @@ class MCPServerManager:
             return scopes or None
         return None
 
-    async def _fetch_tools_with_timeout(
+    async def fetch_tools_with_timeout(
         self,
         client: MCPClient,
         server_name: str,
@@ -5361,7 +5147,7 @@ class MCPServerManager:
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
             verbose_logger.warning(
-                "Error listing tools from %s: %s%s", server_name, type(e).__name__, _upstream_failure_suffix(e)
+                "Error listing tools from %s: %s%s", server_name, type(e).__name__, upstream_failure_suffix(e)
             )
             raise_classified_list_failure(e, server_name)
 
@@ -5427,7 +5213,7 @@ class MCPServerManager:
             "attempts; the 3-character prefix space is too crowded."
         )
 
-    async def _guard_tool_catalog(
+    async def guard_tool_catalog(
         self,
         server: MCPServer,
         tools: Sequence[MCPTool],
@@ -5482,7 +5268,7 @@ class MCPServerManager:
             {seen: kept for seen, kept in self._catalog_alert_signatures.items() if seen != key}
         )
 
-    def _create_prefixed_tools(
+    def create_prefixed_tools(
         self,
         tools: Sequence[MCPTool],
         server: MCPServer,
@@ -5529,7 +5315,7 @@ class MCPServerManager:
             return None
         return listed.get(name)
 
-    def _create_prefixed_prompts(
+    def create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
     ) -> list[Prompt]:
         """
@@ -5556,7 +5342,7 @@ class MCPServerManager:
         verbose_logger.info("Successfully fetched %s prompts from server %s", len(prefixed_prompts), server.name)
         return prefixed_prompts
 
-    def _create_prefixed_resources(
+    def create_prefixed_resources(
         self, resources: Sequence[Resource], server: MCPServer, add_prefix: bool = True
     ) -> list[Resource]:
         """Prefix resource names and track origin server for read requests."""
@@ -5572,7 +5358,7 @@ class MCPServerManager:
         verbose_logger.info("Successfully fetched %s resources from server %s", len(prefixed_resources), server.name)
         return prefixed_resources
 
-    def _create_prefixed_resource_templates(
+    def create_prefixed_resource_templates(
         self,
         resource_templates: Sequence[ResourceTemplate],
         server: MCPServer,
@@ -5985,7 +5771,7 @@ class MCPServerManager:
         The exchanged token is baked into the client at build time, so the retry invalidates the
         cached exchange and rebuilds the client (which re-exchanges). One retry only: a non-auth
         failure or a second auth failure degrades to the normal ``isError`` result, and a re-exchange
-        that now fails surfaces its own 401 challenge from ``_create_mcp_client``.
+        that now fails surfaces its own 401 challenge from ``create_mcp_client``.
         """
         try:
             return await client.call_tool(
@@ -6000,7 +5786,7 @@ class MCPServerManager:
             spec: Final = to_server_spec(mcp_server)
             if spec is not None:
                 await self._cred_provider.invalidate_credentials(to_subject(user_api_key_auth, subject_token), spec)
-            retry_client: Final = await self._create_mcp_client(
+            retry_client: Final = await self.create_mcp_client(
                 server=mcp_server,
                 mcp_auth_header=server_auth_header,
                 extra_headers=extra_headers,
@@ -6069,7 +5855,7 @@ class MCPServerManager:
             MCPAuth.oauth2_token_exchange,
             MCPAuth.oauth2_id_jag,
         ):
-            subject_token = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+            subject_token = self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
                 # For M2M OAuth servers, Authorization must come from token fetch.
@@ -6119,7 +5905,7 @@ class MCPServerManager:
         # MCPMissingUserEnvVarsError when the calling user has not filled in
         # a required per-user variable — the REST layer converts that into
         # a friendly 412 with a setup URL.
-        resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(mcp_server, user_api_key_auth)
+        resolved_static_headers: Final = await self.resolve_static_headers_with_env_vars(mcp_server, user_api_key_auth)
         if resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
@@ -6153,9 +5939,9 @@ class MCPServerManager:
         if extra_headers is not None and len(extra_headers) == 0:
             extra_headers = None
 
-        stdio_env: Final = self._build_stdio_env(mcp_server, raw_headers)
+        stdio_env: Final = self.build_stdio_env(mcp_server, raw_headers)
 
-        client: Final = await self._create_mcp_client(
+        client: Final = await self.create_mcp_client(
             server=mcp_server,
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
@@ -6273,7 +6059,7 @@ class MCPServerManager:
         # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
         result_index: Final = 1 if proxy_logging_obj else 0
         result: Final = mcp_responses[result_index]
-        self._remember_upstream_initialize_instructions(mcp_server, client)
+        self.remember_upstream_initialize_instructions(mcp_server, client)
 
         return cast("CallToolResult | InputRequiredResult", result)
 
@@ -6406,7 +6192,7 @@ class MCPServerManager:
         """Resolve the gateway-owned upstream credential for a spec_path (OpenAPI) tool call.
 
         OpenAPI tools egress through a plain httpx call assembled from ContextVars, never through
-        ``_create_mcp_client``, so the v2 resolver graft there does not run for them and a resolved
+        ``create_mcp_client``, so the v2 resolver graft there does not run for them and a resolved
         credential (authorization_code's stored per-user token, client_credentials' minted M2M
         token, token_exchange's exchanged token, passthrough's forwarded caller token) must be
         materialized into headers here. Returns ``(resolved_auth_headers, forwarded_headers)``:
@@ -6432,7 +6218,7 @@ class MCPServerManager:
 
         subject_token: str | None = None
         if isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
-            subject_token = self._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+            subject_token = self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         elif isinstance(spec.config, PassthroughConfig):
             inbound_token, forwarded_headers = take_forwarded_authorization(forwarded_headers)
             per_server_token: Final = passthrough_token_from_mcp_auth_header(mcp_auth_header)
@@ -7017,13 +6803,13 @@ class MCPServerManager:
             status, health_check_error = await _mcp_server_reachability(server, timeout=MCP_HEALTH_CHECK_TIMEOUT)
         else:
             try:
-                resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
+                resolved_static_headers: Final = await self.resolve_static_headers_with_env_vars(
                     server=server,
                     user_api_key_auth=None,
                     raise_on_missing=False,
                 )
                 extra_headers: Final = dict(resolved_static_headers) if resolved_static_headers else {}
-                client: Final = await self._create_mcp_client(
+                client: Final = await self.create_mcp_client(
                     server=server,
                     mcp_auth_header=None,
                     extra_headers=extra_headers,
@@ -7035,7 +6821,7 @@ class MCPServerManager:
 
                 # Add timeout wrapper to prevent hanging
                 await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
-                self._remember_upstream_initialize_instructions(server, client)
+                self.remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
                 health_check_error = f"Health check timed out after {MCP_HEALTH_CHECK_TIMEOUT} seconds"

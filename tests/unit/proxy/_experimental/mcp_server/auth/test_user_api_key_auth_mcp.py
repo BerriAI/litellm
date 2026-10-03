@@ -6789,6 +6789,16 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 503
 
+    async def test_key_envelope_retains_verified_key_identity_for_catalog_reauthorization(self):
+        from litellm.proxy._types import hash_token
+
+        key_hash = hash_token("sk-owned-envelope-key")
+        record = UserAPIKeyAuth(token=key_hash)
+        with self._patch_key_reload(return_value=record):
+            admitted = await MCPRequestHandler._reload_admitted_key(key_hash)
+        assert admitted.api_key == key_hash
+        assert admitted.via_virtual_key is True
+
     async def test_reload_admitted_key_returns_admin_for_master_key_hash(self):
         """An envelope sealed under the master key has no DB row to reload; the reload resolves it
         to the PROXY_ADMIN auth context (api_key is the alias, never the hash) rather than failing.
@@ -10226,3 +10236,50 @@ async def test_unreadable_empty_key_scope_cannot_gain_additive_grants(monkeypatc
     access = await MCPRequestHandler.get_mcp_server_access(auth)
     assert access.server_ids == ()
     assert access.scope == "scoped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["anonymous", "master", "custom"])
+async def test_catalog_refresh_preserves_non_database_admission_and_resource_scope(kind):
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    if kind == "anonymous":
+        assert await MCPRequestHandler.refresh_catalog_authority(None) is None
+        return
+    caller = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS if kind == "master" else "custom-subject")
+    caller.via_virtual_key = kind == "master"
+    caller.authenticated_by_custom_auth = kind == "custom"
+    caller.mcp_session_resource_server_id = "only-this-server"
+    caller.mcp_toolset_id = "only-this-toolset"
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    assert refreshed is not caller
+    assert refreshed.api_key == caller.api_key
+    assert refreshed.authenticated_by_custom_auth == caller.authenticated_by_custom_auth
+    assert refreshed.mcp_session_resource_server_id == "only-this-server"
+    assert refreshed.mcp_toolset_id == "only-this-toolset"
+    assert refreshed.requires_fresh_policy is True
+    assert caller.requires_fresh_policy is False
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_reads_current_user_org_without_losing_resource_scope(monkeypatch):
+    from types import SimpleNamespace
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    current = LiteLLM_UserTable(user_id="catalog-user", organization_id="current-org", user_role="internal_user", teams=[])
+    table = SimpleNamespace(find_unique=AsyncMock(return_value=current))
+    database = SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table))
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    caller = UserAPIKeyAuth(user_id="catalog-user", org_id="previous-org", user_role="proxy_admin")
+    caller.mcp_admitted_user_subject = True
+    caller.mcp_session_resource_server_id = "scoped-server"
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    assert refreshed.org_id == "current-org"
+    assert refreshed.user_role == "internal_user"
+    assert refreshed.mcp_session_resource_server_id == "scoped-server"
+    assert refreshed.mcp_admitted_user_subject is True
+    assert caller.org_id == "previous-org"

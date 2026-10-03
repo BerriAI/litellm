@@ -331,7 +331,7 @@ class TestMCPServerManager:
             env={"NODE_ENV": "test"},
         )
 
-        client = await manager._create_mcp_client(stdio_server)
+        client = await manager.create_mcp_client(stdio_server)
 
         assert client.transport_type == MCPTransport.stdio
         assert client.stdio_config is not None
@@ -346,7 +346,7 @@ class TestMCPServerManager:
     @pytest.mark.asyncio
     async def test_caller_auth_header_cannot_bypass_v2_for_authorization_code(self):
         """A caller-supplied per-request override must not substitute the stored authorization_code
-        token: _create_mcp_client keeps the v2 spec and resolves through the injected provider
+        token: create_mcp_client keeps the v2 spec and resolves through the injected provider
         rather than deferring to the v1 caller-override path."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
             StaticHeaderAuth,
@@ -372,7 +372,7 @@ class TestMCPServerManager:
             auth_type=MCPAuth.oauth2,  # oauth2 + no client creds + not delegate -> authorization_code
         )
 
-        client = await manager._create_mcp_client(server, mcp_auth_header="Bearer caller-supplied-token")
+        client = await manager.create_mcp_client(server, mcp_auth_header="Bearer caller-supplied-token")
 
         # the v2 resolver ran (the caller override did NOT defer to v1); the stored token wins
         assert calls == [("", "authz-srv")]
@@ -381,7 +381,7 @@ class TestMCPServerManager:
     @pytest.mark.asyncio
     async def test_caller_auth_header_cannot_bypass_id_jag_exchange(self):
         """A caller-supplied per-request override must not disable the ID-JAG exchange and forward an
-        arbitrary bearer upstream: _create_mcp_client keeps the v2 spec and resolves through the
+        arbitrary bearer upstream: create_mcp_client keeps the v2 spec and resolves through the
         injected provider rather than deferring to the v1 caller-override path."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
             StaticHeaderAuth,
@@ -411,7 +411,7 @@ class TestMCPServerManager:
             id_jag_resource_token_endpoint="https://resource-as.example/oauth2/token",
         )
 
-        client = await manager._create_mcp_client(
+        client = await manager.create_mcp_client(
             server,
             mcp_auth_header="Bearer caller-supplied-token",
             subject_token="caller-id-token",
@@ -452,7 +452,7 @@ class TestMCPServerManager:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await MCPServerManager()._create_mcp_client(
+            await MCPServerManager().create_mcp_client(
                 server,
                 mcp_auth_header="Bearer caller-supplied-token",
                 subject_token="caller-id-token",
@@ -462,7 +462,7 @@ class TestMCPServerManager:
         assert "oauth2_id_jag" in str(exc_info.value.detail)
 
     async def test_create_mcp_client_stdio_injects_npm_config_cache(self, monkeypatch):
-        """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
+        """Test that create_mcp_client injects NPM_CONFIG_CACHE when not already set,
         and preserves user-provided NPM_CONFIG_CACHE when present."""
         from litellm.constants import MCP_NPM_CACHE_DIR
 
@@ -479,7 +479,7 @@ class TestMCPServerManager:
             args=["-y", "@modelcontextprotocol/server-everything"],
             env={},
         )
-        client = await manager._create_mcp_client(server_no_cache)
+        client = await manager.create_mcp_client(server_no_cache)
         assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
 
         # Case 2: NPM_CONFIG_CACHE already set -> should NOT be overwritten
@@ -492,7 +492,7 @@ class TestMCPServerManager:
             args=["-y", "@modelcontextprotocol/server-everything"],
             env={"NPM_CONFIG_CACHE": "/custom/cache"},
         )
-        client2 = await manager._create_mcp_client(server_with_cache)
+        client2 = await manager.create_mcp_client(server_with_cache)
         assert client2.stdio_config["env"]["NPM_CONFIG_CACHE"] == "/custom/cache"
 
     async def test_create_mcp_client_refuses_to_start_a_stdio_server_while_stdio_is_not_enabled(self, monkeypatch):
@@ -507,7 +507,7 @@ class TestMCPServerManager:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await manager._create_mcp_client(server)
+            await manager.create_mcp_client(server)
 
         assert exc_info.value.status_code == 403
         assert "LITELLM_ENABLE_MCP_STDIO=true" in str(exc_info.value.detail)
@@ -678,7 +678,7 @@ class TestMCPServerManager:
             },
         )
 
-        env = manager._build_stdio_env(
+        env = manager.build_stdio_env(
             server,
             raw_headers={
                 "x-test-header": "resolved-value",
@@ -704,7 +704,7 @@ class TestMCPServerManager:
             env={"EXPECTED": "${X-Missing}"},
         )
 
-        env = manager._build_stdio_env(server, raw_headers={})
+        env = manager.build_stdio_env(server, raw_headers={})
 
         # When the header isn't provided, the key is omitted entirely
         assert env == {}
@@ -1349,7 +1349,7 @@ class TestMCPServerManager:
             ),
             patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient"),
         ):
-            await manager._create_mcp_client(server)
+            await manager.create_mcp_client(server)
 
         ensure_oauth_metadata_discovered.assert_awaited_once_with(server)
 
@@ -2001,7 +2001,7 @@ class TestMCPServerManager:
             captured_extra_headers = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
 
         result = await manager._call_regular_mcp_tool(
             mcp_server=server,
@@ -2019,7 +2019,7 @@ class TestMCPServerManager:
         assert isinstance(result, CallToolResult)
 
     async def _capture_list_subject_token(self, server, oauth2_headers, raw_headers=None):
-        """Run _get_tools_from_server and return the subject_token it threaded to _create_mcp_client."""
+        """Run _get_tools_from_server and return the subject_token it threaded to create_mcp_client."""
         manager = MCPServerManager()
         captured = {}
 
@@ -2029,8 +2029,8 @@ class TestMCPServerManager:
             captured["subject_token"] = subject_token
             return AsyncMock()
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[])
         await manager._get_tools_from_server(server=server, oauth2_headers=oauth2_headers, raw_headers=raw_headers)
         return captured["subject_token"]
 
@@ -2102,7 +2102,7 @@ class TestMCPServerManager:
         challenge = (
             'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/te-401-server", error="invalid_token"'
         )
-        manager._create_mcp_client = AsyncMock(
+        manager.create_mcp_client = AsyncMock(
             side_effect=HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": challenge})
         )
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
@@ -2128,7 +2128,7 @@ class TestMCPServerManager:
             client_secret="csec",
         )
         manager = MCPServerManager()
-        manager._create_mcp_client = AsyncMock(
+        manager.create_mcp_client = AsyncMock(
             side_effect=HTTPException(status_code=412, detail="token exchange endpoint is not configured")
         )
         with pytest.raises(MCPServerListError) as exc_info:
@@ -2178,7 +2178,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         mock_client = AsyncMock()
         mock_client.call_tool = AsyncMock(side_effect=self._upstream_status_error(401, challenge))
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
             await self._run_call_regular(manager, server)
@@ -2198,7 +2198,7 @@ class TestMCPServerManager:
         expected = CallToolResult(content=[], isError=is_error)
         mock_client = AsyncMock()
         mock_client.call_tool = AsyncMock(return_value=expected)
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         result = await self._run_call_regular(manager, server)
 
@@ -2219,7 +2219,7 @@ class TestMCPServerManager:
         mock_client = AsyncMock()
         mock_client.call_tool = AsyncMock(side_effect=self._upstream_status_error(status_code))
         mock_client.error_tool_result = MCPClient.error_tool_result
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         import litellm.proxy._experimental.mcp_server.mcp_server_manager as _mgr_mod
 
@@ -2246,7 +2246,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
         mock_client = AsyncMock()
         mock_client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         result = await manager._call_regular_mcp_tool(
             mcp_server=server,
@@ -2808,7 +2808,7 @@ class TestMCPServerManager:
 
     async def _capture_subject_token(self, call) -> Optional[str]:
         """Run a manager method (via ``call(manager)``) and return the subject_token it threaded
-        into ``_create_mcp_client``."""
+        into ``create_mcp_client``."""
         manager = MCPServerManager()
         captured: Dict[str, Any] = {}
 
@@ -2818,7 +2818,7 @@ class TestMCPServerManager:
             captured["subject_token"] = subject_token
             return AsyncMock()
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
         await call(manager)
         return captured.get("subject_token")
 
@@ -2878,7 +2878,7 @@ class TestMCPServerManager:
     @pytest.mark.asyncio
     async def test_caller_header_cannot_bypass_v2_for_token_exchange(self):
         """A caller-supplied per-server header (x-mcp-*) must NOT disable the OBO exchange:
-        _create_mcp_client keeps the v2 spec and runs the resolver (which exchanges the subject),
+        create_mcp_client keeps the v2 spec and runs the resolver (which exchanges the subject),
         rather than deferring to v1 and forwarding the caller's header verbatim upstream."""
         from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
             StaticHeaderAuth,
@@ -2895,7 +2895,7 @@ class TestMCPServerManager:
         manager = MCPServerManager(cred_provider=_FakeProvider())
         server = self._token_exchange_server("te-bypass")
 
-        client = await manager._create_mcp_client(
+        client = await manager.create_mcp_client(
             server,
             mcp_auth_header="Bearer x-mcp-caller-header",
             subject_token="subj-jwt",
@@ -2922,7 +2922,7 @@ class TestMCPServerManager:
         manager = MCPServerManager(cred_provider=_FakeProvider())
         server = self._token_exchange_server("te-shadow")
 
-        client = await manager._create_mcp_client(
+        client = await manager.create_mcp_client(
             server,
             extra_headers={"Authorization": "Bearer signer-jwt"},  # simulate the JWT signer
             subject_token="subj-jwt",
@@ -2960,7 +2960,7 @@ class TestMCPServerManager:
             token_url="https://idp.example.com/token",
         )
 
-        client = await manager._create_mcp_client(
+        client = await manager.create_mcp_client(
             server,
             extra_headers={"Authorization": "Bearer signer-jwt"},  # simulate the JWT signer
         )
@@ -2999,7 +2999,7 @@ class TestMCPServerManager:
                 return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="esb-oauth"))
 
         manager = MCPServerManager(cred_provider=_FakeProvider())
-        client = await manager._create_mcp_client(
+        client = await manager.create_mcp_client(
             self._esb_server("esb-oauth"),
             extra_headers={"Authorization": "Bearer static-upstream-mcp-token"},
         )
@@ -3022,7 +3022,7 @@ class TestMCPServerManager:
                 return Ok(StaticHeaderAuth("Bearer MINTED-M2M", header_name="esb-oauth"))
 
         manager = MCPServerManager(cred_provider=_FakeProvider())
-        client = await manager._create_mcp_client(
+        client = await manager.create_mcp_client(
             self._esb_server("esb-oauth"),
             extra_headers={"esb-oauth": "Bearer signer-jwt", "X-Trace": "keep-me"},
         )
@@ -3050,7 +3050,7 @@ class TestMCPServerManager:
                 return Ok(StaticHeaderAuth("Bearer MINTED", header_name="esb-oauth"))
 
         manager = MCPServerManager(cred_provider=_FakeProvider())
-        client = await manager._create_mcp_client(
+        client = await manager.create_mcp_client(
             self._esb_server("esb-oauth"),
             extra_headers={"ESB-OAuth": "Bearer injected", "X-Trace": "keep"},
         )
@@ -3431,7 +3431,7 @@ class TestMCPServerManager:
             captured_extra_headers = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
 
         await manager._call_regular_mcp_tool(
             mcp_server=server,
@@ -3490,7 +3490,7 @@ class TestMCPServerManager:
             captured_extra_headers = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
 
         await manager._call_regular_mcp_tool(
             mcp_server=server,
@@ -3558,7 +3558,7 @@ class TestMCPServerManager:
             captured_extra_headers = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
 
         await manager._call_regular_mcp_tool(
             mcp_server=server,
@@ -3615,7 +3615,7 @@ class TestMCPServerManager:
             captured_extra_headers = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
 
         await manager._call_regular_mcp_tool(
             mcp_server=server,
@@ -3644,7 +3644,7 @@ class TestMCPServerManager:
             captured["extra_headers"] = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
         await manager._call_regular_mcp_tool(
             mcp_server=server,
             original_tool_name="tool",
@@ -3911,7 +3911,7 @@ class TestMCPServerManager:
             ) as mock_resolve,
             patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient") as mock_client_cls,
         ):
-            await manager._create_mcp_client(server=server, extra_headers={"Authorization": "Bearer upstream-token"})
+            await manager.create_mcp_client(server=server, extra_headers={"Authorization": "Bearer upstream-token"})
         mock_resolve.assert_not_awaited()
         kwargs = mock_client_cls.call_args.kwargs
         emitted = httpx.Request("GET", "https://example.com/mcp")
@@ -3964,7 +3964,7 @@ class TestMCPServerManager:
             ) as mock_resolve,
             patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient") as mock_client_cls,
         ):
-            await manager._create_mcp_client(
+            await manager.create_mcp_client(
                 server=server,
                 mcp_auth_header="Bearer caller-override",
                 subject_token="eyJ-subject-token",
@@ -4007,7 +4007,7 @@ class TestMCPServerManager:
             ) as mock_resolve,
             patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient") as mock_client_cls,
         ):
-            await manager._create_mcp_client(
+            await manager.create_mcp_client(
                 server=server,
                 mcp_auth_header=per_server_header,
                 extra_headers={"Authorization": "Bearer global-token"},
@@ -4107,7 +4107,7 @@ class TestMCPServerManager:
 
         with patch.object(
             manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             new_callable=AsyncMock,
             return_value=mock_client,
         ):
@@ -4140,7 +4140,7 @@ class TestMCPServerManager:
 
         with patch.object(
             manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             new_callable=AsyncMock,
             return_value=mock_client,
         ):
@@ -4181,7 +4181,7 @@ class TestMCPServerManager:
         with (
             patch.object(
                 manager,
-                "_create_mcp_client",
+                "create_mcp_client",
                 new_callable=AsyncMock,
                 return_value=mock_client,
             ) as mock_create_client,
@@ -4234,7 +4234,7 @@ class TestMCPServerManager:
         with (
             patch.object(
                 manager,
-                "_create_mcp_client",
+                "create_mcp_client",
                 new_callable=AsyncMock,
                 return_value=mock_client,
             ) as mock_create_client,
@@ -4289,7 +4289,7 @@ class TestMCPServerManager:
 
         with patch.object(
             manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             new_callable=AsyncMock,
             return_value=mock_client,
         ) as mock_create_client:
@@ -5009,7 +5009,7 @@ class TestMCPServerManager:
         # Mock successful client.run_with_session
         mock_client = AsyncMock()
         mock_client.run_with_session = AsyncMock(return_value="ok")
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         # Perform health check
         result = await manager.health_check_server("test-server")
@@ -5041,7 +5041,7 @@ class TestMCPServerManager:
         # Mock failed client.run_with_session
         mock_client = AsyncMock()
         mock_client.run_with_session = AsyncMock(side_effect=Exception("Connection timeout"))
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         # Perform health check
         result = await manager.health_check_server("test-server")
@@ -5066,8 +5066,8 @@ class TestMCPServerManager:
             url="https://up.example.com/mcp",
         )
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        manager._resolve_static_headers_with_env_vars = AsyncMock(return_value=None)
-        manager._create_mcp_client = AsyncMock(
+        manager.resolve_static_headers_with_env_vars = AsyncMock(return_value=None)
+        manager.create_mcp_client = AsyncMock(
             side_effect=HTTPException(status_code=503, detail="OAuth discovery unavailable")
         )
 
@@ -5117,12 +5117,12 @@ class TestMCPServerManager:
             static_headers={"Authorization": "Bearer static-secret", "X-API-Key": "key-secret", "Cookie": "secret"},
         )
         manager.registry[server.server_id] = server
-        manager._create_mcp_client = AsyncMock()
+        manager.create_mcp_client = AsyncMock()
         route: Final = respx_mock.get(server.url).respond(401)
 
         result: Final = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
 
-        manager._create_mcp_client.assert_not_called()
+        manager.create_mcp_client.assert_not_called()
         assert result.status == "reachable"
         assert result.health_check_error is None
         assert result.last_health_check is not None
@@ -5165,12 +5165,12 @@ class TestMCPServerManager:
             url="http://no-token-server.com",
         )
         manager.registry[server.server_id] = server
-        manager._create_mcp_client = AsyncMock()
+        manager.create_mcp_client = AsyncMock()
         route: Final = respx_mock.get(server.url).respond(response_code)
 
         result: Final = await manager.health_check_server(server.server_id)
 
-        manager._create_mcp_client.assert_not_called()
+        manager.create_mcp_client.assert_not_called()
         assert route.call_count == 1
         assert result.status == "reachable"
         assert result.health_check_error is None
@@ -5425,7 +5425,7 @@ class TestMCPServerManager:
         mock_client = AsyncMock()
         mock_client.run_with_session = AsyncMock(return_value="ok")
 
-        # Capture the extra_headers passed to _create_mcp_client
+        # Capture the extra_headers passed to create_mcp_client
         captured_extra_headers = None
 
         async def capture_create_mcp_client(server, mcp_auth_header, extra_headers, stdio_env):
@@ -5433,7 +5433,7 @@ class TestMCPServerManager:
             captured_extra_headers = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
 
         # Perform health check
         result = await manager.health_check_server("test-server")
@@ -5463,12 +5463,12 @@ class TestMCPServerManager:
             extra_headers=["Authorization"],
         )
         manager.registry[server.server_id] = server
-        manager._create_mcp_client = AsyncMock()
+        manager.create_mcp_client = AsyncMock()
         route: Final = respx_mock.get(server.url).respond(401)
 
         result: Final = await manager.health_check_server(server.server_id)
 
-        manager._create_mcp_client.assert_not_called()
+        manager.create_mcp_client.assert_not_called()
         assert route.call_count == 1
         assert "authorization" not in route.calls[0].request.headers
         assert result.status == "reachable"
@@ -5491,12 +5491,12 @@ class TestMCPServerManager:
             extra_headers=["x-api-key"],
         )
         manager.registry[server.server_id] = server
-        manager._create_mcp_client = AsyncMock()
+        manager.create_mcp_client = AsyncMock()
         route: Final = respx_mock.get(server.url).respond(403)
 
         result: Final = await manager.health_check_server(server.server_id)
 
-        manager._create_mcp_client.assert_not_called()
+        manager.create_mcp_client.assert_not_called()
         assert route.call_count == 1
         assert "x-api-key" not in route.calls[0].request.headers
         assert result.status == "reachable"
@@ -5524,13 +5524,13 @@ class TestMCPServerManager:
         # Mock successful client
         mock_client = AsyncMock()
         mock_client.run_with_session = AsyncMock(return_value="ok")
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         # Perform health check
         result = await manager.health_check_server("public-server")
 
         # Verify that client WAS created (health check should run)
-        manager._create_mcp_client.assert_called_once()
+        manager.create_mcp_client.assert_called_once()
 
         # Verify results
         assert isinstance(result, LiteLLM_MCPServerTable)
@@ -5560,13 +5560,13 @@ class TestMCPServerManager:
         # Mock successful client
         mock_client = AsyncMock()
         mock_client.run_with_session = AsyncMock(return_value="ok")
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         # Perform health check
         result = await manager.health_check_server("custom-server")
 
         # Verify that client WAS created (health check should run)
-        manager._create_mcp_client.assert_called_once()
+        manager.create_mcp_client.assert_called_once()
 
         # Verify results
         assert isinstance(result, LiteLLM_MCPServerTable)
@@ -6065,7 +6065,7 @@ class TestMCPServerManager:
         )
 
         # Mock client creation and fetching tools
-        manager._create_mcp_client = AsyncMock(return_value=object())
+        manager.create_mcp_client = AsyncMock(return_value=object())
 
         # Tools returned upstream (unprefixed from provider)
         upstream_tool = MCPTool(
@@ -6074,7 +6074,7 @@ class TestMCPServerManager:
             inputSchema={},
         )
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
 
         # Case 1: add_prefix=True (default for multi-server) -> expect prefixed
         tools_prefixed = await manager._get_tools_from_server(server, add_prefix=True)
@@ -6103,8 +6103,8 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
         )
 
-        manager._create_mcp_client = AsyncMock(return_value=object())
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        manager.create_mcp_client = AsyncMock(return_value=object())
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[])
 
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
@@ -6148,7 +6148,7 @@ class TestMCPServerManager:
         assert manager.server_owning_tool_name_prefix("lazy_map-add") is server
         assert manager.server_owning_tool_name_prefix("someone_else-add") is None
 
-        manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+        manager.create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
 
         assert manager._get_mcp_server_from_tool_name("lazy_map-add") is server
 
@@ -6166,7 +6166,7 @@ class TestMCPServerManager:
 
         assert manager.server_exposes_tool(server, "add") is False
 
-        manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+        manager.create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
 
         assert manager.server_exposes_tool(server, "add") is True
         assert manager.server_exposes_tool(server, "lazy_map-add") is True
@@ -6643,7 +6643,7 @@ class TestMCPServerManager:
         mock_lookup.assert_not_called()
 
     def test_create_prefixed_tools_updates_mapping_for_both_forms(self):
-        """_create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""
+        """create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""
         manager = MCPServerManager()
 
         server = MCPServer(
@@ -6665,7 +6665,7 @@ class TestMCPServerManager:
         )
 
         # Do not add prefix in returned objects
-        out_tools = manager._create_prefixed_tools([t1, t2], server, add_prefix=False)
+        out_tools = manager.create_prefixed_tools([t1, t2], server, add_prefix=False)
 
         # Returned names should be unprefixed
         names = sorted([t.name for t in out_tools])
@@ -6697,7 +6697,7 @@ class TestMCPServerManager:
             description="",
             inputSchema={},
         )
-        _ = manager._create_prefixed_tools([base_tool], server, add_prefix=False)
+        _ = manager.create_prefixed_tools([base_tool], server, add_prefix=False)
 
         # Unprefixed resolution
         resolved_server_unpref = manager._get_mcp_server_from_tool_name("create_zap")
@@ -7153,8 +7153,8 @@ class TestMCPServerManager:
 
         mock_client.call_tool.side_effect = mock_call_tool
 
-        # Mock _create_mcp_client to return our mock client
-        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+        # Mock create_mcp_client to return our mock client
+        manager.create_mcp_client = AsyncMock(return_value=mock_client)
 
         user_api_key_auth: Final = UserAPIKeyAuth(api_key="sk-test")
 
@@ -9510,7 +9510,7 @@ class TestMCPServerTimestamps:
 
     @pytest.mark.asyncio
     async def test_create_mcp_client_uses_server_timeout(self):
-        """_create_mcp_client must pass server.timeout to MCPClient when set."""
+        """create_mcp_client must pass server.timeout to MCPClient when set."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="timeout-client-server",
@@ -9519,12 +9519,12 @@ class TestMCPServerTimestamps:
             transport=MCPTransport.http,
             timeout=180.0,
         )
-        client = await manager._create_mcp_client(server)
+        client = await manager.create_mcp_client(server)
         assert client.timeout == 180.0
 
     @pytest.mark.asyncio
     async def test_create_mcp_client_falls_back_to_global_timeout(self):
-        """_create_mcp_client must fall back to MCP_CLIENT_TIMEOUT when server.timeout is None."""
+        """create_mcp_client must fall back to MCP_CLIENT_TIMEOUT when server.timeout is None."""
         from litellm.constants import MCP_CLIENT_TIMEOUT
 
         manager = MCPServerManager()
@@ -9534,7 +9534,7 @@ class TestMCPServerTimestamps:
             url="https://example.com/mcp",
             transport=MCPTransport.http,
         )
-        client = await manager._create_mcp_client(server)
+        client = await manager.create_mcp_client(server)
         assert client.timeout == MCP_CLIENT_TIMEOUT
 
     @pytest.mark.asyncio
@@ -9548,7 +9548,7 @@ class TestMCPServerTimestamps:
             transport=MCPTransport.http,
             timeout=0.0,
         )
-        client = await manager._create_mcp_client(server)
+        client = await manager.create_mcp_client(server)
         assert client.timeout == 0.0
 
     @pytest.mark.asyncio
@@ -9588,7 +9588,7 @@ class TestMCPServerTimestamps:
             timeout=0.01,
         )
 
-        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+        with patch.object(manager, "create_mcp_client", return_value=mock_client):
             with pytest.raises(HTTPException) as exc_info:
                 await manager._call_regular_mcp_tool(
                     mcp_server=server,
@@ -9943,11 +9943,11 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         assert manager._upstream_initialize_instructions_by_server_id.get("nonexistent") is None
 
     def test_remember_stores_stripped_value(self):
-        """_remember_upstream_initialize_instructions stores a stripped string."""
+        """remember_upstream_initialize_instructions stores a stripped string."""
         manager = MCPServerManager()
         fake_server = MagicMock(server_id="srv")
         fake_client = MagicMock(_last_initialize_instructions="  hello \n")
-        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        manager.remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
 
     def test_remember_ignores_empty_string(self):
@@ -9955,7 +9955,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         manager = MCPServerManager()
         fake_server = MagicMock(server_id="srv")
         fake_client = MagicMock(_last_initialize_instructions="   ")
-        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        manager.remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
 
     def test_remember_ignores_none(self):
@@ -9963,7 +9963,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         manager = MCPServerManager()
         fake_server = MagicMock(server_id="srv")
         fake_client = MagicMock(_last_initialize_instructions=None)
-        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        manager.remember_upstream_initialize_instructions(fake_server, fake_client)
         assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
 
     @pytest.mark.asyncio
@@ -10759,7 +10759,7 @@ class TestHealthCheckInterpolatesGlobalEnvVars:
             captured["extra_headers"] = extra_headers
             return mock_client
 
-        manager._create_mcp_client = AsyncMock(side_effect=_create)
+        manager.create_mcp_client = AsyncMock(side_effect=_create)
         return captured
 
     @pytest.mark.asyncio
@@ -10768,7 +10768,7 @@ class TestHealthCheckInterpolatesGlobalEnvVars:
         server = self._server()
         assert server.requires_per_user_auth is False
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
-        manager._remember_upstream_initialize_instructions = MagicMock()
+        manager.remember_upstream_initialize_instructions = MagicMock()
         captured = self._capture_headers(manager)
 
         result = await manager.health_check_server(server.server_id)
@@ -10781,7 +10781,7 @@ class TestHealthCheckInterpolatesGlobalEnvVars:
         manager = MCPServerManager()
         server = self._server()
         captured = self._capture_headers(manager)
-        manager._remember_upstream_initialize_instructions = MagicMock()
+        manager.remember_upstream_initialize_instructions = MagicMock()
 
         await manager._ensure_upstream_initialize_instructions_cached(server)
 
@@ -11016,7 +11016,7 @@ class TestGetPublicMCPServersLegacyMode:
 
 
 class TestCreateMcpClientV2Graft:
-    """The PR4 v2-resolver graft in ``_create_mcp_client``.
+    """The PR4 v2-resolver graft in ``create_mcp_client``.
 
     Migrated HTTP/SSE modes (``none`` plus the static ``api_key`` family) resolve through the
     injected ``UpstreamCredentialProvider`` into the ``resolved_auth`` slot; every other mode,
@@ -11038,7 +11038,7 @@ class TestCreateMcpClientV2Graft:
             NoOpAuth,
         )
 
-        client = await MCPServerManager()._create_mcp_client(self._http_server(auth_type=None))
+        client = await MCPServerManager().create_mcp_client(self._http_server(auth_type=None))
 
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._mcp_auth_value is None
@@ -11046,7 +11046,7 @@ class TestCreateMcpClientV2Graft:
     @pytest.mark.parametrize("auth_type", [None, MCPAuth.none])
     async def test_none_mode_rejects_url_userinfo(self, auth_type):
         with pytest.raises(HTTPException) as exc_info:
-            await MCPServerManager()._create_mcp_client(
+            await MCPServerManager().create_mcp_client(
                 self._http_server(
                     auth_type=auth_type,
                     url="https://lit-user:s3cr3t@upstream.example.com/mcp",
@@ -11075,7 +11075,7 @@ class TestCreateMcpClientV2Graft:
             StaticHeaderAuth,
         )
 
-        client = await MCPServerManager()._create_mcp_client(
+        client = await MCPServerManager().create_mcp_client(
             self._http_server(auth_type=auth_type, authentication_token=token)
         )
 
@@ -11091,7 +11091,7 @@ class TestCreateMcpClientV2Graft:
             StaticHeaderAuth,
         )
 
-        client = await MCPServerManager()._create_mcp_client(
+        client = await MCPServerManager().create_mcp_client(
             self._http_server(auth_type=MCPAuth.basic, authentication_token="user:pass")
         )
 
@@ -11121,7 +11121,7 @@ class TestCreateMcpClientV2Graft:
             async def refetch(self, server_id, config, failed_access_token):
                 return None
 
-        client = await MCPServerManager()._create_mcp_client(
+        client = await MCPServerManager().create_mcp_client(
             self._http_server(
                 auth_type=MCPAuth.oauth2,
                 oauth2_flow="client_credentials",
@@ -11141,7 +11141,7 @@ class TestCreateMcpClientV2Graft:
         # misconfigured naming the missing fields, rather than deferring to v1 and connecting
         # unauthenticated (which masked the upstream 401 as an empty tool list).
         with pytest.raises(HTTPException) as exc_info:
-            await MCPServerManager()._create_mcp_client(
+            await MCPServerManager().create_mcp_client(
                 self._http_server(
                     auth_type=MCPAuth.oauth2,
                     oauth2_flow="client_credentials",
@@ -11155,7 +11155,7 @@ class TestCreateMcpClientV2Graft:
 
     async def test_static_token_missing_rejects_before_connecting(self):
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(
+            await MCPServerManager().create_mcp_client(
                 self._http_server(auth_type=MCPAuth.api_key, authentication_token=None)
             )
         assert exc.value.status_code == 500
@@ -11163,7 +11163,7 @@ class TestCreateMcpClientV2Graft:
 
     async def test_stdio_migrated_auth_type_still_defers_to_v1(self, monkeypatch):
         monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
-        client = await MCPServerManager()._create_mcp_client(
+        client = await MCPServerManager().create_mcp_client(
             MCPServer(
                 server_id="stdio-graft",
                 name="stdio_graft",
@@ -11192,14 +11192,14 @@ class TestCreateMcpClientV2Graft:
         manager = MCPServerManager(cred_provider=_UnauthorizedProvider())
 
         with pytest.raises(HTTPException) as exc:
-            await manager._create_mcp_client(self._http_server(auth_type=None))
+            await manager.create_mcp_client(self._http_server(auth_type=None))
 
         assert exc.value.status_code == 401
 
     async def test_per_request_override_defers_to_v1(self):
         # A per-request override (mcp_auth_header) must win over the shared static token,
         # exactly as v1 did, so a migrated static server defers to v1 when one is present.
-        client = await MCPServerManager()._create_mcp_client(
+        client = await MCPServerManager().create_mcp_client(
             self._http_server(auth_type=MCPAuth.bearer_token, authentication_token="shared-tok"),
             mcp_auth_header="caller-override",
         )
@@ -11211,7 +11211,7 @@ class TestCreateMcpClientV2Graft:
         # An Authorization already supplied via extra_headers (guardrail hook like the JWT
         # signer, static_headers, or a forwarded caller header) must win. The server stays on
         # the v2 path but skips resolved_auth, so nothing overwrites the inbound header.
-        client = await MCPServerManager()._create_mcp_client(
+        client = await MCPServerManager().create_mcp_client(
             self._http_server(auth_type=MCPAuth.bearer_token, authentication_token="shared-tok"),
             extra_headers={"Authorization": "Bearer hook-jwt"},
         )
@@ -11227,7 +11227,7 @@ class TestCreateMcpClientV2Graft:
 
         # none resolves to NoOpAuth, which writes no header, so it cannot clobber an inbound
         # Authorization; it stays on the v2 path and the inbound header is preserved verbatim.
-        client = await MCPServerManager()._create_mcp_client(
+        client = await MCPServerManager().create_mcp_client(
             self._http_server(auth_type=None),
             extra_headers={"Authorization": "Bearer hook-jwt"},
         )
@@ -11271,7 +11271,7 @@ class TestMCPToolsListAuthSurfacing:
         client.list_tools = AsyncMock(side_effect=_upstream_status_error(401, challenge))
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
-            await manager._fetch_tools_with_timeout(client, "static-key-server")
+            await manager.fetch_tools_with_timeout(client, "static-key-server")
 
         assert exc_info.value.status_code == 401
         assert exc_info.value.www_authenticate == challenge
@@ -11289,7 +11289,7 @@ class TestMCPToolsListAuthSurfacing:
         client.list_tools = AsyncMock(side_effect=_upstream_status_error(403, challenge))
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
-            await manager._fetch_tools_with_timeout(client, "forbidden-server")
+            await manager.fetch_tools_with_timeout(client, "forbidden-server")
 
         assert exc_info.value.status_code == 403
         assert exc_info.value.www_authenticate == challenge
@@ -11306,7 +11306,7 @@ class TestMCPToolsListAuthSurfacing:
         client.list_tools = AsyncMock(side_effect=RuntimeError("upstream 500"))
 
         with pytest.raises(MCPServerListError) as exc_info:
-            await manager._fetch_tools_with_timeout(client, "srv")
+            await manager.fetch_tools_with_timeout(client, "srv")
 
         assert exc_info.value.fault == ServerListFault(tag="internal")
         assert exc_info.value.server_name == "srv"
@@ -11320,7 +11320,7 @@ class TestMCPToolsListAuthSurfacing:
         manager = MCPServerManager()
         server = MCPServer(server_id="oauth-srv", name="oauth-srv", transport=MCPTransport.http)
         challenge = 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/oauth-srv"'
-        manager._create_mcp_client = AsyncMock(
+        manager.create_mcp_client = AsyncMock(
             side_effect=HTTPException(
                 status_code=401,
                 detail="Unauthorized",
@@ -11344,7 +11344,7 @@ class TestMCPToolsListAuthSurfacing:
         401/403 remain the challenge-class statuses routed to MCPUpstreamAuthError."""
         manager = MCPServerManager()
         server = MCPServer(server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http)
-        manager._create_mcp_client = AsyncMock(
+        manager.create_mcp_client = AsyncMock(
             side_effect=HTTPException(
                 status_code=500,
                 detail="MCP stdio command 'foo' is not in the allowlist",
@@ -11382,7 +11382,7 @@ class TestMCPToolsListAuthSurfacing:
         )
         wrapper = RuntimeError("client build failed")
         wrapper.__cause__ = causal
-        manager._create_mcp_client = AsyncMock(side_effect=wrapper)
+        manager.create_mcp_client = AsyncMock(side_effect=wrapper)
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
             await manager._get_tools_from_server(server)
@@ -11421,7 +11421,7 @@ class TestMCPToolsListAuthSurfacing:
         )
         wrapper = RuntimeError("client build failed")
         wrapper.__cause__ = causal
-        manager._create_mcp_client = AsyncMock(side_effect=wrapper)
+        manager.create_mcp_client = AsyncMock(side_effect=wrapper)
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
             await manager._get_tools_from_server(bridge_server)
@@ -11451,7 +11451,7 @@ class TestMCPToolsListAuthSurfacing:
         upstream_challenge = 'Bearer resource_metadata="https://upstream.example/.well-known/oauth-protected-resource"'
         client = MagicMock()
         client.list_tools = AsyncMock(side_effect=_upstream_status_error(401, upstream_challenge))
-        manager._create_mcp_client = AsyncMock(return_value=client)
+        manager.create_mcp_client = AsyncMock(return_value=client)
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
             await manager._get_tools_from_server(bridge_server)
@@ -11476,7 +11476,7 @@ class TestMCPToolsListAuthSurfacing:
             auth_type=MCPAuth.oauth_delegate,
             dcr_bridge=True,
         )
-        manager._create_mcp_client = AsyncMock(
+        manager.create_mcp_client = AsyncMock(
             side_effect=HTTPException(
                 status_code=401,
                 detail="Unauthorized",
@@ -11621,7 +11621,7 @@ class TestOBOCallToolRetry:
         success = CallToolResult(content=[], isError=False)
         first = _RetryFakeClient(raises=_UpstreamAuthError(401))
         retry = _RetryFakeClient(result=success)
-        manager._create_mcp_client = AsyncMock(return_value=retry)
+        manager.create_mcp_client = AsyncMock(return_value=retry)
 
         result = await manager._obo_call_tool_with_retry(
             client=first,
@@ -11637,7 +11637,7 @@ class TestOBOCallToolRetry:
 
         assert result is success
         manager._cred_provider.invalidate_credentials.assert_awaited_once()
-        manager._create_mcp_client.assert_awaited_once()
+        manager.create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
 
     @pytest.mark.asyncio
@@ -11652,7 +11652,7 @@ class TestOBOCallToolRetry:
         success = CallToolResult(content=[], isError=False)
         first = _RetryFakeClient(raises=_UpstreamAuthError(401))
         retry = _RetryFakeClient(result=success)
-        manager._create_mcp_client = AsyncMock(return_value=retry)
+        manager.create_mcp_client = AsyncMock(return_value=retry)
         server = MCPServer(
             server_id="id-jag-srv",
             name="id-jag",
@@ -11691,7 +11691,7 @@ class TestOBOCallToolRetry:
         success = CallToolResult(content=[], isError=False)
         first = _RetryFakeClient(raises=_UpstreamAuthError(401))
         retry = _RetryFakeClient(result=success)
-        manager._create_mcp_client = AsyncMock(side_effect=[first, retry])
+        manager.create_mcp_client = AsyncMock(side_effect=[first, retry])
         server = MCPServer(
             server_id="id-jag-srv",
             name="id-jag",
@@ -11724,7 +11724,7 @@ class TestOBOCallToolRetry:
     async def test_non_auth_error_does_not_retry(self):
         manager = self._manager()
         first = _RetryFakeClient(raises=ValueError("tool blew up"))
-        manager._create_mcp_client = AsyncMock()
+        manager.create_mcp_client = AsyncMock()
 
         result = await manager._obo_call_tool_with_retry(
             client=first,
@@ -11740,7 +11740,7 @@ class TestOBOCallToolRetry:
 
         assert result.is_error is True
         manager._cred_provider.invalidate_credentials.assert_not_awaited()
-        manager._create_mcp_client.assert_not_awaited()
+        manager.create_mcp_client.assert_not_awaited()
         assert first.attempts == 1
 
     @pytest.mark.asyncio
@@ -11749,7 +11749,7 @@ class TestOBOCallToolRetry:
         first = _RetryFakeClient(raises=_UpstreamAuthError(401))
         # The retry client still fails; with raise_on_error defaulting False it returns isError.
         retry = _RetryFakeClient(raises=_UpstreamAuthError(401))
-        manager._create_mcp_client = AsyncMock(return_value=retry)
+        manager.create_mcp_client = AsyncMock(return_value=retry)
 
         result = await manager._obo_call_tool_with_retry(
             client=first,
@@ -11764,7 +11764,7 @@ class TestOBOCallToolRetry:
         )
 
         assert result.is_error is True
-        manager._create_mcp_client.assert_awaited_once()
+        manager.create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
 
 
@@ -11808,7 +11808,7 @@ class TestOBOConcurrencyLimit:
                 return CallToolResult(content=[], isError=False)
 
         manager = MCPServerManager()
-        manager._create_mcp_client = AsyncMock(return_value=_ConcurrencyRecordingClient())
+        manager.create_mcp_client = AsyncMock(return_value=_ConcurrencyRecordingClient())
 
         async def _dispatch():
             return await manager._call_regular_mcp_tool(
@@ -13045,7 +13045,7 @@ class TestServerToolListsHonorThePrefixBoundary:
     async def test_every_spelling_routing_registers_is_also_enforced(self, monkeypatch, short_prefix_mode):
         """The invariant, driven through production code on both sides.
 
-        ``_create_prefixed_tools`` decides which spellings reach dispatch, so
+        ``create_prefixed_tools`` decides which spellings reach dispatch, so
         every key it registers has to be a spelling the blocklist can refuse.
         Any key routing accepts but enforcement misses is a callable blocked
         tool.
@@ -13054,7 +13054,7 @@ class TestServerToolListsHonorThePrefixBoundary:
         shape = self._aliased_server(short_prefix="F3X")
 
         manager = MCPServerManager()
-        manager._create_prefixed_tools([MCPTool(name="deletepet", description="", inputSchema={})], shape)
+        manager.create_prefixed_tools([MCPTool(name="deletepet", description="", inputSchema={})], shape)
         registered = sorted(manager.tool_name_to_mcp_server_name_mapping)
         assert len(registered) > 1
 
@@ -13611,7 +13611,7 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
         manager = MCPServerManager()
         server = await self._registered(manager, auth_type, None)
         manager._set_oauth_discovery_deferred(server.server_id, True)
-        manager._fetch_tools_with_timeout = AsyncMock(
+        manager.fetch_tools_with_timeout = AsyncMock(
             return_value=[MCPTool(name="list_reports", description="d", inputSchema={"type": "object"})]
         )
 
@@ -13623,7 +13623,7 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
             tools = await manager._get_tools_from_server(server=server)
 
         assert [tool.name for tool in tools] == ["upstream-list_reports"]
-        manager._fetch_tools_with_timeout.assert_awaited_once()
+        manager.fetch_tools_with_timeout.assert_awaited_once()
 
     @pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
     @pytest.mark.asyncio
@@ -14501,12 +14501,12 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
         client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
         client.list_prompts = AsyncMock(return_value=[])
         client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
-        manager._create_mcp_client = AsyncMock(return_value=client)
+        manager.create_mcp_client = AsyncMock(return_value=client)
         return manager
 
     @staticmethod
     def _subject_token_given_to_client(manager: MCPServerManager) -> str | None:
-        return manager._create_mcp_client.call_args.kwargs["subject_token"]
+        return manager.create_mcp_client.call_args.kwargs["subject_token"]
 
     async def _call_tool_subject(self, server: MCPServer, oauth2_headers, raw_headers, user_api_key_auth):
         manager: Final = self._manager_with_recording_client()
@@ -14615,7 +14615,7 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
     @pytest.mark.asyncio
     async def test_tools_list_with_only_the_litellm_key_has_no_subject(self):
         manager: Final = self._manager_with_recording_client()
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[])
         await manager._get_tools_from_server(
             server=self._token_exchange_server("te-list-key"),
             oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
@@ -14891,7 +14891,7 @@ async def test_debug_reports_legacy_signing_and_non_http_transport(
             command="python",
             args=["-c", "pass"],
         )
-        client = await MCPServerManager()._create_mcp_client(server)
+        client = await MCPServerManager().create_mcp_client(server)
         if transport == "stdio":
             assert diagnostics.resolution() == "not-applicable"
         else:
@@ -15447,9 +15447,9 @@ def test_discovery_cache_ttl_validation(value: str, expected: float, monkeypatch
 def test_discovery_cache_keys_isolate_user_dependent_auth(auth_type: MCPAuth) -> None:
     manager: Final = MCPServerManager()
     server: Final = _discovery_server().model_copy(update={"auth_type": auth_type})
-    first: Final = manager._discovery_key(server, UserAPIKeyAuth(user_id="first"), None, None, None, None)
-    second: Final = manager._discovery_key(server, UserAPIKeyAuth(user_id="second"), None, None, None, None)
-    anonymous: Final = manager._discovery_key(server, None, None, None, None, None)
+    first: Final = manager.discovery_key(server, UserAPIKeyAuth(user_id="first"), None, None, None, None)
+    second: Final = manager.discovery_key(server, UserAPIKeyAuth(user_id="second"), None, None, None, None)
+    anonymous: Final = manager.discovery_key(server, None, None, None, None, None)
     assert len({first, second, anonymous}) == 3
     assert "first" not in str(first)
     assert "second" not in str(second)
@@ -15477,7 +15477,7 @@ async def test_openapi_listing_ignores_overlapping_server_prefix() -> None:
     from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 
     manager: Final = MCPServerManager()
-    manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+    manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
     for prefix in ("pet-", "petstore-"):
         global_mcp_tool_registry.unregister_tools_with_prefix(prefix)
     _register_local_tool("pet-list", "Local pet tool")
@@ -15498,7 +15498,7 @@ async def test_openapi_listing_finds_tools_registered_under_the_normalized_prefi
     from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 
     manager: Final = MCPServerManager()
-    manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+    manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
     global_mcp_tool_registry.unregister_tools_with_prefix("pet_store-")
     _register_local_tool("pet_store-list", "Pet store tool")
     try:
@@ -15827,7 +15827,7 @@ class TestProtectedCredentialPreparation:
             authentication_token="static-fallback",
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(
+            await MCPServerManager().create_mcp_client(
                 server,
                 mcp_auth_header="Bearer override",
                 subject_token=subject,
@@ -15850,7 +15850,7 @@ class TestProtectedCredentialPreparation:
             auth_type=auth_type,
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=credential)
+            await MCPServerManager().create_mcp_client(server, mcp_auth_header=credential)
         assert exc.value.status_code == 500
         assert "credential" in str(exc.value.detail).lower()
 
@@ -15872,7 +15872,7 @@ class TestProtectedCredentialPreparation:
             transport=MCPTransport.http,
             auth_type=auth_type,
         )
-        client = await MCPServerManager()._create_mcp_client(server, extra_headers=headers)
+        client = await MCPServerManager().create_mcp_client(server, extra_headers=headers)
         assert client._get_auth_headers() == headers
 
     @pytest.mark.asyncio
@@ -15921,7 +15921,7 @@ class TestProtectedCredentialPreparation:
             auth_type=auth_type,
             authentication_token=value,
         )
-        client = await MCPServerManager()._create_mcp_client(server)
+        client = await MCPServerManager().create_mcp_client(server)
         assert client._resolved_auth is not None
         request = httpx.Request("GET", server.url)
         flow = client._resolved_auth.auth_flow(request)
@@ -15949,7 +15949,7 @@ class TestProtectedCredentialPreparation:
         )
         destination: Final = respx_mock.route().respond(200)
         with pytest.raises(HTTPException, match="requires a usable upstream credential") as exc:
-            await MCPServerManager()._create_mcp_client(
+            await MCPServerManager().create_mcp_client(
                 server,
                 mcp_auth_header=value if source == "caller" else None,
                 extra_headers={"Authorization": value} if source == "forwarded" else None,
@@ -15969,7 +15969,7 @@ class TestProtectedCredentialPreparation:
             token_exchange_endpoint="https://idp.example/token",
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, mcp_auth_header="Bearer override")
+            await MCPServerManager().create_mcp_client(server, mcp_auth_header="Bearer override")
         assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -15983,7 +15983,7 @@ class TestProtectedCredentialPreparation:
             auth_type=MCPAuth.bearer_token,
             authentication_token=configured,
         )
-        client = await MCPServerManager()._create_mcp_client(server, mcp_auth_header=override)
+        client = await MCPServerManager().create_mcp_client(server, mcp_auth_header=override)
         assert client._get_auth_headers()["Authorization"] == override
 
     @pytest.mark.asyncio
@@ -15998,7 +15998,7 @@ class TestProtectedCredentialPreparation:
             authentication_token=token,
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, extra_headers={"authorization": " "})
+            await MCPServerManager().create_mcp_client(server, extra_headers={"authorization": " "})
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16012,7 +16012,7 @@ class TestProtectedCredentialPreparation:
             upstream_token_header="X-Custom",
             authentication_token="key",
         )
-        client = await MCPServerManager()._create_mcp_client(server, extra_headers={"X-Trace": "trace"})
+        client = await MCPServerManager().create_mcp_client(server, extra_headers={"X-Trace": "trace"})
         assert client._credential_slot == "X-Custom"
         assert await client.discovery_auth_fingerprint()
 
@@ -16038,10 +16038,10 @@ class TestProtectedCredentialPreparation:
         )
         if not accepted:
             with pytest.raises(HTTPException) as exc:
-                await MCPServerManager()._create_mcp_client(server, extra_headers=dict(static_headers))
+                await MCPServerManager().create_mcp_client(server, extra_headers=dict(static_headers))
             assert exc.value.status_code == 500
             return
-        client: Final = await MCPServerManager()._create_mcp_client(server, extra_headers=dict(static_headers))
+        client: Final = await MCPServerManager().create_mcp_client(server, extra_headers=dict(static_headers))
         request: Final = await client.prepare_request_auth()
         assert all(request.headers[name] == value for name, value in static_headers.items())
 
@@ -16133,7 +16133,7 @@ class TestProtectedCredentialPreparation:
             authentication_token=" ",
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server)
+            await MCPServerManager().create_mcp_client(server)
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16147,7 +16147,7 @@ class TestProtectedCredentialPreparation:
             auth_type=MCPAuth.basic,
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, extra_headers={"Authorization": header})
+            await MCPServerManager().create_mcp_client(server, extra_headers={"Authorization": header})
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16163,7 +16163,7 @@ class TestProtectedCredentialPreparation:
             authentication_token=value if source == "configured" else None,
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+            await MCPServerManager().create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16192,7 +16192,7 @@ class TestProtectedCredentialPreparation:
         )
         empty_slot: Final = default_slot if source == "configured" else "X-Custom"
         selected_slot: Final = "X-Custom" if source == "configured" else default_slot
-        client: Final = await MCPServerManager()._create_mcp_client(
+        client: Final = await MCPServerManager().create_mcp_client(
             server,
             mcp_auth_header=value if source == "caller" else None,
             extra_headers={empty_slot: ""},
@@ -16212,7 +16212,7 @@ class TestProtectedCredentialPreparation:
             upstream_token_header="X-Custom",
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, extra_headers={"X-Custom": "", "X-API-Key": ""})
+            await MCPServerManager().create_mcp_client(server, extra_headers={"X-Custom": "", "X-API-Key": ""})
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16230,7 +16230,7 @@ class TestProtectedCredentialPreparation:
             upstream_token_header=custom_slot,
         )
         headers: Final = {"Authorization": "Bearer caller-credential", "X-API-Key": ""}
-        client: Final = await MCPServerManager()._create_mcp_client(
+        client: Final = await MCPServerManager().create_mcp_client(
             server,
             mcp_auth_header=headers if source == "caller" else None,
             extra_headers=headers if source == "forwarded" else None,
@@ -16266,7 +16266,7 @@ class TestProtectedCredentialPreparation:
             auth_type=MCPAuth.api_key,
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, mcp_auth_header={"Authorization": value})
+            await MCPServerManager().create_mcp_client(server, mcp_auth_header={"Authorization": value})
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16282,7 +16282,7 @@ class TestProtectedCredentialPreparation:
             authentication_token=value if source == "configured" else None,
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+            await MCPServerManager().create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16298,7 +16298,7 @@ class TestProtectedCredentialPreparation:
             auth_type=MCPAuth.basic,
             authentication_token=value,
         )
-        client: Final = await MCPServerManager()._create_mcp_client(server)
+        client: Final = await MCPServerManager().create_mcp_client(server)
         request: Final = await client.prepare_request_auth()
         scheme, encoded = request.headers["Authorization"].split(" ", 1)
         assert scheme == "Basic"
@@ -16329,7 +16329,7 @@ class TestProtectedCredentialPreparation:
             authentication_token=value if source == "configured" else None,
         )
         with pytest.raises(HTTPException) as exc:
-            await MCPServerManager()._create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
+            await MCPServerManager().create_mcp_client(server, mcp_auth_header=value if source == "caller" else None)
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
@@ -16352,7 +16352,7 @@ class TestProtectedCredentialPreparation:
             auth_type=auth_type,
             authentication_token=value,
         )
-        client: Final = await MCPServerManager()._create_mcp_client(server)
+        client: Final = await MCPServerManager().create_mcp_client(server)
         request: Final = await client.prepare_request_auth()
         assert request.headers["Authorization"] == expected
 
@@ -16464,7 +16464,7 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
             if legacy_factory:
                 callback = _create_sampling_callback(user_api_key_auth=UserAPIKeyAuth(user_id="explicit"))
             else:
-                await MCPServerManager()._create_mcp_client(
+                await MCPServerManager().create_mcp_client(
                     upstream, user_api_key_auth=UserAPIKeyAuth(user_id="explicit") if with_caller else None
                 )
                 callback = factory.call_args.kwargs["sampling_callback"]
@@ -16833,7 +16833,7 @@ async def test_catalog_operation_retains_routes_only_for_same_configured_target(
     manager.registry = {server.server_id: server}
     with patch("litellm.proxy.proxy_server.prisma_client", None):
         async with manager.catalog.operation():
-            tools: Final = manager._create_prefixed_tools([Tool(name="search", inputSchema={})], server)
+            tools: Final = manager.create_prefixed_tools([Tool(name="search", inputSchema={})], server)
             if change == "delete":
                 manager.registry = {}
             else:
@@ -16951,7 +16951,7 @@ async def test_catalog_rebuilt_unchanged_server_keeps_discovered_tool_routes():
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         await manager.reload_servers_from_database()
         server: Final = manager.get_mcp_server_by_id(row.server_id)
-        tools: Final = manager._create_prefixed_tools([Tool(name="search", inputSchema={})], server)
+        tools: Final = manager.create_prefixed_tools([Tool(name="search", inputSchema={})], server)
         await manager.reload_servers_from_database()
     assert manager.server_exposes_tool(manager.get_mcp_server_by_id(row.server_id), tools[0].name)
 
@@ -16981,7 +16981,7 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
     async def publish():
         await start.wait()
         manager.registry[server.server_id] = server
-        manager._create_prefixed_tools([Tool(name="search", inputSchema={})], server)
+        manager.create_prefixed_tools([Tool(name="search", inputSchema={})], server)
         if openapi:
             registry.register_tool("late_routes-search", "Search", {}, handler)
         published.set()
@@ -17322,7 +17322,7 @@ async def test_catalog_rejects_configuration_switch_before_client_creation(monke
         await asyncio.create_task(manager.reload_servers_from_database())
         with patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as factory:
             with pytest.raises(HTTPException) as exc:
-                await manager._create_mcp_client(admitted)
+                await manager.create_mcp_client(admitted)
             assert exc.value.status_code == 503
             assert exc.value.detail == "MCP server configuration changed; retry the operation"
             factory.assert_not_called()
@@ -17374,7 +17374,7 @@ async def test_catalog_rejects_old_admission_in_a_new_operation(monkeypatch):
     read_rows.return_value = [_catalog_row("updated")]
     async with manager.catalog.operation():
         with pytest.raises(HTTPException) as exc:
-            await manager._create_mcp_client(original)
+            await manager.create_mcp_client(original)
         assert exc.value.detail == "MCP server configuration changed; retry the operation"
 
 
@@ -17778,7 +17778,7 @@ async def test_configured_protocol_reaches_the_upstream_client(config_only_mcp_m
         {"versions": {"url": "http://127.0.0.1:9/mcp", "transport": "http", "protocol_version": revision}}
     )
     server = next(iter(manager.config_mcp_servers.values()))
-    client = await manager._create_mcp_client(server)
+    client = await manager.create_mcp_client(server)
     assert server.protocol_version == revision
     assert client.protocol_version == revision
 
@@ -17838,8 +17838,8 @@ def catalog_guardrail(monkeypatch):
 
 def _catalog_manager(*upstream_tools: MCPTool) -> MCPServerManager:
     manager = MCPServerManager()
-    manager._create_mcp_client = AsyncMock(return_value=object())
-    manager._fetch_tools_with_timeout = AsyncMock(return_value=list(upstream_tools))
+    manager.create_mcp_client = AsyncMock(return_value=object())
+    manager.fetch_tools_with_timeout = AsyncMock(return_value=list(upstream_tools))
     return manager
 
 
@@ -17999,14 +17999,14 @@ class TestToolCatalogGuard:
             await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         assert send_alert.await_count == 1
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES])
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES])
         recovered = await manager._get_tools_from_server(
             _notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj
         )
         assert [tool.name for tool in recovered] == ["list_notes"]
         assert send_alert.await_count == 1
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES, POISONED_DELETE])
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES, POISONED_DELETE])
         await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         assert send_alert.await_count == 2
 
@@ -18212,12 +18212,12 @@ class TestToolCatalogGuard:
         )
         while send_alert.await_count == 0:
             await asyncio.sleep(0)
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES])
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES])
         await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         gate.set()
         await poisoned_listing
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES, POISONED_DELETE])
+        manager.fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES, POISONED_DELETE])
         await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         assert send_alert.await_count == 2
 
@@ -18332,7 +18332,7 @@ class TestToolCatalogGuard:
 
         expected_name = "petstore-list_pets" if add_prefix else "list_pets"
         assert [(tool.name, tool.description) for tool in served] == [(expected_name, "List pets")]
-        manager._fetch_tools_with_timeout.assert_not_awaited()
+        manager.fetch_tools_with_timeout.assert_not_awaited()
         alerts = {
             call.kwargs["alert_type"]: call.kwargs["message"]
             for call in proxy_logging_obj.slack_alerting_instance.send_alert.await_args_list
@@ -18386,11 +18386,11 @@ async def test_upstream_preparation_rejects_blocked_or_preserves_incomplete_stdi
     server: Final = MCPServer(server_id="stdio", name="stdio", transport=MCPTransport.stdio, command=command, args=args)
     if command == "blocked-executable":
         with pytest.raises(HTTPException) as error:
-            await MCPServerManager()._create_mcp_client(server)
+            await MCPServerManager().create_mcp_client(server)
         assert error.value.status_code == 403
         assert "not in the allowlist" in error.value.detail
     else:
-        client: Final = await MCPServerManager()._create_mcp_client(server)
+        client: Final = await MCPServerManager().create_mcp_client(server)
         assert client.stdio_config is None
 
 
@@ -18405,7 +18405,7 @@ async def test_upstream_preparation_preserves_windows_command_and_caller_environ
     server: Final = MCPServer(
         server_id="stdio", name="stdio", transport=MCPTransport.stdio, command="python.exe", args=[]
     )
-    client: Final = await MCPServerManager()._create_mcp_client(server, stdio_env=environment)
+    client: Final = await MCPServerManager().create_mcp_client(server, stdio_env=environment)
     assert client.stdio_config == {
         "command": "python.exe",
         "args": [],
@@ -18424,7 +18424,7 @@ async def test_upstream_preparation_honors_case_sensitive_extra_command(monkeypa
         server_id="custom-stdio", name="custom-stdio", transport=MCPTransport.stdio,
         command="/opt/tools/CustomRunner", args=[],
     )
-    client: Final = await MCPServerManager()._create_mcp_client(server)
+    client: Final = await MCPServerManager().create_mcp_client(server)
     assert client.stdio_config is not None
     assert client.stdio_config["command"] == "/opt/tools/CustomRunner"
 

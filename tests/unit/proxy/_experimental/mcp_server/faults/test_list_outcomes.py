@@ -133,7 +133,7 @@ async def test_cancelled_fetch_is_a_classified_fault_not_a_healthy_empty_server(
     client.list_tools = AsyncMock(side_effect=asyncio.CancelledError())
 
     with pytest.raises(MCPServerListError) as exc_info:
-        await manager._fetch_tools_with_timeout(client, "cancelled_srv")
+        await manager.fetch_tools_with_timeout(client, "cancelled_srv")
 
     assert exc_info.value.fault.tag == "internal"
 

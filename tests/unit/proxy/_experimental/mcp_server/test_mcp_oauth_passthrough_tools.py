@@ -111,7 +111,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
+        await manager.fetch_tools_with_timeout(mock_client, passthrough_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate == (
@@ -146,7 +146,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(mock_client, delegated_server.name)
+        await manager.fetch_tools_with_timeout(mock_client, delegated_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate == (
@@ -185,7 +185,7 @@ async def test_fetch_tools_from_client_credentials_oauth2_surfaces_upstream_401(
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(mock_client, m2m_server.name)
+        await manager.fetch_tools_with_timeout(mock_client, m2m_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.server_name == "m2m_docs"
@@ -210,7 +210,7 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     mock_client = MagicMock()
     mock_client.list_tools = AsyncMock(return_value=[tool])
 
-    tools = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
+    tools = await manager.fetch_tools_with_timeout(mock_client, passthrough_server.name)
     assert tools == [tool]
 
 
@@ -296,7 +296,7 @@ async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(mock_client, oauth2_server.name)
+        await manager.fetch_tools_with_timeout(mock_client, oauth2_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate is None
@@ -455,7 +455,7 @@ async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         with pytest.raises(MCPServerListError):
-            await manager._fetch_tools_with_timeout(mock_client, "sample_docs")
+            await manager.fetch_tools_with_timeout(mock_client, "sample_docs")
 
     assert "POST https://upstream/ -> HTTP 500" in caplog.text
     assert '"method":"initialize"' in caplog.text
@@ -470,7 +470,7 @@ async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, capl
     request = httpx.Request("POST", "https://upstream/mcp?credential=query-secret")
     response = httpx.Response(500, request=request, json={"error":"missing_scope"})
     error = httpx.HTTPStatusError("query-secret", request=request, response=response)
-    monkeypatch.setattr(manager, "_create_mcp_client", AsyncMock(side_effect=error))
+    monkeypatch.setattr(manager, "create_mcp_client", AsyncMock(side_effect=error))
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         with pytest.raises(MCPServerListError):
             await manager._get_tools_from_server(server)
