@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 from collections import UserDict
@@ -641,7 +642,11 @@ async def paginate_catalog(
         if position.revision is not None and position.revision != available_revision:
             raise MCPError(code=INVALID_PARAMS, message="Upstream snapshot changed; start a fresh listing")
         following: Final = result.next_cursor or None
-        fingerprint: Final = hashlib.sha256(following.encode()).hexdigest() if following is not None else None
+        fingerprint: Final = (
+            base64.urlsafe_b64encode(hashlib.sha256(following.encode()).digest()).decode("ascii").rstrip("=")
+            if following is not None
+            else None
+        )
         if fingerprint in position.seen:
             raise MCPError(code=INVALID_PARAMS, message="Upstream repeated a pagination cursor; start a fresh listing")
         if following is not None and len(position.seen) + 1 >= MCP_TOOL_LISTING_MAX_PAGES:
@@ -657,7 +662,13 @@ async def paginate_catalog(
             result,
         )
 
-    results: Final = tuple([await advance(position) for position in state.positions])
+    tasks: Final = tuple(asyncio.create_task(advance(position)) for position in state.positions)
+    try:
+        results: Final = await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
 
     pages: Final = tuple(result for _, result in results if result is not None)
@@ -895,18 +906,8 @@ async def get_server_tools(
             user_api_key_auth=user_api_key_auth,
             raw_headers=raw_headers,
         )
-        from litellm.proxy._experimental.mcp_server.result_conversion import to_gateway_tool
-        from litellm.proxy._experimental.mcp_server.utils import add_server_prefix_to_name
-
-        prefixed_or_original_tools: Final = (
-            manager.create_prefixed_tools(list(guarded_tools), server, add_prefix=add_prefix)
-            if params is None
-            else [
-                to_gateway_tool(
-                    tool, add_server_prefix_to_name(tool.name, get_server_prefix(server)) if add_prefix else tool.name
-                )
-                for tool in guarded_tools
-            ]
+        prefixed_or_original_tools: Final = manager.create_prefixed_tools(
+            list(guarded_tools), server, add_prefix=add_prefix, register_bare_names=params is None
         )
 
         return page.model_copy(update={"tools": prefixed_or_original_tools})
@@ -1289,11 +1290,21 @@ async def list_gateway_catalog(
             from mcp.shared.exceptions import MCPError
             from mcp.types import INVALID_PARAMS
 
-            from litellm.proxy._experimental.mcp_server.faults.list_outcomes import classify_list_exception
+            from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+                SERVER_OUTCOMES_META_KEY,
+                classify_list_exception,
+            )
             from litellm.proxy._experimental.mcp_server.operations import _aggregate_server_key
 
             try:
-                return await fetch_optional_catalog_page(context, request, server, allowed, cursor)
+                page: Final = await fetch_optional_catalog_page(context, request, server, allowed, cursor)
+                return page.model_copy(
+                    update={
+                        "meta": {
+                            key: value for key, value in (page.meta or {}).items() if key != SERVER_OUTCOMES_META_KEY
+                        }
+                    }
+                )
             except Exception as error:
                 if cursor is not None:
                     raise MCPError(

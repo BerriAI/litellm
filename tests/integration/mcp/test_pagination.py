@@ -310,6 +310,13 @@ def test_incomplete_discovery_never_establishes_a_bare_tool_route(tmp_path: Path
             )
             assert result.is_error
             assert tool_calls(peer.drain()) == ()
+            prefixed = await session.send_request(
+                CallToolRequest(params=CallToolRequestParams(name="pages-add0", arguments={"a": 3, "b": 4})),
+                CallToolResult,
+            )
+            assert not prefixed.is_error
+            assert prefixed.content[0].text == "7"
+            assert len(tool_calls(peer.drain())) == 1
 
     with paginated_mcp_peer(repeat_cursor=True) as peer, httpx.Client() as client:
         seed = Gateway(client, "sk-pagination-test", peer.url)
@@ -365,6 +372,34 @@ def test_failed_upstream_continuation_requires_restart_for_every_catalog(tmp_pat
                 assert "untrusted upstream message" not in str(caught.value)
 
     with paginated_mcp_peer(fail_continuation=True) as peer, httpx.Client() as client:
+        seed = Gateway(client, "sk-pagination-test", peer.url)
+        config = config_file(tmp_path, peer.url)
+        environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}
+        with owned_proxy(
+            seed, tmp_path / "proxy", environment, config=config, database_setup=(), remove_environment=REMOVE_DATABASE
+        ) as gateway:
+            asyncio.run(exercise(gateway))
+
+
+@pytest.mark.parametrize("foreign", [{"foreign": {"status": "error", "message": "foreign outcome"}}, "malformed"])
+def test_optional_catalog_ignores_upstream_gateway_outcomes(tmp_path: Path, foreign):
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
+    async def exercise(gateway):
+        async with catalog_session(gateway) as session:
+            for method, field in (
+                ("list_prompts", "prompts"),
+                ("list_resources", "resources"),
+                ("list_resource_templates", "resource_templates"),
+            ):
+                first = await getattr(session, method)()
+                assert len(getattr(first, field)) == 1
+                assert first.next_cursor
+                second = await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
+                assert len(getattr(second, field)) == 1
+                assert "foreign" not in (second.meta or {}).get(SERVER_OUTCOMES_META_KEY, {})
+
+    with paginated_mcp_peer(metadata={SERVER_OUTCOMES_META_KEY: foreign}) as peer, httpx.Client() as client:
         seed = Gateway(client, "sk-pagination-test", peer.url)
         config = config_file(tmp_path, peer.url)
         environment = {"STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "shared-key"}

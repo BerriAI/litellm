@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Sequence
 
 import pytest
@@ -245,3 +246,60 @@ def test_caller_binding_ignores_transport_headers_and_header_case():
     )
     retry = replace(original, raw_headers={"authorization": "Bearer synthetic", "mcp-session-id": "replica-b-session"})
     assert catalog._caller_scope(original, ()) == catalog._caller_scope(retry, ())
+
+
+@pytest.mark.asyncio
+async def test_upstream_pages_overlap_and_keep_deterministic_order(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "shared-test-key")
+    both_started = asyncio.Event()
+    started = set()
+
+    async def fetch(server_id, cursor):
+        started.add(server_id)
+        if len(started) == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        return page(server_id)
+
+    result = await listing(fetch, servers=("b", "a"))
+    assert [tool.name for tool in result.tools] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_cursor_history_allows_the_full_supported_page_count(monkeypatch):
+    from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "shared-test-key")
+
+    async def fetch(server_id, cursor):
+        index = int(cursor or "0")
+        return page(str(index), str(index + 1) if index + 1 < MCP_TOOL_LISTING_MAX_PAGES else None)
+
+    cursor = None
+    for index in range(MCP_TOOL_LISTING_MAX_PAGES):
+        result = await listing(fetch, cursor, servers=("a",))
+        assert result.tools[0].name == str(index)
+        cursor = result.next_cursor
+        assert bool(cursor) == (index + 1 < MCP_TOOL_LISTING_MAX_PAGES)
+
+
+@pytest.mark.asyncio
+async def test_failed_page_cancels_and_drains_other_upstream_requests(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "shared-test-key")
+    pending_started = asyncio.Event()
+    pending_closed = asyncio.Event()
+
+    async def fetch(server_id, cursor):
+        if server_id == "a":
+            await asyncio.wait_for(pending_started.wait(), timeout=1)
+            raise ValueError("upstream unavailable")
+        pending_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            pending_closed.set()
+        return page(server_id)
+
+    with pytest.raises(ValueError, match="upstream unavailable"):
+        await listing(fetch)
+    assert pending_closed.is_set()

@@ -969,7 +969,7 @@ async def test_gateway_listing_rejects_unrecognized_continuation() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["prompts/list", "resources/list", "resources/templates/list"])
-async def test_continuation_requires_restart_when_current_authority_is_unavailable(monkeypatch, method):
+async def test_continuation_preserves_current_authority_unavailable_error(monkeypatch, method):
     from mcp import MCPError
     from mcp.types import ListPromptsRequest, ListResourcesRequest, ListResourceTemplatesRequest, PaginatedRequestParams
 
@@ -979,7 +979,7 @@ async def test_continuation_requires_restart_when_current_authority_is_unavailab
     caller = UserAPIKeyAuth(api_key="sk-owned-key-without-database")
     caller.via_virtual_key = True
     request = {"prompts/list": ListPromptsRequest, "resources/list": ListResourcesRequest, "resources/templates/list": ListResourceTemplatesRequest}[method]
-    with pytest.raises(MCPError, match="fresh listing"):
+    with pytest.raises(MCPError, match="Server misconfigured: no database connection"):
         await GatewayOperations().execute(request(params=PaginatedRequestParams(cursor="existing-state")), prepare_context(caller))
 
 
@@ -997,3 +997,24 @@ async def test_virtual_tool_catalog_rejects_a_cursor_and_preserves_its_complete_
     assert result.next_cursor is None
     with pytest.raises(MCPError, match="fresh listing"):
         await GatewayOperations().execute(ListToolsRequest(params=PaginatedRequestParams(cursor="existing-state")), context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_name", ["ListPromptsRequest", "ListResourcesRequest", "ListResourceTemplatesRequest"])
+@pytest.mark.parametrize("cursor", [None, "existing-state"])
+async def test_optional_catalog_preserves_revoked_user_error(monkeypatch, request_name, cursor):
+    from types import SimpleNamespace
+
+    from mcp import MCPError, types
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
+    table = SimpleNamespace(find_unique=AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table)))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    caller = UserAPIKeyAuth(user_id="revoked-catalog-user")
+    caller.mcp_admitted_user_subject = True
+    request = getattr(types, request_name)(params=types.PaginatedRequestParams(cursor=cursor))
+    with pytest.raises(MCPError, match="Invalid or expired credential"):
+        await GatewayOperations().execute(request, prepare_context(caller))

@@ -22,7 +22,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import SamplingMessage, TextContent
 from mcp_tests.mcp_e2e_upstream_server import add, multiply
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 from sse_starlette.sse import AppStatus
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
@@ -625,14 +625,28 @@ def tool_calls(observed: tuple[dict[str, object], ...]) -> tuple[dict[str, objec
 
 
 @contextmanager
-def paginated_mcp_peer(*, page_size: int = 1, repeat_cursor: bool = False, fail_listing: bool = False, fail_continuation: bool = False) -> Iterator[McpPeer]:
+def paginated_mcp_peer(
+    *,
+    page_size: int = 1,
+    repeat_cursor: bool = False,
+    fail_listing: bool = False,
+    fail_continuation: bool = False,
+    metadata: dict[str, JsonValue] | None = None,
+) -> Iterator[McpPeer]:
     from contextlib import asynccontextmanager
 
     from mcp.server.lowlevel.server import Server
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.types import (
-        CallToolResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult,
-        ListToolsResult, Prompt, Resource, ResourceTemplate, Tool,
+        CallToolResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
+        Prompt,
+        Resource,
+        ResourceTemplate,
+        Tool,
     )
     from starlette.applications import Starlette
     from starlette.routing import Mount
@@ -650,41 +664,63 @@ def paginated_mcp_peer(*, page_size: int = 1, repeat_cursor: bool = False, fail_
     async def tools(context, params):
         indexes, cursor = window(params)
         return ListToolsResult(
-            tools=[Tool(name=f"add{index}", input_schema={
-                "type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
-                "required": ["a", "b"],
-            }) for index in indexes],
-            next_cursor=cursor, meta={"revision": "stable"},
+            tools=[
+                Tool(
+                    name=f"add{index}",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                        "required": ["a", "b"],
+                    },
+                )
+                for index in indexes
+            ],
+            next_cursor=cursor,
+            meta={"revision": "stable", **(metadata or {})},
         )
 
     async def prompts(context, params):
         indexes, cursor = window(params)
-        return ListPromptsResult(prompts=[Prompt(name=f"prompt{index}") for index in indexes], next_cursor=cursor)
+        return ListPromptsResult(
+            prompts=[Prompt(name=f"prompt{index}") for index in indexes], next_cursor=cursor, meta=metadata
+        )
 
     async def resources(context, params):
         indexes, cursor = window(params)
         return ListResourcesResult(
             resources=[Resource(name=f"resource{index}", uri=f"status://item{index}") for index in indexes],
             next_cursor=cursor,
+            meta=metadata,
         )
 
     async def templates(context, params):
         indexes, cursor = window(params)
         return ListResourceTemplatesResult(
-            resource_templates=[ResourceTemplate(name=f"template{index}", uri_template=f"status{index}://{{item}}") for index in indexes],
+            resource_templates=[
+                ResourceTemplate(name=f"template{index}", uri_template=f"status{index}://{{item}}") for index in indexes
+            ],
             next_cursor=cursor,
+            meta=metadata,
         )
 
     async def call(context, params):
         assert params.name in ("add0", "add1", "add2")
-        return CallToolResult(content=[TextContent(type="text", text=str(params.arguments["a"] + params.arguments["b"]))])
+        return CallToolResult(
+            content=[TextContent(type="text", text=str(params.arguments["a"] + params.arguments["b"]))]
+        )
 
     service = Server(
-        "paginated-catalog", on_list_tools=tools, on_list_prompts=prompts,
-        on_list_resources=resources, on_list_resource_templates=templates, on_call_tool=call,
+        "paginated-catalog",
+        on_list_tools=tools,
+        on_list_prompts=prompts,
+        on_list_resources=resources,
+        on_list_resource_templates=templates,
+        on_call_tool=call,
     )
     manager = StreamableHTTPSessionManager(
-        service, stateless=True, json_response=True,
+        service,
+        stateless=True,
+        json_response=True,
         security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
 
