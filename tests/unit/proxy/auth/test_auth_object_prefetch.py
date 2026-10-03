@@ -1,12 +1,15 @@
 """Counts the Redis round trips and DB queries auth object reads cost per cache regime, and checks that the
 per-object getters still enforce on their own when the prefetch cannot help."""
 
+import asyncio
 import json
 from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
 from fastapi import HTTPException
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -149,6 +152,42 @@ class CountingRedis(RedisCache):
     async def async_delete_cache(self, key: str) -> None:
         self._trip(f"DEL {key}")
         self.store.pop(key, None)
+
+
+class _GatedFakeRedis(RedisCache):
+    def __init__(self, client: FakeRedis, read_done: asyncio.Event, gate: asyncio.Event) -> None:
+        self._client: Final = client
+        self._read_done: Final = read_done
+        self._gate: Final = gate
+        self.mget_calls = 0
+
+    async def async_batch_get_cache(self, key_list: Sequence[str], **kwargs: object) -> dict[str, object]:
+        keys: Final = tuple(key_list)
+        values: Final = await self._client.mget(keys)
+        result: Final = {
+            key: json.loads(value) if value is not None else None
+            for key, value in zip(keys, values, strict=True)
+        }
+        self.mget_calls += 1
+        self._read_done.set()
+        await self._gate.wait()
+        return result
+
+    async def async_seed_and_increment(self, key: str, seed: int) -> int:
+        await self._client.set(key, json.dumps(seed), nx=True)
+        return await self._client.incr(key)
+
+    async def async_set_cache_atomically(
+        self,
+        cache_list: Sequence[tuple[str, object]],
+        ttl: float | None,
+    ) -> None:
+        values: Final = {key: json.dumps(value) for key, value in cache_list}
+        if values:
+            await self._client.mset(values)
+
+    async def async_delete_cache(self, key: str, **kwargs: object) -> None:
+        await self._client.delete(key)
 
 
 def _prisma(rows: dict[str, object] | None = ALL_ROWS) -> MagicMock:
@@ -405,6 +444,48 @@ async def test_identity_prefetch_fetches_registry_list_and_tag_as_a_pair():
     assert redis.commands == [f"MGET {registry_key} {loaded_key}"]
     assert cache.in_memory_cache.get_cache(key=registry_key) == ["eu-1"]
     assert cache.in_memory_cache.get_cache(key=loaded_key) == 17
+
+
+@pytest.mark.asyncio
+async def test_identity_prefetch_discards_registry_keys_invalidated_during_redis_read():
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+
+    gate: Final = asyncio.Event()
+    read_done: Final = asyncio.Event()
+    redis: Final = _GatedFakeRedis(
+        FakeRedis(server=FakeServer(), decode_responses=True),
+        read_done=read_done,
+        gate=gate,
+    )
+    cache: Final = _cache(redis)
+    end_user_key: Final = end_user_cache_key("prefetch-race-end-user")
+    registry_key: Final = end_user_restricted_registry_cache_key()
+    loaded_key: Final = registry_loaded_version_cache_key(registry_key)
+    version_key: Final = registry_version_cache_key(registry_key)
+    row: Final = {"user_id": "prefetch-race-end-user", "spend": 0.0}
+    await redis.async_set_cache_atomically(
+        cache_list=(
+            (end_user_key, row),
+            (registry_key, ("old-entry",)),
+            (loaded_key, 41),
+            (version_key, 41),
+        ),
+        ttl=60,
+    )
+
+    prefetch: Final = asyncio.create_task(
+        prefetch_identity_keys((end_user_key, registry_key, loaded_key, version_key), cache)
+    )
+    await read_done.wait()
+    await evict_and_broadcast(cache_keys=(registry_key,), user_api_key_cache=cache)
+    gate.set()
+    await prefetch
+
+    assert redis.mget_calls == 1
+    assert cache.in_memory_cache.get_cache(key=end_user_key) == row
+    assert cache.in_memory_cache.get_cache(key=registry_key) is None
+    assert cache.in_memory_cache.get_cache(key=loaded_key) is None
+    assert cache.in_memory_cache.get_cache(key=version_key) is None
 
 
 @pytest.mark.asyncio

@@ -22,11 +22,11 @@ async def bump_registry_version(registry_key: str, user_api_key_cache: UserApiKe
             await redis_cache.async_seed_and_increment(version_key, _registry_version_seed())
         except Exception as e:
             verbose_proxy_logger.warning(
-                "Failed to update registry version %s; a stale registry may be served until the next reload: %s",
-                registry_key,
+                "Failed to update registry version; a stale registry may be served until the next reload: %s",
                 e,
             )
             return
+        user_api_key_cache.note_registry_invalidation()
         redis_memory: Final[RegistryMemoryCache] = user_api_key_cache.in_memory_cache_for(version_key)
         redis_memory.delete_cache(version_key)
         return
@@ -34,6 +34,7 @@ async def bump_registry_version(registry_key: str, user_api_key_cache: UserApiKe
     current: Final = memory.get_cache(key=version_key)
     new_version: Final = (current if isinstance(current, int) else _registry_version_seed()) + 1
     memory.set_cache(key=version_key, value=new_version, ttl=get_management_object_ttl(user_api_key_cache))
+    user_api_key_cache.note_registry_invalidation()
 
 
 async def current_registry_version_for_load(
@@ -47,8 +48,7 @@ async def current_registry_version_for_load(
             return await redis_cache.async_get_or_seed(version_key, _registry_version_seed())
         except Exception as e:
             verbose_proxy_logger.warning(
-                "Failed to read registry version %s; this registry load will not be cached: %s",
-                registry_key,
+                "Failed to read registry version; this registry load will not be cached: %s",
                 e,
             )
             return None

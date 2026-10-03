@@ -1776,9 +1776,12 @@ async def _cached_registry(
     try:
         keys: Final = [cache_key, loaded_version_key, version_key]
         batch: Final = active_request_redis_batch(redis_cache)
+        registry_invalidations: Final = user_api_key_cache.registry_invalidations
         redis_result: Final[object] = (
             await redis_cache.async_batch_get_cache(key_list=keys) if batch is None else await batch.mget(keys)
         )
+        if user_api_key_cache.registry_invalidations != registry_invalidations:
+            return _REGISTRY_NOT_CACHED
         redis_values: Final = _REGISTRY_CACHE_ROWS.validate_python(redis_result)
     except Exception:
         return _REGISTRY_NOT_CACHED

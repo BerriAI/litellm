@@ -83,12 +83,16 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
         )
+        self.registry_invalidations: int = 0
         self.key_object_cache: Final = DualCache(
             in_memory_cache=key_object_in_memory_cache or InMemoryCache(),
             redis_cache=redis_cache,
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
         )
+
+    def note_registry_invalidation(self) -> None:
+        self.registry_invalidations += 1
 
     def in_memory_cache_for(self, key: str) -> InMemoryCache:
         return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
@@ -398,6 +402,18 @@ REGISTRY_CACHE_KEYS: Final = frozenset(
         model_access_group_registry_cache_key(),
     }
 )
+
+
+def is_registry_cache_key(key: str) -> bool:
+    return any(
+        key
+        in (
+            registry_key,
+            registry_loaded_version_cache_key(registry_key),
+            registry_version_cache_key(registry_key),
+        )
+        for registry_key in REGISTRY_CACHE_KEYS
+    )
 
 
 def team_membership_auth_cache_key(team_id: str, user_id: str) -> str:
