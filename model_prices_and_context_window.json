@@ -79845,5 +79845,27 @@
         "supports_tool_choice": true,
         "supports_vision": false,
         "supports_web_search": false
+    },
+    "azure_ai/kimi-k2-thinking": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/kimi/",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": false,
+        "supports_vision": false
     }
 }
