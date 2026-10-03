@@ -24,6 +24,32 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
     "Add a small yellow star in the top right corner of this simple drawing of a blue circle on a white background"
 )
 
+ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
+
+
+def native_health_check_mode(model: str, custom_llm_provider: str | None) -> Literal["anthropic_messages"] | None:
+    if custom_llm_provider != "bedrock_mantle":
+        return None
+    from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
+
+    return "anthropic_messages" if is_mantle_claude_model(model) else None
+
+
+def _cost_map_mode(model: str) -> str | None:
+    import litellm
+    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+
+    return OPTIONAL_STR.validate_python(litellm.model_cost.get(model, {}).get("mode"))
+
+
+def default_health_check_mode(requested_model: str, model: str, custom_llm_provider: str) -> str:
+    return (
+        native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider)
+        or _cost_map_mode(requested_model)
+        or _cost_map_mode(model)
+        or "chat"
+    )
+
 
 def get_image_file_for_health_check() -> bytes:
     """Return the image used for health checks."""
@@ -167,6 +193,7 @@ class HealthCheckHelpers:
             "realtime",
             "batch",
             "responses",
+            "anthropic_messages",
             "ocr",
             "evaluation",
         ],
@@ -253,6 +280,13 @@ class HealthCheckHelpers:
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),
                 input=prompt or "test",
+            ),
+            "anthropic_messages": lambda: litellm.anthropic_messages(
+                **{
+                    "max_tokens": ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS,
+                    "messages": [{"role": "user", "content": prompt or "test"}],
+                    **model_params,
+                }
             ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),

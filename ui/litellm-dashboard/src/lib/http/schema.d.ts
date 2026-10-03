@@ -27259,7 +27259,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check

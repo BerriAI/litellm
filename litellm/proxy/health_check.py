@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
@@ -69,18 +70,29 @@ HEALTH_DISPLAY_PARAMS: Final = (
 # endpoints that reject unknown fields with 400 "Unknown parameter:
 # 'max_tokens'". Allow-list so new modes are safe by default.
 # Per-deployment override: `model_info.health_check_supports_max_tokens`.
-_MAX_TOKEN_SUPPORT_MODES: Final[frozenset[str]] = frozenset({"chat", "completion", "responses"})
+_MAX_TOKEN_SUPPORT_MODES: Final[frozenset[str]] = frozenset({"chat", "completion", "responses", "anthropic_messages"})
+
+
+def _native_health_check_mode(model: str, provider_param: object) -> str | None:
+    try:
+        resolved_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=provider_param if isinstance(provider_param, str) else None
+        )
+    except Exception:
+        return None
+    return native_health_check_mode(model=resolved_model, custom_llm_provider=custom_llm_provider)
 
 
 def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
     """
     Effective mode for a deployment's health-check probe.
 
-    Prefers operator-set `model_info.mode`; otherwise resolves it from the model
-    cost map, which understands `bedrock/` and cross-region inference-profile
-    prefixes (`us.`, `eu.`, `apac.`). Without this, non-chat Bedrock deployments
-    (e.g. embeddings) are probed as chat, so `max_tokens` is injected and the
-    request 400s on "extraneous key [max_tokens]".
+    Prefers operator-set `model_info.mode`; then the mode the provider requires for
+    that model family (Bedrock Mantle serves Claude ids on the Messages API only);
+    otherwise resolves it from the model cost map, which understands `bedrock/` and
+    cross-region inference-profile prefixes (`us.`, `eu.`, `apac.`). Without this,
+    non-chat Bedrock deployments (e.g. embeddings) are probed as chat, so
+    `max_tokens` is injected and the request 400s on "extraneous key [max_tokens]".
     """
     explicit_mode: Final = model_info.get("mode")
     if isinstance(explicit_mode, str):
@@ -88,6 +100,9 @@ def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params:
     model: Final = litellm_params.get("model")
     if not isinstance(model, str):
         return None
+    native_mode: Final = _native_health_check_mode(model, litellm_params.get("custom_llm_provider"))
+    if native_mode is not None:
+        return native_mode
     try:
         return litellm.get_model_info(model=model).get("mode")
     except Exception:

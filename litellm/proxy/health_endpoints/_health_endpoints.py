@@ -2033,6 +2033,7 @@ async def test_model_connection(
         "rerank",
         "realtime",
         "responses",
+        "anthropic_messages",
         "ocr",
     ]
     | None = fastapi.Body(

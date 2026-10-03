@@ -9,6 +9,7 @@ from pydantic import TypeAdapter
 from litellm.types.decisions import DecisionsCallParams
 
 DECISIONS_CALL_PARAMS: Final[TypeAdapter[DecisionsCallParams]] = TypeAdapter(DecisionsCallParams)
+OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 def _filter_model_params(model_params: dict) -> dict:
