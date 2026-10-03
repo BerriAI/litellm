@@ -12,7 +12,6 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -92,6 +91,16 @@ def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Se
     )
 
 
+def _fallback_target_label(target: object) -> str:
+    match target:
+        case str():
+            return target
+        case {"model": str() as model}:
+            return model
+        case _:
+            return "<unnamed fallback>"
+
+
 def format_fallback_outcome_message(
     model_group: str | None,
     fallback_model_group: Sequence[object] | None,
@@ -101,7 +110,7 @@ def format_fallback_outcome_message(
     lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
     if not fallback_model_group:
         return f"{lead} No fallback was attempted."
-    targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
+    targets: Final = ", ".join(_fallback_target_label(target) for target in fallback_model_group)
     if not fallback_failure_detail:
         return f"{lead} Fallback model group(s) configured: {targets}."
     return f"{lead} Fallback to {targets} also failed: {fallback_failure_detail}"
