@@ -2850,6 +2850,19 @@ class MCPServerManager:
             normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
         )
 
+    def _has_mapped_tools(self, server: MCPServer) -> bool:
+        owned = self._owned_mapping_values(server)
+
+        return any(
+            normalize_server_name(owner) in owned for owner in self.tool_name_to_mcp_server_name_mapping.values()
+        )
+
+    async def _ensure_tool_mapping_for_server(self, server: MCPServer) -> None:
+        if self._has_mapped_tools(server):
+            return
+
+        await self._get_tools_from_server(server)
+
     def server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
         owned: Final = self._owned_mapping_values(server)
         mapped_owners: Final = (
@@ -2866,6 +2879,10 @@ class MCPServerManager:
             for server in reversed(tuple(self.get_registry().values()))
             for known_prefix in iter_known_server_prefixes(server)
         }
+
+    def _get_server_for_tool_call(self, server_name: str, name: str) -> MCPServer | None:
+        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
+        return self.server_owning_tool_name_prefix(prefixed_tool_name)
 
     def server_owning_tool_name_prefix(self, tool_name: str) -> MCPServer | None:
         prefix_to_server: Final = self._known_prefix_to_server()
@@ -6257,6 +6274,12 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time: Final = datetime.datetime.now()
+
+        candidate_server = self._get_server_for_tool_call(server_name, name)
+
+        if candidate_server is not None:
+            await self._ensure_tool_mapping_for_server(candidate_server)
+
         mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
 
         # Resolved before any hook runs so a missing BYOK credential (401) never
