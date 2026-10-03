@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useState } from "react";
 
 import { playbackPhase, playbackReducer, startPlayback, type Phase, type Playback } from "../../model/live";
 import type { Review } from "../../model/types";
@@ -11,7 +11,10 @@ function prefersReducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-export function useReviewPlayback(reviews: readonly Review[], live: boolean): Playback & { phase: Phase } {
+export function useReviewPlayback(
+  reviews: readonly Review[],
+  live: boolean,
+): Playback & { phase: Phase; replay: () => void } {
   const [still] = useState(prefersReducedMotion);
   const [state, dispatch] = useReducer(playbackReducer, undefined, () =>
     playbackReducer(startPlayback(reviews, live), still ? { type: "settle" } : { type: "tick", now: Date.now() }),
@@ -34,10 +37,15 @@ export function useReviewPlayback(reviews: readonly Review[], live: boolean): Pl
     return () => window.clearInterval(timer);
   }, [busy, still]);
 
+  const replay = useCallback(() => {
+    dispatch({ type: "replay" });
+    if (still) dispatch({ type: "settle" });
+  }, [still]);
+
   const current = state.current;
   const phase =
     still || !current
       ? { span: -1, typed: current?.reasoning.length ?? 0, verdict: true }
       : playbackPhase(now - state.startedAt, state.duration, current.spans.length, current.reasoning.length);
-  return { ...state, phase };
+  return { ...state, phase, replay };
 }
