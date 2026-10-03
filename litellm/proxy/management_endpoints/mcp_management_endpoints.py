@@ -921,39 +921,47 @@ if MCP_AVAILABLE:
         issuer_changed: Final = "issuer" in payload.model_fields_set and not issuer_identities_match(
             payload.issuer or "", existing_server.issuer or ""
         )
-        if upstream_changed:
-            cleared: Final = stale_mcp_auth_fields(
+        cleared: Final = (
+            stale_mcp_auth_fields(
                 payload.model_dump(exclude_unset=True),
                 lambda field: (
                     getattr(existing_server, f"configured_{field}", None) or getattr(existing_server, field, None)
                 ),
             )
-            payload = payload.model_copy(update={**cleared, "oauth2_flow": payload.oauth2_flow})
-        if _has_non_admin_config_credentials(payload.credentials):
-            return payload
+            if upstream_changed
+            else {}
+        )
+        resolved_payload: Final = (
+            payload.model_copy(update={**cleared, "oauth2_flow": payload.oauth2_flow}) if upstream_changed else payload
+        )
+        if _has_non_admin_config_credentials(resolved_payload.credentials):
+            return resolved_payload
 
-        inherited_credentials: dict[str, object] = {
+        existing_credentials: Final[dict[str, object]] = {
             credential_key: value
             for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
             if (value := getattr(existing_server, server_attr, None))
         }
-        if upstream_changed:
-            inherited_credentials = oauth_credentials_for_upstream_edit(
-                inherited_credentials,
+        bound_credentials: Final = (
+            oauth_credentials_for_upstream_edit(
+                existing_credentials,
                 existing_server.issuer,
                 existing_server.url,
                 issuer_changed=issuer_changed
-                or (payload.auth_type or existing_server.auth_type) != existing_server.auth_type,
+                or (resolved_payload.auth_type or existing_server.auth_type) != existing_server.auth_type,
             )
+            if upstream_changed
+            else existing_credentials
+        )
         # The gate above guarantees anything still supplied is admin config, which the admin just
         # typed, so it wins over the stored value.
-        inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
+        inherited_credentials: Final = {**bound_credentials, **dict(resolved_payload.credentials or {})}
 
         if not inherited_credentials:
-            return payload
+            return resolved_payload
 
         try:
-            return payload.model_copy(update={"credentials": inherited_credentials})
+            return resolved_payload.model_copy(update={"credentials": inherited_credentials})
         except AttributeError:
             pass
 

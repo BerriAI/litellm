@@ -185,7 +185,11 @@ def oauth_credentials_for_upstream_edit(
     )
     retained: Final = {key: value for key, value in credentials.items() if key not in removed}
     if keep_client:
-        retained.update(dcr_issuer=registered_issuer, dcr_server_url=credentials.get("dcr_server_url") or previous_url)
+        return {
+            **retained,
+            "dcr_issuer": registered_issuer,
+            "dcr_server_url": credentials.get("dcr_server_url") or previous_url,
+        }
     return retained
 
 
@@ -1252,16 +1256,16 @@ async def update_mcp_server(
     # exclude_unset=True makes this a true partial update: fields the caller did
     # not provide are not written, so they keep their existing DB value instead
     # of being reset to a schema default (transport=sse, allow_all_keys=False...).
-    data_dict: Final = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
+    prepared_data: Final = _prepare_mcp_server_data(data, exclude_unset=True, fields_set=fields_set)
 
     # Pre-fetch existing record once if we need it for auth_type, url, or credential logic
     existing = None
-    has_credentials: Final = "credentials" in data_dict and data_dict["credentials"] is not None
+    has_credentials: Final = "credentials" in prepared_data and prepared_data["credentials"] is not None
     # An explicit token-exchange column write (set or clear) also migrates the
     # legacy blob copies below, so the existing row is needed for those updates.
-    explicit_te_write: Final = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & data_dict.keys())
-    url_provided: Final = "url" in data_dict and data_dict["url"] is not None
-    issuer_provided: Final = "issuer" in data_dict
+    explicit_te_write: Final = bool(_TOKEN_EXCHANGE_COLUMN_FIELDS & prepared_data.keys())
+    url_provided: Final = "url" in prepared_data and prepared_data["url"] is not None
+    issuer_provided: Final = "issuer" in prepared_data
     if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
         existing = await _db_find_mcp_server_row(prisma_client, data.server_id)
 
@@ -1272,12 +1276,12 @@ async def update_mcp_server(
     )
     # A url change re-points the server at a potentially different upstream, so any discovered or
     # trust-on-first-use OAuth endpoints/issuer belong to the old upstream and must re-discover.
-    url_changed: Final = bool(url_provided and existing and existing.url != data_dict["url"])
+    url_changed: Final = bool(url_provided and existing and existing.url != prepared_data["url"])
     old_issuer: Final = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
     issuer_changed: Final = bool(
         issuer_provided
         and existing is not None
-        and not issuer_identities_match(_blank_to_none(data_dict.get("issuer")) or "", old_issuer or "")
+        and not issuer_identities_match(_blank_to_none(prepared_data.get("issuer")) or "", old_issuer or "")
     )
 
     oauth_upstream_edited: Final = bool(existing and existing.auth_type == "oauth2" and (url_changed or issuer_changed))
@@ -1293,18 +1297,16 @@ async def update_mcp_server(
         else existing_credentials
     )
     edited_credentials: Final = {"credentials": safe_dumps(retained_credentials)} if oauth_upstream_edited else {}
-    data_dict.update({**edited_credentials, **data_dict})
+    cleared_auth_fields: Final = (
+        stale_mcp_auth_fields(prepared_data, lambda field: getattr(existing, field, None))
+        if auth_type_changed or url_changed or issuer_changed
+        else {}
+    )
+    data_dict: Final = {**edited_credentials, **prepared_data, **cleared_auth_fields}
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
         data_dict["credentials"] = None
-
-    if auth_type_changed or url_changed or issuer_changed:
-        # Clear each auth-flow-scoped field that the caller either omitted (partial update) or
-        # resubmitted unchanged. The edit form re-sends every field, so a stale issuer/endpoint
-        # belonging to the old upstream would otherwise survive a url/auth_type change and win in the
-        # resolution merge; only a genuinely new submitted value is kept.
-        data_dict.update(stale_mcp_auth_fields(data_dict, lambda field: getattr(existing, field, None)))
 
     # An explicit column write that does not touch credentials must still migrate
     # the row's legacy blob copies: lift values for columns the caller left
@@ -1333,11 +1335,10 @@ async def update_mcp_server(
             # within the client-forwarded class (true_passthrough ↔ oauth_delegate) keeps
             # the same declared app and so must merge, not replace.
             if not auth_type_changed:
-                existing_creds = retained_credentials
                 new_creds: Final = _credentials_blob_to_mutable_dict(data_dict["credentials"])
                 # New values override existing; existing keys not in update are preserved. A client
                 # rotation additionally drops the previous app's stale minted token keys.
-                merged: Final = _drop_stale_minted_on_client_rotation({**existing_creds, **new_creds}, new_creds)
+                merged: Final = _drop_stale_minted_on_client_rotation({**retained_credentials, **new_creds}, new_creds)
                 # Migrate-on-write for legacy rows: token-exchange settings the
                 # old blob shape carried move to their dedicated columns (unless
                 # the caller set the column this update, or the row already has

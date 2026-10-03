@@ -1988,30 +1988,32 @@ async def register_client_with_server(
         server_id=resolved_server.server_id,
     )
 
-    token_response = response.json()
-
-    if persist_credentials and not bridge_relay:
-        persistence_result = await _persist_dcr_client_registration(
-            resolved_server, token_response, current_redirect_uri
-        )
-        if persistence_result == "reused":
-            return dummy_return
-        if persistence_result == "failed":
-            raise HTTPException(
-                status_code=503, detail="OAuth client registration could not be saved; retry authorization"
-            )
-        if persistence_result == "persisted":
-            token_response = {
-                **token_response,
-                "dcr_issuer": resolved_server.issuer,
-                "dcr_server_url": resolved_server.url,
-                "dcr_redirect_uris": [current_redirect_uri],
-            }
-
-    if client_redirect_uris and not bridge_relay and isinstance(token_response, dict):
-        token_response = {**token_response, "redirect_uris": client_facing_redirect_uris}
-
-    return JSONResponse(token_response)
+    token_response: Final = response.json()
+    persistence_result: Final = (
+        await _persist_dcr_client_registration(resolved_server, token_response, current_redirect_uri)
+        if persist_credentials and not bridge_relay
+        else None
+    )
+    if persistence_result == "reused":
+        return dummy_return
+    if persistence_result == "failed":
+        raise HTTPException(status_code=503, detail="OAuth client registration could not be saved; retry authorization")
+    bound_response: Final = (
+        {
+            **token_response,
+            "dcr_issuer": resolved_server.issuer,
+            "dcr_server_url": resolved_server.url,
+            "dcr_redirect_uris": [current_redirect_uri],
+        }
+        if persistence_result == "persisted"
+        else token_response
+    )
+    client_response: Final = (
+        {**bound_response, "redirect_uris": client_facing_redirect_uris}
+        if client_redirect_uris and not bridge_relay and isinstance(bound_response, dict)
+        else bound_response
+    )
+    return JSONResponse(client_response)
 
 
 @router.get("/authorize/mcp-session")
@@ -2429,13 +2431,13 @@ async def callback(
                 iss,
                 issuer_state.get("expected_issuer"),
             )
-            response = _render_oauth_error_html(
+            issuer_error_response: Final = _render_oauth_error_html(
                 "invalid_issuer",
                 "This authorization response came from a different identity provider than the one this "
                 "MCP server is configured to use.",
             )
-            _clear_oauth_state_cookie(response, request, state)
-            return response
+            _clear_oauth_state_cookie(issuer_error_response, request, state)
+            return issuer_error_response
 
         # Interactive dcr_bridge oauth_delegate: the state carries the litellm user the authorize step
         # captured. Instead of forwarding the raw upstream code (which the client would present at the
