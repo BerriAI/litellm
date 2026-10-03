@@ -184,10 +184,10 @@ def _nested_blocks(blocks: tuple[_AttachmentBlock, ...]) -> tuple[_AttachmentBlo
 
 def _nested_content(block: _AttachmentBlock) -> object:
     match block:
-        case _ToolResultBlock(content=content):
-            return content
-        case _DocumentBlock(source=_Source(type="content", content=content)):
-            return content
+        case _ToolResultBlock():
+            return block.content
+        case _DocumentBlock(source=_Source(type="content")):
+            return block.source.content
         case _:
             return None
 
@@ -200,16 +200,10 @@ def _blocks(content: object) -> tuple[_AttachmentBlock, ...]:
 
 def _classify_block(block: _AttachmentBlock, index: int) -> _Classified:
     match block:
-        case _ImageURLBlock(image_url=_ImageURL(url=url)):
-            return _from_uri(url, None, index, "image")
-        case _ImageURLBlock(image_url=str(url)):
-            return _from_uri(url, None, index, "image")
-        case _InputImageBlock(image_url=url):
-            return _from_uri(url, None, index, "image")
-        case _VideoURLBlock(video_url=_ImageURL(url=url)):
-            return _from_uri(url, None, index, "file")
-        case _VideoURLBlock(video_url=str(url)):
-            return _from_uri(url, None, index, "file")
+        case _ImageURLBlock() | _InputImageBlock():
+            return _from_uri(_url(block.image_url), None, index, "image")
+        case _VideoURLBlock():
+            return _from_uri(_url(block.video_url), None, index, "file")
         case _InputAudioBlock(input_audio=_InputAudio(data=str(data), format=audio_format)):
             name: Final = f"attachment-{index}.{audio_format}" if audio_format else None
             return _from_base64(data, name, index, "audio", None)
@@ -225,6 +219,10 @@ def _classify_block(block: _AttachmentBlock, index: int) -> _Classified:
             return _from_source(source, title, index, "file")
         case _:
             return _NOT_AN_ATTACHMENT
+
+
+def _url(value: _ImageURL | str | None) -> str | None:
+    return value.url if isinstance(value, _ImageURL) else value
 
 
 def _from_uri(raw_uri: str | None, name: str | None, index: int, kind: AttachmentType) -> _Classified:
