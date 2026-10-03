@@ -15,6 +15,7 @@ from litellm.cost_calculator import (
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
+    pricing_entry_for_cost_calc,
     response_cost_calculator,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -5639,3 +5640,56 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     )
 
     assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider,deployment_model,cost_map_key",
+    [
+        ("vertex_ai", "claude-opus-4-8@default", "vertex_ai/claude-opus-4-8@default"),
+        ("anthropic", "claude-opus-4-8", "claude-opus-4-8"),
+    ],
+)
+def test_completion_cost_prices_capability_rule_alias_from_the_deployment(
+    _local_model_cost_map: None, custom_llm_provider: str, deployment_model: str, cost_map_key: str
+) -> None:
+    """Streamed proxy chunks carry the client's alias, so the first cost candidate is the
+    provider-prefixed alias. That name matches a claude capability generalization rule (unpriced)
+    and must fall through to the deployment's priced model instead of stopping at $0."""
+    response: Final = ModelResponse(
+        id="chatcmpl_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-opus-4.8",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+    row: Final = litellm.model_cost[cost_map_key]
+    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
+    assert expected > 0
+
+    assert completion_cost(
+        completion_response=response,
+        model=deployment_model,
+        custom_llm_provider=custom_llm_provider,
+    ) == pytest.approx(expected)
+
+
+def test_pricing_entry_for_cost_calc_skips_capability_rule_alias(_local_model_cost_map: None) -> None:
+    response: Final = ModelResponse(
+        id="chatcmpl_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-opus-4.8",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+
+    resolved: Final = pricing_entry_for_cost_calc(
+        model="claude-opus-4-8@default",
+        completion_response=response,
+        custom_llm_provider="vertex_ai",
+        custom_pricing=None,
+        base_model=None,
+        router_model_id=None,
+        region_name=None,
+        litellm_logging_obj=None,
+    )
+
+    assert resolved is not None
+    assert resolved[0] == "vertex_ai/claude-opus-4-8@default"

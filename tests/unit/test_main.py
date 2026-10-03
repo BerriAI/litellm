@@ -4061,7 +4061,7 @@ def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
     logging_obj: Final = LiteLLMLogging(
-        model="us.anthropic.claude-opus-5",
+        model="unmapped-deployment-without-cost-map-entry",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="completion",
