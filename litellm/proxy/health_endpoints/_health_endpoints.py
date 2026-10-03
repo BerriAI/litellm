@@ -2214,8 +2214,13 @@ async def test_model_connection(
         }
 
         resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        probe_model_info: Final = _model_info_for_mode_resolution(
+            _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
+            stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
+            request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
+        )
         litellm_params = _update_litellm_params_for_health_check(
-            model_info=resolved_model_info or {},
+            model_info=dict(probe_model_info),
             litellm_params=litellm_params,
         )
 
@@ -2234,14 +2239,7 @@ async def test_model_connection(
         probe_mode: Final = (
             mode
             or _string_mode_or_bad_request(raw_params_mode)
-            or _resolve_health_check_mode(
-                _model_info_for_mode_resolution(
-                    _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
-                    stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
-                    request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
-                ),
-                _OBJECT_MAPPING.validate_python(litellm_params),
-            )
+            or _resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
 
         result: Final = await run_with_timeout(

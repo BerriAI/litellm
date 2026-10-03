@@ -796,6 +796,33 @@ async def test_test_model_connection_stored_operator_mode_follows_the_stored_mod
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_overridden_model_probe_params_follow_the_probed_model():
+    """
+    When the request selects a deployment by id and swaps in another model, the probe's
+    params are shaped for that model, so the stored mode must not inject `max_tokens`
+    into what is now an embedding probe (Mistral rejects it with a 422 extra_forbidden).
+    """
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "anthropic-claude-haiku-4-5",
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "fake-anthropic-key"},
+            "model_info": {"id": "anthropic-messages-id", "mode": "anthropic_messages"},
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "mistral/mistral-embed", "api_key": "fake-mistral-key"},
+            model_info={"id": "anthropic-messages-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == "embedding"
+    assert "max_tokens" not in ahealth_check.call_args.kwargs["model_params"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("params_mode", [123, ["chat"], {"mode": "chat"}, False], ids=["int", "list", "dict", "bool"])
 async def test_test_model_connection_non_string_params_mode_is_a_bad_request(params_mode: object):
     with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
