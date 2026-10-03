@@ -30,7 +30,8 @@ CounterScope: TypeAlias = Literal["key", "user", "team"]
 _COUNTER_PREFIX: Final = "litellm:file_usage"
 _DAY_SECONDS: Final = 24 * 60 * 60
 _MINUTE_SECONDS: Final = 60
-_LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(gt=0)])
+_LIMIT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
+_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,11 +55,11 @@ class FileUsageLimitExceeded:
 
 
 def _read_limit(
-    settings: Mapping[str, object] | None,
+    settings: Mapping[str, object],
     setting: FileUsageSetting,
     source: LimitSource,
 ) -> FileUsageLimit | None:
-    raw: Final = (settings or EMPTY_MAPPING).get(setting)
+    raw: Final = settings.get(setting)
     if raw is None:
         return None
     try:
@@ -77,14 +78,16 @@ def _key_limit(
     general_settings: Mapping[str, object],
     setting: FileUsageSetting,
 ) -> FileUsageLimit | None:
-    from_key: Final = _read_limit(user_api_key_dict.metadata, setting, "key")
+    key_metadata: Final = _METADATA_ADAPTER.validate_python(user_api_key_dict.metadata or EMPTY_MAPPING)
+    from_key: Final = _read_limit(key_metadata, setting, "key")
     if from_key is not None:
         return from_key
     return _read_limit(general_settings, setting, "general_settings")
 
 
 def _team_limit(user_api_key_dict: UserAPIKeyAuth, setting: FileUsageSetting) -> FileUsageLimit | None:
-    return _read_limit(user_api_key_dict.team_metadata, setting, "team")
+    team_metadata: Final = _METADATA_ADAPTER.validate_python(user_api_key_dict.team_metadata or EMPTY_MAPPING)
+    return _read_limit(team_metadata, setting, "team")
 
 
 def batch_file_record_limit(
@@ -193,7 +196,7 @@ def _describe_scope(scoped: ScopedFileUsageLimit) -> str:
 
 def _raise_limit_exceeded(exceeded: FileUsageLimitExceeded, what_ran_out: str, when_it_resets: str) -> NoReturn:
     scoped: Final = exceeded.limit
-    headers: Final = {"retry-after": str(exceeded.retry_after_seconds)}  # mutable-ok: ProxyException mutates it
+    headers: Final = {"retry-after": str(exceeded.retry_after_seconds)}
     raise ProxyException(
         message=(
             f"{what_ran_out}: {scoped.limit.setting} is {scoped.limit.value} for {_describe_scope(scoped)} "

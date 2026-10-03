@@ -6,7 +6,7 @@ use litellm_llms::{
         chat::transformation::{BaseConfig, ProviderChatResponseData, Unsupported},
     },
 };
-use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use litellm_llms_types::formats::chat_completions::{ChatCompletionsResponse, ChatMessage};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 

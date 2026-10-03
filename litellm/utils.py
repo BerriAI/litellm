@@ -55,6 +55,7 @@ import litellm.litellm_core_utils.json_validation_rule
 from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_default_encoding,
+    _get_messages_reach_token_count,
     _get_modified_max_tokens,
     _get_token_counter_new,
 )
@@ -308,6 +309,7 @@ if TYPE_CHECKING:
         CachingHandlerResponse,
         LLMCachingHandler,
     )
+    from litellm.harness.types import Harness
     from litellm.integrations.custom_logger import CustomLogger
 
     # Type stubs for lazy-loaded functions and classes
@@ -385,6 +387,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.google_genai.transformation import (
         BaseGoogleGenAIGenerateContentConfig,
     )
+    from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
     from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
     from litellm.llms.base_llm.image_generation.transformation import (
         BaseImageGenerationConfig,
@@ -408,7 +411,7 @@ if TYPE_CHECKING:
         BaseVectorStoreFilesConfig,
     )
     from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo, BedrockRoute
     from litellm.llms.bedrock.embed.amazon_nova_transformation import (
         AmazonNovaEmbeddingConfig,
     )
@@ -628,9 +631,12 @@ def _custom_logger_class_exists_in_success_callbacks(
 
     Prevents double adding a custom logger callback to the litellm callbacks
 
-    Matches on the exact class; an instance of a subclass does not count as registered
+    Matches on the exact class and callback name; an instance of a subclass does not count as registered
     """
-    return any(type(cb) is type(callback_class) for cb in litellm.success_callback + litellm._async_success_callback)
+    return any(
+        _is_same_registered_custom_logger(cb, callback_class)
+        for cb in litellm.success_callback + litellm._async_success_callback
+    )
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
@@ -643,9 +649,23 @@ def _custom_logger_class_exists_in_failure_callbacks(
 
     Prevents double adding a custom logger callback to the litellm callbacks
 
-    Matches on the exact class; an instance of a subclass does not count as registered
+    Matches on the exact class and callback name; an instance of a subclass does not count as registered
     """
-    return any(type(cb) is type(callback_class) for cb in litellm.failure_callback + litellm._async_failure_callback)
+    return any(
+        _is_same_registered_custom_logger(cb, callback_class)
+        for cb in litellm.failure_callback + litellm._async_failure_callback
+    )
+
+
+def _is_same_registered_custom_logger(existing: object, callback_class: CustomLogger) -> bool:
+    """
+    One logger class can serve several callback names (every OTel v2 preset such as
+    ``otel`` and ``arize`` is an ``OpenTelemetryV2``), so a registered ``otel`` logger
+    must not count as an already registered ``arize`` logger
+    """
+    return type(existing) is type(callback_class) and getattr(existing, "callback_name", None) == getattr(
+        callback_class, "callback_name", None
+    )
 
 
 def get_request_guardrails(kwargs: dict[str, Any]) -> list[str]:
@@ -1188,7 +1208,7 @@ def function_setup(
         elif call_type == CallTypes.moderation.value or call_type == CallTypes.amoderation.value:
             messages = args[1] if len(args) > 1 else kwargs["input"]
         elif call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value:
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            messages = args[0] if len(args) > 0 else kwargs.get("prompt")
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
             messages = kwargs.get("query")
         elif call_type in (CallTypes.search.value, CallTypes.asearch.value):
@@ -1198,6 +1218,9 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
+        elif call_type in (CallTypes.decisions.value, CallTypes.adecisions.value):
+            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state", "")
+            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
@@ -1251,7 +1274,7 @@ def function_setup(
                 verbose_logger.debug("Error extracting messages from Google contents: %s", e)
                 messages = "default-message-value"
         elif call_type in NON_INFERENCE_CALL_TYPES:
-            messages = []  # mutable-ok: loggers require a list here and Logging copies it
+            messages = []
         else:
             messages = "default-message-value"
         stream = False
@@ -2309,6 +2332,7 @@ def _is_async_request(
         or kwargs.get("_arealtime", False) is True
         or kwargs.get("acreate_batch", False) is True
         or kwargs.get("acreate_fine_tuning_job", False) is True
+        or kwargs.get("aresponses", False) is True
         or is_pass_through is True
     ):
         return True
@@ -3109,9 +3133,9 @@ def _update_dictionary(existing_dict: dict, new_dict: dict) -> dict:
             elif isinstance(v, dict):
                 existing_nested_dict = existing_dict.get(k)
                 if isinstance(existing_nested_dict, dict):
-                    existing_dict[k] = {**existing_nested_dict, **v}  # mutable-ok: copy-on-write merge
+                    existing_dict[k] = {**existing_nested_dict, **v}
                 else:
-                    existing_dict[k] = dict(v)  # mutable-ok: detached copy, never the caller's dict by reference
+                    existing_dict[k] = dict(v)
             else:
                 existing_dict[k] = v
 
@@ -3262,7 +3286,7 @@ def reapply_runtime_model_cost_registrations() -> None:
     if _LiveDeploymentReplay.callback is not None:
         _LiveDeploymentReplay.callback()
     if _runtime_registered_model_cost:
-        register_model(model_cost=dict(_runtime_registered_model_cost))  # mutable-ok: snapshot, replay rewrites it
+        register_model(model_cost=dict(_runtime_registered_model_cost))
 
 
 def cost_map_omits_token_price(*keys: object) -> bool:
@@ -3322,7 +3346,7 @@ def register_model(
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
         for _registered_key, _registered_value in _registrations.items():
-            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)  # mutable-ok: caller-owned
+            _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
 
     _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
 
@@ -3344,7 +3368,7 @@ def register_model(
                 # An exact entry ends the lookup ladder before the capability rules are
                 # consulted, so seed from them: otherwise registering an unmapped model
                 # shadows the very defaults it would have resolved to unregistered.
-                existing_model = dict(match_capability_generalizations(_key_str) or {})  # mutable-ok: merge target
+                existing_model = dict(match_capability_generalizations(_key_str) or {})
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 if builtin_entry is not None:
@@ -3451,6 +3475,14 @@ def _should_drop_param(k, additional_drop_params) -> bool:
         return True  # allow user to drop specific params for a model - e.g. vllm - logit bias
 
     return False
+
+
+def _bedrock_route_for_request(
+    model: str, passed_params: Mapping[str, object], additional_drop_params: Sequence[str] | None
+) -> BedrockRoute:
+    from litellm.llms.bedrock.common_utils import bedrock_route_for_request
+
+    return bedrock_route_for_request(model, passed_params, additional_drop_params)
 
 
 def _get_non_default_params(passed_params: dict, default_params: dict, additional_drop_params: list | None) -> dict:
@@ -3583,7 +3615,7 @@ def get_optional_params_image_gen(
     user: str | None = None,
     imageConfig: dict | None = None,
     custom_llm_provider: str | None = None,
-    additional_drop_params: list | None = None,
+    additional_drop_params: Sequence[str] | None = None,
     provider_config: BaseImageGenerationConfig | None = None,
     drop_params: bool | None = None,
     **kwargs: object,
@@ -3595,7 +3627,7 @@ def get_optional_params_image_gen(
     passed_params.pop("provider_config", None)
     passed_params.pop("drop_params", None)
     drop_params = normalize_drop_params(drop_params)
-    additional_drop_params = passed_params.pop("additional_drop_params", None)
+    passed_params.pop("additional_drop_params", None)
     passed_params.pop("kwargs")
     special_params: Final[Mapping[str, object]] = kwargs
     for k, v in special_params.items():
@@ -4426,7 +4458,7 @@ def get_optional_params(
     allowed_openai_params: list[str] | None = None,
     reasoning_effort=None,
     verbosity=None,
-    additional_drop_params=None,
+    additional_drop_params: list[str] | None = None,
     messages: list[AllMessageValues] | None = None,
     thinking: AnthropicThinkingParam | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
@@ -4434,11 +4466,12 @@ def get_optional_params(
     store: bool | None = None,
     prompt_cache_key: str | None = None,
     base_model: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     drop_params = normalize_drop_params(drop_params)  # rebind-ok: config and DB deployments pass "true" as a string
     passed_params: Final = locals().copy()
-    special_params: Final = passed_params.pop("kwargs")
+    passed_params.pop("kwargs")
+    special_params: Final = kwargs
     # Remove base_model from passed_params so it doesn't interfere with
     # non_default_params / _check_valid_arg — it's a routing hint, not an
     # OpenAI param.
@@ -4493,9 +4526,17 @@ def get_optional_params(
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
+    bedrock_route: Final = (
+        _bedrock_route_for_request(model, passed_params, additional_drop_params)
+        if custom_llm_provider == "bedrock"
+        else None
+    )
     get_supported_openai_params: Final[_SupportedOpenAIParamsGetter] = litellm_utils.get_supported_openai_params
-    supported_params = get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
+    supported_params = (
+        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+        if bedrock_route == "converse"
+        and isinstance(provider_config, litellm.AmazonBedrockRuntimeChatCompletionsConfig)
+        else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
     )
     if supported_params is None:
         supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
@@ -4665,7 +4706,6 @@ def get_optional_params(
         )
     elif custom_llm_provider == "bedrock":
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
-        bedrock_route: Final = bedrock_model_info.get_bedrock_route(model)
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
@@ -5073,7 +5113,7 @@ def provider_rejectable_params(passed_params: Mapping[str, object]) -> frozenset
     params at all, so a caller filtering on "is this an OpenAI param" would discard configuration the
     request needs while never touching what the provider would have rejected.
     """
-    params: Final = dict(passed_params)  # mutable-ok: get_non_default_params takes a dict
+    params: Final = dict(passed_params)
     return frozenset(get_non_default_params(params)) - PROVIDER_UNVALIDATED_PARAMS
 
 
@@ -6102,6 +6142,9 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_272k_tokens_flex=_model_info.get(
                     "cache_creation_input_token_cost_above_272k_tokens_flex", None
                 ),
+                cache_creation_input_token_cost_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_ultrafast", None
+                ),
                 cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
                 cache_creation_input_token_cost_priority=_model_info.get(
                     "cache_creation_input_token_cost_priority", None
@@ -6126,6 +6169,9 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_above_272k_tokens_flex=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_flex", None
+                ),
+                cache_read_input_token_cost_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_read_input_token_cost_above_272k_tokens_ultrafast", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
@@ -6165,8 +6211,12 @@ def _get_model_info_helper(
                 input_cost_per_token_above_272k_tokens_flex=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_flex", None
                 ),
+                input_cost_per_token_above_272k_tokens_ultrafast=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens_ultrafast", None
+                ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
+                cost_per_second=_model_info.get("cost_per_second", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
@@ -6231,6 +6281,9 @@ def _get_model_info_helper(
                 output_cost_per_token_above_272k_tokens_flex=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_flex", None
                 ),
+                output_cost_per_token_above_272k_tokens_ultrafast=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens_ultrafast", None
+                ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
                     "output_cost_per_token_above_512k_tokens", None
                 ),
@@ -6287,6 +6340,7 @@ def _get_model_info_helper(
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
+                supports_regex_lookaround=_model_info.get("supports_regex_lookaround", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
@@ -7341,7 +7395,7 @@ class TextCompletionStreamWrapper:
 def mock_stream_usage_chunk(model_response: ModelResponseStream, model: str, prompt_tokens: int) -> ModelResponseStream:
     return ModelResponseStream(
         id=model_response.id,
-        choices=[],  # mutable-ok: ModelResponseStream only treats a list as explicit choices, a tuple gets a default choice
+        choices=[],
         model=model,
         usage=Usage(
             prompt_tokens=prompt_tokens,
@@ -8811,8 +8865,12 @@ class ProviderConfigManager:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
-        elif litellm.LlmProviders.JINA_AI == provider:
-            return litellm.JinaAIRerankConfig()
+        elif provider in (litellm.LlmProviders.JINA_AI, litellm.LlmProviders.SCALEWAY):
+            return (
+                litellm.ScalewayRerankConfig()
+                if provider == litellm.LlmProviders.SCALEWAY
+                else litellm.JinaAIRerankConfig()
+            )
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
@@ -9852,6 +9910,41 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def get_provider_harness_config(harness: Harness) -> BaseHarnessConfig | None:
+        """
+        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents, Tool Loop).
+        """
+        from litellm.harness.types import Harness as _Harness
+
+        if harness == _Harness.CLAUDE_CODE:
+            from litellm.llms.claude_code.harness.transformation import (
+                ClaudeCodeHarnessConfig,
+            )
+
+            return ClaudeCodeHarnessConfig()
+        if harness == _Harness.CODEX:
+            from litellm.llms.codex.harness.transformation import CodexHarnessConfig
+
+            return CodexHarnessConfig()
+        if harness == _Harness.OPENCODE:
+            from litellm.llms.opencode.harness.transformation import (
+                OpenCodeHarnessConfig,
+            )
+
+            return OpenCodeHarnessConfig()
+        if harness == _Harness.DEEPAGENTS:
+            from litellm.llms.deepagents.harness.transformation import (
+                DeepAgentsHarnessConfig,
+            )
+
+            return DeepAgentsHarnessConfig()
+        if harness == _Harness.TOOL_LOOP:
+            from litellm.llms.tool_loop.harness.transformation import ToolLoopHarnessConfig
+
+            return ToolLoopHarnessConfig()
+        return None
+
+    @staticmethod
     def get_provider_text_to_speech_config(
         model: str,
         provider: LlmProviders,
@@ -10034,19 +10127,19 @@ def is_prompt_caching_valid_prompt(
     OpenAI's minimum is a flat 1024 across models, which the default already covers.
     """
     try:
-        if messages is None and tools is None:
+        if messages is None:
             return False
         if custom_llm_provider is not None and not model.startswith(custom_llm_provider):
             model = custom_llm_provider + "/" + model
-        token_count: Final = token_counter(
-            messages=messages,
-            tools=tools,
-            model=model,
-            use_default_image_token_count=True,
-        )
         if min_token_count is None:
             min_token_count = get_prompt_cache_min_tokens(model=model)
-        return token_count >= min_token_count
+        return _get_messages_reach_token_count()(
+            model=model,
+            messages=messages,
+            threshold=min_token_count,
+            tools=tools,
+            use_default_image_token_count=True,
+        )
     except Exception as e:
         verbose_logger.error("Error in is_prompt_caching_valid_prompt: %s", e)
         return False

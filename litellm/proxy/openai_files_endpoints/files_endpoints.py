@@ -579,6 +579,7 @@ async def create_file(
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
+        general_settings_view,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -677,7 +678,7 @@ async def create_file(
                 file_source,
                 _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
                 PASSTHROUGH_BATCH_LINE_SHAPE if passthrough else BATCH_LINE_SHAPE,
-                batch_file_record_limit(user_api_key_dict, general_settings),
+                batch_file_record_limit(user_api_key_dict, general_settings_view()),
             )
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
@@ -756,7 +757,7 @@ async def create_file(
 
         if purpose == "batch":
             await enforce_batch_file_upload_limit(
-                proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings
+                proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings_view()
             )
 
         # Include original request and headers in the data
@@ -975,6 +976,7 @@ async def get_file_content(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        general_settings_view,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -990,7 +992,7 @@ async def get_file_content(
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
         await enforce_file_download_limit(
-            proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings, file_id
+            proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings_view(), file_id
         )
 
         # Include original request and headers in the data

@@ -16,7 +16,7 @@ const BaseAwareRequest = function (url: string, init?: RequestInit): Request {
 const middleware: Middleware = {
   onRequest({ request }) {
     const token = getAuthToken();
-    if (token) {
+    if (token && !request.headers.has(getAuthHeaderName())) {
       request.headers.set(getAuthHeaderName(), `Bearer ${token}`);
     }
   },
