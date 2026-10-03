@@ -14,10 +14,10 @@ from functools import partial
 from http.client import responses
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
-from typing_extensions import assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS, TRACE_READ_RETRY_AFTER_SECONDS
