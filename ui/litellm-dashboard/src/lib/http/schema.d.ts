@@ -25530,6 +25530,8 @@ export interface components {
             active: boolean;
             /** Agent Id */
             agent_id: string;
+            /** Blueprint Id */
+            blueprint_id?: string | null;
             /** Client Id */
             client_id: string;
             /** Issuer */
@@ -31593,6 +31595,11 @@ export interface components {
         };
         /** EntraIdentityConfig */
         EntraIdentityConfig: {
+            /**
+             * Blueprint Id
+             * @description Entra Agent ID blueprint application ID. When set, only tokens issued to an agent identity created from this blueprint are accepted
+             */
+            blueprint_id?: string | null;
             /** Client Id */
             client_id: string;
             /**
