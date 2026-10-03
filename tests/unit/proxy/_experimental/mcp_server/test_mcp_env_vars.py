@@ -874,6 +874,7 @@ def _mock_env_vars_prisma(row=None):
     prisma.db.litellm_mcpuserenvvars.upsert = AsyncMock()
     prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()
     prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
+    prisma.db.litellm_mcptoolversion.delete_many = AsyncMock()
     return prisma
 
 
@@ -1251,6 +1252,38 @@ async def test_delete_mcp_server_succeeds_when_orphan_cleanup_fails():
     result = await delete_mcp_server(prisma, "srv-1")
 
     assert result is deleted
+    prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_removes_tool_version_rows():
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma: Final = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=object())
+
+    await delete_mcp_server(prisma, "srv-1")
+
+    prisma.db.litellm_mcptoolversion.delete_many.assert_awaited_once_with(where={"server_id": "srv-1"})
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_succeeds_when_tool_version_cleanup_fails():
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    deleted: Final = object()
+    prisma: Final = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=deleted)
+    prisma.db.litellm_mcptoolversion.delete_many = AsyncMock(side_effect=RuntimeError("connection pool exhausted"))
+
+    result: Final = await delete_mcp_server(prisma, "srv-1")
+
+    assert result is deleted
+    prisma.db.litellm_mcptoolversion.delete_many.assert_awaited_once_with(where={"server_id": "srv-1"})
     prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
 
 

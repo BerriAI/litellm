@@ -71,6 +71,10 @@ class MCPServerRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPServer
     table_name = "litellm_mcpservertable"
 
 
+class MCPToolVersionRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPToolVersion"]):
+    table_name = "litellm_mcptoolversion"
+
+
 class ManagedObjectRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedObjectTable"]):
     table_name = "litellm_managedobjecttable"
 
