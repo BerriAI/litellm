@@ -75454,6 +75454,42 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "openrouter/openai/gpt-image-2": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://openrouter.ai/api/v1/images/models/openai/gpt-image-2/endpoints",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "openrouter/openai/gpt-image-2.5-flare": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://openrouter.ai/api/v1/images/models/openai/gpt-image-2.5-flare/endpoints",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "openrouter/openai/gpt-image-2.5-sunburst": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://openrouter.ai/api/v1/images/models/openai/gpt-image-2.5-sunburst/endpoints",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
     "openrouter/openai/gpt-5.4-mini:batch": {
         "cache_read_input_token_cost": 3.75e-08,
         "input_cost_per_token": 3.75e-07,
