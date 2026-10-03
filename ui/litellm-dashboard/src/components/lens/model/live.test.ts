@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   analysisModel,
   conclusions,
+  tickerLine,
   liveJob,
   liveStats,
   outcome,
@@ -69,6 +70,11 @@ describe("review outcome", () => {
 
   it("is unknown when the model cannot assess, even with an issue", () => {
     expect(outcome(review("a", { cannot_assess: true, verdicts: [issue("i")] }))).toBe("unknown");
+  });
+
+  it("names the agent and short trace id in the ticker, falling back to the run name", () => {
+    expect(tickerLine(review("a", { trace_id: "a91f3c02deadbeef" }))).toBe("reading support-bot · a91f3c02");
+    expect(tickerLine(review("a", { agent: "", name: "refund", trace_id: "7d21" }))).toBe("reading refund · 7d21");
   });
 
   it("leads the verdict line with the issue summary over patterns", () => {
@@ -172,6 +178,15 @@ describe("playback queue", () => {
     expect(second.current?.execution_id).toBe("b");
     expect(second.played.map((r) => r.execution_id)).toEqual(["a"]);
     expect(playbackReducer(second, { type: "tick", now: 1e9 })).toBe(second);
+  });
+
+  it("replays a finished run from its first review", () => {
+    const done = startPlayback(reviews, false);
+    const again = playbackReducer(done, { type: "replay" });
+    expect(again.current).toBeNull();
+    expect(again.played).toEqual([]);
+    expect(again.pending.map((r) => r.execution_id)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(playbackReducer(again, { type: "tick", now: 0 }).current?.execution_id).toBe("a");
   });
 
   it("settles everything at once for reduced motion", () => {

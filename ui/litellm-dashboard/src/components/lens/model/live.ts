@@ -51,6 +51,10 @@ export function outcome(review: Pick<Review, "cannot_assess" | "verdicts">): Out
   return review.verdicts.some((v) => v.kind === "issue") ? "issue" : "clear";
 }
 
+export function tickerLine(review: Pick<Review, "agent" | "name" | "trace_id">): string {
+  return `reading ${review.agent || review.name} · ${review.trace_id.slice(0, 8)}`;
+}
+
 export function verdictLine(review: Pick<Review, "cannot_assess" | "verdicts">): string {
   const issue = review.verdicts.find((v) => v.kind === "issue");
   if (issue) return issue.summary;
@@ -140,7 +144,8 @@ export interface Playback {
 export type PlaybackAction =
   | { type: "enqueue"; reviews: readonly Review[] }
   | { type: "tick"; now: number }
-  | { type: "settle" };
+  | { type: "settle" }
+  | { type: "replay" };
 
 const PLAYED_LIMIT = 200;
 
@@ -193,6 +198,11 @@ function settle(state: Playback): Playback {
   };
 }
 
+function replay(state: Playback): Playback {
+  const all = [...state.played, ...(state.current ? [state.current] : []), ...state.pending];
+  return { ...state, played: [], current: null, pending: all, startedAt: Number.NEGATIVE_INFINITY, duration: 0 };
+}
+
 export function playbackReducer(state: Playback, action: PlaybackAction): Playback {
   switch (action.type) {
     case "enqueue":
@@ -201,6 +211,8 @@ export function playbackReducer(state: Playback, action: PlaybackAction): Playba
       return advance(state, action.now);
     case "settle":
       return settle(state);
+    case "replay":
+      return replay(state);
   }
 }
 
