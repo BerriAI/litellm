@@ -2,8 +2,8 @@ use super::{Extraction, Format, Payload, SpanFacts};
 use crate::{
     Error,
     normalize::{
-        ObservationType, RoleEvidence, SpanContext, attr, messages, present, select_attribute,
-        usage_tokens,
+        CallEvidence, CallKey, ObservationType, RoleEvidence, SpanContext, attr, messages, present,
+        select_attribute, usage_tokens,
     },
 };
 
@@ -107,10 +107,17 @@ impl Format for GenAi {
         let (input_tokens, output_tokens) = usage_tokens(attributes)?;
         let input = payload(context, &INPUT_KEYS);
         let output = payload(context, &OUTPUT_KEYS);
+        let role = Operation::from_context(context).map(Operation::role);
+        let calls = match (role, present(attributes, &["gen_ai.response.id"])) {
+            (Some(ObservationType::Llm), Some(id)) => {
+                CallEvidence::complete(CallKey::ProviderResponse(id))
+            }
+            _ => CallEvidence::Unknown,
+        };
         Ok(Extraction {
             facts: SpanFacts {
-                role: Operation::from_context(context)
-                    .map(|operation| RoleEvidence::Declared(operation.role())),
+                role: role.map(RoleEvidence::Declared),
+                calls,
                 model: present(
                     attributes,
                     &["gen_ai.request.model", "gen_ai.response.model"],

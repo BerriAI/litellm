@@ -47,6 +47,7 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
                     ("UserId".into(), json!(user_id)),
                     ("Duration".into(), json!(1_000_000)),
                     ("LiteLLMRequestId".into(), json!("reused-response")),
+                    ("CallEvidence".into(), json!("complete")),
                 ])
             })
             .collect(),
@@ -152,6 +153,14 @@ async fn large_runs_remain_complete_under_default_reader_limits(
                     ("TeamId".into(), json!("team-a")),
                     ("ApiKeyHash".into(), json!("key-a")),
                     ("Duration".into(), json!(1000)),
+                    (
+                        "CallEvidence".into(),
+                        json!(if costed && step > 0 {
+                            "complete"
+                        } else {
+                            "unknown"
+                        }),
+                    ),
                     (
                         "LiteLLMRequestId".into(),
                         json!(if costed && step > 0 {
@@ -591,5 +600,113 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         .await,
         Err(litellm_traces_clickhouse::Error::ReadTooLarge)
     ));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let start_ms = 1_790_000_000_000_i64;
+    let cases = [
+        (
+            "gateway",
+            "provider-request",
+            "gateway",
+            "team-a",
+            "key-a",
+            Some(0.25),
+        ),
+        ("legacy", "legacy", "", "team-a", "key-a", Some(0.25)),
+        ("conflict", "conflict", "different", "team-a", "key-a", None),
+        (
+            "foreign-team",
+            "request",
+            "foreign-team",
+            "team-b",
+            "key-a",
+            None,
+        ),
+        (
+            "foreign-key",
+            "request",
+            "foreign-key",
+            "team-a",
+            "key-b",
+            None,
+        ),
+    ];
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        cases
+            .iter()
+            .map(|(id, _, _, _, _, _)| {
+                BTreeMap::from([
+                    ("Timestamp".into(), json!(start_ms * 1_000_000)),
+                    ("Duration".into(), json!(1_000_000)),
+                    ("TraceId".into(), json!(id)),
+                    ("SpanId".into(), json!("call")),
+                    ("ObservationType".into(), json!("llm")),
+                    ("TeamId".into(), json!("team-a")),
+                    ("ApiKeyHash".into(), json!("key-a")),
+                    ("CallKeys".into(), json!([format!("litellm_request:{id}")])),
+                    ("CallEvidence".into(), json!("complete")),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::SpendLogs,
+        cases
+            .iter()
+            .map(|(_, request, call_id, team, key, _)| {
+                BTreeMap::from([
+                    ("request_id".into(), json!(request)),
+                    ("response_id".into(), json!("provider-response")),
+                    ("litellm_call_id".into(), json!(call_id)),
+                    ("team_id".into(), json!(team)),
+                    ("api_key".into(), json!(key)),
+                    ("start_time".into(), json!(start_ms)),
+                    ("end_time".into(), json!(start_ms + 1)),
+                    ("spend".into(), json!(0.25)),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
+    let reader = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let access = ReadAccessParams {
+        all_teams: false,
+        user_id: String::new(),
+        team_ids: vec!["team-a".into()],
+    };
+    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    assert_eq!(page.data.len(), cases.len());
+    for (id, _, _, _, _, expected) in cases {
+        let summary = page
+            .data
+            .iter()
+            .find(|summary| summary.trace_id == id)
+            .ok_or("missing run")?;
+        let detail = get_trace(client, &reader, &access, id, &summary.trace_ref)
+            .await?
+            .ok_or("missing trace")?;
+        assert_eq!(detail.summary.spend, expected, "{id}");
+        assert_eq!(summary.spend, expected, "{id}");
+    }
     Ok(())
 }

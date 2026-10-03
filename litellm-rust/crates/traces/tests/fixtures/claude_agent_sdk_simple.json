@@ -10,12 +10,6 @@
             }
           },
           {
-            "key": "service.name",
-            "value": {
-              "stringValue": "claude-agent-sdk-simple-linked"
-            }
-          },
-          {
             "key": "host.arch",
             "value": {
               "stringValue": "arm64"
@@ -24,13 +18,19 @@
           {
             "key": "os.type",
             "value": {
-              "stringValue": "linux"
+              "stringValue": "darwin"
             }
           },
           {
             "key": "os.version",
             "value": {
-              "stringValue": "7.0.11-orbstack-00360-gc9bc4d96ac70"
+              "stringValue": "25.6.0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
             }
           },
           {
@@ -49,13 +49,13 @@
           },
           "spans": [
             {
-              "traceId": "68d4ab5c1bb4cdff9f7fa72ce5e360d4",
-              "spanId": "2202f91fa2679814",
-              "parentSpanId": "f0281548ccd4d661",
+              "traceId": "207bf859f653150fd4346add5cb11ad3",
+              "spanId": "1825d4fb63cffcec",
+              "parentSpanId": "8a420dd58d6ff237",
               "name": "claude_code.llm_request",
               "kind": 1,
-              "startTimeUnixNano": "1791013731536000000",
-              "endTimeUnixNano": "1791013738679125375",
+              "startTimeUnixNano": "1791061376589000000",
+              "endTimeUnixNano": "1791061384361645125",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -66,19 +66,19 @@
                 {
                   "key": "user.id",
                   "value": {
-                    "stringValue": "4493a11fb6084c04be89c081b455b16d3b2df792ebf4dc2014e12d078d4732e8"
+                    "stringValue": "999dc5afd40b65ac74b33bdc01c83510d935a57dfc4b1c232b51504bb8caed2e"
                   }
                 },
                 {
                   "key": "session.id",
                   "value": {
-                    "stringValue": "7b36c5c7-8eb5-45ad-8ffc-2966f64389b7"
+                    "stringValue": "0e5bb47c-6b08-4a1b-bde4-9ab142589572"
                   }
                 },
                 {
                   "key": "terminal.type",
                   "value": {
-                    "stringValue": "non-interactive"
+                    "stringValue": "ghostty"
                   }
                 },
                 {
@@ -168,7 +168,7 @@
                 {
                   "key": "system_reminders_count",
                   "value": {
-                    "intValue": "1"
+                    "intValue": "2"
                   }
                 },
                 {
@@ -180,25 +180,25 @@
                 {
                   "key": "system_reminders",
                   "value": {
-                    "stringValue": "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /fixtures/claude-agent-sdk\n - Is a git repository: true\n - Platform: linux\n - Shell: unknown\n - OS Version: Linux 7.0.11-orbstack-00360-gc9bc4d96ac70\n\nYou are powered by the model openai/gpt-6-luna.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nToday's date is 2026-10-03."
+                    "stringValue": "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of /home/user/.claude/projects/-home-user-dev-litellm-lens-example/memory/MEMORY.md (user's auto-memory, persists across conversations):\n\n- [LiteLLM spend correlation contract](litellm-spend-correlation-contract.md) \u2014 source PR #44421, offline validation with mock gateway + recorder\n- [SDK wiring limits](litellm-lens-example-sdk-wiring-limits.md) \u2014 which SDKs cannot take the shared gateway transport and why\n\n---\n\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /home/user/dev/litellm-lens-example/claude-agent-sdk\n - Is a git repository: true\n - Platform: darwin\n - Shell: zsh\n - OS Version: Darwin 25.6.0\n\nYou are powered by the model openai/gpt-6-luna.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nToday's date is 2026-10-03."
                   }
                 },
                 {
                   "key": "duration_ms",
                   "value": {
-                    "intValue": "7143"
+                    "intValue": "7772"
                   }
                 },
                 {
                   "key": "input_tokens",
                   "value": {
-                    "intValue": "172"
+                    "intValue": "323"
                   }
                 },
                 {
                   "key": "output_tokens",
                   "value": {
-                    "intValue": "665"
+                    "intValue": "671"
                   }
                 },
                 {
@@ -234,25 +234,25 @@
                 {
                   "key": "request_id",
                   "value": {
-                    "stringValue": "msg_7117e61b-cb2a-4e2f-8155-9b8bab62a4b9"
+                    "stringValue": "msg_b65eb4b6-da48-4eb3-a564-0f65202f4797"
                   }
                 },
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "msg_7117e61b-cb2a-4e2f-8155-9b8bab62a4b9"
+                    "stringValue": "msg_b65eb4b6-da48-4eb3-a564-0f65202f4797"
                   }
                 },
                 {
                   "key": "ttft_ms",
                   "value": {
-                    "intValue": "540"
+                    "intValue": "769"
                   }
                 },
                 {
                   "key": "first_content_ms",
                   "value": {
-                    "intValue": "5584"
+                    "intValue": "6113"
                   }
                 },
                 {
@@ -264,7 +264,7 @@
                 {
                   "key": "response.model_output",
                   "value": {
-                    "stringValue": "An **agent trace** is the chronological record of an agent run: the input it received, the model’s intermediate messages, any tools it called and their results, and how the run ended.\n\nIt shows **how** the agent reached its final answer—not just the answer itself—and is useful for debugging and monitoring. In the Claude Agent SDK, you can follow a run through its streamed messages and events. Traces may contain prompts or other sensitive data, so handle them accordingly."
+                    "stringValue": "An **agent trace** is the connected record of one agent task from start to finish\u2014not just a single LLM request.\n\nFor example, a task might produce a trace containing:\n1. The agent\u2019s model call\n2. A weather-tool call and its result\n3. A follow-up model call that writes the answer\n\nThose steps are linked as spans in a timeline, often with timestamps, status, token usage, and cost. Traces help you understand what the agent did, where it failed or spent time, and which calls contributed to the cost.\n\nA trace may contain prompts and tool inputs or outputs, depending on the instrumentation, but it **doesn\u2019t mean the agent\u2019s hidden chain-of-thought is being recorded**."
                   }
                 },
                 {
@@ -288,7 +288,7 @@
               ],
               "events": [
                 {
-                  "timeUnixNano": "1791013731538265232",
+                  "timeUnixNano": "1791061376591988250",
                   "name": "gen_ai.request.attempt",
                   "attributes": [
                     {
@@ -304,13 +304,13 @@
               "flags": 257
             },
             {
-              "traceId": "68d4ab5c1bb4cdff9f7fa72ce5e360d4",
-              "spanId": "f0281548ccd4d661",
-              "parentSpanId": "d8aa87f2b774735d",
+              "traceId": "207bf859f653150fd4346add5cb11ad3",
+              "spanId": "8a420dd58d6ff237",
+              "parentSpanId": "c2c6b0971076f31c",
               "name": "claude_code.interaction",
               "kind": 1,
-              "startTimeUnixNano": "1791013731512000000",
-              "endTimeUnixNano": "1791013738692801566",
+              "startTimeUnixNano": "1791061376541000000",
+              "endTimeUnixNano": "1791061384366705375",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -321,19 +321,19 @@
                 {
                   "key": "user.id",
                   "value": {
-                    "stringValue": "4493a11fb6084c04be89c081b455b16d3b2df792ebf4dc2014e12d078d4732e8"
+                    "stringValue": "999dc5afd40b65ac74b33bdc01c83510d935a57dfc4b1c232b51504bb8caed2e"
                   }
                 },
                 {
                   "key": "session.id",
                   "value": {
-                    "stringValue": "7b36c5c7-8eb5-45ad-8ffc-2966f64389b7"
+                    "stringValue": "0e5bb47c-6b08-4a1b-bde4-9ab142589572"
                   }
                 },
                 {
                   "key": "terminal.type",
                   "value": {
-                    "stringValue": "non-interactive"
+                    "stringValue": "ghostty"
                   }
                 },
                 {
@@ -381,7 +381,7 @@
                 {
                   "key": "interaction.duration_ms",
                   "value": {
-                    "intValue": "7181"
+                    "intValue": "7826"
                   }
                 }
               ],
@@ -416,7 +416,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "ff3ae854-67ab-4a61-98b3-8840846062f8"
+              "stringValue": "5ac3598e-aed9-4cda-ac0e-1ab2f82a2673"
             }
           },
           {
@@ -426,15 +426,15 @@
             }
           },
           {
-            "key": "service.name",
-            "value": {
-              "stringValue": "claude-agent-sdk-simple-linked"
-            }
-          },
-          {
             "key": "telemetry.auto.version",
             "value": {
               "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
             }
           }
         ]
@@ -447,12 +447,12 @@
           },
           "spans": [
             {
-              "traceId": "68d4ab5c1bb4cdff9f7fa72ce5e360d4",
-              "spanId": "d8aa87f2b774735d",
+              "traceId": "207bf859f653150fd4346add5cb11ad3",
+              "spanId": "c2c6b0971076f31c",
               "name": "ClaudeAgentSDK.query",
               "kind": 1,
-              "startTimeUnixNano": "1791013731360778595",
-              "endTimeUnixNano": "1791013738788489656",
+              "startTimeUnixNano": "1791061376098056000",
+              "endTimeUnixNano": "1791061384413648000",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -481,7 +481,7 @@
                 {
                   "key": "llm.output_messages.0.message.content.0",
                   "value": {
-                    "stringValue": "An **agent trace** is the chronological record of an agent run: the input it received, the model’s intermediate messages, any tools it called and their results, and how the run ended.\n\nIt shows **how** the agent reached its final answer—not just the answer itself—and is useful for debugging and monitoring. In the Claude Agent SDK, you can follow a run through its streamed messages and events. Traces may contain prompts or other sensitive data, so handle them accordingly."
+                    "stringValue": "An **agent trace** is the connected record of one agent task from start to finish\u2014not just a single LLM request.\n\nFor example, a task might produce a trace containing:\n1. The agent\u2019s model call\n2. A weather-tool call and its result\n3. A follow-up model call that writes the answer\n\nThose steps are linked as spans in a timeline, often with timestamps, status, token usage, and cost. Traces help you understand what the agent did, where it failed or spent time, and which calls contributed to the cost.\n\nA trace may contain prompts and tool inputs or outputs, depending on the instrumentation, but it **doesn\u2019t mean the agent\u2019s hidden chain-of-thought is being recorded**."
                   }
                 },
                 {
@@ -499,7 +499,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "An **agent trace** is the chronological record of an agent run: the input it received, the model’s intermediate messages, any tools it called and their results, and how the run ended.\n\nIt shows **how** the agent reached its final answer—not just the answer itself—and is useful for debugging and monitoring. In the Claude Agent SDK, you can follow a run through its streamed messages and events. Traces may contain prompts or other sensitive data, so handle them accordingly."
+                    "stringValue": "An **agent trace** is the connected record of one agent task from start to finish\u2014not just a single LLM request.\n\nFor example, a task might produce a trace containing:\n1. The agent\u2019s model call\n2. A weather-tool call and its result\n3. A follow-up model call that writes the answer\n\nThose steps are linked as spans in a timeline, often with timestamps, status, token usage, and cost. Traces help you understand what the agent did, where it failed or spent time, and which calls contributed to the cost.\n\nA trace may contain prompts and tool inputs or outputs, depending on the instrumentation, but it **doesn\u2019t mean the agent\u2019s hidden chain-of-thought is being recorded**."
                   }
                 },
                 {
@@ -517,19 +517,19 @@
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "172"
+                    "intValue": "323"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "665"
+                    "intValue": "671"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "837"
+                    "intValue": "994"
                   }
                 },
                 {
@@ -547,13 +547,13 @@
                 {
                   "key": "llm.cost.total",
                   "value": {
-                    "doubleValue": 0.013987999999999999
+                    "doubleValue": 0.014712000000000001
                   }
                 },
                 {
                   "key": "session.id",
                   "value": {
-                    "stringValue": "7b36c5c7-8eb5-45ad-8ffc-2966f64389b7"
+                    "stringValue": "0e5bb47c-6b08-4a1b-bde4-9ab142589572"
                   }
                 },
                 {

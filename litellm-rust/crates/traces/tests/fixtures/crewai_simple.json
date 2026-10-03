@@ -24,19 +24,19 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "ce3d1e9d-9ad8-4e9c-baa1-790de8270f2a"
-            }
-          },
-          {
-            "key": "service.name",
-            "value": {
-              "stringValue": "crewai-simple"
+              "stringValue": "474ef02c-24f0-4fe4-84e3-568c08278bf7"
             }
           },
           {
             "key": "telemetry.auto.version",
             "value": {
               "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
             }
           }
         ]
@@ -49,13 +49,13 @@
           },
           "spans": [
             {
-              "traceId": "110c44d444b7742cfa57fc70cef424d8",
-              "spanId": "29ed447ec5f9b6e8",
-              "parentSpanId": "97f30ba7a431f8e7",
+              "traceId": "9423efa0faa4a873d896222c6b33aacc",
+              "spanId": "742c3f48055313df",
+              "parentSpanId": "3af673c4fc56a4d3",
               "name": "ChatCompletion",
               "kind": 1,
-              "startTimeUnixNano": "1791012936617707896",
-              "endTimeUnixNano": "1791012938235971272",
+              "startTimeUnixNano": "1791061313593128000",
+              "endTimeUnixNano": "1791061315819218000",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -66,7 +66,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\":[{\"role\":\"system\",\"content\":\"You are research_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}],\"model\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"messages\": [{\"role\": \"system\", \"content\": \"You are research_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}], \"model\": \"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -78,7 +78,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"chatcmpl-EUoZMwGeJM9ul6B0NsHufReuUYcEa\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a chronological record of an AI agent’s actions and observations while completing a task—such as its inputs, tool calls, tool results, and final response. It helps explain, debug, and evaluate the agent’s behavior.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791012936,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":86,\"prompt_tokens\":73,\"total_tokens\":159,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":27,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
+                    "stringValue": "{\"id\":\"chatcmpl-EV19e7sf5xeFVr05xBNOmEygQ8mTd\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a chronological record of an AI agent\u2019s execution: the steps it took, such as receiving input, calling tools, observing results, and producing an answer. Traces help developers understand, debug, and evaluate an agent\u2019s behavior.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791061314,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":122,\"prompt_tokens\":73,\"total_tokens\":195,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":61,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
                   }
                 },
                 {
@@ -90,7 +90,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"model\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -126,7 +126,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "159"
+                    "intValue": "195"
                   }
                 },
                 {
@@ -138,7 +138,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "86"
+                    "intValue": "122"
                   }
                 },
                 {
@@ -162,7 +162,7 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "27"
+                    "intValue": "61"
                   }
                 },
                 {
@@ -180,7 +180,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a chronological record of an AI agent’s actions and observations while completing a task—such as its inputs, tool calls, tool results, and final response. It helps explain, debug, and evaluate the agent’s behavior."
+                    "stringValue": "An **agent trace** is a chronological record of an AI agent\u2019s execution: the steps it took, such as receiving input, calling tools, observing results, and producing an answer. Traces help developers understand, debug, and evaluate an agent\u2019s behavior."
                   }
                 },
                 {
@@ -210,18 +210,18 @@
           },
           "spans": [
             {
-              "traceId": "110c44d444b7742cfa57fc70cef424d8",
-              "spanId": "97f30ba7a431f8e7",
-              "parentSpanId": "b2637dab2e2fc2ca",
+              "traceId": "9423efa0faa4a873d896222c6b33aacc",
+              "spanId": "3af673c4fc56a4d3",
+              "parentSpanId": "1edfe2e36e867117",
               "name": "research_agent._execute_core",
               "kind": 1,
-              "startTimeUnixNano": "1791012936360020229",
-              "endTimeUnixNano": "1791012938250502005",
+              "startTimeUnixNano": "1791061313403894000",
+              "endTimeUnixNano": "1791061315825553000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"agent\":{\"entity_type\":\"agent\",\"id\":\"af3484b5-92a5-4a01-acf7-0e759af2f968\",\"role\":\"research_agent\",\"goal\":\"Answer questions clearly\",\"backstory\":\"You explain technical concepts.\",\"cache\":true,\"verbose\":false,\"max_rpm\":null,\"allow_delegation\":false,\"tools\":[],\"max_iter\":25,\"tool_failure_policy\":null,\"i18n\":{\"prompt_file\":null},\"cache_handler\":null,\"tools_results\":[],\"max_tokens\":null,\"knowledge\":null,\"knowledge_sources\":null,\"knowledge_storage\":null,\"security_config\":{\"fingerprint\":{\"metadata\":{}}},\"checkpoint\":null,\"adapted_agent\":false,\"knowledge_config\":null,\"apps\":null,\"mcps\":null,\"memory\":null,\"skills\":null,\"execution_context\":null,\"checkpoint_kickoff_event_id\":null,\"max_execution_time\":null,\"use_system_prompt\":true,\"system_template\":null,\"prompt_template\":null,\"response_template\":null,\"allow_code_execution\":false,\"respect_context_window\":true,\"max_retry_limit\":2,\"multimodal\":false,\"inject_date\":false,\"date_format\":\"%Y-%m-%d\",\"code_execution_mode\":\"safe\",\"planning_config\":null,\"planning\":false,\"reasoning\":false,\"max_reasoning_attempts\":null,\"embedder\":null,\"agent_knowledge_context\":null,\"crew_knowledge_context\":null,\"knowledge_search_query\":null,\"from_repository\":null,\"guardrail_max_retries\":3,\"a2a\":null,\"key\":\"4dc9e33a8c7925f0f322ab0a8886aef0\"},\"context\":\"\",\"tools\":[]}"
+                    "stringValue": "{\"agent\": {\"entity_type\": \"agent\", \"id\": \"85ad8f68-68d9-4510-9367-af4d6697cb24\", \"role\": \"research_agent\", \"goal\": \"Answer questions clearly\", \"backstory\": \"You explain technical concepts.\", \"cache\": true, \"verbose\": false, \"max_rpm\": null, \"allow_delegation\": false, \"tools\": [], \"max_iter\": 25, \"tool_failure_policy\": null, \"i18n\": {\"prompt_file\": null}, \"cache_handler\": null, \"tools_results\": [], \"max_tokens\": null, \"knowledge\": null, \"knowledge_sources\": null, \"knowledge_storage\": null, \"security_config\": {\"fingerprint\": {\"metadata\": {}}}, \"checkpoint\": null, \"adapted_agent\": false, \"knowledge_config\": null, \"apps\": null, \"mcps\": null, \"memory\": null, \"skills\": null, \"execution_context\": null, \"checkpoint_kickoff_event_id\": null, \"max_execution_time\": null, \"use_system_prompt\": true, \"system_template\": null, \"prompt_template\": null, \"response_template\": null, \"allow_code_execution\": false, \"respect_context_window\": true, \"max_retry_limit\": 2, \"multimodal\": false, \"inject_date\": false, \"date_format\": \"%Y-%m-%d\", \"code_execution_mode\": \"safe\", \"planning_config\": null, \"planning\": false, \"reasoning\": false, \"max_reasoning_attempts\": null, \"embedder\": null, \"agent_knowledge_context\": null, \"crew_knowledge_context\": null, \"knowledge_search_query\": null, \"from_repository\": null, \"guardrail_max_retries\": 3, \"a2a\": null, \"key\": \"4dc9e33a8c7925f0f322ab0a8886aef0\"}, \"context\": \"\", \"tools\": []}"
                   }
                 },
                 {
@@ -239,7 +239,7 @@
                 {
                   "key": "task_id",
                   "value": {
-                    "stringValue": "583ee87b-ad8f-42b0-9354-78036e8c3875"
+                    "stringValue": "be50aff3-19df-4772-99d7-5bd96218c0f6"
                   }
                 },
                 {
@@ -257,13 +257,13 @@
                 {
                   "key": "crew_id",
                   "value": {
-                    "stringValue": "75706cf9-6de1-475e-8e6b-dc145c5d54d6"
+                    "stringValue": "e829105c-c95a-4f8e-aea4-4a98b6c84b13"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"description\":\"What is an agent trace?\",\"name\":\"What is an agent trace?\",\"expected_output\":\"A short answer\",\"summary\":\"What is an agent trace?...\",\"raw\":\"An **agent trace** is a chronological record of an AI agent’s actions and observations while completing a task—such as its inputs, tool calls, tool results, and final response. It helps explain, debug, and evaluate the agent’s behavior.\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"research_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are research_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}],\"tool_failures\":[]}"
+                    "stringValue": "{\"description\": \"What is an agent trace?\", \"name\": \"What is an agent trace?\", \"expected_output\": \"A short answer\", \"summary\": \"What is an agent trace?...\", \"raw\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: the steps it took, such as receiving input, calling tools, observing results, and producing an answer. Traces help developers understand, debug, and evaluate an agent\u2019s behavior.\", \"pydantic\": null, \"json_dict\": null, \"agent\": \"research_agent\", \"output_format\": \"raw\", \"messages\": [{\"role\": \"system\", \"content\": \"You are research_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}], \"tool_failures\": []}"
                   }
                 },
                 {
@@ -285,17 +285,17 @@
               "flags": 256
             },
             {
-              "traceId": "110c44d444b7742cfa57fc70cef424d8",
-              "spanId": "b2637dab2e2fc2ca",
+              "traceId": "9423efa0faa4a873d896222c6b33aacc",
+              "spanId": "1edfe2e36e867117",
               "name": "research_crew.kickoff",
               "kind": 1,
-              "startTimeUnixNano": "1791012936330034002",
-              "endTimeUnixNano": "1791012938279104760",
+              "startTimeUnixNano": "1791061313393493000",
+              "endTimeUnixNano": "1791061315827947000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"question\":\"What is an agent trace?\"}"
+                    "stringValue": "{\"question\": \"What is an agent trace?\"}"
                   }
                 },
                 {
@@ -313,31 +313,31 @@
                 {
                   "key": "crew_id",
                   "value": {
-                    "stringValue": "75706cf9-6de1-475e-8e6b-dc145c5d54d6"
+                    "stringValue": "e829105c-c95a-4f8e-aea4-4a98b6c84b13"
                   }
                 },
                 {
                   "key": "crew_inputs",
                   "value": {
-                    "stringValue": "{\"question\":\"What is an agent trace?\"}"
+                    "stringValue": "{\"question\": \"What is an agent trace?\"}"
                   }
                 },
                 {
                   "key": "crew_agents",
                   "value": {
-                    "stringValue": "[{\"key\":\"4dc9e33a8c7925f0f322ab0a8886aef0\",\"id\":\"af3484b5-92a5-4a01-acf7-0e759af2f968\",\"role\":\"research_agent\",\"goal\":\"Answer questions clearly\",\"backstory\":\"You explain technical concepts.\",\"verbose?\":false,\"max_iter\":25,\"max_rpm\":null,\"delegation_enabled\":false,\"tools_names\":[]}]"
+                    "stringValue": "[{\"key\": \"4dc9e33a8c7925f0f322ab0a8886aef0\", \"id\": \"85ad8f68-68d9-4510-9367-af4d6697cb24\", \"role\": \"research_agent\", \"goal\": \"Answer questions clearly\", \"backstory\": \"You explain technical concepts.\", \"verbose?\": false, \"max_iter\": 25, \"max_rpm\": null, \"delegation_enabled\": false, \"tools_names\": []}]"
                   }
                 },
                 {
                   "key": "crew_tasks",
                   "value": {
-                    "stringValue": "[{\"id\":\"583ee87b-ad8f-42b0-9354-78036e8c3875\",\"description\":\"{question}\",\"expected_output\":\"A short answer\",\"async_execution?\":false,\"human_input?\":false,\"agent_role\":\"research_agent\",\"agent_key\":\"4dc9e33a8c7925f0f322ab0a8886aef0\",\"context\":null,\"tools_names\":[]}]"
+                    "stringValue": "[{\"id\": \"be50aff3-19df-4772-99d7-5bd96218c0f6\", \"description\": \"{question}\", \"expected_output\": \"A short answer\", \"async_execution?\": false, \"human_input?\": false, \"agent_role\": \"research_agent\", \"agent_key\": \"4dc9e33a8c7925f0f322ab0a8886aef0\", \"context\": null, \"tools_names\": []}]"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"raw\":\"An **agent trace** is a chronological record of an AI agent’s actions and observations while completing a task—such as its inputs, tool calls, tool results, and final response. It helps explain, debug, and evaluate the agent’s behavior.\",\"pydantic\":null,\"json_dict\":null,\"tasks_output\":[{\"description\":\"What is an agent trace?\",\"name\":\"What is an agent trace?\",\"expected_output\":\"A short answer\",\"summary\":\"What is an agent trace?...\",\"raw\":\"An **agent trace** is a chronological record of an AI agent’s actions and observations while completing a task—such as its inputs, tool calls, tool results, and final response. It helps explain, debug, and evaluate the agent’s behavior.\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"research_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are research_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}],\"tool_failures\":[]}],\"token_usage\":{\"total_tokens\":159,\"prompt_tokens\":73,\"cached_prompt_tokens\":0,\"completion_tokens\":86,\"reasoning_tokens\":27,\"cache_creation_tokens\":0,\"successful_requests\":1}}"
+                    "stringValue": "{\"raw\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: the steps it took, such as receiving input, calling tools, observing results, and producing an answer. Traces help developers understand, debug, and evaluate an agent\u2019s behavior.\", \"pydantic\": null, \"json_dict\": null, \"tasks_output\": [{\"description\": \"What is an agent trace?\", \"name\": \"What is an agent trace?\", \"expected_output\": \"A short answer\", \"summary\": \"What is an agent trace?...\", \"raw\": \"An **agent trace** is a chronological record of an AI agent\u2019s execution: the steps it took, such as receiving input, calling tools, observing results, and producing an answer. Traces help developers understand, debug, and evaluate an agent\u2019s behavior.\", \"pydantic\": null, \"json_dict\": null, \"agent\": \"research_agent\", \"output_format\": \"raw\", \"messages\": [{\"role\": \"system\", \"content\": \"You are research_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}], \"tool_failures\": []}], \"token_usage\": {\"total_tokens\": 195, \"prompt_tokens\": 73, \"cached_prompt_tokens\": 0, \"completion_tokens\": 122, \"reasoning_tokens\": 61, \"cache_creation_tokens\": 0, \"successful_requests\": 1}}"
                   }
                 },
                 {

@@ -24,13 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "2f0e5505-868d-4055-8cc7-da99aabeac5d"
-            }
-          },
-          {
-            "key": "service.name",
-            "value": {
-              "stringValue": "opentelemetry-swarm"
+              "stringValue": "c949636c-f59d-48d0-8239-a92b83ddc0ff"
             }
           },
           {
@@ -38,10 +32,72 @@
             "value": {
               "stringValue": "0.66b0"
             }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
+            }
           }
         ]
       },
       "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "233c54429123cf3eecb0c0cdd275daea",
+              "spanId": "649da60c202b3c6e",
+              "parentSpanId": "251f89cfa368db92",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061358177721000",
+              "endTimeUnixNano": "1791061361394236000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "b7d9d8c9-6c02-4b60-bea6-f706d8539157"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        },
         {
           "scope": {
             "name": "openinference.instrumentation.openai",
@@ -49,13 +105,13 @@
           },
           "spans": [
             {
-              "traceId": "e868a26f268dc15240585d6c3e536ab2",
-              "spanId": "a663c32e7657f1df",
-              "parentSpanId": "86ca0e090d648d0c",
+              "traceId": "233c54429123cf3eecb0c0cdd275daea",
+              "spanId": "251f89cfa368db92",
+              "parentSpanId": "0e1f3d821df03d59",
               "name": "ChatCompletion",
               "kind": 1,
-              "startTimeUnixNano": "1791013009573764272",
-              "endTimeUnixNano": "1791013012992167966",
+              "startTimeUnixNano": "1791061358166907000",
+              "endTimeUnixNano": "1791061361398541000",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -66,7 +122,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"openai/gpt-6-luna\",\"messages\":[{\"role\":\"user\",\"content\":\"List key facts about: What is an agent trace?\"}]}"
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"messages\": [{\"role\": \"user\", \"content\": \"List key facts about: What is an agent trace?\"}]}"
                   }
                 },
                 {
@@ -78,7 +134,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"chatcmpl-EUoaXDlWrV7o7T6eQBfbmCGblGv7W\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"- **An agent trace is a record of an AI agent’s execution**—the sequence of events involved in handling a task.\\n- It may include the user’s request, model calls, tool calls and their results, intermediate actions, errors, and the final response.\\n- Traces often capture **timestamps, durations, identifiers, and metadata**, and may organize events as nested steps or spans.\\n- They help developers **debug behavior, measure performance, evaluate results, and audit tool use**.\\n- The exact detail varies by system: a trace may omit some events or sensitive data.\\n- A trace is **not necessarily the agent’s full internal reasoning**. It records observable execution events, not a guaranteed transcript of private thought.\\n- Traces can contain sensitive information, so they should be handled with appropriate access controls, redaction, and retention policies.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791013009,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":292,\"prompt_tokens\":17,\"total_tokens\":309,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":112,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
+                    "stringValue": "{\"id\":\"chatcmpl-EV1AMlFMAux4TPXGalT8n8WFpz9de\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"- **An agent trace** is a record of an AI agent\u2019s execution as it works toward a task.\\n- It may include the agent\u2019s inputs and outputs, tool calls and results, handoffs to other agents, errors, timing, and other metadata.\\n- Traces often show events in order and may group them into nested steps or spans.\\n- They help developers debug behavior, measure performance, evaluate results, and audit tool use.\\n- A trace is **not necessarily a transcript of the agent\u2019s internal reasoning**; it records only what the system captures.\\n- Trace contents and formats vary by platform, and traces may contain sensitive information that needs protection.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791061358,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":262,\"prompt_tokens\":17,\"total_tokens\":279,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":121,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
                   }
                 },
                 {
@@ -90,7 +146,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"model\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -114,7 +170,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "309"
+                    "intValue": "279"
                   }
                 },
                 {
@@ -126,7 +182,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "292"
+                    "intValue": "262"
                   }
                 },
                 {
@@ -150,7 +206,7 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "112"
+                    "intValue": "121"
                   }
                 },
                 {
@@ -168,7 +224,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "- **An agent trace is a record of an AI agent’s execution**—the sequence of events involved in handling a task.\n- It may include the user’s request, model calls, tool calls and their results, intermediate actions, errors, and the final response.\n- Traces often capture **timestamps, durations, identifiers, and metadata**, and may organize events as nested steps or spans.\n- They help developers **debug behavior, measure performance, evaluate results, and audit tool use**.\n- The exact detail varies by system: a trace may omit some events or sensitive data.\n- A trace is **not necessarily the agent’s full internal reasoning**. It records observable execution events, not a guaranteed transcript of private thought.\n- Traces can contain sensitive information, so they should be handled with appropriate access controls, redaction, and retention policies."
+                    "stringValue": "- **An agent trace** is a record of an AI agent\u2019s execution as it works toward a task.\n- It may include the agent\u2019s inputs and outputs, tool calls and results, handoffs to other agents, errors, timing, and other metadata.\n- Traces often show events in order and may group them into nested steps or spans.\n- They help developers debug behavior, measure performance, evaluate results, and audit tool use.\n- A trace is **not necessarily a transcript of the agent\u2019s internal reasoning**; it records only what the system captures.\n- Trace contents and formats vary by platform, and traces may contain sensitive information that needs protection."
                   }
                 },
                 {
@@ -197,13 +253,13 @@
           },
           "spans": [
             {
-              "traceId": "e868a26f268dc15240585d6c3e536ab2",
-              "spanId": "86ca0e090d648d0c",
-              "parentSpanId": "e3fc3c9c37fe686f",
+              "traceId": "233c54429123cf3eecb0c0cdd275daea",
+              "spanId": "0e1f3d821df03d59",
+              "parentSpanId": "fddaf2da465baf71",
               "name": "search_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013009564659675",
-              "endTimeUnixNano": "1791013012992208258",
+              "startTimeUnixNano": "1791061358150691000",
+              "endTimeUnixNano": "1791061361398579000",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -226,7 +282,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "- **An agent trace is a record of an AI agent’s execution**—the sequence of events involved in handling a task.\n- It may include the user’s request, model calls, tool calls and their results, intermediate actions, errors, and the final response.\n- Traces often capture **timestamps, durations, identifiers, and metadata**, and may organize events as nested steps or spans.\n- They help developers **debug behavior, measure performance, evaluate results, and audit tool use**.\n- The exact detail varies by system: a trace may omit some events or sensitive data.\n- A trace is **not necessarily the agent’s full internal reasoning**. It records observable execution events, not a guaranteed transcript of private thought.\n- Traces can contain sensitive information, so they should be handled with appropriate access controls, redaction, and retention policies."
+                    "stringValue": "- **An agent trace** is a record of an AI agent\u2019s execution as it works toward a task.\n- It may include the agent\u2019s inputs and outputs, tool calls and results, handoffs to other agents, errors, timing, and other metadata.\n- Traces often show events in order and may group them into nested steps or spans.\n- They help developers debug behavior, measure performance, evaluate results, and audit tool use.\n- A trace is **not necessarily a transcript of the agent\u2019s internal reasoning**; it records only what the system captures.\n- Trace contents and formats vary by platform, and traces may contain sensitive information that needs protection."
                   }
                 }
               ],
@@ -261,13 +317,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "2f0e5505-868d-4055-8cc7-da99aabeac5d"
-            }
-          },
-          {
-            "key": "service.name",
-            "value": {
-              "stringValue": "opentelemetry-swarm"
+              "stringValue": "c949636c-f59d-48d0-8239-a92b83ddc0ff"
             }
           },
           {
@@ -275,10 +325,72 @@
             "value": {
               "stringValue": "0.66b0"
             }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
+            }
           }
         ]
       },
       "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "233c54429123cf3eecb0c0cdd275daea",
+              "spanId": "0ec1817127832b0c",
+              "parentSpanId": "7ba1e22608c20ae9",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061361399259000",
+              "endTimeUnixNano": "1791061363203340000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "e84366c5-5d88-4ec0-bc54-6b5000ae11d1"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        },
         {
           "scope": {
             "name": "openinference.instrumentation.openai",
@@ -286,13 +398,13 @@
           },
           "spans": [
             {
-              "traceId": "e868a26f268dc15240585d6c3e536ab2",
-              "spanId": "88f6d1b77297aea1",
-              "parentSpanId": "d659d1129befe46c",
+              "traceId": "233c54429123cf3eecb0c0cdd275daea",
+              "spanId": "7ba1e22608c20ae9",
+              "parentSpanId": "7756eefae3c9e2e9",
               "name": "ChatCompletion",
               "kind": 1,
-              "startTimeUnixNano": "1791013012992568678",
-              "endTimeUnixNano": "1791013014841844220",
+              "startTimeUnixNano": "1791061361398942000",
+              "endTimeUnixNano": "1791061363203834000",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -303,7 +415,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"openai/gpt-6-luna\",\"messages\":[{\"role\":\"user\",\"content\":\"Using these notes, answer 'What is an agent trace?':\\n- **An agent trace is a record of an AI agent’s execution**—the sequence of events involved in handling a task.\\n- It may include the user’s request, model calls, tool calls and their results, intermediate actions, errors, and the final response.\\n- Traces often capture **timestamps, durations, identifiers, and metadata**, and may organize events as nested steps or spans.\\n- They help developers **debug behavior, measure performance, evaluate results, and audit tool use**.\\n- The exact detail varies by system: a trace may omit some events or sensitive data.\\n- A trace is **not necessarily the agent’s full internal reasoning**. It records observable execution events, not a guaranteed transcript of private thought.\\n- Traces can contain sensitive information, so they should be handled with appropriate access controls, redaction, and retention policies.\"}]}"
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"messages\": [{\"role\": \"user\", \"content\": \"Using these notes, answer 'What is an agent trace?':\\n- **An agent trace** is a record of an AI agent\u2019s execution as it works toward a task.\\n- It may include the agent\u2019s inputs and outputs, tool calls and results, handoffs to other agents, errors, timing, and other metadata.\\n- Traces often show events in order and may group them into nested steps or spans.\\n- They help developers debug behavior, measure performance, evaluate results, and audit tool use.\\n- A trace is **not necessarily a transcript of the agent\u2019s internal reasoning**; it records only what the system captures.\\n- Trace contents and formats vary by platform, and traces may contain sensitive information that needs protection.\"}]}"
                   }
                 },
                 {
@@ -315,7 +427,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"chatcmpl-EUoabltkqCx58uxj30PtrZOFbex43\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of an AI agent’s execution: the events involved in handling a task. It may include the user’s request, model and tool calls, results, intermediate actions, errors, and final response, often with timestamps, durations, identifiers, and other metadata.\\n\\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. Their level of detail varies, and they aren’t necessarily a complete record of the agent’s internal reasoning—they capture observable execution events, not a guaranteed transcript of private thought. Because traces may contain sensitive information, they should be protected with appropriate access controls, redaction, and retention policies.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791013013,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":137,\"prompt_tokens\":190,\"total_tokens\":327,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
+                    "stringValue": "{\"id\":\"chatcmpl-EV1APW9BhnXpYoujMXnLb4ElRb9gM\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of an AI agent\u2019s execution as it works toward a task. It can include inputs and outputs, tool calls and results, handoffs, errors, timing, and other metadata, often organized as ordered or nested steps.\\n\\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. They capture only what the system records\u2014not necessarily the agent\u2019s internal reasoning. Their contents and formats vary by platform, and they may contain sensitive information that should be protected.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791061361,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":107,\"prompt_tokens\":151,\"total_tokens\":258,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
                   }
                 },
                 {
@@ -327,7 +439,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"model\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -339,7 +451,7 @@
                 {
                   "key": "llm.input_messages.0.message.content",
                   "value": {
-                    "stringValue": "Using these notes, answer 'What is an agent trace?':\n- **An agent trace is a record of an AI agent’s execution**—the sequence of events involved in handling a task.\n- It may include the user’s request, model calls, tool calls and their results, intermediate actions, errors, and the final response.\n- Traces often capture **timestamps, durations, identifiers, and metadata**, and may organize events as nested steps or spans.\n- They help developers **debug behavior, measure performance, evaluate results, and audit tool use**.\n- The exact detail varies by system: a trace may omit some events or sensitive data.\n- A trace is **not necessarily the agent’s full internal reasoning**. It records observable execution events, not a guaranteed transcript of private thought.\n- Traces can contain sensitive information, so they should be handled with appropriate access controls, redaction, and retention policies."
+                    "stringValue": "Using these notes, answer 'What is an agent trace?':\n- **An agent trace** is a record of an AI agent\u2019s execution as it works toward a task.\n- It may include the agent\u2019s inputs and outputs, tool calls and results, handoffs to other agents, errors, timing, and other metadata.\n- Traces often show events in order and may group them into nested steps or spans.\n- They help developers debug behavior, measure performance, evaluate results, and audit tool use.\n- A trace is **not necessarily a transcript of the agent\u2019s internal reasoning**; it records only what the system captures.\n- Trace contents and formats vary by platform, and traces may contain sensitive information that needs protection."
                   }
                 },
                 {
@@ -351,19 +463,19 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "327"
+                    "intValue": "258"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "190"
+                    "intValue": "151"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "137"
+                    "intValue": "107"
                   }
                 },
                 {
@@ -405,7 +517,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an AI agent’s execution: the events involved in handling a task. It may include the user’s request, model and tool calls, results, intermediate actions, errors, and final response, often with timestamps, durations, identifiers, and other metadata.\n\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. Their level of detail varies, and they aren’t necessarily a complete record of the agent’s internal reasoning—they capture observable execution events, not a guaranteed transcript of private thought. Because traces may contain sensitive information, they should be protected with appropriate access controls, redaction, and retention policies."
+                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s execution as it works toward a task. It can include inputs and outputs, tool calls and results, handoffs, errors, timing, and other metadata, often organized as ordered or nested steps.\n\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. They capture only what the system records\u2014not necessarily the agent\u2019s internal reasoning. Their contents and formats vary by platform, and they may contain sensitive information that should be protected."
                   }
                 },
                 {
@@ -434,13 +546,13 @@
           },
           "spans": [
             {
-              "traceId": "e868a26f268dc15240585d6c3e536ab2",
-              "spanId": "d659d1129befe46c",
-              "parentSpanId": "e3fc3c9c37fe686f",
+              "traceId": "233c54429123cf3eecb0c0cdd275daea",
+              "spanId": "7756eefae3c9e2e9",
+              "parentSpanId": "fddaf2da465baf71",
               "name": "writer_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013012992247633",
-              "endTimeUnixNano": "1791013014841889262",
+              "startTimeUnixNano": "1791061361398626000",
+              "endTimeUnixNano": "1791061363203851000",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -457,13 +569,13 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "Using these notes, answer 'What is an agent trace?':\n- **An agent trace is a record of an AI agent’s execution**—the sequence of events involved in handling a task.\n- It may include the user’s request, model calls, tool calls and their results, intermediate actions, errors, and the final response.\n- Traces often capture **timestamps, durations, identifiers, and metadata**, and may organize events as nested steps or spans.\n- They help developers **debug behavior, measure performance, evaluate results, and audit tool use**.\n- The exact detail varies by system: a trace may omit some events or sensitive data.\n- A trace is **not necessarily the agent’s full internal reasoning**. It records observable execution events, not a guaranteed transcript of private thought.\n- Traces can contain sensitive information, so they should be handled with appropriate access controls, redaction, and retention policies."
+                    "stringValue": "Using these notes, answer 'What is an agent trace?':\n- **An agent trace** is a record of an AI agent\u2019s execution as it works toward a task.\n- It may include the agent\u2019s inputs and outputs, tool calls and results, handoffs to other agents, errors, timing, and other metadata.\n- Traces often show events in order and may group them into nested steps or spans.\n- They help developers debug behavior, measure performance, evaluate results, and audit tool use.\n- A trace is **not necessarily a transcript of the agent\u2019s internal reasoning**; it records only what the system captures.\n- Trace contents and formats vary by platform, and traces may contain sensitive information that needs protection."
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an AI agent’s execution: the events involved in handling a task. It may include the user’s request, model and tool calls, results, intermediate actions, errors, and final response, often with timestamps, durations, identifiers, and other metadata.\n\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. Their level of detail varies, and they aren’t necessarily a complete record of the agent’s internal reasoning—they capture observable execution events, not a guaranteed transcript of private thought. Because traces may contain sensitive information, they should be protected with appropriate access controls, redaction, and retention policies."
+                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s execution as it works toward a task. It can include inputs and outputs, tool calls and results, handoffs, errors, timing, and other metadata, often organized as ordered or nested steps.\n\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. They capture only what the system records\u2014not necessarily the agent\u2019s internal reasoning. Their contents and formats vary by platform, and they may contain sensitive information that should be protected."
                   }
                 }
               ],
@@ -471,12 +583,12 @@
               "flags": 256
             },
             {
-              "traceId": "e868a26f268dc15240585d6c3e536ab2",
-              "spanId": "e3fc3c9c37fe686f",
+              "traceId": "233c54429123cf3eecb0c0cdd275daea",
+              "spanId": "fddaf2da465baf71",
               "name": "research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013009564625842",
-              "endTimeUnixNano": "1791013014841904929",
+              "startTimeUnixNano": "1791061358150661000",
+              "endTimeUnixNano": "1791061363203862000",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -499,7 +611,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an AI agent’s execution: the events involved in handling a task. It may include the user’s request, model and tool calls, results, intermediate actions, errors, and final response, often with timestamps, durations, identifiers, and other metadata.\n\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. Their level of detail varies, and they aren’t necessarily a complete record of the agent’s internal reasoning—they capture observable execution events, not a guaranteed transcript of private thought. Because traces may contain sensitive information, they should be protected with appropriate access controls, redaction, and retention policies."
+                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s execution as it works toward a task. It can include inputs and outputs, tool calls and results, handoffs, errors, timing, and other metadata, often organized as ordered or nested steps.\n\nTraces help developers debug behavior, measure performance, evaluate results, and audit tool use. They capture only what the system records\u2014not necessarily the agent\u2019s internal reasoning. Their contents and formats vary by platform, and they may contain sensitive information that should be protected."
                   }
                 }
               ],

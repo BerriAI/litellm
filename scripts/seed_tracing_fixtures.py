@@ -57,6 +57,7 @@ class FixtureCapture(BaseModel):
     name: str
     trace_id: str
     spend_linked: bool
+    spend_complete: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +72,11 @@ def spend_fixtures(directory: Path = SPEND_FIXTURES) -> tuple[tuple[str, tuple[S
     return tuple(
         (
             path.stem.removesuffix("_spend_logs"),
-            SPEND_ROWS.validate_python(tuple(json.loads(line) for line in path.read_text().splitlines())),
+            SPEND_ROWS.validate_python(
+                tuple(
+                    {"litellm_call_id": "", **JSON_OBJECT.validate_json(line)} for line in path.read_text().splitlines()
+                )
+            ),
         )
         for path in sorted(directory.glob("*_spend_logs.jsonl"))
     )
@@ -97,7 +102,11 @@ def response_ids(rows: tuple[SpendLogRecord, ...]) -> Iterator[str]:
 
 
 def response_pattern(rows: tuple[SpendLogRecord, ...]) -> re.Pattern[str]:
-    identities: Final = sorted(frozenset(filter(None, response_ids(rows))), key=len, reverse=True)
+    identities: Final = sorted(
+        frozenset(filter(None, chain(response_ids(rows), (row["litellm_call_id"] for row in rows)))),
+        key=len,
+        reverse=True,
+    )
     return re.compile("|".join(re.escape(identity) for identity in identities) or r"(?!)")
 
 
@@ -311,7 +320,7 @@ async def verify_capture(
         "spend_rows": len(rows),
         "recorded_spend": expected,
         "trace_spend": actual,
-        "verified": math.isclose(actual, expected) if actual is not None else not capture.spend_linked,
+        "verified": math.isclose(actual, expected) if actual is not None else not (capture.spend_linked and capture.spend_complete),
     }
 
 

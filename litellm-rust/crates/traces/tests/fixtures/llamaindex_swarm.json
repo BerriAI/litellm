@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "a8a06936-e57e-4b68-8336-1a51bf887748"
+              "stringValue": "904881b9-2843-4404-929b-1ef9c106340a"
             }
           },
           {
@@ -34,15 +34,15 @@
             }
           },
           {
-            "key": "service.name",
-            "value": {
-              "stringValue": "llamaindex-swarm"
-            }
-          },
-          {
             "key": "telemetry.auto.version",
             "value": {
               "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
             }
           }
         ]
@@ -55,18 +55,18 @@
           },
           "spans": [
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "aca6f8f81821cd49",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "e1d7ef1a61097d4b",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.init_run",
               "kind": 1,
-              "startTimeUnixNano": "1791012932779093539",
-              "endTimeUnixNano": "1791012932824969889",
+              "startTimeUnixNano": "1791061370990755000",
+              "endTimeUnixNano": "1791061371042744000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff3bc7ca50>\",\"ev\":\"AgentWorkflowStartEvent()\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10e04c910>\", \"ev\": \"AgentWorkflowStartEvent()\"}"
                   }
                 },
                 {
@@ -100,18 +100,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "4728908e623afaf0",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "d55fe19a9ada9a23",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.setup_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791012932825429268",
-              "endTimeUnixNano": "1791012932825628562",
+              "startTimeUnixNano": "1791061371043272000",
+              "endTimeUnixNano": "1791061371043489000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff3bf69cd0>\",\"ev\":\"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10dd2de00>\", \"ev\": \"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
                   }
                 },
                 {
@@ -145,13 +145,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "964efb1113d50b1c",
-              "parentSpanId": "cc3090195ddf9fb8",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "4a7ea12842ed8be5",
+              "parentSpanId": "fd9f760dee9dd877",
               "name": "OpenAILike._prepare_chat_with_tools",
               "kind": 1,
-              "startTimeUnixNano": "1791012932826851241",
-              "endTimeUnixNano": "1791012932827443539",
+              "startTimeUnixNano": "1791061371044653000",
+              "endTimeUnixNano": "1791061371045286000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -180,7 +180,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"tools\":[\"<FunctionTool object>\"],\"user_msg\":null,\"chat_history\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"],\"verbose\":false,\"allow_parallel_tool_calls\":true,\"tool_required\":false}"
+                    "stringValue": "{\"tools\": [\"<FunctionTool object>\"], \"user_msg\": null, \"chat_history\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"], \"verbose\": false, \"allow_parallel_tool_calls\": true, \"tool_required\": false}"
                   }
                 },
                 {
@@ -192,7 +192,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}], \"tool_choice\": \"auto\", \"parallel_tool_calls\": true}"
                   }
                 },
                 {
@@ -214,13 +214,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "c327d7ffb22a6511",
-              "parentSpanId": "4a65ea4296352be0",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "5a1eceb1380ddc0f",
+              "parentSpanId": "793b736f5fea6caa",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791012932827595207",
-              "endTimeUnixNano": "1791012934556141349",
+              "startTimeUnixNano": "1791061371045447000",
+              "endTimeUnixNano": "1791061372999190000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -249,13 +249,13 @@
                 {
                   "key": "llm.tools.0.tool.json_schema",
                   "value": {
-                    "stringValue": "{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}"
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"],\"kwargs\":{\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true}}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"], \"kwargs\": {\"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}], \"tool_choice\": \"auto\", \"parallel_tool_calls\": true}}"
                   }
                 },
                 {
@@ -309,7 +309,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "49"
+                    "intValue": "51"
                   }
                 },
                 {
@@ -321,7 +321,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "178"
+                    "intValue": "180"
                   }
                 },
                 {
@@ -333,7 +333,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_RzNHtbQ1Lemhceak8nlTQq6k"
+                    "stringValue": "call_uNNvo1VxA0Cja9WAGq3md5Nf"
                   }
                 },
                 {
@@ -345,7 +345,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"to_agent\":\"search_agent\",\"reason\":\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\"}"
+                    "stringValue": "{\"to_agent\":\"search_agent\",\"reason\":\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\"}"
                   }
                 },
                 {
@@ -361,13 +361,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "4a65ea4296352be0",
-              "parentSpanId": "cc3090195ddf9fb8",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "793b736f5fea6caa",
+              "parentSpanId": "fd9f760dee9dd877",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791012932827480998",
-              "endTimeUnixNano": "1791012934556374768",
+              "startTimeUnixNano": "1791061371045328000",
+              "endTimeUnixNano": "1791061372999502000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -396,13 +396,13 @@
                 {
                   "key": "llm.tools.0.tool.json_schema",
                   "value": {
-                    "stringValue": "{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}"
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"],\"kwargs\":{\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true}}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\"], \"kwargs\": {\"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'search_agent': 'Gathers facts.', 'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}], \"tool_choice\": \"auto\", \"parallel_tool_calls\": true}}"
                   }
                 },
                 {
@@ -414,7 +414,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{\"tool_calls\":[{\"id\":\"call_RzNHtbQ1Lemhceak8nlTQq6k\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}]},\"blocks\":[{\"tool_call_id\":\"call_RzNHtbQ1Lemhceak8nlTQq6k\",\"tool_name\":\"handoff\",\"tool_kwargs\":\"{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}\"}]},\"raw\":{\"id\":\"resp_02661e822bb23206006ac0b0450cd887d09957b1862c03afeb\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"content\":null,\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_RzNHtbQ1Lemhceak8nlTQq6k\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}]}}],\"created\":1791012932,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":49,\"prompt_tokens\":129,\"total_tokens\":178,\"completion_tokens_details\":{\"reasoning_tokens\":0},\"prompt_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}},\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":129,\"completion_tokens\":49,\"total_tokens\":178}}"
+                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{\"tool_calls\":[{\"id\":\"call_uNNvo1VxA0Cja9WAGq3md5Nf\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}]},\"blocks\":[{\"tool_call_id\":\"call_uNNvo1VxA0Cja9WAGq3md5Nf\",\"tool_name\":\"handoff\",\"tool_kwargs\":\"{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}\"}]},\"raw\":{\"id\":\"resp_03b44f13b2d156d0006ac16d7b618c87d0bf7313d60c70073b\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"content\":null,\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_uNNvo1VxA0Cja9WAGq3md5Nf\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}]}}],\"created\":1791061371,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":51,\"prompt_tokens\":129,\"total_tokens\":180,\"completion_tokens_details\":{\"reasoning_tokens\":0},\"prompt_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}},\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":129,\"completion_tokens\":51,\"total_tokens\":180}}"
                   }
                 },
                 {
@@ -436,18 +436,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "cc3090195ddf9fb8",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "fd9f760dee9dd877",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.run_agent_step",
               "kind": 1,
-              "startTimeUnixNano": "1791012932826003608",
-              "endTimeUnixNano": "1791012934556586937",
+              "startTimeUnixNano": "1791061371043813000",
+              "endTimeUnixNano": "1791061372999818000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff3bf6a3f0>\",\"ev\":\"AgentSetup(input=[ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')]), ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10dd2e520>\", \"ev\": \"AgentSetup(input=[ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Hand off to search_agent to gather facts.')]), ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
                   }
                 },
                 {
@@ -459,7 +459,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Func..."
+                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Func..."
                   }
                 },
                 {
@@ -481,18 +481,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "bcb74ede4fa60645",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "b303e11936ee0587",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.parse_agent_output",
               "kind": 1,
-              "startTimeUnixNano": "1791012934556989358",
-              "endTimeUnixNano": "1791012934557221152",
+              "startTimeUnixNano": "1791061373000750000",
+              "endTimeUnixNano": "1791061373001323000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff392d7e30>\",\"ev\":\"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')]), structured_response=None, current_agent_name='research_agent', raw={'id': 'resp_02661e822bb23206006ac0b0450cd887d09957b1862c03afeb', 'choices': [{'finish_reason': 'tool_calls', 'index': 0, 'logprobs': None, 'message': {'content': None, 'refusal': None, 'role': 'assistant', 'annotations': None, 'audio': None, 'function_call': None, 'tool_calls': [{'id': 'call_RzNHtbQ1Lemhceak8nlTQq6k', 'function': {'arguments': '{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', 'name': 'handoff'}, 'type': 'function', 'index': 0}]}}], 'created': 1791012932, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 49, 'prompt_tokens': 129, 'total_tokens': 178, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_prediction_tokens': None}, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}, 'access_programs': {'cyber': 'daybreak_blue'}, 'billing': {'payer': 'developer'}, 'frequency_penalty': 0.0, 'presence_penalty': 0.0, 'tool_usage': {'image_gen': {'input_tokens': 0, 'input_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'output_tokens': 0, 'output_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'total_tokens': 0}, 'web_search': {'num_requests': 0}}}, tool_calls=[ToolSelection(tool_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.'})], retry_messages=[])\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f3b3bf0>\", \"ev\": \"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')]), structured_response=None, current_agent_name='research_agent', raw={'id': 'resp_03b44f13b2d156d0006ac16d7b618c87d0bf7313d60c70073b', 'choices': [{'finish_reason': 'tool_calls', 'index': 0, 'logprobs': None, 'message': {'content': None, 'refusal': None, 'role': 'assistant', 'annotations': None, 'audio': None, 'function_call': None, 'tool_calls': [{'id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf', 'function': {'arguments': '{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', 'name': 'handoff'}, 'type': 'function', 'index': 0}]}}], 'created': 1791061371, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 51, 'prompt_tokens': 129, 'total_tokens': 180, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_prediction_tokens': None}, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}, 'access_programs': {'cyber': 'daybreak_blue'}, 'billing': {'payer': 'developer'}, 'frequency_penalty': 0.0, 'presence_penalty': 0.0, 'tool_usage': {'image_gen': {'input_tokens': 0, 'input_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'output_tokens': 0, 'output_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'total_tokens': 0}, 'web_search': {'num_requests': 0}}}, tool_calls=[ToolSelection(tool_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.'})], retry_messages=[])\"}"
                   }
                 },
                 {
@@ -514,13 +514,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "b32aca0c6821c06a",
-              "parentSpanId": "3ce4b55cc32b5ca3",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "98191b02af8081c3",
+              "parentSpanId": "f6e427095785db32",
               "name": "FunctionTool.acall",
               "kind": 1,
-              "startTimeUnixNano": "1791012934557827658",
-              "endTimeUnixNano": "1791012934558394498",
+              "startTimeUnixNano": "1791061373002765000",
+              "endTimeUnixNano": "1791061373003230000",
               "attributes": [
                 {
                   "key": "tool.description",
@@ -537,13 +537,13 @@
                 {
                   "key": "tool.parameters",
                   "value": {
-                    "stringValue": "{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\"}"
+                    "stringValue": "{\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\"}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"kwargs\":{\"to_agent\":\"search_agent\",\"reason\":\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\",\"ctx\":\"<workflows.context.context.Context object at 0xffff3bc61bf0>\"}}"
+                    "stringValue": "{\"kwargs\": {\"to_agent\": \"search_agent\", \"reason\": \"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\", \"ctx\": \"<workflows.context.context.Context object at 0x10e02d590>\"}}"
                   }
                 },
                 {
@@ -555,7 +555,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"blocks\":[{\"text\":\"Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\nPlease continue with the current request.\"}],\"tool_name\":\"handoff\",\"raw_input\":{\"args\":[],\"kwargs\":{\"to_agent\":\"search_agent\",\"reason\":\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\"}},\"raw_output\":\"Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\nPlease continue with the current request.\",\"is_error\":false}"
+                    "stringValue": "{\"blocks\":[{\"text\":\"Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\nPlease continue with the current request.\"}],\"tool_name\":\"handoff\",\"raw_input\":{\"args\":[],\"kwargs\":{\"to_agent\":\"search_agent\",\"reason\":\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\"}},\"raw_output\":\"Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\nPlease continue with the current request.\",\"is_error\":false}"
                   }
                 },
                 {
@@ -577,18 +577,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "3ce4b55cc32b5ca3",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "f6e427095785db32",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.call_tool",
               "kind": 1,
-              "startTimeUnixNano": "1791012934557441238",
-              "endTimeUnixNano": "1791012934558492207",
+              "startTimeUnixNano": "1791061373001941000",
+              "endTimeUnixNano": "1791061373003335000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff3bc61bf0>\",\"ev\":\"ToolCall(tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.'}, tool_id='call_RzNHtbQ1Lemhceak8nlTQq6k')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10e02d590>\", \"ev\": \"ToolCall(tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.'}, tool_id='call_uNNvo1VxA0Cja9WAGq3md5Nf')\"}"
                   }
                 },
                 {
@@ -600,7 +600,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, ..."
+                    "stringValue": "ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent sy..."
                   }
                 },
                 {
@@ -622,18 +622,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "c14eecbbd65a6586",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "4f0624623c684d2a",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.aggregate_tool_results",
               "kind": 1,
-              "startTimeUnixNano": "1791012934558929170",
-              "endTimeUnixNano": "1791012934559528926",
+              "startTimeUnixNano": "1791061373003765000",
+              "endTimeUnixNano": "1791061373004396000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff391cb240>\",\"ev\":\"ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.'}, tool_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_output=ToolOutput(blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')], tool_name='handoff', raw_input={'args': (), 'kwargs': {'to_agent': 'search_agent', 'reason': 'Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.'}}, raw_output='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.', is_error=False), return_direct=True)\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f36b130>\", \"ev\": \"ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'search_agent', 'reason': 'Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.'}, tool_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_output=ToolOutput(blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')], tool_name='handoff', raw_input={'args': (), 'kwargs': {'to_agent': 'search_agent', 'reason': 'Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.'}}, raw_output='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.', is_error=False), return_direct=True)\"}"
                   }
                 },
                 {
@@ -667,18 +667,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "942700c9d1957643",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "7b0f015904c970d7",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.setup_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791012934559910388",
-              "endTimeUnixNano": "1791012934560065015",
+              "startTimeUnixNano": "1791061373004764000",
+              "endTimeUnixNano": "1791061373004916000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff390dc850>\",\"ev\":\"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])], current_agent_name='search_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f431750>\", \"ev\": \"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])], current_agent_name='search_agent')\"}"
                   }
                 },
                 {
@@ -712,13 +712,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "a8cc2d9a467ba83c",
-              "parentSpanId": "6854ee84248e15a9",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "6ed0d0571b6349d8",
+              "parentSpanId": "eb1a17544c97ab80",
               "name": "OpenAILike._prepare_chat_with_tools",
               "kind": 1,
-              "startTimeUnixNano": "1791012934560694938",
-              "endTimeUnixNano": "1791012934561001316",
+              "startTimeUnixNano": "1791061373005561000",
+              "endTimeUnixNano": "1791061373005879000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -747,7 +747,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"tools\":[\"<FunctionTool object>\"],\"user_msg\":null,\"chat_history\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\"],\"verbose\":false,\"allow_parallel_tool_calls\":true,\"tool_required\":false}"
+                    "stringValue": "{\"tools\": [\"<FunctionTool object>\"], \"user_msg\": null, \"chat_history\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\"], \"verbose\": false, \"allow_parallel_tool_calls\": true, \"tool_required\": false}"
                   }
                 },
                 {
@@ -759,7 +759,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\"],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\"], \"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}], \"tool_choice\": \"auto\", \"parallel_tool_calls\": true}"
                   }
                 },
                 {
@@ -808,7 +808,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "a8a06936-e57e-4b68-8336-1a51bf887748"
+              "stringValue": "904881b9-2843-4404-929b-1ef9c106340a"
             }
           },
           {
@@ -818,15 +818,15 @@
             }
           },
           {
-            "key": "service.name",
-            "value": {
-              "stringValue": "llamaindex-swarm"
-            }
-          },
-          {
             "key": "telemetry.auto.version",
             "value": {
               "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
             }
           }
         ]
@@ -839,13 +839,13 @@
           },
           "spans": [
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "30e7529449224002",
-              "parentSpanId": "98c63e25de49ec37",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "b7a387dc0df243cc",
+              "parentSpanId": "60063425126090a6",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791012934561148734",
-              "endTimeUnixNano": "1791012938621344511",
+              "startTimeUnixNano": "1791061373006028000",
+              "endTimeUnixNano": "1791061376588340000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -874,13 +874,13 @@
                 {
                   "key": "llm.tools.0.tool.json_schema",
                   "value": {
-                    "stringValue": "{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}"
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\"],\"kwargs\":{\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true}}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\"], \"kwargs\": {\"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}], \"tool_choice\": \"auto\", \"parallel_tool_calls\": true}}"
                   }
                 },
                 {
@@ -922,7 +922,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_RzNHtbQ1Lemhceak8nlTQq6k"
+                    "stringValue": "call_uNNvo1VxA0Cja9WAGq3md5Nf"
                   }
                 },
                 {
@@ -934,7 +934,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"to_agent\":\"search_agent\",\"reason\":\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\"}"
+                    "stringValue": "{\"to_agent\":\"search_agent\",\"reason\":\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\"}"
                   }
                 },
                 {
@@ -946,25 +946,25 @@
                 {
                   "key": "llm.input_messages.3.message.content",
                   "value": {
-                    "stringValue": "Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\nPlease continue with the current request."
+                    "stringValue": "Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\nPlease continue with the current request."
                   }
                 },
                 {
                   "key": "llm.input_messages.3.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_RzNHtbQ1Lemhceak8nlTQq6k"
+                    "stringValue": "call_uNNvo1VxA0Cja9WAGq3md5Nf"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "assistant: Key facts:\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow."
+                    "stringValue": "assistant: None"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "229"
+                    "intValue": "233"
                   }
                 },
                 {
@@ -976,19 +976,19 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "241"
+                    "intValue": "248"
                   }
                 },
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "96"
+                    "intValue": "117"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "470"
+                    "intValue": "481"
                   }
                 },
                 {
@@ -998,21 +998,9 @@
                   }
                 },
                 {
-                  "key": "llm.output_messages.0.message.contents.0.message_content.type",
-                  "value": {
-                    "stringValue": "text"
-                  }
-                },
-                {
-                  "key": "llm.output_messages.0.message.contents.0.message_content.text",
-                  "value": {
-                    "stringValue": "Key facts:\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow."
-                  }
-                },
-                {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_TVOyqsdlpeSfdH2agAWl1mw2"
+                    "stringValue": "call_AiuL7gjOj6TBkbrw2xNb4Vpb"
                   }
                 },
                 {
@@ -1024,7 +1012,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"to_agent\":\"writer_agent\",\"reason\":\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\"}"
+                    "stringValue": "{\"to_agent\":\"writer_agent\",\"reason\":\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\"}"
                   }
                 },
                 {
@@ -1040,13 +1028,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "98c63e25de49ec37",
-              "parentSpanId": "6854ee84248e15a9",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "60063425126090a6",
+              "parentSpanId": "eb1a17544c97ab80",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791012934561033150",
-              "endTimeUnixNano": "1791012938621457678",
+              "startTimeUnixNano": "1791061373005911000",
+              "endTimeUnixNano": "1791061376588455000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -1075,13 +1063,13 @@
                 {
                   "key": "llm.tools.0.tool.json_schema",
                   "value": {
-                    "stringValue": "{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}"
+                    "stringValue": "{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\"],\"kwargs\":{\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"handoff\",\"description\":\"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\",\"parameters\":{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\",\"additionalProperties\":false},\"strict\":false}}],\"tool_choice\":\"auto\",\"parallel_tool_calls\":true}}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\"], \"kwargs\": {\"tools\": [{\"type\": \"function\", \"function\": {\"name\": \"handoff\", \"description\": \"Useful for handing off to another agent.\\nIf you are currently not equipped to handle the user's request, or another agent is better suited to handle the request, please hand off to the appropriate agent.\\n\\nCurrently available agents:\\n{'writer_agent': 'Writes the final answer.'}\\n\", \"parameters\": {\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\", \"additionalProperties\": false}, \"strict\": false}}], \"tool_choice\": \"auto\", \"parallel_tool_calls\": true}}"
                   }
                 },
                 {
@@ -1093,7 +1081,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{\"tool_calls\":[{\"id\":\"call_TVOyqsdlpeSfdH2agAWl1mw2\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}]},\"blocks\":[{\"text\":\"Key facts:\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.\"},{\"tool_call_id\":\"call_TVOyqsdlpeSfdH2agAWl1mw2\",\"tool_name\":\"handoff\",\"tool_kwargs\":\"{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}\"}]},\"raw\":{\"id\":\"resp_0bec42016665bad5006ac0b046f53487d0afcc19aad3e8034b\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"content\":\"Key facts:\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.\",\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_TVOyqsdlpeSfdH2agAWl1mw2\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}],\"reasoning_items\":[{\"type\":\"reasoning\",\"id\":\"rs_0bec42016665bad5006ac0b04770d487d091f18c25cc6ee9f8\",\"encrypted_content\":\"gAAAAABqwLBKnUAA3ShDPfliEggMOIUT_ZKeqrNmOoNX_xy1fMug-FzKjaVg6Ns_WJlYtN-6tdLBAt44XScP_R0aXgNLvVhDAvCfbk9W0o0MzeurT6IOLI1Kk2z22h5GmO8WfRi-gDdzwKHXPldH9lRiL3MNeuHztMKWW6qXLnQO1zGG36DzSr1kkIhiPMKcjqtDuSW1_k-f3TmgTY6fyTegxRALf2QTkLq_selQNEse2vVaAKIVnbOWixeVrm3q8_pWJbv81RRX0s9Azyk79g-K5yveCIfeEMiQuS7lj5L2Pmnv_nUMO4zuJIBL3xyz8gypLg6pe4HArl01heZgOwwqkX0NEZZeRcxWpOPH8W6-32rQyyn54eXoRNakOJ_AKD_MQK1sa1YZ3Ot32bsYy4LAlf7Im6OoEvdZozp0iTluDZAj153EVQrS9hxe5BieAOOoR0y5UzeZRYnYUPivYYCnA_d_w1FzZ2MwprmXlt8hto7EdOql0K0_9ydwYsCNK-32mE-_IxMS2Bq1PWxnLXFKj_Z6Q9nYJ2zec06jn2HlV0-eKBXNeZjn9a1r6-gwWVkkzwiXSvnhwIoCxxei18FQOcf2x38MfRjDTwlojp-1uMQK4iSghVI15flvU3Gr_WdDrQl9OTjkjT7hdhzgBRvsMWNe2q7ix1533qyx6KCHyIU6ilRPvbYPyrXp2-1Oih-1cFaqaSRWVJ0z5opyQF5UCht_OCBOhcpLweWmKCZ3ADIu6QT7eA6XxjYpIJfE9Mtf6rmkSgIuRtNensUSCFe077D4o9Dx_T7LISjmSOLIbPyAiGm1Tlhv_AxYNVYznJTUGsKYcIV69UacufHNtatoSmGbunofvx83RFjsmXnNmKe1NxjEGsJcmm8J2p2PGSsyAPPNI62n6GmlH3IldyzTubIqAb_gtjAeyJXU-kga_xMbX_aExB-lCn_J46hSL3u574phrhE0ByI5e4LsWRg3ru2lg-_SzFRypdROBiz6UjBuIv1qMfKYOC3bsVvESPOaIkQdEJ6uCo3LdVe8q0mDXFuzoKBQ5Y6bRN5rbdiB_HI-HEm5a4Iyh_cav_X1aAhnEjTfQAF09Xb7ekgCyVBlEuJcupHQhmJMbjnB2lKjutqsiCdROim8SsRVYMtxa6TF947mik_kNS03y_n6DCYYsRMmZjTzt1cA8qrPJNchP6Us9A_Blb6RsJGD3-LaSRVsLpVQc_3GwoLWoh2iIYvnmJl9CKLbFD01eWTJ3-WYUrD4QaZVFDKrGHnc_lYlRDEbRUvIf4ueWVXppyX9KVXHQJQxyL3jNXEc6AXPdveFQFFF9p84joVXcfDHLv1PzSmu9l4FOjxTMgbuUHAUrunpBDEgDWjcbAW2i3zoe-tyGT_IgkTNr5aub2NU1oHqIqXNh-aumWixCJlQm-SA7vnh95rh0m6R9nPL2P_vEAowwYtIPnRoPsZOjamzYsayEqIZUN8-PW9tDycDeZpJqGguoKBdYl07HlB6pgZG4NzAuS-3ifkgmhh1oSVMgvFecpKWGRz-K_txMz9B7ZeyKfUuQTRFDV2V7fyRBtrvx41BXotX7XeJGFQY3i8rzN7InixGng4Xn8jICkmEgB1xIbk_0m3qq78O65Uyk7kT69G1VJ8yulccbRH6-dDJ_X0D96MgyJOxNHaCMAgVPj3ojplzT6z4SIQwunZgXS1XvFI7Nh69q6gqdoeDrjw366hPF35PDAKNjQGsCQbD9eK13wwZYze3764eUI3n9McGgGtlbekrXzCZm1IN-UCQ625YPYkyKNFCiou5bFt5cdMwnAjaXBuxDrCRTjQdSShhdMhVqrVDNU1mimRL0LV5X14pjG9VA5CPR6k9\",\"summary\":[]}]}}],\"created\":1791012934,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":241,\"prompt_tokens\":229,\"total_tokens\":470,\"completion_tokens_details\":{\"reasoning_tokens\":96},\"prompt_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}},\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":229,\"completion_tokens\":241,\"total_tokens\":470}}"
+                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{\"tool_calls\":[{\"id\":\"call_AiuL7gjOj6TBkbrw2xNb4Vpb\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}]},\"blocks\":[{\"tool_call_id\":\"call_AiuL7gjOj6TBkbrw2xNb4Vpb\",\"tool_name\":\"handoff\",\"tool_kwargs\":\"{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}\"}]},\"raw\":{\"id\":\"resp_010ef730cc2991e5006ac16d7d272487d0a9a3d9bf828f3360\",\"choices\":[{\"finish_reason\":\"tool_calls\",\"index\":0,\"message\":{\"content\":null,\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_AiuL7gjOj6TBkbrw2xNb4Vpb\",\"function\":{\"arguments\":\"{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}\",\"name\":\"handoff\"},\"type\":\"function\",\"index\":0}],\"reasoning_content\":\"\",\"reasoning_items\":[{\"type\":\"reasoning\",\"id\":\"rs_010ef730cc2991e5006ac16d7dbbd087d08e0c067500c341f3\",\"encrypted_content\":\"gAAAAABqwW2AHPai_ZycYxFvSI44ckjP9rwJrEZB6tyxLF1GSFMvYXkadfRSi4oZ1jXY4DhSl-G5sLL2Zv9JiQiFZPoWWAltWbNMHwqWDCRGOJkUfrSxNh60Df3F2d9ok8EHb7n9BasxqwP57VKXss-gpAaRK5ubFf8T8LWy_TxvxbIZEaq43s1KYVUsQeAXd6C0LS1HEbjPd50EKzThrtyoqvImWyZN8ENGknYszBNzMXdmBqufIPZ7dTCglecC-T75oktASC11iG_zxS7w2SkhrPjP292z0PzITZp25wVGMVZVh3hSSkZQE5OWvLetenRd7UNNQ-nbSbltUWB_Gns2asbz0yxVtU4v4gm2yqU6yPq-aqpDmwmWbLjFV894aIg3aRALsMYC63Mwg5xhn_qcDCG7PmvHaKfo-AOCfuw5fok16bCgkjPrX-V4gUgesniyOYbnr8IrfQPbpr-oTNpHCKZlQR79qDWblE6fO27uYOUcTdtSBJUjHfREcs4-5CQaIUeYsFYpTbVH89Ztywlf097AWJiZEH2sPYf8Gerg9ljyFztj1CnwlPAWV0a6lpNvGrvEfswB2agImWe3qW2eoSsFkHRvaSi41bKV5aaGv_Kot48nupMpmVRDeVyp9MsePy7h888-JJAfeAxKG441GGee4ef0mT3EpCub6YbzHibtB6-it1vo0o1MXD-dIPvZ4qGc06Loawzrp3pL21NCGUvKUVdgsdMWfXss6zfqRUqWxuIzwOonz9pMPTY9rObBB-OyRvX2jluZP5ZhZLO2k50QxEeCymc0WBx2dI2PP_8T633qacOzVK2tMIxKXT5C-s2LkNmYTKI0EZarVmtkq39KGL8iN9mt-yxsH5IZmn1yg3TZs1Z8A7Cd3NYGK-WSK2TbWsixJvqowMGxv29jwXNDicB-dAnj4lcMPbiFePnaRUIXCGtTr_maU0ISqYo2gs28BL6MELnDpuq-gtRokCOgyNnKY4C69AEJSywar8jE3JeNNS5wFfgPbGEKKgDiMafjQ6l29G-YKUHsXCH3LFNVyqiTl1lbquPnJ8ZrOhNeK_98Q50P5NCh9NAd3OJ86aLb8VflMNwgzf-UanxVeSmpG-M3IOE70KaVvf63GMlZ_-qgCM_fdjZihucI-dF6eUTPaEA4Sloh5ppavbCNETsTok_zMfSMen65ziJ5ygwCqIqXdhm3ByLa2FjVhZiqwYzTNJ_cgGNl2gO0QC89Y4lKecd_ugDQImRLq7uBvZ7Ju1kUueyLOiEt9wc6anzoN3p_zwNwj5sGolrGRYr9GWmv4UwPQ2kooRMHGkxPpP8cQpBHANJ96etdAY8JA6am-ALv5gV14nsdEmkmNzN9tfTfKEDfcu2U5XR9ADkU8k4gdzCxZtAlPyQUXorDGT7P_zZbEu9vWmmUK08ziiFqM9V08Tji-5pQM_UqMUYmgx2PaBfp5FKZkZt8Q38ObSlOIP3e2lDg81jHDOdMfXANUOxtdNCEWA7xSdqARHbmTOCI5w_hMNWom_zHuAXpgvHB-4Ry5a-dIy1zM-RB4xQ5pjAQH2uMXTcUXZE4ZRP5pUMSNJEZSzk4ETgIjH2mvGxiefAy7QxdOGuvZy1dDVdVLYBqMfu_ZXt00_rUzV2-Z9NjUFb9kfXhiO1XucNF2neM5v4c1MwYf6-YxCFVQY6O3_6dSAnicI7ZlpFfgwIRGZy49t5ZxsA-ALVZclOTpPkP_tsO0tuu8WgGEDk0Ew-7chZOiPK72CWtK-xPTZqJRk-5D_O2c1eLHVVFWGZzgPM6pfN1JXdAnKIi-q9jseF28CDhJYapfts6u-VzO1hUDba0wzkTT4OjCCLoGDohtIqmUFFOf3PEn37FizeEilgvbKVtl1lJybf0x-bF8m2m4AO_O7eoeZ64Ng02Tsbr2_IjxD834osvkX16_gM8ji4YG3jj71bscPN7-uuIlg-tYbZHDsRQvB4=\",\"summary\":[]}]}}],\"created\":1791061373,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":248,\"prompt_tokens\":233,\"total_tokens\":481,\"completion_tokens_details\":{\"reasoning_tokens\":117},\"prompt_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}},\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":233,\"completion_tokens\":248,\"total_tokens\":481}}"
                   }
                 },
                 {
@@ -1115,18 +1103,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "6854ee84248e15a9",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "eb1a17544c97ab80",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.run_agent_step",
               "kind": 1,
-              "startTimeUnixNano": "1791012934560267142",
-              "endTimeUnixNano": "1791012938621682014",
+              "startTimeUnixNano": "1791061373005185000",
+              "endTimeUnixNano": "1791061376588666000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff390dcc50>\",\"ev\":\"AgentSetup(input=[ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')]), ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])], current_agent_name='search_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f431b50>\", \"ev\": \"AgentSetup(input=[ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='List key facts, then hand off to writer_agent.')]), ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])], current_agent_name='search_agent')\"}"
                   }
                 },
                 {
@@ -1138,7 +1126,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Func..."
+                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Func..."
                   }
                 },
                 {
@@ -1160,18 +1148,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "7cc4a444b2e4b631",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "26b30e6ec3cbaf4e",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.parse_agent_output",
               "kind": 1,
-              "startTimeUnixNano": "1791012938622123727",
-              "endTimeUnixNano": "1791012938622368771",
+              "startTimeUnixNano": "1791061376589487000",
+              "endTimeUnixNano": "1791061376589763000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff39179f40>\",\"ev\":\"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[TextBlock(block_type='text', text='Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.'), ToolCallBlock(block_type='tool_call', tool_call_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}')]), structured_response=None, current_agent_name='search_agent', raw={'id': 'resp_0bec42016665bad5006ac0b046f53487d0afcc19aad3e8034b', 'choices': [{'finish_reason': 'tool_calls', 'index': 0, 'logprobs': None, 'message': {'content': 'Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.', 'refusal': None, 'role': 'assistant', 'annotations': None, 'audio': None, 'function_call': None, 'tool_calls': [{'id': 'call_TVOyqsdlpeSfdH2agAWl1mw2', 'function': {'arguments': '{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', 'name': 'handoff'}, 'type': 'function', 'index': 0}], 'reasoning_items': [{'type': 'reasoning', 'id': 'rs_0bec42016665bad5006ac0b04770d487d091f18c25cc6ee9f8', 'encrypted_content': 'gAAAAABqwLBKnUAA3ShDPfliEggMOIUT_ZKeqrNmOoNX_xy1fMug-FzKjaVg6Ns_WJlYtN-6tdLBAt44XScP_R0aXgNLvVhDAvCfbk9W0o0MzeurT6IOLI1Kk2z22h5GmO8WfRi-gDdzwKHXPldH9lRiL3MNeuHztMKWW6qXLnQO1zGG36DzSr1kkIhiPMKcjqtDuSW1_k-f3TmgTY6fyTegxRALf2QTkLq_selQNEse2vVaAKIVnbOWixeVrm3q8_pWJbv81RRX0s9Azyk79g-K5yveCIfeEMiQuS7lj5L2Pmnv_nUMO4zuJIBL3xyz8gypLg6pe4HArl01heZgOwwqkX0NEZZeRcxWpOPH8W6-32rQyyn54eXoRNakOJ_AKD_MQK1sa1YZ3Ot32bsYy4LAlf7Im6OoEvdZozp0iTluDZAj153EVQrS9hxe5BieAOOoR0y5UzeZRYnYUPivYYCnA_d_w1FzZ2MwprmXlt8hto7EdOql0K0_9ydwYsCNK-32mE-_IxMS2Bq1PWxnLXFKj_Z6Q9nYJ2zec06jn2HlV0-eKBXNeZjn9a1r6-gwWVkkzwiXSvnhwIoCxxei18FQOcf2x38MfRjDTwlojp-1uMQK4iSghVI15flvU3Gr_WdDrQl9OTjkjT7hdhzgBRvsMWNe2q7ix1533qyx6KCHyIU6ilRPvbYPyrXp2-1Oih-1cFaqaSRWVJ0z5opyQF5UCht_OCBOhcpLweWmKCZ3ADIu6QT7eA6XxjYpIJfE9Mtf6rmkSgIuRtNensUSCFe077D4o9Dx_T7LISjmSOLIbPyAiGm1Tlhv_AxYNVYznJTUGsKYcIV69UacufHNtatoSmGbunofvx83RFjsmXnNmKe1NxjEGsJcmm8J2p2PGSsyAPPNI62n6GmlH3IldyzTubIqAb_gtjAeyJXU-kga_xMbX_aExB-lCn_J46hSL3u574phrhE0ByI5e4LsWRg3ru2lg-_SzFRypdROBiz6UjBuIv1qMfKYOC3bsVvESPOaIkQdEJ6uCo3LdVe8q0mDXFuzoKBQ5Y6bRN5rbdiB_HI-HEm5a4Iyh_cav_X1aAhnEjTfQAF09Xb7ekgCyVBlEuJcupHQhmJMbjnB2lKjutqsiCdROim8SsRVYMtxa6TF947mik_kNS03y_n6DCYYsRMmZjTzt1cA8qrPJNchP6Us9A_Blb6RsJGD3-LaSRVsLpVQc_3GwoLWoh2iIYvnmJl9CKLbFD01eWTJ3-WYUrD4QaZVFDKrGHnc_lYlRDEbRUvIf4ueWVXppyX9KVXHQJQxyL3jNXEc6AXPdveFQFFF9p84joVXcfDHLv1PzSmu9l4FOjxTMgbuUHAUrunpBDEgDWjcbAW2i3zoe-tyGT_IgkTNr5aub2NU1oHqIqXNh-aumWixCJlQm-SA7vnh95rh0m6R9nPL2P_vEAowwYtIPnRoPsZOjamzYsayEqIZUN8-PW9tDycDeZpJqGguoKBdYl07HlB6pgZG4NzAuS-3ifkgmhh1oSVMgvFecpKWGRz-K_txMz9B7ZeyKfUuQTRFDV2V7fyRBtrvx41BXotX7XeJGFQY3i8rzN7InixGng4Xn8jICkmEgB1xIbk_0m3qq78O65Uyk7kT69G1VJ8yulccbRH6-dDJ_X0D96MgyJOxNHaCMAgVPj3ojplzT6z4SIQwunZgXS1XvFI7Nh69q6gqdoeDrjw366hPF35PDAKNjQGsCQbD9eK13wwZYze3764eUI3n9McGgGtlbekrXzCZm1IN-UCQ625YPYkyKNFCiou5bFt5cdMwnAjaXBuxDrCRTjQdSShhdMhVqrVDNU1mimRL0LV5X14pjG9VA5CPR6k9', 'summary': []}]}}], 'created': 1791012934, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 241, 'prompt_tokens': 229, 'total_tokens': 470, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 96, 'rejected_prediction_tokens': None}, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}, 'access_programs': {'cyber': 'daybreak_blue'}, 'billing': {'payer': 'developer'}, 'frequency_penalty': 0.0, 'presence_penalty': 0.0, 'tool_usage': {'image_gen': {'input_tokens': 0, 'input_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'output_tokens': 0, 'output_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'total_tokens': 0}, 'web_search': {'num_requests': 0}}}, tool_calls=[ToolSelection(tool_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.'})], retry_messages=[])\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10da1e8a0>\", \"ev\": \"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}')]), structured_response=None, current_agent_name='search_agent', raw={'id': 'resp_010ef730cc2991e5006ac16d7d272487d0a9a3d9bf828f3360', 'choices': [{'finish_reason': 'tool_calls', 'index': 0, 'logprobs': None, 'message': {'content': None, 'refusal': None, 'role': 'assistant', 'annotations': None, 'audio': None, 'function_call': None, 'tool_calls': [{'id': 'call_AiuL7gjOj6TBkbrw2xNb4Vpb', 'function': {'arguments': '{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', 'name': 'handoff'}, 'type': 'function', 'index': 0}], 'reasoning_content': '', 'reasoning_items': [{'type': 'reasoning', 'id': 'rs_010ef730cc2991e5006ac16d7dbbd087d08e0c067500c341f3', 'encrypted_content': 'gAAAAABqwW2AHPai_ZycYxFvSI44ckjP9rwJrEZB6tyxLF1GSFMvYXkadfRSi4oZ1jXY4DhSl-G5sLL2Zv9JiQiFZPoWWAltWbNMHwqWDCRGOJkUfrSxNh60Df3F2d9ok8EHb7n9BasxqwP57VKXss-gpAaRK5ubFf8T8LWy_TxvxbIZEaq43s1KYVUsQeAXd6C0LS1HEbjPd50EKzThrtyoqvImWyZN8ENGknYszBNzMXdmBqufIPZ7dTCglecC-T75oktASC11iG_zxS7w2SkhrPjP292z0PzITZp25wVGMVZVh3hSSkZQE5OWvLetenRd7UNNQ-nbSbltUWB_Gns2asbz0yxVtU4v4gm2yqU6yPq-aqpDmwmWbLjFV894aIg3aRALsMYC63Mwg5xhn_qcDCG7PmvHaKfo-AOCfuw5fok16bCgkjPrX-V4gUgesniyOYbnr8IrfQPbpr-oTNpHCKZlQR79qDWblE6fO27uYOUcTdtSBJUjHfREcs4-5CQaIUeYsFYpTbVH89Ztywlf097AWJiZEH2sPYf8Gerg9ljyFztj1CnwlPAWV0a6lpNvGrvEfswB2agImWe3qW2eoSsFkHRvaSi41bKV5aaGv_Kot48nupMpmVRDeVyp9MsePy7h888-JJAfeAxKG441GGee4ef0mT3EpCub6YbzHibtB6-it1vo0o1MXD-dIPvZ4qGc06Loawzrp3pL21NCGUvKUVdgsdMWfXss6zfqRUqWxuIzwOonz9pMPTY9rObBB-OyRvX2jluZP5ZhZLO2k50QxEeCymc0WBx2dI2PP_8T633qacOzVK2tMIxKXT5C-s2LkNmYTKI0EZarVmtkq39KGL8iN9mt-yxsH5IZmn1yg3TZs1Z8A7Cd3NYGK-WSK2TbWsixJvqowMGxv29jwXNDicB-dAnj4lcMPbiFePnaRUIXCGtTr_maU0ISqYo2gs28BL6MELnDpuq-gtRokCOgyNnKY4C69AEJSywar8jE3JeNNS5wFfgPbGEKKgDiMafjQ6l29G-YKUHsXCH3LFNVyqiTl1lbquPnJ8ZrOhNeK_98Q50P5NCh9NAd3OJ86aLb8VflMNwgzf-UanxVeSmpG-M3IOE70KaVvf63GMlZ_-qgCM_fdjZihucI-dF6eUTPaEA4Sloh5ppavbCNETsTok_zMfSMen65ziJ5ygwCqIqXdhm3ByLa2FjVhZiqwYzTNJ_cgGNl2gO0QC89Y4lKecd_ugDQImRLq7uBvZ7Ju1kUueyLOiEt9wc6anzoN3p_zwNwj5sGolrGRYr9GWmv4UwPQ2kooRMHGkxPpP8cQpBHANJ96etdAY8JA6am-ALv5gV14nsdEmkmNzN9tfTfKEDfcu2U5XR9ADkU8k4gdzCxZtAlPyQUXorDGT7P_zZbEu9vWmmUK08ziiFqM9V08Tji-5pQM_UqMUYmgx2PaBfp5FKZkZt8Q38ObSlOIP3e2lDg81jHDOdMfXANUOxtdNCEWA7xSdqARHbmTOCI5w_hMNWom_zHuAXpgvHB-4Ry5a-dIy1zM-RB4xQ5pjAQH2uMXTcUXZE4ZRP5pUMSNJEZSzk4ETgIjH2mvGxiefAy7QxdOGuvZy1dDVdVLYBqMfu_ZXt00_rUzV2-Z9NjUFb9kfXhiO1XucNF2neM5v4c1MwYf6-YxCFVQY6O3_6dSAnicI7ZlpFfgwIRGZy49t5ZxsA-ALVZclOTpPkP_tsO0tuu8WgGEDk0Ew-7chZOiPK72CWtK-xPTZqJRk-5D_O2c1eLHVVFWGZzgPM6pfN1JXdAnKIi-q9jseF28CDhJYapfts6u-VzO1hUDba0wzkTT4OjCCLoGDohtIqmUFFOf3PEn37FizeEilgvbKVtl1lJybf0x-bF8m2m4AO_O7eoeZ64Ng02Tsbr2_IjxD834osvkX16_gM8ji4YG3jj71bscPN7-uuIlg-tYbZHDsRQvB4=', 'summary': []}]}}], 'created': 1791061373, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 248, 'prompt_tokens': 233, 'total_tokens': 481, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 117, 'rejected_prediction_tokens': None}, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}, 'access_programs': {'cyber': 'daybreak_blue'}, 'billing': {'payer': 'developer'}, 'frequency_penalty': 0.0, 'presence_penalty': 0.0, 'tool_usage': {'image_gen': {'input_tokens': 0, 'input_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'output_tokens': 0, 'output_tokens_details': {'image_tokens': 0, 'text_tokens': 0}, 'total_tokens': 0}, 'web_search': {'num_requests': 0}}}, tool_calls=[ToolSelection(tool_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.'})], retry_messages=[])\"}"
                   }
                 },
                 {
@@ -1193,13 +1181,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "e4e5c87e20e47934",
-              "parentSpanId": "fc15b2b9e7a49a58",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "a54416bcc050346c",
+              "parentSpanId": "b9507a93c3029650",
               "name": "FunctionTool.acall",
               "kind": 1,
-              "startTimeUnixNano": "1791012938622995861",
-              "endTimeUnixNano": "1791012938623265322",
+              "startTimeUnixNano": "1791061376590654000",
+              "endTimeUnixNano": "1791061376590963000",
               "attributes": [
                 {
                   "key": "tool.description",
@@ -1216,13 +1204,13 @@
                 {
                   "key": "tool.parameters",
                   "value": {
-                    "stringValue": "{\"properties\":{\"to_agent\":{\"title\":\"To Agent\",\"type\":\"string\"},\"reason\":{\"title\":\"Reason\",\"type\":\"string\"}},\"required\":[\"to_agent\",\"reason\"],\"type\":\"object\"}"
+                    "stringValue": "{\"properties\": {\"to_agent\": {\"title\": \"To Agent\", \"type\": \"string\"}, \"reason\": {\"title\": \"Reason\", \"type\": \"string\"}}, \"required\": [\"to_agent\", \"reason\"], \"type\": \"object\"}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"kwargs\":{\"to_agent\":\"writer_agent\",\"reason\":\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\",\"ctx\":\"<workflows.context.context.Context object at 0xffff3bf6d8b0>\"}}"
+                    "stringValue": "{\"kwargs\": {\"to_agent\": \"writer_agent\", \"reason\": \"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\", \"ctx\": \"<workflows.context.context.Context object at 0x10da1f980>\"}}"
                   }
                 },
                 {
@@ -1234,7 +1222,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"blocks\":[{\"text\":\"Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\nPlease continue with the current request.\"}],\"tool_name\":\"handoff\",\"raw_input\":{\"args\":[],\"kwargs\":{\"to_agent\":\"writer_agent\",\"reason\":\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\"}},\"raw_output\":\"Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\nPlease continue with the current request.\",\"is_error\":false}"
+                    "stringValue": "{\"blocks\":[{\"text\":\"Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\nPlease continue with the current request.\"}],\"tool_name\":\"handoff\",\"raw_input\":{\"args\":[],\"kwargs\":{\"to_agent\":\"writer_agent\",\"reason\":\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\"}},\"raw_output\":\"Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\nPlease continue with the current request.\",\"is_error\":false}"
                   }
                 },
                 {
@@ -1256,18 +1244,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "fc15b2b9e7a49a58",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "b9507a93c3029650",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.call_tool",
               "kind": 1,
-              "startTimeUnixNano": "1791012938622586148",
-              "endTimeUnixNano": "1791012938623353240",
+              "startTimeUnixNano": "1791061376590160000",
+              "endTimeUnixNano": "1791061376591082000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff3bf6d8b0>\",\"ev\":\"ToolCall(tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.'}, tool_id='call_TVOyqsdlpeSfdH2agAWl1mw2')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10da1f980>\", \"ev\": \"ToolCall(tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.'}, tool_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb')\"}"
                   }
                 },
                 {
@@ -1279,7 +1267,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meanin..."
+                    "stringValue": "ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s executi..."
                   }
                 },
                 {
@@ -1301,18 +1289,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "3299be588d99ba7f",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "cd5559c8139c8455",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.aggregate_tool_results",
               "kind": 1,
-              "startTimeUnixNano": "1791012938623886579",
-              "endTimeUnixNano": "1791012938625491595",
+              "startTimeUnixNano": "1791061376591599000",
+              "endTimeUnixNano": "1791061376592240000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff38f58ad0>\",\"ev\":\"ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.'}, tool_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_output=ToolOutput(blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.')], tool_name='handoff', raw_input={'args': (), 'kwargs': {'to_agent': 'writer_agent', 'reason': 'Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.'}}, raw_output='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.', is_error=False), return_direct=True)\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f4e7230>\", \"ev\": \"ToolCallResult(tool_name='handoff', tool_kwargs={'to_agent': 'writer_agent', 'reason': 'Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.'}, tool_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_output=ToolOutput(blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.')], tool_name='handoff', raw_input={'args': (), 'kwargs': {'to_agent': 'writer_agent', 'reason': 'Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.'}}, raw_output='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.', is_error=False), return_direct=True)\"}"
                   }
                 },
                 {
@@ -1346,18 +1334,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "049d08f49a3affeb",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "3e946f4b18c05806",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.setup_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791012938626007892",
-              "endTimeUnixNano": "1791012938626220644",
+              "startTimeUnixNano": "1791061376592616000",
+              "endTimeUnixNano": "1791061376592844000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff38f58f30>\",\"ev\":\"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[TextBlock(block_type='text', text='Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.'), ToolCallBlock(block_type='tool_call', tool_call_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_TVOyqsdlpeSfdH2agAWl1mw2'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.')])], current_agent_name='writer_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f4e7690>\", \"ev\": \"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_AiuL7gjOj6TBkbrw2xNb4Vpb'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.')])], current_agent_name='writer_agent')\"}"
                   }
                 },
                 {
@@ -1391,13 +1379,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "6bf9e4cc9af79c1a",
-              "parentSpanId": "3e28312b1de60c2f",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "55f57c1271a92b9f",
+              "parentSpanId": "636940f2f8057e5a",
               "name": "OpenAILike._prepare_chat_with_tools",
               "kind": 1,
-              "startTimeUnixNano": "1791012938626629607",
-              "endTimeUnixNano": "1791012938626867276",
+              "startTimeUnixNano": "1791061376593423000",
+              "endTimeUnixNano": "1791061376593716000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -1426,7 +1414,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"tools\":[],\"user_msg\":null,\"chat_history\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[TextBlock(block_type='text', text='Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.'), ToolCallBlock(block_type='tool_call', tool_call_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_TVOyqsdlpeSfdH2agAWl1mw2'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.')])\"],\"verbose\":false,\"allow_parallel_tool_calls\":true,\"tool_required\":false}"
+                    "stringValue": "{\"tools\": [], \"user_msg\": null, \"chat_history\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_AiuL7gjOj6TBkbrw2xNb4Vpb'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.')])\"], \"verbose\": false, \"allow_parallel_tool_calls\": true, \"tool_required\": false}"
                   }
                 },
                 {
@@ -1438,7 +1426,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[TextBlock(block_type='text', text='Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.'), ToolCallBlock(block_type='tool_call', tool_call_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_TVOyqsdlpeSfdH2agAWl1mw2'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.')])\"],\"tools\":null,\"tool_choice\":null}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_AiuL7gjOj6TBkbrw2xNb4Vpb'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.')])\"], \"tools\": null, \"tool_choice\": null}"
                   }
                 },
                 {
@@ -1460,13 +1448,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "ebc288dba468b6b6",
-              "parentSpanId": "bc20f40c1da97dab",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "f31a99eb06ab44f4",
+              "parentSpanId": "a5d9c37e5e99a147",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791012938627043361",
-              "endTimeUnixNano": "1791012939949511800",
+              "startTimeUnixNano": "1791061376593898000",
+              "endTimeUnixNano": "1791061377855904000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -1495,7 +1483,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[TextBlock(block_type='text', text='Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.'), ToolCallBlock(block_type='tool_call', tool_call_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_TVOyqsdlpeSfdH2agAWl1mw2'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.')])\"],\"kwargs\":{\"tools\":null,\"tool_choice\":null}}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_AiuL7gjOj6TBkbrw2xNb4Vpb'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.')])\"], \"kwargs\": {\"tools\": null, \"tool_choice\": null}}"
                   }
                 },
                 {
@@ -1537,7 +1525,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_RzNHtbQ1Lemhceak8nlTQq6k"
+                    "stringValue": "call_uNNvo1VxA0Cja9WAGq3md5Nf"
                   }
                 },
                 {
@@ -1549,7 +1537,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"to_agent\":\"search_agent\",\"reason\":\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\"}"
+                    "stringValue": "{\"to_agent\":\"search_agent\",\"reason\":\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\"}"
                   }
                 },
                 {
@@ -1561,13 +1549,13 @@
                 {
                   "key": "llm.input_messages.3.message.content",
                   "value": {
-                    "stringValue": "Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\nPlease continue with the current request."
+                    "stringValue": "Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\nPlease continue with the current request."
                   }
                 },
                 {
                   "key": "llm.input_messages.3.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_RzNHtbQ1Lemhceak8nlTQq6k"
+                    "stringValue": "call_uNNvo1VxA0Cja9WAGq3md5Nf"
                   }
                 },
                 {
@@ -1577,21 +1565,9 @@
                   }
                 },
                 {
-                  "key": "llm.input_messages.4.message.contents.0.message_content.type",
-                  "value": {
-                    "stringValue": "text"
-                  }
-                },
-                {
-                  "key": "llm.input_messages.4.message.contents.0.message_content.text",
-                  "value": {
-                    "stringValue": "Key facts:\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow."
-                  }
-                },
-                {
                   "key": "llm.input_messages.4.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_TVOyqsdlpeSfdH2agAWl1mw2"
+                    "stringValue": "call_AiuL7gjOj6TBkbrw2xNb4Vpb"
                   }
                 },
                 {
@@ -1603,7 +1579,7 @@
                 {
                   "key": "llm.input_messages.4.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"to_agent\":\"writer_agent\",\"reason\":\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\"}"
+                    "stringValue": "{\"to_agent\":\"writer_agent\",\"reason\":\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\"}"
                   }
                 },
                 {
@@ -1615,25 +1591,25 @@
                 {
                   "key": "llm.input_messages.5.message.content",
                   "value": {
-                    "stringValue": "Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\nPlease continue with the current request."
+                    "stringValue": "Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\nPlease continue with the current request."
                   }
                 },
                 {
                   "key": "llm.input_messages.5.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_TVOyqsdlpeSfdH2agAWl1mw2"
+                    "stringValue": "call_AiuL7gjOj6TBkbrw2xNb4Vpb"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "assistant: An **agent trace** is a chronological record of an AI agent’s run—often including its inputs, tool calls and results, actions, and final output. It helps people debug, evaluate, or audit the agent. The exact contents vary by system."
+                    "stringValue": "assistant: An **agent trace** is a record of an AI agent\u2019s execution\u2014such as model calls, tool use, results, and errors. It helps with debugging and monitoring, and usually records operational events rather than the model\u2019s private chain-of-thought. The exact details vary by platform."
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "331"
+                    "intValue": "400"
                   }
                 },
                 {
@@ -1651,7 +1627,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "54"
+                    "intValue": "61"
                   }
                 },
                 {
@@ -1669,7 +1645,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "385"
+                    "intValue": "461"
                   }
                 },
                 {
@@ -1681,7 +1657,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a chronological record of an AI agent’s run—often including its inputs, tool calls and results, actions, and final output. It helps people debug, evaluate, or audit the agent. The exact contents vary by system."
+                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s execution\u2014such as model calls, tool use, results, and errors. It helps with debugging and monitoring, and usually records operational events rather than the model\u2019s private chain-of-thought. The exact details vary by platform."
                   }
                 },
                 {
@@ -1697,13 +1673,13 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "bc20f40c1da97dab",
-              "parentSpanId": "3e28312b1de60c2f",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "a5d9c37e5e99a147",
+              "parentSpanId": "636940f2f8057e5a",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791012938626908818",
-              "endTimeUnixNano": "1791012939949791386",
+              "startTimeUnixNano": "1791061376593758000",
+              "endTimeUnixNano": "1791061377856038000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -1732,7 +1708,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\":[\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\",\"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')])\",\"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[TextBlock(block_type='text', text='Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.'), ToolCallBlock(block_type='tool_call', tool_call_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}')])\",\"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_TVOyqsdlpeSfdH2agAWl1mw2'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.')])\"],\"kwargs\":{\"tools\":null,\"tool_choice\":null}}"
+                    "stringValue": "{\"messages\": [\"ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')])\", \"ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')])\", \"ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}')])\", \"ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_AiuL7gjOj6TBkbrw2xNb4Vpb'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.')])\"], \"kwargs\": {\"tools\": null, \"tool_choice\": null}}"
                   }
                 },
                 {
@@ -1744,7 +1720,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{},\"blocks\":[{\"text\":\"An **agent trace** is a chronological record of an AI agent’s run—often including its inputs, tool calls and results, actions, and final output. It helps people debug, evaluate, or audit the agent. The exact contents vary by system.\"}]},\"raw\":{\"id\":\"chatcmpl-EUoZPudX3aVycw6EinRdE6TVPJfwe\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a chronological record of an AI agent’s run—often including its inputs, tool calls and results, actions, and final output. It helps people debug, evaluate, or audit the agent. The exact contents vary by system.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791012939,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":54,\"prompt_tokens\":331,\"total_tokens\":385,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":331,\"completion_tokens\":54,\"total_tokens\":385}}"
+                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{},\"blocks\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s execution\u2014such as model calls, tool use, results, and errors. It helps with debugging and monitoring, and usually records operational events rather than the model\u2019s private chain-of-thought. The exact details vary by platform.\"}]},\"raw\":{\"id\":\"chatcmpl-EV1AeFVtpOzMvGNYEsqPrXBYWlFnF\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of an AI agent\u2019s execution\u2014such as model calls, tool use, results, and errors. It helps with debugging and monitoring, and usually records operational events rather than the model\u2019s private chain-of-thought. The exact details vary by platform.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791061376,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":61,\"prompt_tokens\":400,\"total_tokens\":461,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":400,\"completion_tokens\":61,\"total_tokens\":461}}"
                   }
                 },
                 {
@@ -1766,18 +1742,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "3e28312b1de60c2f",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "636940f2f8057e5a",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.run_agent_step",
               "kind": 1,
-              "startTimeUnixNano": "1791012938626461897",
-              "endTimeUnixNano": "1791012939950304850",
+              "startTimeUnixNano": "1791061376593149000",
+              "endTimeUnixNano": "1791061377856449000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff39107040>\",\"ev\":\"AgentSetup(input=[ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')]), ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_RzNHtbQ1Lemhceak8nlTQq6k', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_RzNHtbQ1Lemhceak8nlTQq6k', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_RzNHtbQ1Lemhceak8nlTQq6k'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather accurate context on the meaning of “agent trace,” including common usage and any ambiguity by domain, so I can answer clearly..\\\\nPlease continue with the current request.')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_TVOyqsdlpeSfdH2agAWl1mw2', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[TextBlock(block_type='text', text='Key facts:\\\\n- “Agent trace” usually means a chronological record of an AI agent’s execution.\\\\n- It may include prompts or inputs, intermediate reasoning summaries, tool calls and their results, actions, and final outputs.\\\\n- Traces are used to debug behavior, evaluate performance, and audit what happened.\\\\n- Exact contents vary by product; the term can also refer more broadly to distributed tracing across services involved in an agent workflow.'), ToolCallBlock(block_type='tool_call', tool_call_id='call_TVOyqsdlpeSfdH2agAWl1mw2', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_TVOyqsdlpeSfdH2agAWl1mw2'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Write a concise, clear answer to “What is an agent trace?” using the facts above and noting that exact meaning varies by context..\\\\nPlease continue with the current request.')])], current_agent_name='writer_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f4d4600>\", \"ev\": \"AgentSetup(input=[ChatMessage(role=<MessageRole.SYSTEM: 'system'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='Write a short answer from the facts.')]), ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_uNNvo1VxA0Cja9WAGq3md5Nf', function=Function(arguments='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_uNNvo1VxA0Cja9WAGq3md5Nf', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"search_agent\\\",\\\"reason\\\":\\\"Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_uNNvo1VxA0Cja9WAGq3md5Nf'}, blocks=[TextBlock(block_type='text', text='Agent search_agent is now handling the request due to the following reason: Gather a concise, accurate explanation of the term \u201cagent trace,\u201d noting possible meanings across AI/agent systems and any distinction from related concepts..\\\\nPlease continue with the current request.')]), ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={'tool_calls': [ChatCompletionMessageFunctionToolCall(id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', function=Function(arguments='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}', name='handoff'), type='function', index=0)]}, blocks=[ToolCallBlock(block_type='tool_call', tool_call_id='call_AiuL7gjOj6TBkbrw2xNb4Vpb', tool_name='handoff', tool_kwargs='{\\\"to_agent\\\":\\\"writer_agent\\\",\\\"reason\\\":\\\"Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform.\\\"}')]), ChatMessage(role=<MessageRole.TOOL: 'tool'>, additional_kwargs={'tool_call_id': 'call_AiuL7gjOj6TBkbrw2xNb4Vpb'}, blocks=[TextBlock(block_type='text', text='Agent writer_agent is now handling the request due to the following reason: Key facts: \u201cagent trace\u201d is a context-dependent term, usually a chronological record of an AI agent\u2019s execution. It may capture events such as user input, model calls, tool/function calls, observations/results, state transitions, timing, and errors, often organized as spans for debugging, monitoring, or auditing. It is not necessarily the model\u2019s private chain-of-thought; traces typically expose operational events and selected inputs/outputs, subject to privacy/redaction. Give a concise definition and mention the term can vary by platform..\\\\nPlease continue with the current request.')])], current_agent_name='writer_agent')\"}"
                   }
                 },
                 {
@@ -1789,7 +1765,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a chronological record of an AI ag..."
+                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of an AI agent\u2019s executio..."
                   }
                 },
                 {
@@ -1811,18 +1787,18 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "a47cd594035a8669",
-              "parentSpanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "9f641858404e31ac",
+              "parentSpanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.parse_agent_output",
               "kind": 1,
-              "startTimeUnixNano": "1791012939951573238",
-              "endTimeUnixNano": "1791012939953337798",
+              "startTimeUnixNano": "1791061377857211000",
+              "endTimeUnixNano": "1791061377858007000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\":\"<workflows.context.context.Context object at 0xffff391f3290>\",\"ev\":\"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a chronological record of an AI agent’s run—often including its inputs, tool calls and results, actions, and final output. It helps people debug, evaluate, or audit the agent. The exact contents vary by system.')]), structured_response=None, current_agent_name='writer_agent', raw={'id': 'chatcmpl-EUoZPudX3aVycw6EinRdE6TVPJfwe', 'choices': [{'finish_reason': 'stop', 'index': 0, 'logprobs': None, 'message': {'content': 'An **agent trace** is a chronological record of an AI agent’s run—often including its inputs, tool calls and results, actions, and final output. It helps people debug, evaluate, or audit the agent. The exact contents vary by system.', 'refusal': None, 'role': 'assistant', 'annotations': [], 'audio': None, 'function_call': None, 'tool_calls': None, 'provider_specific_fields': {'refusal': None}}, 'provider_specific_fields': {}}], 'created': 1791012939, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 54, 'prompt_tokens': 331, 'total_tokens': 385, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}}, tool_calls=[], retry_messages=[])\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10f3cb410>\", \"ev\": \"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of an AI agent\u2019s execution\u2014such as model calls, tool use, results, and errors. It helps with debugging and monitoring, and usually records operational events rather than the model\u2019s private chain-of-thought. The exact details vary by platform.')]), structured_response=None, current_agent_name='writer_agent', raw={'id': 'chatcmpl-EV1AeFVtpOzMvGNYEsqPrXBYWlFnF', 'choices': [{'finish_reason': 'stop', 'index': 0, 'logprobs': None, 'message': {'content': 'An **agent trace** is a record of an AI agent\u2019s execution\u2014such as model calls, tool use, results, and errors. It helps with debugging and monitoring, and usually records operational events rather than the model\u2019s private chain-of-thought. The exact details vary by platform.', 'refusal': None, 'role': 'assistant', 'annotations': [], 'audio': None, 'function_call': None, 'tool_calls': None, 'provider_specific_fields': {'refusal': None}}, 'provider_specific_fields': {}}], 'created': 1791061376, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 61, 'prompt_tokens': 400, 'total_tokens': 461, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}}, tool_calls=[], retry_messages=[])\"}"
                   }
                 },
                 {
@@ -1834,7 +1810,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a chronological r..."
+                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of an AI..."
                   }
                 },
                 {
@@ -1856,17 +1832,17 @@
               "flags": 256
             },
             {
-              "traceId": "4cd4958d44006a8bf56d04166c07bdd7",
-              "spanId": "07d91b81763ca271",
+              "traceId": "b2a00495369de00b1b6befb7845030f2",
+              "spanId": "c2f4febbff5e0910",
               "name": "AgentWorkflow.run",
               "kind": 1,
-              "startTimeUnixNano": "1791012932778093528",
-              "endTimeUnixNano": "1791012939953847428",
+              "startTimeUnixNano": "1791061370989711000",
+              "endTimeUnixNano": "1791061377858428000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"init_state\":{\"is_running\":false,\"config\":{\"steps\":{\"aggregate_tool_results\":{\"accepted_events\":[\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"call_tool\":{\"accepted_events\":[\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"init_run\":{\"accepted_events\":[\"<AgentWorkflowStartEvent() -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"parse_agent_output\":{\"accepted_events\":[\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"run_agent_step\":{\"accepted_events\":[\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"setup_agent\":{\"accepted_events\":[\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null}},\"timeout\":null,\"catch_error_handlers\":{},\"handler_for_step\":{},\"collection_bindings\":{}},\"workers\":{\"aggregate_tool_results\":{\"queue\":[],\"config\":{\"accepted_events\":[\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"in_progress\":[],\"collected_events\":{},\"collected_waiters\":[],\"static_collect_events\":[]},\"call_tool\":{\"queue\":[],\"config\":{\"accepted_events\":[\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"in_progress\":[],\"collected_events\":{},\"collected_waiters\":[],\"static_collect_events\":[]},\"init_run\":{\"queue\":[],\"config\":{\"accepted_events\":[\"<AgentWorkflowStartEvent() -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"in_progress\":[],\"collected_events\":{},\"collected_waiters\":[],\"static_collect_events\":[]},\"parse_agent_output\":{\"queue\":[],\"config\":{\"accepted_events\":[\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"in_progress\":[],\"collected_events\":{},\"collected_waiters\":[],\"static_collect_events\":[]},\"run_agent_step\":{\"queue\":[],\"config\":{\"accepted_events\":[\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"in_progress\":[],\"collected_events\":{},\"collected_waiters\":[],\"static_collect_events\":[]},\"setup_agent\":{\"queue\":[],\"config\":{\"accepted_events\":[\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"],\"retry_policy\":null,\"num_workers\":4,\"accept_event_subclasses\":false,\"collection_param\":null,\"collect_params\":null,\"collection_policy\":null},\"in_progress\":[],\"collected_events\":{},\"collected_waiters\":[],\"static_collect_events\":[]}},\"stream_seq\":0,\"work_item_seq\":0,\"streams\":{},\"collection_release_states\":{},\"children\":{},\"elapsed_alive\":0.0,\"last_alive_stamp\":null},\"start_event\":\"AgentWorkflowStartEvent()\",\"tags\":{\"instrument_tags\":{\"llamaindex.run_id\":\"ilozUQS8de\"}}}"
+                    "stringValue": "{\"init_state\": {\"is_running\": false, \"config\": {\"steps\": {\"aggregate_tool_results\": {\"accepted_events\": [\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"call_tool\": {\"accepted_events\": [\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"init_run\": {\"accepted_events\": [\"<AgentWorkflowStartEvent() -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"parse_agent_output\": {\"accepted_events\": [\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"run_agent_step\": {\"accepted_events\": [\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"setup_agent\": {\"accepted_events\": [\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}}, \"timeout\": null, \"catch_error_handlers\": {}, \"handler_for_step\": {}, \"collection_bindings\": {}}, \"workers\": {\"aggregate_tool_results\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"call_tool\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"init_run\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentWorkflowStartEvent() -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"parse_agent_output\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"run_agent_step\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"setup_agent\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}}, \"stream_seq\": 0, \"work_item_seq\": 0, \"streams\": {}, \"collection_release_states\": {}, \"children\": {}, \"elapsed_alive\": 0.0, \"last_alive_stamp\": null}, \"start_event\": \"AgentWorkflowStartEvent()\", \"tags\": {\"instrument_tags\": {\"llamaindex.run_id\": \"jAcb0RPqBf\"}}}"
                   }
                 },
                 {
@@ -1878,7 +1854,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a chronological r..."
+                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of an AI..."
                   }
                 },
                 {

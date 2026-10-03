@@ -1,1819 +1,1819 @@
 {
- "resourceSpans": [
-  {
-   "resource": {
-    "attributes": [
-     {
-      "key": "service.name",
-      "value": {
-       "stringValue": "claude-agent-sdk-demo"
-      }
-     },
-     {
-      "key": "os.type",
-      "value": {
-       "stringValue": "linux"
-      }
-     },
-     {
-      "key": "os.version",
-      "value": {
-       "stringValue": "0.0.0"
-      }
-     },
-     {
-      "key": "service.version",
-      "value": {
-       "stringValue": "2.1.286"
-      }
-     }
-    ],
-    "droppedAttributesCount": 0
-   },
-   "scopeSpans": [
+  "resourceSpans": [
     {
-     "scope": {
-      "name": "com.anthropic.claude_code.tracing",
-      "version": "1.0.0"
-     },
-     "spans": [
-      {
-       "traceId": "6444c31c3ebc86434c869bcb2c98327a",
-       "spanId": "76ec1951742116e7",
-       "name": "claude_code.llm_request",
-       "kind": 1,
-       "startTimeUnixNano": "1790903552975000000",
-       "endTimeUnixNano": "1790903554399789458",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "llm_request"
-         }
-        },
-        {
-         "key": "model",
-         "value": {
-          "stringValue": "anthropic/claude-sonnet-5"
-         }
-        },
-        {
-         "key": "gen_ai.system",
-         "value": {
-          "stringValue": "anthropic"
-         }
-        },
-        {
-         "key": "gen_ai.request.model",
-         "value": {
-          "stringValue": "anthropic/claude-sonnet-5"
-         }
-        },
-        {
-         "key": "llm_request.context",
-         "value": {
-          "stringValue": "standalone"
-         }
-        },
-        {
-         "key": "speed",
-         "value": {
-          "stringValue": "normal"
-         }
-        },
-        {
-         "key": "query_source",
-         "value": {
-          "stringValue": "generate_session_title"
-         }
-        },
-        {
-         "key": "query_source_safe",
-         "value": {
-          "stringValue": "generate_session_title"
-         }
-        },
-        {
-         "key": "system_prompt_hash",
-         "value": {
-          "stringValue": "sp_53788704fc52"
-         }
-        },
-        {
-         "key": "system_prompt_preview",
-         "value": {
-          "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.e44; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK.\n\nYou are naming a coding session so the user can pick it out of a long list of sessions. The title is a name for what the session is about, not a sentence describing the task: a short noun phrase of two to five words, in sentence case (capitalize only the first word, plus proper nouns, acronyms, and code identifiers exactly as written). When a draft runs past "
-         }
-        },
-        {
-         "key": "system_prompt_length",
-         "value": {
-          "intValue": 3198
-         }
-        },
-        {
-         "key": "tools",
-         "value": {
-          "stringValue": "[]"
-         }
-        },
-        {
-         "key": "tools_count",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "new_context_message_count",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "new_context",
-         "value": {
-          "stringValue": "[USER]\n<session>\nUse Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does.\n</session>\n\nWrite the title in the predominant language of the session — a stray word or code token in another language doesn't change it, and neither does the English of these instructions."
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 1425
-         }
-        },
-        {
-         "key": "input_tokens",
-         "value": {
-          "intValue": 1205
-         }
-        },
-        {
-         "key": "output_tokens",
-         "value": {
-          "intValue": 14
-         }
-        },
-        {
-         "key": "cache_read_tokens",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "cache_creation_tokens",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "success",
-         "value": {
-          "boolValue": true
-         }
-        },
-        {
-         "key": "attempt",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "response.has_tool_call",
-         "value": {
-          "boolValue": false
-         }
-        },
-        {
-         "key": "ttft_ms",
-         "value": {
-          "intValue": 978
-         }
-        },
-        {
-         "key": "first_content_ms",
-         "value": {
-          "intValue": 978
-         }
-        },
-        {
-         "key": "effort",
-         "value": {
-          "stringValue": "high"
-         }
-        },
-        {
-         "key": "response.model_output",
-         "value": {
-          "stringValue": "{\"title\": \"agent.py summary\"}"
-         }
-        },
-        {
-         "key": "stop_reason",
-         "value": {
-          "stringValue": "end_turn"
-         }
-        },
-        {
-         "key": "gen_ai.response.finish_reasons",
-         "value": {
-          "arrayValue": {
-           "values": [
-            {
-             "stringValue": "end_turn"
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-agent-sdk-demo"
             }
-           ]
-          }
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [
-        {
-         "attributes": [
-          {
-           "key": "attempt",
-           "value": {
-            "intValue": 1
-           }
-          }
-         ],
-         "name": "gen_ai.request.attempt",
-         "timeUnixNano": "1790903552983035250",
-         "droppedAttributesCount": 0
-        }
-       ],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "f2c724a68fdf61b0",
-       "name": "claude_code.interaction",
-       "kind": 1,
-       "startTimeUnixNano": "1790903554106000000",
-       "endTimeUnixNano": "1790903559582058834",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "interaction"
-         }
-        },
-        {
-         "key": "user_prompt",
-         "value": {
-          "stringValue": "Use Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does."
-         }
-        },
-        {
-         "key": "user_prompt_length",
-         "value": {
-          "intValue": 114
-         }
-        },
-        {
-         "key": "interaction.sequence",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "parent.source",
-         "value": {
-          "stringValue": "none"
-         }
-        },
-        {
-         "key": "queued_sends",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "new_context",
-         "value": {
-          "stringValue": "[USER PROMPT]\nUse Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does."
-         }
-        },
-        {
-         "key": "interaction.duration_ms",
-         "value": {
-          "intValue": 5476
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "bb43215ef8fa36cd",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.hook",
-       "kind": 1,
-       "startTimeUnixNano": "1790903554113000000",
-       "endTimeUnixNano": "1790903554125993917",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "hook"
-         }
-        },
-        {
-         "key": "hook_event",
-         "value": {
-          "stringValue": "UserPromptSubmit"
-         }
-        },
-        {
-         "key": "hook_name",
-         "value": {
-          "stringValue": "UserPromptSubmit"
-         }
-        },
-        {
-         "key": "num_hooks",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "hook_definitions",
-         "value": {
-          "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 13
-         }
-        },
-        {
-         "key": "num_success",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "num_blocking",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_non_blocking_error",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_cancelled",
-         "value": {
-          "intValue": 0
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "2deef999c66d8cbd",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.llm_request",
-       "kind": 1,
-       "startTimeUnixNano": "1790903554137000000",
-       "endTimeUnixNano": "1790903556349230708",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "llm_request"
-         }
-        },
-        {
-         "key": "model",
-         "value": {
-          "stringValue": "claude-sonnet-5-5"
-         }
-        },
-        {
-         "key": "gen_ai.system",
-         "value": {
-          "stringValue": "anthropic"
-         }
-        },
-        {
-         "key": "gen_ai.request.model",
-         "value": {
-          "stringValue": "claude-sonnet-5-5"
-         }
-        },
-        {
-         "key": "llm_request.context",
-         "value": {
-          "stringValue": "interaction"
-         }
-        },
-        {
-         "key": "speed",
-         "value": {
-          "stringValue": "normal"
-         }
-        },
-        {
-         "key": "query_source",
-         "value": {
-          "stringValue": "sdk"
-         }
-        },
-        {
-         "key": "query_source_safe",
-         "value": {
-          "stringValue": "sdk"
-         }
-        },
-        {
-         "key": "system_prompt_hash",
-         "value": {
-          "stringValue": "sp_754c39bc2203"
-         }
-        },
-        {
-         "key": "system_prompt_preview",
-         "value": {
-          "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.d3f; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK."
-         }
-        },
-        {
-         "key": "system_prompt_length",
-         "value": {
-          "intValue": 137
-         }
-        },
-        {
-         "key": "tools",
-         "value": {
-          "stringValue": "[{\"name\":\"Agent\",\"hash\":\"164e46314bb0\"},{\"name\":\"Bash\",\"hash\":\"81dc4be713e1\"},{\"name\":\"CronCreate\",\"hash\":\"e4c660878de6\"},{\"name\":\"CronDelete\",\"hash\":\"4e244a652bf3\"},{\"name\":\"CronList\",\"hash\":\"6154cd8fa452\"},{\"name\":\"DesignSync\",\"hash\":\"390c2da6fbb7\"},{\"name\":\"Edit\",\"hash\":\"6430d0c60f48\"},{\"name\":\"EnterWorktree\",\"hash\":\"3f353219c93a\"},{\"name\":\"ExitWorktree\",\"hash\":\"79e242d1cef5\"},{\"name\":\"Glob\",\"hash\":\"341f5d0a2e2f\"},{\"name\":\"Grep\",\"hash\":\"1d3c47f9148f\"},{\"name\":\"ListAgents\",\"hash\":\"0a3591a577c6\"},{\"name\":\"ListMcpResourcesTool\",\"hash\":\"80428e7012e5\"},{\"name\":\"LSP\",\"hash\":\"b7be7911ea66\"},{\"name\":\"Monitor\",\"hash\":\"53eb832de993\"},{\"name\":\"NotebookEdit\",\"hash\":\"d88b4bf2ec93\"},{\"name\":\"PushNotification\",\"hash\":\"74f8dcf21b80\"},{\"name\":\"Read\",\"hash\":\"680529a1e735\"},{\"name\":\"ReadMcpResourceDirTool\",\"hash\":\"f87a091f6f1e\"},{\"name\":\"ReadMcpResourceTool\",\"hash\":\"9f256f5afee4\"},{\"name\":\"ReportFindings\",\"hash\":\"d742f97bb17e\"},{\"name\":\"ScheduleWakeup\",\"hash\":\"24fdfa8e91c8\"},{\"name\":\"SendMessage\",\"hash\":\"eee44afb16ba\"},{\"name\":\"Skill\",\"hash\":\"c3282cbcede5\"},{\"name\":\"TaskStop\",\"hash\":\"b145464cdabc\"},{\"name\":\"WebFetch\",\"hash\":\"e1fbaacd430d\"},{\"name\":\"WebSearch\",\"hash\":\"79a806bff741\"},{\"name\":\"Workflow\",\"hash\":\"b09d3792832d\"},{\"name\":\"Write\",\"hash\":\"416c9b17ff1f\"},{\"name\":\"mcp__circleci-mcp-server__config_helper\",\"hash\":\"bcd90f18bf38\"},{\"name\":\"mcp__circleci-mcp-server__download_usage_api_data\",\"hash\":\"df3e8366d548\"},{\"name\":\"mcp__circleci-mcp-server__find_flaky_tests\",\"hash\":\"35d48aad6c1b\"},{\"name\":\"mcp__circleci-mcp-server__find_underused_resource_classes\",\"hash\":\"b6b544482103\"},{\"name\":\"mcp__circleci-mcp-server__get_build_failure_logs\",\"hash\":\"a84b7eb33376\"},{\"name\":\"mcp__circleci-mcp-server__get_job_test_results\",\"hash\":\"95a3008792d4\"},{\"name\":\"mcp__circleci-mcp-server__get_latest_pipeline_status\",\"hash\":\"ea60228bec14\"},{\"name\":\"mcp__circleci-mcp-server__list_artifacts\",\"hash\":\"8c9753f10d8a\"},{\"name\":\"mcp__circleci-mcp-server__list_component_versions\",\"hash\":\"cac90df13b07\"},{\"name\":\"mcp__circleci-mcp-server__list_followed_projects\",\"hash\":\"bf86651fa262\"},{\"name\":\"mcp__circleci-mcp-server__rerun_workflow\",\"hash\":\"c85db32f4ab5\"},{\"name\":\"mcp__circleci-mcp-server__run_pipeline\",\"hash\":\"0f2f6b8d2936\"},{\"name\":\"mcp__circleci-mcp-server__run_rollback_pipeline\",\"hash\":\"abfacf237ce4\"},{\"name\":\"mcp__playwright__browser_click\",\"hash\":\"91de7aecd638\"},{\"name\":\"mcp__playwright__browser_close\",\"hash\":\"e98f666ea071\"},{\"name\":\"mcp__playwright__browser_console_messages\",\"hash\":\"82ff489beb79\"},{\"name\":\"mcp__playwright__browser_drag\",\"hash\":\"65acccb5d2c1\"},{\"name\":\"mcp__playwright__browser_drop\",\"hash\":\"3c8a52e5451e\"},{\"name\":\"mcp__playwright__browser_emulate_media\",\"hash\":\"6756c94f272a\"},{\"name\":\"mcp__playwright__browser_evaluate\",\"hash\":\"004c2c32370c\"},{\"name\":\"mcp__playwright__browser_file_upload\",\"hash\":\"c85100e222ce\"},{\"name\":\"mcp__playwright__browser_fill_form\",\"hash\":\"c1e1e58fbdae\"},{\"name\":\"mcp__playwright__browser_find\",\"hash\":\"15bd7a67e0ee\"},{\"name\":\"mcp__playwright__browser_handle_dialog\",\"hash\":\"53ee7d0c23d0\"},{\"name\":\"mcp__playwright__browser_hover\",\"hash\":\"5298590d93e1\"},{\"name\":\"mcp__playwright__browser_navigate\",\"hash\":\"13af28143cf5\"},{\"name\":\"mcp__playwright__browser_navigate_back\",\"hash\":\"4d22b2a379fe\"},{\"name\":\"mcp__playwright__browser_network_request\",\"hash\":\"38fdda66d74c\"},{\"name\":\"mcp__playwright__browser_network_requests\",\"hash\":\"4a14c080f656\"},{\"name\":\"mcp__playwright__browser_press_key\",\"hash\":\"0e6f0a5adf21\"},{\"name\":\"mcp__playwright__browser_resize\",\"hash\":\"7288e0cc1a79\"},{\"name\":\"mcp__playwright__browser_run_code_unsafe\",\"hash\":\"01ca95060d3c\"},{\"name\":\"mcp__playwright__browser_select_option\",\"hash\":\"76837ea235f1\"},{\"name\":\"mcp__playwright__browser_snapshot\",\"hash\":\"3fd890550de1\"},{\"name\":\"mcp__playwright__browser_tabs\",\"hash\":\"522a8a555576\"},{\"name\":\"mcp__playwright__browser_take_screenshot\",\"hash\":\"233d844004d3\"},{\"name\":\"mcp__playwright__browser_type\",\"hash\":\"a09159e7094c\"},{\"name\":\"mcp__playwright__browser_wait_for\",\"hash\":\"844ffa5b2657\"}]"
-         }
-        },
-        {
-         "key": "tools_count",
-         "value": {
-          "intValue": 67
-         }
-        },
-        {
-         "key": "new_context_message_count",
-         "value": {
-          "intValue": 2
-         }
-        },
-        {
-         "key": "system_reminders_count",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "new_context",
-         "value": {
-          "stringValue": "[USER]\nUse Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does."
-         }
-        },
-        {
-         "key": "system_reminders",
-         "value": {
-          "stringValue": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is 2026-10-01.\n</system-reminder>"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 2211
-         }
-        },
-        {
-         "key": "input_tokens",
-         "value": {
-          "intValue": 2
-         }
-        },
-        {
-         "key": "output_tokens",
-         "value": {
-          "intValue": 142
-         }
-        },
-        {
-         "key": "cache_read_tokens",
-         "value": {
-          "intValue": 64465
-         }
-        },
-        {
-         "key": "cache_creation_tokens",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "success",
-         "value": {
-          "boolValue": true
-         }
-        },
-        {
-         "key": "attempt",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "response.has_tool_call",
-         "value": {
-          "boolValue": true
-         }
-        },
-        {
-         "key": "ttft_ms",
-         "value": {
-          "intValue": 1501
-         }
-        },
-        {
-         "key": "first_content_ms",
-         "value": {
-          "intValue": 1502
-         }
-        },
-        {
-         "key": "effort",
-         "value": {
-          "stringValue": "medium"
-         }
-        },
-        {
-         "key": "stop_reason",
-         "value": {
-          "stringValue": "tool_use"
-         }
-        },
-        {
-         "key": "gen_ai.response.finish_reasons",
-         "value": {
-          "arrayValue": {
-           "values": [
-            {
-             "stringValue": "tool_use"
-            }
-           ]
-          }
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [
-        {
-         "attributes": [
-          {
-           "key": "attempt",
-           "value": {
-            "intValue": 1
-           }
-          }
-         ],
-         "name": "gen_ai.request.attempt",
-         "timeUnixNano": "1790903554143646000",
-         "droppedAttributesCount": 0
-        }
-       ],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "854082e87e4e6073",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.hook",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556063000000",
-       "endTimeUnixNano": "1790903556065091708",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "hook"
-         }
-        },
-        {
-         "key": "hook_event",
-         "value": {
-          "stringValue": "PreToolUse"
-         }
-        },
-        {
-         "key": "hook_name",
-         "value": {
-          "stringValue": "PreToolUse:Bash"
-         }
-        },
-        {
-         "key": "num_hooks",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "hook_definitions",
-         "value": {
-          "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 2
-         }
-        },
-        {
-         "key": "num_success",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "num_blocking",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_non_blocking_error",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_cancelled",
-         "value": {
-          "intValue": 0
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "54f2045463e7a662",
-       "parentSpanId": "8424fac5bab20a92",
-       "name": "claude_code.tool.blocked_on_user",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556066000000",
-       "endTimeUnixNano": "1790903556069516458",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "tool.blocked_on_user"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "decision",
-         "value": {
-          "stringValue": "unknown"
-         }
-        },
-        {
-         "key": "source",
-         "value": {
-          "stringValue": "unknown"
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "8424fac5bab20a92",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.tool",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556066000000",
-       "endTimeUnixNano": "1790903556556444875",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "tool"
-         }
-        },
-        {
-         "key": "tool_name",
-         "value": {
-          "stringValue": "Bash"
-         }
-        },
-        {
-         "key": "tool_name_safe",
-         "value": {
-          "stringValue": "Bash"
-         }
-        },
-        {
-         "key": "full_command",
-         "value": {
-          "stringValue": "ls"
-         }
-        },
-        {
-         "key": "bash_command_class",
-         "value": {
-          "stringValue": "file_search"
-         }
-        },
-        {
-         "key": "bash_argv0",
-         "value": {
-          "stringValue": "ls"
-         }
-        },
-        {
-         "key": "tool_use_id",
-         "value": {
-          "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
-         }
-        },
-        {
-         "key": "gen_ai.tool.call.id",
-         "value": {
-          "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
-         }
-        },
-        {
-         "key": "tool_input",
-         "value": {
-          "stringValue": "[TOOL INPUT: Bash]\n{\"command\":\"ls\",\"description\":\"List files in current directory\"}"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 490
-         }
-        },
-        {
-         "key": "new_context",
-         "value": {
-          "stringValue": "[TOOL RESULT: Bash]\n{\"stdout\":\"agent.py\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false}"
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [
-        {
-         "attributes": [
-          {
-           "key": "bash_command",
-           "value": {
-            "stringValue": "ls"
-           }
           },
           {
-           "key": "output",
-           "value": {
-            "stringValue": "agent.py"
-           }
-          }
-         ],
-         "name": "tool.output",
-         "timeUnixNano": "1790903556556378875",
-         "droppedAttributesCount": 0
-        }
-       ],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "da4be56bb2765e6d",
-       "parentSpanId": "8424fac5bab20a92",
-       "name": "claude_code.tool.execution",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556070000000",
-       "endTimeUnixNano": "1790903556556723292",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "tool.execution"
-         }
-        },
-        {
-         "key": "tool_use_id",
-         "value": {
-          "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
-         }
-        },
-        {
-         "key": "gen_ai.tool.call.id",
-         "value": {
-          "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 487
-         }
-        },
-        {
-         "key": "success",
-         "value": {
-          "boolValue": true
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "136b9d479f0df250",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.hook",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556338000000",
-       "endTimeUnixNano": "1790903556338853041",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "hook"
-         }
-        },
-        {
-         "key": "hook_event",
-         "value": {
-          "stringValue": "PreToolUse"
-         }
-        },
-        {
-         "key": "hook_name",
-         "value": {
-          "stringValue": "PreToolUse:Read"
-         }
-        },
-        {
-         "key": "num_hooks",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "hook_definitions",
-         "value": {
-          "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "num_success",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "num_blocking",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_non_blocking_error",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_cancelled",
-         "value": {
-          "intValue": 0
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "e72fb4376fbc390a",
-       "parentSpanId": "272c1ac0706d67ea",
-       "name": "claude_code.tool.blocked_on_user",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556339000000",
-       "endTimeUnixNano": "1790903556341383250",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "tool.blocked_on_user"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 2
-         }
-        },
-        {
-         "key": "decision",
-         "value": {
-          "stringValue": "unknown"
-         }
-        },
-        {
-         "key": "source",
-         "value": {
-          "stringValue": "unknown"
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "272c1ac0706d67ea",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.tool",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556339000000",
-       "endTimeUnixNano": "1790903556342962542",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "tool"
-         }
-        },
-        {
-         "key": "tool_name",
-         "value": {
-          "stringValue": "Read"
-         }
-        },
-        {
-         "key": "tool_name_safe",
-         "value": {
-          "stringValue": "Read"
-         }
-        },
-        {
-         "key": "file_path",
-         "value": {
-          "stringValue": "/workspace/agent.py"
-         }
-        },
-        {
-         "key": "tool_use_id",
-         "value": {
-          "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
-         }
-        },
-        {
-         "key": "gen_ai.tool.call.id",
-         "value": {
-          "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
-         }
-        },
-        {
-         "key": "tool_input",
-         "value": {
-          "stringValue": "[TOOL INPUT: Read]\n{\"file_path\":\"/workspace/agent.py\"}"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 4
-         }
-        },
-        {
-         "key": "new_context",
-         "value": {
-          "stringValue": "[TOOL RESULT: Read]\n{\"type\":\"text\",\"file\":{\"filePath\":\"/workspace/agent.py\",\"content\":\"import asyncio\\nimport os\\nimport sys\\n\\nfrom claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query\\n\\nPROXY = os.environ.get(\\\"LITELLM_URL\\\", \\\"http://localhost:4000\\\")\\nKEY = os.environ[\\\"LITELLM_API_KEY\\\"]\\n\\nOTEL_ENV = {\\n    \\\"CLAUDE_CODE_ENABLE_TELEMETRY\\\": \\\"1\\\",\\n    \\\"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA\\\": \\\"1\\\",\\n    \\\"OTEL_TRACES_EXPORTER\\\": \\\"otlp\\\",\\n    \\\"OTEL_METRICS_EXPORTER\\\": \\\"none\\\",\\n    \\\"OTEL_LOGS_EXPORTER\\\": \\\"none\\\",\\n    \\\"OTEL_EXPORTER_OTLP_PROTOCOL\\\": \\\"http/protobuf\\\",\\n    \\\"OTEL_EXPORTER_OTLP_ENDPOINT\\\": PROXY,\\n    \\\"OTEL_EXPORTER_OTLP_HEADERS\\\": f\\\"Authorization=Bearer {KEY}\\\",\\n    \\\"OTEL_SERVICE_NAME\\\": \\\"claude-agent-sdk-demo\\\",\\n    \\\"OTEL_TRACES_EXPORT_INTERVAL\\\": \\\"1000\\\",\\n    \\\"OTEL_LOG_USER_PROMPTS\\\": \\\"1\\\",\\n    \\\"OTEL_LOG_TOOL_DETAILS\\\": \\\"1\\\",\\n    \\\"OTEL_LOG_TOOL_CONTENT\\\": \\\"1\\\",\\n    \\\"ANTHROPIC_BASE_URL\\\": PROXY,\\n    \\\"ANTHROPIC_AUTH_TOKEN\\\": KEY,\\n    \\\"CLAUDE_CODE_PROPAGATE_TRACEPARENT\\\": \\\"1\\\",\\n}\\n\\n\\nasync def main(prompt: str) -> None:\\n    options = ClaudeAgentOptions(\\n        model=os.environ.get(\\\"AGENT_MODEL\\\", \\\"claude-sonnet-5-5\\\"),\\n        allowed_tools=[\\\"Bash\\\", \\\"Read\\\", \\\"Glob\\\", \\\"Grep\\\"],\\n        permission_mode=\\\"bypassPermissions\\\",\\n        cwd=os.path.dirname(os.path.abspath(__file__)),\\n        env=OTEL_ENV,\\n        max_turns=8,\\n    )\\n    async for message in query(prompt=prompt, options=options):\\n        if isinstance(message, AssistantMessage):\\n            for block in message.content:\\n                if isinstance(block, TextBlock):\\n                    print(block.text)\\n        elif isinstance(message, ResultMessage):\\n            print(f\\\"\\\\n[done] turns={message.num_turns} cost=${message.total_cost_usd} error={message.is_error}\\\")\\n    await asyncio.sleep(3)\\n\\n\\nif __name__ == \\\"__main__\\\":\\n    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else \\\"List the files in this directory, read agent.py, and summarize in 2 sentences what it does.\\\"))\\n\",\"numLines\":51,\"startLine\":1,\"totalLines\":51}}"
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [
-        {
-         "attributes": [
-          {
-           "key": "file_path",
-           "value": {
-            "stringValue": "/workspace/agent.py"
-           }
+            "key": "os.type",
+            "value": {
+              "stringValue": "linux"
+            }
           },
           {
-           "key": "content",
-           "value": {
-            "stringValue": "import asyncio\nimport os\nimport sys\n\nfrom claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query\n\nPROXY = os.environ.get(\"LITELLM_URL\", \"http://localhost:4000\")\nKEY = os.environ[\"LITELLM_API_KEY\"]\n\nOTEL_ENV = {\n    \"CLAUDE_CODE_ENABLE_TELEMETRY\": \"1\",\n    \"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA\": \"1\",\n    \"OTEL_TRACES_EXPORTER\": \"otlp\",\n    \"OTEL_METRICS_EXPORTER\": \"none\",\n    \"OTEL_LOGS_EXPORTER\": \"none\",\n    \"OTEL_EXPORTER_OTLP_PROTOCOL\": \"http/protobuf\",\n    \"OTEL_EXPORTER_OTLP_ENDPOINT\": PROXY,\n    \"OTEL_EXPORTER_OTLP_HEADERS\": f\"Authorization=Bearer {KEY}\",\n    \"OTEL_SERVICE_NAME\": \"claude-agent-sdk-demo\",\n    \"OTEL_TRACES_EXPORT_INTERVAL\": \"1000\",\n    \"OTEL_LOG_USER_PROMPTS\": \"1\",\n    \"OTEL_LOG_TOOL_DETAILS\": \"1\",\n    \"OTEL_LOG_TOOL_CONTENT\": \"1\",\n    \"ANTHROPIC_BASE_URL\": PROXY,\n    \"ANTHROPIC_AUTH_TOKEN\": KEY,\n    \"CLAUDE_CODE_PROPAGATE_TRACEPARENT\": \"1\",\n}\n\n\nasync def main(prompt: str) -> None:\n    options = ClaudeAgentOptions(\n        model=os.environ.get(\"AGENT_MODEL\", \"claude-sonnet-5-5\"),\n        allowed_tools=[\"Bash\", \"Read\", \"Glob\", \"Grep\"],\n        permission_mode=\"bypassPermissions\",\n        cwd=os.path.dirname(os.path.abspath(__file__)),\n        env=OTEL_ENV,\n        max_turns=8,\n    )\n    async for message in query(prompt=prompt, options=options):\n        if isinstance(message, AssistantMessage):\n            for block in message.content:\n                if isinstance(block, TextBlock):\n                    print(block.text)\n        elif isinstance(message, ResultMessage):\n            print(f\"\\n[done] turns={message.num_turns} cost=${message.total_cost_usd} error={message.is_error}\")\n    await asyncio.sleep(3)\n\n\nif __name__ == \"__main__\":\n    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else \"List the files in this directory, read agent.py, and summarize in 2 sentences what it does.\"))\n"
-           }
-          }
-         ],
-         "name": "tool.output",
-         "timeUnixNano": "1790903556342885417",
-         "droppedAttributesCount": 0
-        }
-       ],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "2deab56c3fcadd65",
-       "parentSpanId": "272c1ac0706d67ea",
-       "name": "claude_code.tool.execution",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556341000000",
-       "endTimeUnixNano": "1790903556342440709",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "tool.execution"
-         }
-        },
-        {
-         "key": "tool_use_id",
-         "value": {
-          "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
-         }
-        },
-        {
-         "key": "gen_ai.tool.call.id",
-         "value": {
-          "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "success",
-         "value": {
-          "boolValue": true
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "6ce31fa350c73483",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.hook",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556344000000",
-       "endTimeUnixNano": "1790903556352695167",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "hook"
-         }
-        },
-        {
-         "key": "hook_event",
-         "value": {
-          "stringValue": "PostToolUse"
-         }
-        },
-        {
-         "key": "hook_name",
-         "value": {
-          "stringValue": "PostToolUse:Read"
-         }
-        },
-        {
-         "key": "num_hooks",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "hook_definitions",
-         "value": {
-          "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 9
-         }
-        },
-        {
-         "key": "num_success",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "num_blocking",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_non_blocking_error",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_cancelled",
-         "value": {
-          "intValue": 0
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "ae2da48ea097cc66",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.hook",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556557000000",
-       "endTimeUnixNano": "1790903556565797375",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "hook"
-         }
-        },
-        {
-         "key": "hook_event",
-         "value": {
-          "stringValue": "PostToolUse"
-         }
-        },
-        {
-         "key": "hook_name",
-         "value": {
-          "stringValue": "PostToolUse:Bash"
-         }
-        },
-        {
-         "key": "num_hooks",
-         "value": {
-          "intValue": 4
-         }
-        },
-        {
-         "key": "hook_definitions",
-         "value": {
-          "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 9
-         }
-        },
-        {
-         "key": "num_success",
-         "value": {
-          "intValue": 4
-         }
-        },
-        {
-         "key": "num_blocking",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_non_blocking_error",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_cancelled",
-         "value": {
-          "intValue": 0
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "97518db411b06070",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.llm_request",
-       "kind": 1,
-       "startTimeUnixNano": "1790903556573000000",
-       "endTimeUnixNano": "1790903559563597125",
-       "attributes": [
-        {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "llm_request"
-         }
-        },
-        {
-         "key": "model",
-         "value": {
-          "stringValue": "claude-sonnet-5-5"
-         }
-        },
-        {
-         "key": "gen_ai.system",
-         "value": {
-          "stringValue": "anthropic"
-         }
-        },
-        {
-         "key": "gen_ai.request.model",
-         "value": {
-          "stringValue": "claude-sonnet-5-5"
-         }
-        },
-        {
-         "key": "llm_request.context",
-         "value": {
-          "stringValue": "interaction"
-         }
-        },
-        {
-         "key": "speed",
-         "value": {
-          "stringValue": "normal"
-         }
-        },
-        {
-         "key": "query_source",
-         "value": {
-          "stringValue": "sdk"
-         }
-        },
-        {
-         "key": "query_source_safe",
-         "value": {
-          "stringValue": "sdk"
-         }
-        },
-        {
-         "key": "system_prompt_hash",
-         "value": {
-          "stringValue": "sp_754c39bc2203"
-         }
-        },
-        {
-         "key": "system_prompt_preview",
-         "value": {
-          "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.d3f; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK."
-         }
-        },
-        {
-         "key": "system_prompt_length",
-         "value": {
-          "intValue": 137
-         }
-        },
-        {
-         "key": "tools",
-         "value": {
-          "stringValue": "[{\"name\":\"Agent\",\"hash\":\"164e46314bb0\"},{\"name\":\"Bash\",\"hash\":\"81dc4be713e1\"},{\"name\":\"CronCreate\",\"hash\":\"e4c660878de6\"},{\"name\":\"CronDelete\",\"hash\":\"4e244a652bf3\"},{\"name\":\"CronList\",\"hash\":\"6154cd8fa452\"},{\"name\":\"DesignSync\",\"hash\":\"390c2da6fbb7\"},{\"name\":\"Edit\",\"hash\":\"6430d0c60f48\"},{\"name\":\"EnterWorktree\",\"hash\":\"3f353219c93a\"},{\"name\":\"ExitWorktree\",\"hash\":\"79e242d1cef5\"},{\"name\":\"Glob\",\"hash\":\"341f5d0a2e2f\"},{\"name\":\"Grep\",\"hash\":\"1d3c47f9148f\"},{\"name\":\"ListAgents\",\"hash\":\"0a3591a577c6\"},{\"name\":\"ListMcpResourcesTool\",\"hash\":\"80428e7012e5\"},{\"name\":\"LSP\",\"hash\":\"b7be7911ea66\"},{\"name\":\"Monitor\",\"hash\":\"53eb832de993\"},{\"name\":\"NotebookEdit\",\"hash\":\"d88b4bf2ec93\"},{\"name\":\"PushNotification\",\"hash\":\"74f8dcf21b80\"},{\"name\":\"Read\",\"hash\":\"680529a1e735\"},{\"name\":\"ReadMcpResourceDirTool\",\"hash\":\"f87a091f6f1e\"},{\"name\":\"ReadMcpResourceTool\",\"hash\":\"9f256f5afee4\"},{\"name\":\"ReportFindings\",\"hash\":\"d742f97bb17e\"},{\"name\":\"ScheduleWakeup\",\"hash\":\"24fdfa8e91c8\"},{\"name\":\"SendMessage\",\"hash\":\"eee44afb16ba\"},{\"name\":\"Skill\",\"hash\":\"c3282cbcede5\"},{\"name\":\"TaskStop\",\"hash\":\"b145464cdabc\"},{\"name\":\"WebFetch\",\"hash\":\"e1fbaacd430d\"},{\"name\":\"WebSearch\",\"hash\":\"79a806bff741\"},{\"name\":\"Workflow\",\"hash\":\"b09d3792832d\"},{\"name\":\"Write\",\"hash\":\"416c9b17ff1f\"},{\"name\":\"mcp__circleci-mcp-server__config_helper\",\"hash\":\"bcd90f18bf38\"},{\"name\":\"mcp__circleci-mcp-server__download_usage_api_data\",\"hash\":\"df3e8366d548\"},{\"name\":\"mcp__circleci-mcp-server__find_flaky_tests\",\"hash\":\"35d48aad6c1b\"},{\"name\":\"mcp__circleci-mcp-server__find_underused_resource_classes\",\"hash\":\"b6b544482103\"},{\"name\":\"mcp__circleci-mcp-server__get_build_failure_logs\",\"hash\":\"a84b7eb33376\"},{\"name\":\"mcp__circleci-mcp-server__get_job_test_results\",\"hash\":\"95a3008792d4\"},{\"name\":\"mcp__circleci-mcp-server__get_latest_pipeline_status\",\"hash\":\"ea60228bec14\"},{\"name\":\"mcp__circleci-mcp-server__list_artifacts\",\"hash\":\"8c9753f10d8a\"},{\"name\":\"mcp__circleci-mcp-server__list_component_versions\",\"hash\":\"cac90df13b07\"},{\"name\":\"mcp__circleci-mcp-server__list_followed_projects\",\"hash\":\"bf86651fa262\"},{\"name\":\"mcp__circleci-mcp-server__rerun_workflow\",\"hash\":\"c85db32f4ab5\"},{\"name\":\"mcp__circleci-mcp-server__run_pipeline\",\"hash\":\"0f2f6b8d2936\"},{\"name\":\"mcp__circleci-mcp-server__run_rollback_pipeline\",\"hash\":\"abfacf237ce4\"},{\"name\":\"mcp__playwright__browser_click\",\"hash\":\"91de7aecd638\"},{\"name\":\"mcp__playwright__browser_close\",\"hash\":\"e98f666ea071\"},{\"name\":\"mcp__playwright__browser_console_messages\",\"hash\":\"82ff489beb79\"},{\"name\":\"mcp__playwright__browser_drag\",\"hash\":\"65acccb5d2c1\"},{\"name\":\"mcp__playwright__browser_drop\",\"hash\":\"3c8a52e5451e\"},{\"name\":\"mcp__playwright__browser_emulate_media\",\"hash\":\"6756c94f272a\"},{\"name\":\"mcp__playwright__browser_evaluate\",\"hash\":\"004c2c32370c\"},{\"name\":\"mcp__playwright__browser_file_upload\",\"hash\":\"c85100e222ce\"},{\"name\":\"mcp__playwright__browser_fill_form\",\"hash\":\"c1e1e58fbdae\"},{\"name\":\"mcp__playwright__browser_find\",\"hash\":\"15bd7a67e0ee\"},{\"name\":\"mcp__playwright__browser_handle_dialog\",\"hash\":\"53ee7d0c23d0\"},{\"name\":\"mcp__playwright__browser_hover\",\"hash\":\"5298590d93e1\"},{\"name\":\"mcp__playwright__browser_navigate\",\"hash\":\"13af28143cf5\"},{\"name\":\"mcp__playwright__browser_navigate_back\",\"hash\":\"4d22b2a379fe\"},{\"name\":\"mcp__playwright__browser_network_request\",\"hash\":\"38fdda66d74c\"},{\"name\":\"mcp__playwright__browser_network_requests\",\"hash\":\"4a14c080f656\"},{\"name\":\"mcp__playwright__browser_press_key\",\"hash\":\"0e6f0a5adf21\"},{\"name\":\"mcp__playwright__browser_resize\",\"hash\":\"7288e0cc1a79\"},{\"name\":\"mcp__playwright__browser_run_code_unsafe\",\"hash\":\"01ca95060d3c\"},{\"name\":\"mcp__playwright__browser_select_option\",\"hash\":\"76837ea235f1\"},{\"name\":\"mcp__playwright__browser_snapshot\",\"hash\":\"3fd890550de1\"},{\"name\":\"mcp__playwright__browser_tabs\",\"hash\":\"522a8a555576\"},{\"name\":\"mcp__playwright__browser_take_screenshot\",\"hash\":\"233d844004d3\"},{\"name\":\"mcp__playwright__browser_type\",\"hash\":\"a09159e7094c\"},{\"name\":\"mcp__playwright__browser_wait_for\",\"hash\":\"844ffa5b2657\"}]"
-         }
-        },
-        {
-         "key": "tools_count",
-         "value": {
-          "intValue": 67
-         }
-        },
-        {
-         "key": "new_context_message_count",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "new_context",
-         "value": {
-          "stringValue": "[TOOL RESULT: toolu_013N7z8L1z2qM2q3mSiUkwD6]\n1\timport asyncio\n2\timport os\n3\timport sys\n4\t\n5\tfrom claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query\n6\t\n7\tPROXY = os.environ.get(\"LITELLM_URL\", \"http://localhost:4000\")\n8\tKEY = os.environ[\"LITELLM_API_KEY\"]\n9\t\n10\tOTEL_ENV = {\n11\t    \"CLAUDE_CODE_ENABLE_TELEMETRY\": \"1\",\n12\t    \"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA\": \"1\",\n13\t    \"OTEL_TRACES_EXPORTER\": \"otlp\",\n14\t    \"OTEL_METRICS_EXPORTER\": \"none\",\n15\t    \"OTEL_LOGS_EXPORTER\": \"none\",\n16\t    \"OTEL_EXPORTER_OTLP_PROTOCOL\": \"http/protobuf\",\n17\t    \"OTEL_EXPORTER_OTLP_ENDPOINT\": PROXY,\n18\t    \"OTEL_EXPORTER_OTLP_HEADERS\": f\"Authorization=Bearer {KEY}\",\n19\t    \"OTEL_SERVICE_NAME\": \"claude-agent-sdk-demo\",\n20\t    \"OTEL_TRACES_EXPORT_INTERVAL\": \"1000\",\n21\t    \"OTEL_LOG_USER_PROMPTS\": \"1\",\n22\t    \"OTEL_LOG_TOOL_DETAILS\": \"1\",\n23\t    \"OTEL_LOG_TOOL_CONTENT\": \"1\",\n24\t    \"ANTHROPIC_BASE_URL\": PROXY,\n25\t    \"ANTHROPIC_AUTH_TOKEN\": KEY,\n26\t    \"CLAUDE_CODE_PROPAGATE_TRACEPARENT\": \"1\",\n27\t}\n28\t\n29\t\n30\tasync def main(prompt: str) -> None:\n31\t    options = ClaudeAgentOptions(\n32\t        model=os.environ.get(\"AGENT_MODEL\", \"claude-sonnet-5-5\"),\n33\t        allowed_tools=[\"Bash\", \"Read\", \"Glob\", \"Grep\"],\n34\t        permission_mode=\"bypassPermissions\",\n35\t        cwd=os.path.dirname(os.path.abspath(__file__)),\n36\t        env=OTEL_ENV,\n37\t        max_turns=8,\n38\t    )\n39\t    async for message in query(prompt=prompt, options=options):\n40\t        if isinstance(message, AssistantMessage):\n41\t            for block in message.content:\n42\t                if isinstance(block, TextBlock):\n43\t                    print(block.text)\n44\t        elif isinstance(message, ResultMessage):\n45\t            print(f\"\\n[done] turns={message.num_turns} cost=${message.total_cost_usd} error={message.is_error}\")\n46\t    await asyncio.sleep(3)\n47\t\n48\t\n49\tif __name__ == \"__main__\":\n50\t    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else \"List the files in this directory, read agent.py, and summarize in 2 sentences what it does.\"))\n51\t\n\n---\n\n[TOOL RESULT: toolu_01DduwZEneZSy9fyFScexRKh]\nagent.py"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 2990
-         }
-        },
-        {
-         "key": "input_tokens",
-         "value": {
-          "intValue": 2
-         }
-        },
-        {
-         "key": "output_tokens",
-         "value": {
-          "intValue": 201
-         }
-        },
-        {
-         "key": "cache_read_tokens",
-         "value": {
-          "intValue": 65763
-         }
-        },
-        {
-         "key": "cache_creation_tokens",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "success",
-         "value": {
-          "boolValue": true
-         }
-        },
-        {
-         "key": "attempt",
-         "value": {
-          "intValue": 1
-         }
-        },
-        {
-         "key": "response.has_tool_call",
-         "value": {
-          "boolValue": false
-         }
-        },
-        {
-         "key": "ttft_ms",
-         "value": {
-          "intValue": 2947
-         }
-        },
-        {
-         "key": "first_content_ms",
-         "value": {
-          "intValue": 2948
-         }
-        },
-        {
-         "key": "effort",
-         "value": {
-          "stringValue": "medium"
-         }
-        },
-        {
-         "key": "response.model_output",
-         "value": {
-          "stringValue": "`agent.py` is a script that runs a Claude Agent SDK agent. The agent can use Bash, Read, Glob and Grep, runs with permissions bypassed, and is capped at 8 turns. It takes a prompt from the command line and prints the assistant's text and a final summary of turns, cost and error status. Its API traffic goes through a LiteLLM proxy, which is set by `LITELLM_URL` and authenticated with `LITELLM_API_KEY`. It also turns on OpenTelemetry tracing and sends the traces to that same proxy.\n\nThe directory contains only `agent.py`."
-         }
-        },
-        {
-         "key": "stop_reason",
-         "value": {
-          "stringValue": "end_turn"
-         }
-        },
-        {
-         "key": "gen_ai.response.finish_reasons",
-         "value": {
-          "arrayValue": {
-           "values": [
-            {
-             "stringValue": "end_turn"
+            "key": "os.version",
+            "value": {
+              "stringValue": "0.0.0"
             }
-           ]
-          }
-         }
-        }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [
-        {
-         "attributes": [
+          },
           {
-           "key": "attempt",
-           "value": {
-            "intValue": 1
-           }
+            "key": "service.version",
+            "value": {
+              "stringValue": "2.1.286"
+            }
           }
-         ],
-         "name": "gen_ai.request.attempt",
-         "timeUnixNano": "1790903556574496750",
-         "droppedAttributesCount": 0
-        }
-       ],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
+        ],
+        "droppedAttributesCount": 0
       },
-      {
-       "traceId": "eab5340b3073943f63df1ff8d5b42db3",
-       "spanId": "4683636de3a73da7",
-       "parentSpanId": "f2c724a68fdf61b0",
-       "name": "claude_code.hook",
-       "kind": 1,
-       "startTimeUnixNano": "1790903559566000000",
-       "endTimeUnixNano": "1790903559579699042",
-       "attributes": [
+      "scopeSpans": [
         {
-         "key": "user.id",
-         "value": {
-          "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
-         }
-        },
-        {
-         "key": "session.id",
-         "value": {
-          "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
-         }
-        },
-        {
-         "key": "span.type",
-         "value": {
-          "stringValue": "hook"
-         }
-        },
-        {
-         "key": "hook_event",
-         "value": {
-          "stringValue": "Stop"
-         }
-        },
-        {
-         "key": "hook_name",
-         "value": {
-          "stringValue": "Stop"
-         }
-        },
-        {
-         "key": "num_hooks",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "hook_definitions",
-         "value": {
-          "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
-         }
-        },
-        {
-         "key": "duration_ms",
-         "value": {
-          "intValue": 14
-         }
-        },
-        {
-         "key": "num_success",
-         "value": {
-          "intValue": 3
-         }
-        },
-        {
-         "key": "num_blocking",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_non_blocking_error",
-         "value": {
-          "intValue": 0
-         }
-        },
-        {
-         "key": "num_cancelled",
-         "value": {
-          "intValue": 0
-         }
+          "scope": {
+            "name": "com.anthropic.claude_code.tracing",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "6444c31c3ebc86434c869bcb2c98327a",
+              "spanId": "76ec1951742116e7",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1790903552975000000",
+              "endTimeUnixNano": "1790903554399789458",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "anthropic/claude-sonnet-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "anthropic/claude-sonnet-5"
+                  }
+                },
+                {
+                  "key": "llm_request.context",
+                  "value": {
+                    "stringValue": "standalone"
+                  }
+                },
+                {
+                  "key": "speed",
+                  "value": {
+                    "stringValue": "normal"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "generate_session_title"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "generate_session_title"
+                  }
+                },
+                {
+                  "key": "system_prompt_hash",
+                  "value": {
+                    "stringValue": "sp_53788704fc52"
+                  }
+                },
+                {
+                  "key": "system_prompt_preview",
+                  "value": {
+                    "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.e44; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK.\n\nYou are naming a coding session so the user can pick it out of a long list of sessions. The title is a name for what the session is about, not a sentence describing the task: a short noun phrase of two to five words, in sentence case (capitalize only the first word, plus proper nouns, acronyms, and code identifiers exactly as written). When a draft runs past "
+                  }
+                },
+                {
+                  "key": "system_prompt_length",
+                  "value": {
+                    "intValue": 3198
+                  }
+                },
+                {
+                  "key": "tools",
+                  "value": {
+                    "stringValue": "[]"
+                  }
+                },
+                {
+                  "key": "tools_count",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "new_context_message_count",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[USER]\n<session>\nUse Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does.\n</session>\n\nWrite the title in the predominant language of the session — a stray word or code token in another language doesn't change it, and neither does the English of these instructions."
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 1425
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": 1205
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": 14
+                  }
+                },
+                {
+                  "key": "cache_read_tokens",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "cache_creation_tokens",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "attempt",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "response.has_tool_call",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "ttft_ms",
+                  "value": {
+                    "intValue": 978
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": 978
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "high"
+                  }
+                },
+                {
+                  "key": "response.model_output",
+                  "value": {
+                    "stringValue": "{\"title\": \"agent.py summary\"}"
+                  }
+                },
+                {
+                  "key": "stop_reason",
+                  "value": {
+                    "stringValue": "end_turn"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "end_turn"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [
+                {
+                  "attributes": [
+                    {
+                      "key": "attempt",
+                      "value": {
+                        "intValue": 1
+                      }
+                    }
+                  ],
+                  "name": "gen_ai.request.attempt",
+                  "timeUnixNano": "1790903552983035250",
+                  "droppedAttributesCount": 0
+                }
+              ],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "f2c724a68fdf61b0",
+              "name": "claude_code.interaction",
+              "kind": 1,
+              "startTimeUnixNano": "1790903554106000000",
+              "endTimeUnixNano": "1790903559582058834",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "user_prompt",
+                  "value": {
+                    "stringValue": "Use Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does."
+                  }
+                },
+                {
+                  "key": "user_prompt_length",
+                  "value": {
+                    "intValue": 114
+                  }
+                },
+                {
+                  "key": "interaction.sequence",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "parent.source",
+                  "value": {
+                    "stringValue": "none"
+                  }
+                },
+                {
+                  "key": "queued_sends",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[USER PROMPT]\nUse Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does."
+                  }
+                },
+                {
+                  "key": "interaction.duration_ms",
+                  "value": {
+                    "intValue": 5476
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "bb43215ef8fa36cd",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.hook",
+              "kind": 1,
+              "startTimeUnixNano": "1790903554113000000",
+              "endTimeUnixNano": "1790903554125993917",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "hook"
+                  }
+                },
+                {
+                  "key": "hook_event",
+                  "value": {
+                    "stringValue": "UserPromptSubmit"
+                  }
+                },
+                {
+                  "key": "hook_name",
+                  "value": {
+                    "stringValue": "UserPromptSubmit"
+                  }
+                },
+                {
+                  "key": "num_hooks",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "hook_definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 13
+                  }
+                },
+                {
+                  "key": "num_success",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "num_blocking",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_non_blocking_error",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_cancelled",
+                  "value": {
+                    "intValue": 0
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "2deef999c66d8cbd",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1790903554137000000",
+              "endTimeUnixNano": "1790903556349230708",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-sonnet-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-sonnet-5-5"
+                  }
+                },
+                {
+                  "key": "llm_request.context",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "speed",
+                  "value": {
+                    "stringValue": "normal"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "system_prompt_hash",
+                  "value": {
+                    "stringValue": "sp_754c39bc2203"
+                  }
+                },
+                {
+                  "key": "system_prompt_preview",
+                  "value": {
+                    "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.d3f; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK."
+                  }
+                },
+                {
+                  "key": "system_prompt_length",
+                  "value": {
+                    "intValue": 137
+                  }
+                },
+                {
+                  "key": "tools",
+                  "value": {
+                    "stringValue": "[{\"name\":\"Agent\",\"hash\":\"164e46314bb0\"},{\"name\":\"Bash\",\"hash\":\"81dc4be713e1\"},{\"name\":\"CronCreate\",\"hash\":\"e4c660878de6\"},{\"name\":\"CronDelete\",\"hash\":\"4e244a652bf3\"},{\"name\":\"CronList\",\"hash\":\"6154cd8fa452\"},{\"name\":\"DesignSync\",\"hash\":\"390c2da6fbb7\"},{\"name\":\"Edit\",\"hash\":\"6430d0c60f48\"},{\"name\":\"EnterWorktree\",\"hash\":\"3f353219c93a\"},{\"name\":\"ExitWorktree\",\"hash\":\"79e242d1cef5\"},{\"name\":\"Glob\",\"hash\":\"341f5d0a2e2f\"},{\"name\":\"Grep\",\"hash\":\"1d3c47f9148f\"},{\"name\":\"ListAgents\",\"hash\":\"0a3591a577c6\"},{\"name\":\"ListMcpResourcesTool\",\"hash\":\"80428e7012e5\"},{\"name\":\"LSP\",\"hash\":\"b7be7911ea66\"},{\"name\":\"Monitor\",\"hash\":\"53eb832de993\"},{\"name\":\"NotebookEdit\",\"hash\":\"d88b4bf2ec93\"},{\"name\":\"PushNotification\",\"hash\":\"74f8dcf21b80\"},{\"name\":\"Read\",\"hash\":\"680529a1e735\"},{\"name\":\"ReadMcpResourceDirTool\",\"hash\":\"f87a091f6f1e\"},{\"name\":\"ReadMcpResourceTool\",\"hash\":\"9f256f5afee4\"},{\"name\":\"ReportFindings\",\"hash\":\"d742f97bb17e\"},{\"name\":\"ScheduleWakeup\",\"hash\":\"24fdfa8e91c8\"},{\"name\":\"SendMessage\",\"hash\":\"eee44afb16ba\"},{\"name\":\"Skill\",\"hash\":\"c3282cbcede5\"},{\"name\":\"TaskStop\",\"hash\":\"b145464cdabc\"},{\"name\":\"WebFetch\",\"hash\":\"e1fbaacd430d\"},{\"name\":\"WebSearch\",\"hash\":\"79a806bff741\"},{\"name\":\"Workflow\",\"hash\":\"b09d3792832d\"},{\"name\":\"Write\",\"hash\":\"416c9b17ff1f\"},{\"name\":\"mcp__circleci-mcp-server__config_helper\",\"hash\":\"bcd90f18bf38\"},{\"name\":\"mcp__circleci-mcp-server__download_usage_api_data\",\"hash\":\"df3e8366d548\"},{\"name\":\"mcp__circleci-mcp-server__find_flaky_tests\",\"hash\":\"35d48aad6c1b\"},{\"name\":\"mcp__circleci-mcp-server__find_underused_resource_classes\",\"hash\":\"b6b544482103\"},{\"name\":\"mcp__circleci-mcp-server__get_build_failure_logs\",\"hash\":\"a84b7eb33376\"},{\"name\":\"mcp__circleci-mcp-server__get_job_test_results\",\"hash\":\"95a3008792d4\"},{\"name\":\"mcp__circleci-mcp-server__get_latest_pipeline_status\",\"hash\":\"ea60228bec14\"},{\"name\":\"mcp__circleci-mcp-server__list_artifacts\",\"hash\":\"8c9753f10d8a\"},{\"name\":\"mcp__circleci-mcp-server__list_component_versions\",\"hash\":\"cac90df13b07\"},{\"name\":\"mcp__circleci-mcp-server__list_followed_projects\",\"hash\":\"bf86651fa262\"},{\"name\":\"mcp__circleci-mcp-server__rerun_workflow\",\"hash\":\"c85db32f4ab5\"},{\"name\":\"mcp__circleci-mcp-server__run_pipeline\",\"hash\":\"0f2f6b8d2936\"},{\"name\":\"mcp__circleci-mcp-server__run_rollback_pipeline\",\"hash\":\"abfacf237ce4\"},{\"name\":\"mcp__playwright__browser_click\",\"hash\":\"91de7aecd638\"},{\"name\":\"mcp__playwright__browser_close\",\"hash\":\"e98f666ea071\"},{\"name\":\"mcp__playwright__browser_console_messages\",\"hash\":\"82ff489beb79\"},{\"name\":\"mcp__playwright__browser_drag\",\"hash\":\"65acccb5d2c1\"},{\"name\":\"mcp__playwright__browser_drop\",\"hash\":\"3c8a52e5451e\"},{\"name\":\"mcp__playwright__browser_emulate_media\",\"hash\":\"6756c94f272a\"},{\"name\":\"mcp__playwright__browser_evaluate\",\"hash\":\"004c2c32370c\"},{\"name\":\"mcp__playwright__browser_file_upload\",\"hash\":\"c85100e222ce\"},{\"name\":\"mcp__playwright__browser_fill_form\",\"hash\":\"c1e1e58fbdae\"},{\"name\":\"mcp__playwright__browser_find\",\"hash\":\"15bd7a67e0ee\"},{\"name\":\"mcp__playwright__browser_handle_dialog\",\"hash\":\"53ee7d0c23d0\"},{\"name\":\"mcp__playwright__browser_hover\",\"hash\":\"5298590d93e1\"},{\"name\":\"mcp__playwright__browser_navigate\",\"hash\":\"13af28143cf5\"},{\"name\":\"mcp__playwright__browser_navigate_back\",\"hash\":\"4d22b2a379fe\"},{\"name\":\"mcp__playwright__browser_network_request\",\"hash\":\"38fdda66d74c\"},{\"name\":\"mcp__playwright__browser_network_requests\",\"hash\":\"4a14c080f656\"},{\"name\":\"mcp__playwright__browser_press_key\",\"hash\":\"0e6f0a5adf21\"},{\"name\":\"mcp__playwright__browser_resize\",\"hash\":\"7288e0cc1a79\"},{\"name\":\"mcp__playwright__browser_run_code_unsafe\",\"hash\":\"01ca95060d3c\"},{\"name\":\"mcp__playwright__browser_select_option\",\"hash\":\"76837ea235f1\"},{\"name\":\"mcp__playwright__browser_snapshot\",\"hash\":\"3fd890550de1\"},{\"name\":\"mcp__playwright__browser_tabs\",\"hash\":\"522a8a555576\"},{\"name\":\"mcp__playwright__browser_take_screenshot\",\"hash\":\"233d844004d3\"},{\"name\":\"mcp__playwright__browser_type\",\"hash\":\"a09159e7094c\"},{\"name\":\"mcp__playwright__browser_wait_for\",\"hash\":\"844ffa5b2657\"}]"
+                  }
+                },
+                {
+                  "key": "tools_count",
+                  "value": {
+                    "intValue": 67
+                  }
+                },
+                {
+                  "key": "new_context_message_count",
+                  "value": {
+                    "intValue": 2
+                  }
+                },
+                {
+                  "key": "system_reminders_count",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[USER]\nUse Bash to run 'ls' in this directory, then use Read to read agent.py, and summarize in 2 sentences what it does."
+                  }
+                },
+                {
+                  "key": "system_reminders",
+                  "value": {
+                    "stringValue": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# currentDate\nToday's date is 2026-10-01.\n</system-reminder>"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 2211
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": 2
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": 142
+                  }
+                },
+                {
+                  "key": "cache_read_tokens",
+                  "value": {
+                    "intValue": 64465
+                  }
+                },
+                {
+                  "key": "cache_creation_tokens",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "attempt",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "response.has_tool_call",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "ttft_ms",
+                  "value": {
+                    "intValue": 1501
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": 1502
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "medium"
+                  }
+                },
+                {
+                  "key": "stop_reason",
+                  "value": {
+                    "stringValue": "tool_use"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool_use"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [
+                {
+                  "attributes": [
+                    {
+                      "key": "attempt",
+                      "value": {
+                        "intValue": 1
+                      }
+                    }
+                  ],
+                  "name": "gen_ai.request.attempt",
+                  "timeUnixNano": "1790903554143646000",
+                  "droppedAttributesCount": 0
+                }
+              ],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "854082e87e4e6073",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.hook",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556063000000",
+              "endTimeUnixNano": "1790903556065091708",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "hook"
+                  }
+                },
+                {
+                  "key": "hook_event",
+                  "value": {
+                    "stringValue": "PreToolUse"
+                  }
+                },
+                {
+                  "key": "hook_name",
+                  "value": {
+                    "stringValue": "PreToolUse:Bash"
+                  }
+                },
+                {
+                  "key": "num_hooks",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "hook_definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 2
+                  }
+                },
+                {
+                  "key": "num_success",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "num_blocking",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_non_blocking_error",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_cancelled",
+                  "value": {
+                    "intValue": 0
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "54f2045463e7a662",
+              "parentSpanId": "8424fac5bab20a92",
+              "name": "claude_code.tool.blocked_on_user",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556066000000",
+              "endTimeUnixNano": "1790903556069516458",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.blocked_on_user"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "decision",
+                  "value": {
+                    "stringValue": "unknown"
+                  }
+                },
+                {
+                  "key": "source",
+                  "value": {
+                    "stringValue": "unknown"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "8424fac5bab20a92",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556066000000",
+              "endTimeUnixNano": "1790903556556444875",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Bash"
+                  }
+                },
+                {
+                  "key": "tool_name_safe",
+                  "value": {
+                    "stringValue": "Bash"
+                  }
+                },
+                {
+                  "key": "full_command",
+                  "value": {
+                    "stringValue": "ls"
+                  }
+                },
+                {
+                  "key": "bash_command_class",
+                  "value": {
+                    "stringValue": "file_search"
+                  }
+                },
+                {
+                  "key": "bash_argv0",
+                  "value": {
+                    "stringValue": "ls"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
+                  }
+                },
+                {
+                  "key": "tool_input",
+                  "value": {
+                    "stringValue": "[TOOL INPUT: Bash]\n{\"command\":\"ls\",\"description\":\"List files in current directory\"}"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 490
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[TOOL RESULT: Bash]\n{\"stdout\":\"agent.py\",\"stderr\":\"\",\"interrupted\":false,\"isImage\":false,\"noOutputExpected\":false}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [
+                {
+                  "attributes": [
+                    {
+                      "key": "bash_command",
+                      "value": {
+                        "stringValue": "ls"
+                      }
+                    },
+                    {
+                      "key": "output",
+                      "value": {
+                        "stringValue": "agent.py"
+                      }
+                    }
+                  ],
+                  "name": "tool.output",
+                  "timeUnixNano": "1790903556556378875",
+                  "droppedAttributesCount": 0
+                }
+              ],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "da4be56bb2765e6d",
+              "parentSpanId": "8424fac5bab20a92",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556070000000",
+              "endTimeUnixNano": "1790903556556723292",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01DduwZEneZSy9fyFScexRKh"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 487
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "136b9d479f0df250",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.hook",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556338000000",
+              "endTimeUnixNano": "1790903556338853041",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "hook"
+                  }
+                },
+                {
+                  "key": "hook_event",
+                  "value": {
+                    "stringValue": "PreToolUse"
+                  }
+                },
+                {
+                  "key": "hook_name",
+                  "value": {
+                    "stringValue": "PreToolUse:Read"
+                  }
+                },
+                {
+                  "key": "num_hooks",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "hook_definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "num_success",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "num_blocking",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_non_blocking_error",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_cancelled",
+                  "value": {
+                    "intValue": 0
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "e72fb4376fbc390a",
+              "parentSpanId": "272c1ac0706d67ea",
+              "name": "claude_code.tool.blocked_on_user",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556339000000",
+              "endTimeUnixNano": "1790903556341383250",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.blocked_on_user"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 2
+                  }
+                },
+                {
+                  "key": "decision",
+                  "value": {
+                    "stringValue": "unknown"
+                  }
+                },
+                {
+                  "key": "source",
+                  "value": {
+                    "stringValue": "unknown"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "272c1ac0706d67ea",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556339000000",
+              "endTimeUnixNano": "1790903556342962542",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Read"
+                  }
+                },
+                {
+                  "key": "tool_name_safe",
+                  "value": {
+                    "stringValue": "Read"
+                  }
+                },
+                {
+                  "key": "file_path",
+                  "value": {
+                    "stringValue": "/workspace/agent.py"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
+                  }
+                },
+                {
+                  "key": "tool_input",
+                  "value": {
+                    "stringValue": "[TOOL INPUT: Read]\n{\"file_path\":\"/workspace/agent.py\"}"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 4
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[TOOL RESULT: Read]\n{\"type\":\"text\",\"file\":{\"filePath\":\"/workspace/agent.py\",\"content\":\"import asyncio\\nimport os\\nimport sys\\n\\nfrom claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query\\n\\nPROXY = os.environ.get(\\\"LITELLM_URL\\\", \\\"http://localhost:4000\\\")\\nKEY = os.environ[\\\"LITELLM_API_KEY\\\"]\\n\\nOTEL_ENV = {\\n    \\\"CLAUDE_CODE_ENABLE_TELEMETRY\\\": \\\"1\\\",\\n    \\\"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA\\\": \\\"1\\\",\\n    \\\"OTEL_TRACES_EXPORTER\\\": \\\"otlp\\\",\\n    \\\"OTEL_METRICS_EXPORTER\\\": \\\"none\\\",\\n    \\\"OTEL_LOGS_EXPORTER\\\": \\\"none\\\",\\n    \\\"OTEL_EXPORTER_OTLP_PROTOCOL\\\": \\\"http/protobuf\\\",\\n    \\\"OTEL_EXPORTER_OTLP_ENDPOINT\\\": PROXY,\\n    \\\"OTEL_EXPORTER_OTLP_HEADERS\\\": f\\\"Authorization=Bearer {KEY}\\\",\\n    \\\"OTEL_SERVICE_NAME\\\": \\\"claude-agent-sdk-demo\\\",\\n    \\\"OTEL_TRACES_EXPORT_INTERVAL\\\": \\\"1000\\\",\\n    \\\"OTEL_LOG_USER_PROMPTS\\\": \\\"1\\\",\\n    \\\"OTEL_LOG_TOOL_DETAILS\\\": \\\"1\\\",\\n    \\\"OTEL_LOG_TOOL_CONTENT\\\": \\\"1\\\",\\n    \\\"ANTHROPIC_BASE_URL\\\": PROXY,\\n    \\\"ANTHROPIC_AUTH_TOKEN\\\": KEY,\\n    \\\"CLAUDE_CODE_PROPAGATE_TRACEPARENT\\\": \\\"1\\\",\\n}\\n\\n\\nasync def main(prompt: str) -> None:\\n    options = ClaudeAgentOptions(\\n        model=os.environ.get(\\\"AGENT_MODEL\\\", \\\"claude-sonnet-5-5\\\"),\\n        allowed_tools=[\\\"Bash\\\", \\\"Read\\\", \\\"Glob\\\", \\\"Grep\\\"],\\n        permission_mode=\\\"bypassPermissions\\\",\\n        cwd=os.path.dirname(os.path.abspath(__file__)),\\n        env=OTEL_ENV,\\n        max_turns=8,\\n    )\\n    async for message in query(prompt=prompt, options=options):\\n        if isinstance(message, AssistantMessage):\\n            for block in message.content:\\n                if isinstance(block, TextBlock):\\n                    print(block.text)\\n        elif isinstance(message, ResultMessage):\\n            print(f\\\"\\\\n[done] turns={message.num_turns} cost=${message.total_cost_usd} error={message.is_error}\\\")\\n    await asyncio.sleep(3)\\n\\n\\nif __name__ == \\\"__main__\\\":\\n    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else \\\"List the files in this directory, read agent.py, and summarize in 2 sentences what it does.\\\"))\\n\",\"numLines\":51,\"startLine\":1,\"totalLines\":51}}"
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [
+                {
+                  "attributes": [
+                    {
+                      "key": "file_path",
+                      "value": {
+                        "stringValue": "/workspace/agent.py"
+                      }
+                    },
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "import asyncio\nimport os\nimport sys\n\nfrom claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query\n\nPROXY = os.environ.get(\"LITELLM_URL\", \"http://localhost:4000\")\nKEY = os.environ[\"LITELLM_API_KEY\"]\n\nOTEL_ENV = {\n    \"CLAUDE_CODE_ENABLE_TELEMETRY\": \"1\",\n    \"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA\": \"1\",\n    \"OTEL_TRACES_EXPORTER\": \"otlp\",\n    \"OTEL_METRICS_EXPORTER\": \"none\",\n    \"OTEL_LOGS_EXPORTER\": \"none\",\n    \"OTEL_EXPORTER_OTLP_PROTOCOL\": \"http/protobuf\",\n    \"OTEL_EXPORTER_OTLP_ENDPOINT\": PROXY,\n    \"OTEL_EXPORTER_OTLP_HEADERS\": f\"Authorization=Bearer {KEY}\",\n    \"OTEL_SERVICE_NAME\": \"claude-agent-sdk-demo\",\n    \"OTEL_TRACES_EXPORT_INTERVAL\": \"1000\",\n    \"OTEL_LOG_USER_PROMPTS\": \"1\",\n    \"OTEL_LOG_TOOL_DETAILS\": \"1\",\n    \"OTEL_LOG_TOOL_CONTENT\": \"1\",\n    \"ANTHROPIC_BASE_URL\": PROXY,\n    \"ANTHROPIC_AUTH_TOKEN\": KEY,\n    \"CLAUDE_CODE_PROPAGATE_TRACEPARENT\": \"1\",\n}\n\n\nasync def main(prompt: str) -> None:\n    options = ClaudeAgentOptions(\n        model=os.environ.get(\"AGENT_MODEL\", \"claude-sonnet-5-5\"),\n        allowed_tools=[\"Bash\", \"Read\", \"Glob\", \"Grep\"],\n        permission_mode=\"bypassPermissions\",\n        cwd=os.path.dirname(os.path.abspath(__file__)),\n        env=OTEL_ENV,\n        max_turns=8,\n    )\n    async for message in query(prompt=prompt, options=options):\n        if isinstance(message, AssistantMessage):\n            for block in message.content:\n                if isinstance(block, TextBlock):\n                    print(block.text)\n        elif isinstance(message, ResultMessage):\n            print(f\"\\n[done] turns={message.num_turns} cost=${message.total_cost_usd} error={message.is_error}\")\n    await asyncio.sleep(3)\n\n\nif __name__ == \"__main__\":\n    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else \"List the files in this directory, read agent.py, and summarize in 2 sentences what it does.\"))\n"
+                      }
+                    }
+                  ],
+                  "name": "tool.output",
+                  "timeUnixNano": "1790903556342885417",
+                  "droppedAttributesCount": 0
+                }
+              ],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "2deab56c3fcadd65",
+              "parentSpanId": "272c1ac0706d67ea",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556341000000",
+              "endTimeUnixNano": "1790903556342440709",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_013N7z8L1z2qM2q3mSiUkwD6"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "6ce31fa350c73483",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.hook",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556344000000",
+              "endTimeUnixNano": "1790903556352695167",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "hook"
+                  }
+                },
+                {
+                  "key": "hook_event",
+                  "value": {
+                    "stringValue": "PostToolUse"
+                  }
+                },
+                {
+                  "key": "hook_name",
+                  "value": {
+                    "stringValue": "PostToolUse:Read"
+                  }
+                },
+                {
+                  "key": "num_hooks",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "hook_definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 9
+                  }
+                },
+                {
+                  "key": "num_success",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "num_blocking",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_non_blocking_error",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_cancelled",
+                  "value": {
+                    "intValue": 0
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "ae2da48ea097cc66",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.hook",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556557000000",
+              "endTimeUnixNano": "1790903556565797375",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "hook"
+                  }
+                },
+                {
+                  "key": "hook_event",
+                  "value": {
+                    "stringValue": "PostToolUse"
+                  }
+                },
+                {
+                  "key": "hook_name",
+                  "value": {
+                    "stringValue": "PostToolUse:Bash"
+                  }
+                },
+                {
+                  "key": "num_hooks",
+                  "value": {
+                    "intValue": 4
+                  }
+                },
+                {
+                  "key": "hook_definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 9
+                  }
+                },
+                {
+                  "key": "num_success",
+                  "value": {
+                    "intValue": 4
+                  }
+                },
+                {
+                  "key": "num_blocking",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_non_blocking_error",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_cancelled",
+                  "value": {
+                    "intValue": 0
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "97518db411b06070",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1790903556573000000",
+              "endTimeUnixNano": "1790903559563597125",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-sonnet-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-sonnet-5-5"
+                  }
+                },
+                {
+                  "key": "llm_request.context",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "speed",
+                  "value": {
+                    "stringValue": "normal"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "system_prompt_hash",
+                  "value": {
+                    "stringValue": "sp_754c39bc2203"
+                  }
+                },
+                {
+                  "key": "system_prompt_preview",
+                  "value": {
+                    "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.d3f; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK."
+                  }
+                },
+                {
+                  "key": "system_prompt_length",
+                  "value": {
+                    "intValue": 137
+                  }
+                },
+                {
+                  "key": "tools",
+                  "value": {
+                    "stringValue": "[{\"name\":\"Agent\",\"hash\":\"164e46314bb0\"},{\"name\":\"Bash\",\"hash\":\"81dc4be713e1\"},{\"name\":\"CronCreate\",\"hash\":\"e4c660878de6\"},{\"name\":\"CronDelete\",\"hash\":\"4e244a652bf3\"},{\"name\":\"CronList\",\"hash\":\"6154cd8fa452\"},{\"name\":\"DesignSync\",\"hash\":\"390c2da6fbb7\"},{\"name\":\"Edit\",\"hash\":\"6430d0c60f48\"},{\"name\":\"EnterWorktree\",\"hash\":\"3f353219c93a\"},{\"name\":\"ExitWorktree\",\"hash\":\"79e242d1cef5\"},{\"name\":\"Glob\",\"hash\":\"341f5d0a2e2f\"},{\"name\":\"Grep\",\"hash\":\"1d3c47f9148f\"},{\"name\":\"ListAgents\",\"hash\":\"0a3591a577c6\"},{\"name\":\"ListMcpResourcesTool\",\"hash\":\"80428e7012e5\"},{\"name\":\"LSP\",\"hash\":\"b7be7911ea66\"},{\"name\":\"Monitor\",\"hash\":\"53eb832de993\"},{\"name\":\"NotebookEdit\",\"hash\":\"d88b4bf2ec93\"},{\"name\":\"PushNotification\",\"hash\":\"74f8dcf21b80\"},{\"name\":\"Read\",\"hash\":\"680529a1e735\"},{\"name\":\"ReadMcpResourceDirTool\",\"hash\":\"f87a091f6f1e\"},{\"name\":\"ReadMcpResourceTool\",\"hash\":\"9f256f5afee4\"},{\"name\":\"ReportFindings\",\"hash\":\"d742f97bb17e\"},{\"name\":\"ScheduleWakeup\",\"hash\":\"24fdfa8e91c8\"},{\"name\":\"SendMessage\",\"hash\":\"eee44afb16ba\"},{\"name\":\"Skill\",\"hash\":\"c3282cbcede5\"},{\"name\":\"TaskStop\",\"hash\":\"b145464cdabc\"},{\"name\":\"WebFetch\",\"hash\":\"e1fbaacd430d\"},{\"name\":\"WebSearch\",\"hash\":\"79a806bff741\"},{\"name\":\"Workflow\",\"hash\":\"b09d3792832d\"},{\"name\":\"Write\",\"hash\":\"416c9b17ff1f\"},{\"name\":\"mcp__circleci-mcp-server__config_helper\",\"hash\":\"bcd90f18bf38\"},{\"name\":\"mcp__circleci-mcp-server__download_usage_api_data\",\"hash\":\"df3e8366d548\"},{\"name\":\"mcp__circleci-mcp-server__find_flaky_tests\",\"hash\":\"35d48aad6c1b\"},{\"name\":\"mcp__circleci-mcp-server__find_underused_resource_classes\",\"hash\":\"b6b544482103\"},{\"name\":\"mcp__circleci-mcp-server__get_build_failure_logs\",\"hash\":\"a84b7eb33376\"},{\"name\":\"mcp__circleci-mcp-server__get_job_test_results\",\"hash\":\"95a3008792d4\"},{\"name\":\"mcp__circleci-mcp-server__get_latest_pipeline_status\",\"hash\":\"ea60228bec14\"},{\"name\":\"mcp__circleci-mcp-server__list_artifacts\",\"hash\":\"8c9753f10d8a\"},{\"name\":\"mcp__circleci-mcp-server__list_component_versions\",\"hash\":\"cac90df13b07\"},{\"name\":\"mcp__circleci-mcp-server__list_followed_projects\",\"hash\":\"bf86651fa262\"},{\"name\":\"mcp__circleci-mcp-server__rerun_workflow\",\"hash\":\"c85db32f4ab5\"},{\"name\":\"mcp__circleci-mcp-server__run_pipeline\",\"hash\":\"0f2f6b8d2936\"},{\"name\":\"mcp__circleci-mcp-server__run_rollback_pipeline\",\"hash\":\"abfacf237ce4\"},{\"name\":\"mcp__playwright__browser_click\",\"hash\":\"91de7aecd638\"},{\"name\":\"mcp__playwright__browser_close\",\"hash\":\"e98f666ea071\"},{\"name\":\"mcp__playwright__browser_console_messages\",\"hash\":\"82ff489beb79\"},{\"name\":\"mcp__playwright__browser_drag\",\"hash\":\"65acccb5d2c1\"},{\"name\":\"mcp__playwright__browser_drop\",\"hash\":\"3c8a52e5451e\"},{\"name\":\"mcp__playwright__browser_emulate_media\",\"hash\":\"6756c94f272a\"},{\"name\":\"mcp__playwright__browser_evaluate\",\"hash\":\"004c2c32370c\"},{\"name\":\"mcp__playwright__browser_file_upload\",\"hash\":\"c85100e222ce\"},{\"name\":\"mcp__playwright__browser_fill_form\",\"hash\":\"c1e1e58fbdae\"},{\"name\":\"mcp__playwright__browser_find\",\"hash\":\"15bd7a67e0ee\"},{\"name\":\"mcp__playwright__browser_handle_dialog\",\"hash\":\"53ee7d0c23d0\"},{\"name\":\"mcp__playwright__browser_hover\",\"hash\":\"5298590d93e1\"},{\"name\":\"mcp__playwright__browser_navigate\",\"hash\":\"13af28143cf5\"},{\"name\":\"mcp__playwright__browser_navigate_back\",\"hash\":\"4d22b2a379fe\"},{\"name\":\"mcp__playwright__browser_network_request\",\"hash\":\"38fdda66d74c\"},{\"name\":\"mcp__playwright__browser_network_requests\",\"hash\":\"4a14c080f656\"},{\"name\":\"mcp__playwright__browser_press_key\",\"hash\":\"0e6f0a5adf21\"},{\"name\":\"mcp__playwright__browser_resize\",\"hash\":\"7288e0cc1a79\"},{\"name\":\"mcp__playwright__browser_run_code_unsafe\",\"hash\":\"01ca95060d3c\"},{\"name\":\"mcp__playwright__browser_select_option\",\"hash\":\"76837ea235f1\"},{\"name\":\"mcp__playwright__browser_snapshot\",\"hash\":\"3fd890550de1\"},{\"name\":\"mcp__playwright__browser_tabs\",\"hash\":\"522a8a555576\"},{\"name\":\"mcp__playwright__browser_take_screenshot\",\"hash\":\"233d844004d3\"},{\"name\":\"mcp__playwright__browser_type\",\"hash\":\"a09159e7094c\"},{\"name\":\"mcp__playwright__browser_wait_for\",\"hash\":\"844ffa5b2657\"}]"
+                  }
+                },
+                {
+                  "key": "tools_count",
+                  "value": {
+                    "intValue": 67
+                  }
+                },
+                {
+                  "key": "new_context_message_count",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[TOOL RESULT: toolu_013N7z8L1z2qM2q3mSiUkwD6]\n1\timport asyncio\n2\timport os\n3\timport sys\n4\t\n5\tfrom claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query\n6\t\n7\tPROXY = os.environ.get(\"LITELLM_URL\", \"http://localhost:4000\")\n8\tKEY = os.environ[\"LITELLM_API_KEY\"]\n9\t\n10\tOTEL_ENV = {\n11\t    \"CLAUDE_CODE_ENABLE_TELEMETRY\": \"1\",\n12\t    \"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA\": \"1\",\n13\t    \"OTEL_TRACES_EXPORTER\": \"otlp\",\n14\t    \"OTEL_METRICS_EXPORTER\": \"none\",\n15\t    \"OTEL_LOGS_EXPORTER\": \"none\",\n16\t    \"OTEL_EXPORTER_OTLP_PROTOCOL\": \"http/protobuf\",\n17\t    \"OTEL_EXPORTER_OTLP_ENDPOINT\": PROXY,\n18\t    \"OTEL_EXPORTER_OTLP_HEADERS\": f\"Authorization=Bearer {KEY}\",\n19\t    \"OTEL_SERVICE_NAME\": \"claude-agent-sdk-demo\",\n20\t    \"OTEL_TRACES_EXPORT_INTERVAL\": \"1000\",\n21\t    \"OTEL_LOG_USER_PROMPTS\": \"1\",\n22\t    \"OTEL_LOG_TOOL_DETAILS\": \"1\",\n23\t    \"OTEL_LOG_TOOL_CONTENT\": \"1\",\n24\t    \"ANTHROPIC_BASE_URL\": PROXY,\n25\t    \"ANTHROPIC_AUTH_TOKEN\": KEY,\n26\t    \"CLAUDE_CODE_PROPAGATE_TRACEPARENT\": \"1\",\n27\t}\n28\t\n29\t\n30\tasync def main(prompt: str) -> None:\n31\t    options = ClaudeAgentOptions(\n32\t        model=os.environ.get(\"AGENT_MODEL\", \"claude-sonnet-5-5\"),\n33\t        allowed_tools=[\"Bash\", \"Read\", \"Glob\", \"Grep\"],\n34\t        permission_mode=\"bypassPermissions\",\n35\t        cwd=os.path.dirname(os.path.abspath(__file__)),\n36\t        env=OTEL_ENV,\n37\t        max_turns=8,\n38\t    )\n39\t    async for message in query(prompt=prompt, options=options):\n40\t        if isinstance(message, AssistantMessage):\n41\t            for block in message.content:\n42\t                if isinstance(block, TextBlock):\n43\t                    print(block.text)\n44\t        elif isinstance(message, ResultMessage):\n45\t            print(f\"\\n[done] turns={message.num_turns} cost=${message.total_cost_usd} error={message.is_error}\")\n46\t    await asyncio.sleep(3)\n47\t\n48\t\n49\tif __name__ == \"__main__\":\n50\t    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else \"List the files in this directory, read agent.py, and summarize in 2 sentences what it does.\"))\n51\t\n\n---\n\n[TOOL RESULT: toolu_01DduwZEneZSy9fyFScexRKh]\nagent.py"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 2990
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": 2
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": 201
+                  }
+                },
+                {
+                  "key": "cache_read_tokens",
+                  "value": {
+                    "intValue": 65763
+                  }
+                },
+                {
+                  "key": "cache_creation_tokens",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "attempt",
+                  "value": {
+                    "intValue": 1
+                  }
+                },
+                {
+                  "key": "response.has_tool_call",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "ttft_ms",
+                  "value": {
+                    "intValue": 2947
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": 2948
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "medium"
+                  }
+                },
+                {
+                  "key": "response.model_output",
+                  "value": {
+                    "stringValue": "`agent.py` is a script that runs a Claude Agent SDK agent. The agent can use Bash, Read, Glob and Grep, runs with permissions bypassed, and is capped at 8 turns. It takes a prompt from the command line and prints the assistant's text and a final summary of turns, cost and error status. Its API traffic goes through a LiteLLM proxy, which is set by `LITELLM_URL` and authenticated with `LITELLM_API_KEY`. It also turns on OpenTelemetry tracing and sends the traces to that same proxy.\n\nThe directory contains only `agent.py`."
+                  }
+                },
+                {
+                  "key": "stop_reason",
+                  "value": {
+                    "stringValue": "end_turn"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "end_turn"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [
+                {
+                  "attributes": [
+                    {
+                      "key": "attempt",
+                      "value": {
+                        "intValue": 1
+                      }
+                    }
+                  ],
+                  "name": "gen_ai.request.attempt",
+                  "timeUnixNano": "1790903556574496750",
+                  "droppedAttributesCount": 0
+                }
+              ],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            },
+            {
+              "traceId": "eab5340b3073943f63df1ff8d5b42db3",
+              "spanId": "4683636de3a73da7",
+              "parentSpanId": "f2c724a68fdf61b0",
+              "name": "claude_code.hook",
+              "kind": 1,
+              "startTimeUnixNano": "1790903559566000000",
+              "endTimeUnixNano": "1790903559579699042",
+              "attributes": [
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "0000000000000000000000000000000000000000000000000000000000000000"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "efddb30e-4074-43fe-97d6-d10785429cd5"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "hook"
+                  }
+                },
+                {
+                  "key": "hook_event",
+                  "value": {
+                    "stringValue": "Stop"
+                  }
+                },
+                {
+                  "key": "hook_name",
+                  "value": {
+                    "stringValue": "Stop"
+                  }
+                },
+                {
+                  "key": "num_hooks",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "hook_definitions",
+                  "value": {
+                    "stringValue": "[{\"type\":\"command\",\"command\":\"/workspace/.claude/hooks/notify.sh\"}]"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": 14
+                  }
+                },
+                {
+                  "key": "num_success",
+                  "value": {
+                    "intValue": 3
+                  }
+                },
+                {
+                  "key": "num_blocking",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_non_blocking_error",
+                  "value": {
+                    "intValue": 0
+                  }
+                },
+                {
+                  "key": "num_cancelled",
+                  "value": {
+                    "intValue": 0
+                  }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": {
+                "code": 0
+              },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            }
+          ]
         }
-       ],
-       "droppedAttributesCount": 0,
-       "events": [],
-       "droppedEventsCount": 0,
-       "status": {
-        "code": 0
-       },
-       "links": [],
-       "droppedLinksCount": 0,
-       "flags": 257
-      }
-     ]
+      ]
     }
-   ]
-  }
- ]
+  ]
 }

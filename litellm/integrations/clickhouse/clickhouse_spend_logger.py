@@ -155,6 +155,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     return SpendLogRecord(
         request_id=request_id,
         response_id=strip_cache_hit_suffix(request_id),
+        litellm_call_id=payload.get("litellm_call_id") or "",
         call_type=payload.get("call_type") or "",
         api_key=metadata.get("user_api_key_hash") or "",
         key_alias=metadata.get("user_api_key_alias") or "",

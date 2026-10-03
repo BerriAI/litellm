@@ -70,6 +70,7 @@ class _ClickHouseLogger(Protocol):
 def _payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": "chatcmpl-abc123",
+        "litellm_call_id": "gateway-call",
         "trace_id": "trace-1",
         "session_id": "",
         "call_type": "acompletion",
@@ -161,6 +162,7 @@ def test_success_row_mapping():
     assert set(row) == set(SpendLogRecord.__annotations__)
     assert row["request_id"] == "chatcmpl-abc123"
     assert row["response_id"] == "chatcmpl-abc123"
+    assert row["litellm_call_id"] == "gateway-call"
     assert row["spend"] == 0.00042
     assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (20, 10, 30)
     assert (row["cache_read_tokens"], row["cache_write_tokens"]) == (5, 7)
@@ -314,6 +316,7 @@ def test_cache_hit_id_is_stripped_for_response_id():
     )
     assert row["request_id"] == "chatcmpl-abc123_cache_hit1727600000.123456"
     assert row["response_id"] == "chatcmpl-abc123"
+    assert row["litellm_call_id"] == "gateway-call"
     assert row["cache_hit"] is True
     assert strip_cache_hit_suffix("chatcmpl-xyz") == "chatcmpl-xyz"
 
@@ -563,3 +566,11 @@ def test_non_finite_payload_cost_is_logged_as_unknown(response_cost: float) -> N
     payload: Final = cast(StandardLoggingPayload, _payload(response_cost=response_cost))
     row: Final = spend_log_row_from_payload(payload, {"response_cost": response_cost})
     assert row["spend"] is None
+
+
+@pytest.mark.parametrize("status", ("success", "failure"))
+def test_standard_payload_retains_gateway_call_id(status: Literal["success", "failure"]) -> None:
+    payload: Final = _standard_payload(response_cost=0.0, status=status)
+    row: Final = spend_log_row_from_payload(payload, {"response_cost": 0.0})
+    assert row["litellm_call_id"] == payload["litellm_call_id"] == "standard-payload-call"
+    assert row["request_id"] == payload["id"]

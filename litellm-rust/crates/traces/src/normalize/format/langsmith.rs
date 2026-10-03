@@ -179,25 +179,52 @@ impl Format for LangSmith {
         let observation_type = ObservationType::try_from(attr(attributes, "langsmith.span.kind"))
             .unwrap_or(ObservationType::Chain);
         let io = span_io(observation_type, attributes);
+        let legacy_input = !attr(attributes, "gen_ai.prompt").is_empty();
+        let legacy_output = !attr(attributes, "gen_ai.completion").is_empty();
         Ok(Extraction {
             facts: SpanFacts {
                 role: Some(RoleEvidence::Declared(observation_type)),
-                input: if attr(attributes, "gen_ai.prompt").is_empty() {
-                    String::new()
-                } else {
+                input: if legacy_input {
                     io.input
-                },
-                output: if attr(attributes, "gen_ai.completion").is_empty() {
-                    String::new()
                 } else {
-                    io.output
+                    base.facts.input
                 },
-                calls: io.calls,
-                ..SpanFacts::default()
-            }
-            .or(base.facts),
+                output: if legacy_output {
+                    io.output
+                } else {
+                    base.facts.output
+                },
+                calls: match io.calls {
+                    CallEvidence::Unknown => base.facts.calls,
+                    calls => calls,
+                },
+                ..base.facts
+            },
             display_name: None,
-            consumed_attributes: base.consumed_attributes,
+            consumed_attributes: base
+                .consumed_attributes
+                .into_iter()
+                .filter(|source| {
+                    !(legacy_input
+                        && matches!(
+                            *source,
+                            "gen_ai.input.messages"
+                                | "gen_ai.tool.call.arguments"
+                                | "gen_ai.retrieval.query.text"
+                                | "gen_ai.prompt"
+                        ))
+                        && !(legacy_output
+                            && matches!(
+                                *source,
+                                "gen_ai.output.messages"
+                                    | "gen_ai.tool.call.result"
+                                    | "gen_ai.retrieval.documents"
+                                    | "gen_ai.completion"
+                            ))
+                })
+                .chain(legacy_input.then_some("gen_ai.prompt"))
+                .chain(legacy_output.then_some("gen_ai.completion"))
+                .collect(),
         })
     }
 }

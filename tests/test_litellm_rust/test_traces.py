@@ -485,16 +485,12 @@ class SeededTraceAPI:
 @pytest.fixture
 def seeded_trace_api(clickhouse_url: str) -> Iterator[SeededTraceAPI]:
     from scripts.seed_tracing_fixtures import (
-        SPEND_FIXTURE,
-        SPEND_ROWS,
         TRACE_FIXTURES,
         fixture_replays,
         rebase_spend,
     )
 
-    spends: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    spends: Final = dict(spend_fixtures())["deeplite_swarm"]
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
     replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, "query-api", pattern)
     swarm: Final = next(replay for replay in replays if replay.name == "deeplite_swarm")
@@ -631,7 +627,7 @@ def test_captured_sdk_cost_survives_seeding_and_is_queryable(name: str, captured
     detail: Final = TRACE.validate_json(response.content)
     original: Final = span_rows((TRACE_FIXTURES / f"{name}.json").read_bytes(), "application/json")
     assert detail["summary"]["span_count"] == len(original)
-    if capture.spend_linked:
+    if capture.spend_linked and capture.spend_complete:
         assert detail["summary"]["spend"] is not None
         assert math.isclose(detail["summary"]["spend"], sum(row["spend"] or 0 for row in rows))
     else:
