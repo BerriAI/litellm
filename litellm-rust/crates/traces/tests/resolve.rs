@@ -61,7 +61,14 @@ fn owned(mut span: TraceSpansRow, team: &str, user: &str, key: &str) -> TraceSpa
     span
 }
 
-fn spend(request_id: &str, response_id: &str, team: &str, user: &str, key: &str, cost: f64) -> SpendByResponseIdsRow {
+fn spend(
+    request_id: &str,
+    response_id: &str,
+    team: &str,
+    user: &str,
+    key: &str,
+    cost: f64,
+) -> SpendByResponseIdsRow {
     SpendByResponseIdsRow {
         request_id: request_id.into(),
         response_id: response_id.into(),
@@ -79,24 +86,69 @@ fn spend(request_id: &str, response_id: &str, team: &str, user: &str, key: &str,
 /// root agent -> llm, task tool -> researcher subagent (N times) -> llm + search tool + middleware.
 fn deep_agent(researchers: usize) -> Vec<TraceSpansRow> {
     let mut rows = vec![
-        at(row("root", "", "deep_research_agent", "agent", "deep_research_agent"), 0, 1000),
+        at(
+            row(
+                "root",
+                "",
+                "deep_research_agent",
+                "agent",
+                "deep_research_agent",
+            ),
+            0,
+            1000,
+        ),
         llm("llm-root", "root", "deep_research_agent", "chatcmpl-root"),
-        at(row("task", "root", "task", "tool", "deep_research_agent"), 200, 700),
+        at(
+            row("task", "root", "task", "tool", "deep_research_agent"),
+            200,
+            700,
+        ),
     ];
     for index in 0..researchers {
         let researcher = format!("res-{index}");
         rows.extend([
-            at(row(&researcher, "task", "researcher", "agent", "researcher"), 201, 5),
-            at(llm(&format!("res-llm-{index}"), &researcher, "researcher", &format!("chatcmpl-res-{index}")), 202, 100),
-            at(row(&format!("res-tool-{index}"), &researcher, "search_docs", "tool", "researcher"), 203, 1),
-            row(&format!("res-mw-{index}"), &researcher, "FilesystemMiddleware.wrap_model_call", "framework", "researcher"),
+            at(
+                row(&researcher, "task", "researcher", "agent", "researcher"),
+                201,
+                5,
+            ),
+            at(
+                llm(
+                    &format!("res-llm-{index}"),
+                    &researcher,
+                    "researcher",
+                    &format!("chatcmpl-res-{index}"),
+                ),
+                202,
+                100,
+            ),
+            at(
+                row(
+                    &format!("res-tool-{index}"),
+                    &researcher,
+                    "search_docs",
+                    "tool",
+                    "researcher",
+                ),
+                203,
+                1,
+            ),
+            row(
+                &format!("res-mw-{index}"),
+                &researcher,
+                "FilesystemMiddleware.wrap_model_call",
+                "framework",
+                "researcher",
+            ),
         ]);
     }
     rows
 }
 
 fn agents(rows: &[TraceSpansRow]) -> Vec<AgentNode> {
-    resolve_trace("t", "", rows, &[]).map(|trace| trace.agents).unwrap_or_default()
+    resolve_trace("t", "", rows, &[])
+        .map(|trace| trace.agents)
+        .unwrap_or_default()
 }
 
 #[rstest]
@@ -115,7 +167,15 @@ fn summary_counts_model_calls_tools_and_agents() {
     assert_eq!(summary.input_preview, "input of deep_research_agent");
     assert_eq!(summary.status, SpanStatus::Ok);
     assert_eq!(summary.error_count, 1);
-    assert_eq!((summary.span_count, summary.agent_count, summary.llm_calls, summary.tool_calls), (7, 2, 2, 2));
+    assert_eq!(
+        (
+            summary.span_count,
+            summary.agent_count,
+            summary.llm_calls,
+            summary.tool_calls
+        ),
+        (7, 2, 2, 2)
+    );
     assert_eq!((summary.input_tokens, summary.output_tokens), (200, 40));
     assert_eq!(summary.models, ["claude-sonnet-4-5"]);
     assert_eq!(summary.duration_ms, 1000.0);
@@ -127,10 +187,22 @@ fn summary_counts_model_calls_tools_and_agents() {
 fn spans_are_offset_from_the_trace_start() {
     let trace = resolve_trace("t1", "", &deep_agent(1), &[]).unwrap();
     let span = |id: &str| trace.spans.iter().find(|span| span.span_id == id).unwrap();
-    assert_eq!((span("root").start_offset_ms, span("root").parent_span_id.clone()), (0.0, None));
-    assert_eq!((span("task").start_offset_ms, span("task").duration_ms), (200.0, 700.0));
+    assert_eq!(
+        (
+            span("root").start_offset_ms,
+            span("root").parent_span_id.clone()
+        ),
+        (0.0, None)
+    );
+    assert_eq!(
+        (span("task").start_offset_ms, span("task").duration_ms),
+        (200.0, 700.0)
+    );
     assert_eq!(span("task").parent_span_id.as_deref(), Some("root"));
-    assert_eq!(span("llm-root").litellm_request_id.as_deref(), Some("chatcmpl-root"));
+    assert_eq!(
+        span("llm-root").litellm_request_id.as_deref(),
+        Some("chatcmpl-root")
+    );
     assert_eq!(span("task").litellm_request_id, None);
 }
 
@@ -150,8 +222,18 @@ fn repeated_subagent_invocations_aggregate_into_one_node() {
         }
     );
     let researcher = &trace.agents[1];
-    assert_eq!(researcher.parent_agent.as_deref(), Some("deep_research_agent"));
-    assert_eq!((researcher.invocations, researcher.llm_calls, researcher.tool_calls), (200, 200, 200));
+    assert_eq!(
+        researcher.parent_agent.as_deref(),
+        Some("deep_research_agent")
+    );
+    assert_eq!(
+        (
+            researcher.invocations,
+            researcher.llm_calls,
+            researcher.tool_calls
+        ),
+        (200, 200, 200)
+    );
     assert!((researcher.duration_ms - 1000.0).abs() < 1e-6);
     assert_eq!(trace.summary.span_count, 3 + 4 * 200);
 }
@@ -175,10 +257,19 @@ fn parent_agent_skips_same_name_ancestors_and_stops_at_cycles() {
 
 #[rstest]
 fn unnamed_calls_belong_to_the_nearest_agent_and_wrappers_are_not_agents() {
-    let crew = TraceSpansRow { wrapper_candidate: 1, ..row("crew", "", "crew.kickoff", "agent", "") };
+    let crew = TraceSpansRow {
+        wrapper_candidate: 1,
+        ..row("crew", "", "crew.kickoff", "agent", "")
+    };
     let nodes = agents(&[
         crew,
-        row("a", "crew", "researcher._execute_core", "agent", "researcher"),
+        row(
+            "a",
+            "crew",
+            "researcher._execute_core",
+            "agent",
+            "researcher",
+        ),
         row("chain", "a", "step", "chain", ""),
         llm("llm", "chain", "", "req-1"),
         row("tool", "a", "search", "tool", ""),
@@ -192,8 +283,17 @@ fn unnamed_calls_belong_to_the_nearest_agent_and_wrappers_are_not_agents() {
 
 #[rstest]
 fn named_wrapper_inside_the_same_agent_is_a_chain() {
-    let wrapper = TraceSpansRow { wrapper_candidate: 1, ..row("w", "a", "researcher.run", "agent", "researcher") };
-    let trace = resolve_trace("t", "", &[row("a", "", "researcher", "agent", "researcher"), wrapper], &[]).unwrap();
+    let wrapper = TraceSpansRow {
+        wrapper_candidate: 1,
+        ..row("w", "a", "researcher.run", "agent", "researcher")
+    };
+    let trace = resolve_trace(
+        "t",
+        "",
+        &[row("a", "", "researcher", "agent", "researcher"), wrapper],
+        &[],
+    )
+    .unwrap();
     assert_eq!(trace.spans[1].kind, "chain");
     assert_eq!(trace.agents[0].invocations, 1);
 }
@@ -201,34 +301,81 @@ fn named_wrapper_inside_the_same_agent_is_a_chain() {
 #[rstest]
 fn agents_named_only_by_their_tools_are_agents() {
     let nodes = agents(&[row("t", "", "tool", "tool", "ghost")]);
-    assert_eq!((nodes[0].name.as_str(), nodes[0].invocations, nodes[0].tool_calls), ("ghost", 1, 1));
+    assert_eq!(
+        (
+            nodes[0].name.as_str(),
+            nodes[0].invocations,
+            nodes[0].tool_calls
+        ),
+        ("ghost", 1, 1)
+    );
 }
 
 #[rstest]
 fn overlapping_tool_spans_count_one_call() {
-    let tool = |span_id: &str| TraceSpansRow { tool_call_id: "call-1".into(), ..row(span_id, "a", "search", "tool", "") };
-    let trace = resolve_trace("t", "", &[row("a", "", "agent", "agent", "agent"), tool("x"), tool("y")], &[]).unwrap();
+    let tool = |span_id: &str| TraceSpansRow {
+        tool_call_id: "call-1".into(),
+        ..row(span_id, "a", "search", "tool", "")
+    };
+    let trace = resolve_trace(
+        "t",
+        "",
+        &[
+            row("a", "", "agent", "agent", "agent"),
+            tool("x"),
+            tool("y"),
+        ],
+        &[],
+    )
+    .unwrap();
     assert_eq!(trace.summary.tool_calls, 1);
     assert_eq!(trace.agents[0].tool_calls, 1);
 }
 
 #[rstest]
 fn names_and_frameworks_are_sorted_and_distinct() {
-    let framed = |span: TraceSpansRow, framework: &str| TraceSpansRow { framework: framework.into(), ..span };
+    let framed = |span: TraceSpansRow, framework: &str| TraceSpansRow {
+        framework: framework.into(),
+        ..span
+    };
     let trace = resolve_trace(
         "t1",
         "",
         &[
-            framed(row("root", "", "invoke_agent research_agent", "agent", "research_agent"), "claude-code"),
-            framed(row("r1", "root", "researcher._execute_core", "agent", "researcher"), "claude-agent-sdk"),
-            framed(row("r2", "r1", "invoke_agent researcher", "agent", "researcher"), ""),
+            framed(
+                row(
+                    "root",
+                    "",
+                    "invoke_agent research_agent",
+                    "agent",
+                    "research_agent",
+                ),
+                "claude-code",
+            ),
+            framed(
+                row(
+                    "r1",
+                    "root",
+                    "researcher._execute_core",
+                    "agent",
+                    "researcher",
+                ),
+                "claude-agent-sdk",
+            ),
+            framed(
+                row("r2", "r1", "invoke_agent researcher", "agent", "researcher"),
+                "",
+            ),
             row("llm", "r2", "chat", "llm", "researcher"),
         ],
         &[],
     )
     .unwrap();
     assert_eq!(trace.summary.agent_names, ["research_agent", "researcher"]);
-    assert_eq!(trace.summary.frameworks, ["claude-agent-sdk", "claude-code"]);
+    assert_eq!(
+        trace.summary.frameworks,
+        ["claude-agent-sdk", "claude-code"]
+    );
     assert_eq!(trace.summary.name, "invoke_agent research_agent");
     assert_eq!(trace.agents[1].invocations, 2);
     assert_eq!(trace.agents[1].llm_calls, 1);
@@ -237,30 +384,68 @@ fn names_and_frameworks_are_sorted_and_distinct() {
 #[rstest]
 fn repeated_response_counts_once_and_other_owners_are_ignored() {
     let rows = [
-        owned(row("root", "", "agent", "agent", "agent"), "team-a", "", "key-a"),
-        owned(llm("llm-1", "root", "agent", "response-1"), "team-a", "", "key-a"),
-        owned(llm("llm-2", "root", "agent", "response-1"), "team-a", "", "key-a"),
+        owned(
+            row("root", "", "agent", "agent", "agent"),
+            "team-a",
+            "",
+            "key-a",
+        ),
+        owned(
+            llm("llm-1", "root", "agent", "response-1"),
+            "team-a",
+            "",
+            "key-a",
+        ),
+        owned(
+            llm("llm-2", "root", "agent", "response-1"),
+            "team-a",
+            "",
+            "key-a",
+        ),
     ];
     let spend = [
         spend("request-other", "response-1", "team-b", "", "key-b", 99.0),
         spend("request-1", "response-1", "team-a", "", "key-a", 0.25),
-        spend("request-other-key", "unrelated-response", "team-a", "", "key-c", 50.0),
+        spend(
+            "request-other-key",
+            "unrelated-response",
+            "team-a",
+            "",
+            "key-c",
+            50.0,
+        ),
     ];
     let trace = resolve_trace("trace-1", "ref", &rows, &spend).unwrap();
     assert_eq!(trace.summary.spend, Some(0.25));
     assert_eq!(trace.agents[0].spend, Some(0.25));
     assert_eq!(
-        trace.spans.iter().map(|span| span.spend).collect::<Vec<_>>(),
+        trace
+            .spans
+            .iter()
+            .map(|span| span.spend)
+            .collect::<Vec<_>>(),
         [None, Some(0.25), Some(0.25)]
     );
 }
 
 #[rstest]
 fn ambiguous_response_id_keeps_cost_unknown() {
-    let rows = [owned(llm("llm-1", "", "agent", "response-1"), "", "user", "key-a")];
+    let rows = [owned(
+        llm("llm-1", "", "agent", "response-1"),
+        "",
+        "user",
+        "key-a",
+    )];
     let spend = [
         spend("response-1", "response-1", "", "user", "key-a", 0.25),
-        spend("response-1_cache_hit123", "response-1", "", "user", "key-a", 0.0),
+        spend(
+            "response-1_cache_hit123",
+            "response-1",
+            "",
+            "user",
+            "key-a",
+            0.0,
+        ),
     ];
     let trace = resolve_trace("trace-1", "ref", &rows, &spend).unwrap();
     assert_eq!((trace.summary.spend, trace.spans[0].spend), (None, None));
@@ -286,10 +471,22 @@ fn cost_requires_shared_ownership(
     #[case] known: bool,
 ) {
     let rows = [
-        owned(row("agent", "", "agent", "agent", "agent"), trace_team, trace_user, trace_key),
-        owned(llm("llm", "agent", "agent", "response"), trace_team, trace_user, trace_key),
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            trace_team,
+            trace_user,
+            trace_key,
+        ),
+        owned(
+            llm("llm", "agent", "agent", "response"),
+            trace_team,
+            trace_user,
+            trace_key,
+        ),
     ];
-    let spend = [spend("request", "response", spend_team, spend_user, spend_key, 0.25)];
+    let spend = [spend(
+        "request", "response", spend_team, spend_user, spend_key, 0.25,
+    )];
     let trace = resolve_trace("trace", "visible-reference", &rows, &spend).unwrap();
     let expected = known.then_some(0.25);
     assert_eq!(trace.summary.spend, expected);
@@ -302,16 +499,39 @@ fn cost_requires_shared_ownership(
 #[case::missing_spend("missing_spend")]
 #[case::duplicate_spend("duplicate_spend")]
 fn incomplete_call_cost_never_becomes_a_partial_total(#[case] failure: &str) {
-    let second_id = if failure == "missing_id" { "" } else { "second" };
+    let second_id = if failure == "missing_id" {
+        ""
+    } else {
+        "second"
+    };
     let rows = [
-        owned(row("agent", "", "agent", "agent", "agent"), "team", "", "export"),
-        owned(llm("first", "agent", "agent", "first"), "team", "", "export"),
-        owned(llm("second", "agent", "agent", second_id), "team", "", "export"),
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "export",
+        ),
+        owned(
+            llm("first", "agent", "agent", "first"),
+            "team",
+            "",
+            "export",
+        ),
+        owned(
+            llm("second", "agent", "agent", second_id),
+            "team",
+            "",
+            "export",
+        ),
     ];
     let first = spend("first", "first", "team", "", "export", 0.25);
     let second = spend("second", "second", "team", "", "export", 0.25);
     let duplicate = spend("duplicate", "second", "team", "", "export", 0.25);
-    let spend = if failure == "duplicate_spend" { vec![first, second, duplicate] } else { vec![first] };
+    let spend = if failure == "duplicate_spend" {
+        vec![first, second, duplicate]
+    } else {
+        vec![first]
+    };
     let trace = resolve_trace("trace", "ref", &rows, &spend).unwrap();
     assert_eq!(trace.spans[1].spend, Some(0.25));
     assert_eq!(trace.spans[2].spend, None);
@@ -328,7 +548,12 @@ fn transport_spans_complete_a_call_without_its_own_id() {
     let mut call = llm("llm", "agent", "agent", "");
     call.trace_id = "trace".into();
     let rows = [
-        owned(row("agent", "", "agent", "agent", "agent"), "team", "", "key"),
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
         owned(call, "team", "", "key"),
         owned(transport, "team", "", "key"),
     ];
@@ -368,7 +593,14 @@ fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
     });
     assert_eq!(summary.spend, None);
     assert_eq!(summary.status, SpanStatus::Ok);
-    assert_eq!((summary.span_count, summary.error_count, summary.agent_invocations), (126, 1, 2));
+    assert_eq!(
+        (
+            summary.span_count,
+            summary.error_count,
+            summary.agent_invocations
+        ),
+        (126, 1, 2)
+    );
     assert_eq!(summary.start_time, "2026-09-30T04:36:29.377000+00:00");
 }
 

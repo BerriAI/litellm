@@ -14,7 +14,7 @@ use crate::InsertRow;
 /// Converts each distinct shared source once; keeping the source pins its identity.
 struct SharedValues<T>(HashMap<SharedIdentity, (Shared<T>, Shared<Value>)>);
 
-impl<T> SharedValues<T> {
+impl<T: Clone> SharedValues<T> {
     fn new() -> Self {
         Self(HashMap::new())
     }
@@ -76,7 +76,11 @@ fn present_fields<T: Serialize>(value: &T) -> String {
     }
 }
 
-pub fn span_rows(spans: Vec<DecodedSpan>, tenant: &Tenant, max_value_bytes: usize) -> Vec<InsertRow> {
+pub fn span_rows(
+    spans: Vec<DecodedSpan>,
+    tenant: &Tenant,
+    max_value_bytes: usize,
+) -> Vec<InsertRow> {
     let mut resources = SharedValues::new();
     let mut scopes = SharedValues::new();
     spans
@@ -102,10 +106,18 @@ pub fn span_rows(spans: Vec<DecodedSpan>, tenant: &Tenant, max_value_bytes: usiz
             let shared = [
                 (
                     "ResourceAttributes",
-                    resources.get(&span.resource_attributes, |attributes| stamped(attributes, tenant)),
+                    resources.get(&span.resource_attributes, |attributes| {
+                        stamped(attributes, tenant)
+                    }),
                 ),
-                ("ScopeName", scopes.get(&span.scope_name, |name| Value::from(name.as_str()))),
-                ("ScopeVersion", scopes.get(&span.scope_version, |version| Value::from(version.as_str()))),
+                (
+                    "ScopeName",
+                    scopes.get(&span.scope_name, |name| Value::from(name.as_str())),
+                ),
+                (
+                    "ScopeVersion",
+                    scopes.get(&span.scope_version, |version| Value::from(version.as_str())),
+                ),
             ];
             let owned = [
                 ("Timestamp", json(span.start_ns)),
@@ -124,24 +136,43 @@ pub fn span_rows(spans: Vec<DecodedSpan>, tenant: &Tenant, max_value_bytes: usiz
                 ("ApiKeyHash", Value::from(tenant.api_key_hash.as_str())),
                 ("UserId", Value::from(tenant.user_id.as_str())),
                 ("ObservationType", json(normalized.observation_type)),
-                ("WrapperCandidate", Value::Bool(normalized.wrapper_candidate)),
+                (
+                    "WrapperCandidate",
+                    Value::Bool(normalized.wrapper_candidate),
+                ),
                 ("AgentName", Value::String(normalized.agent_name)),
                 ("Framework", Value::String(normalized.framework)),
-                ("AgentMetadata", Value::String(present_fields(&normalized.agent_metadata))),
-                ("LiteLLMRequestId", Value::String(normalized.litellm_request_id)),
+                (
+                    "AgentMetadata",
+                    Value::String(present_fields(&normalized.agent_metadata)),
+                ),
+                (
+                    "LiteLLMRequestId",
+                    Value::String(normalized.litellm_request_id),
+                ),
                 ("CallKeys", json(&normalized.call_keys)),
                 ("CallEvidence", Value::from(normalized.call_evidence)),
                 ("Model", Value::String(normalized.model)),
                 ("InputTokens", Value::from(normalized.input_tokens)),
                 ("OutputTokens", Value::from(normalized.output_tokens)),
-                ("Input", Value::String(truncate_messages(normalized.input, max_value_bytes))),
+                (
+                    "Input",
+                    Value::String(truncate_messages(normalized.input, max_value_bytes)),
+                ),
                 ("InputPreview", Value::String(normalized.input_preview)),
-                ("Output", Value::String(truncate_value(normalized.output, max_value_bytes))),
+                (
+                    "Output",
+                    Value::String(truncate_value(normalized.output, max_value_bytes)),
+                ),
                 ("ToolCallId", Value::String(normalized.tool_call_id)),
             ];
             shared
                 .into_iter()
-                .chain(owned.into_iter().map(|(column, value)| (column, Shared::new(value))))
+                .chain(
+                    owned
+                        .into_iter()
+                        .map(|(column, value)| (column, Shared::new(value))),
+                )
                 .map(|(column, value)| (column.to_owned(), value))
                 .collect()
         })

@@ -44,7 +44,9 @@ fn export(resources: Vec<(Vec<Value>, Vec<Value>)>) -> Vec<u8> {
             })
         })
         .collect();
-    json!({"resourceSpans": resource_spans}).to_string().into_bytes()
+    json!({"resourceSpans": resource_spans})
+        .to_string()
+        .into_bytes()
 }
 
 fn rows(body: &[u8], tenant: &Tenant, max_value_bytes: usize) -> Vec<Value> {
@@ -65,7 +67,10 @@ fn tenant_overwrites_claimed_identity_and_resources_stay_shared_per_group(tenant
     let body = export(vec![
         (
             spoofed.clone(),
-            vec![span(&"02".repeat(8), vec![], json!({})), span(&"03".repeat(8), vec![], json!({}))],
+            vec![
+                span(&"02".repeat(8), vec![], json!({})),
+                span(&"03".repeat(8), vec![], json!({})),
+            ],
         ),
         (spoofed, vec![span(&"04".repeat(8), vec![], json!({}))]),
     ]);
@@ -114,7 +119,11 @@ fn status_message_falls_back_to_the_exception_event(
             ]}],
         }),
     );
-    let row = &rows(&export(vec![(vec![], vec![exported])]), &tenant, MAX_VALUE_BYTES)[0];
+    let row = &rows(
+        &export(vec![(vec![], vec![exported])]),
+        &tenant,
+        MAX_VALUE_BYTES,
+    )[0];
     assert_eq!(row["StatusCode"], "STATUS_CODE_ERROR");
     assert_eq!(row["StatusMessage"], expected);
 }
@@ -131,7 +140,10 @@ fn consumed_payloads_leave_span_attributes_and_long_values_are_capped(tenant: Te
         vec![
             attribute("gen_ai.operation.name", "chat"),
             attribute("gen_ai.input.messages", &messages.to_string()),
-            attribute("gen_ai.output.messages", &json!([{"role": "assistant", "content": "y".repeat(300)}]).to_string()),
+            attribute(
+                "gen_ai.output.messages",
+                &json!([{"role": "assistant", "content": "y".repeat(300)}]).to_string(),
+            ),
             attribute("custom.blob", &"z".repeat(300)),
         ],
         json!({}),
@@ -140,7 +152,10 @@ fn consumed_payloads_leave_span_attributes_and_long_values_are_capped(tenant: Te
     let attributes = row["SpanAttributes"].as_object().unwrap();
     assert!(!attributes.contains_key("gen_ai.input.messages"));
     assert!(!attributes.contains_key("gen_ai.output.messages"));
-    assert_eq!(attributes["custom.blob"], format!("{}…[truncated 100 bytes]", "z".repeat(200)));
+    assert_eq!(
+        attributes["custom.blob"],
+        format!("{}…[truncated 100 bytes]", "z".repeat(200))
+    );
     let input = row["Input"].as_str().unwrap();
     let kept: Vec<Value> = serde_json::from_str(input).unwrap();
     assert!(input.len() <= 200);
@@ -153,12 +168,19 @@ fn consumed_payloads_leave_span_attributes_and_long_values_are_capped(tenant: Te
 #[rstest]
 fn rows_carry_every_normalized_column(tenant: Tenant) {
     let row = &rows(
-        &export(vec![(vec![], vec![span(&"02".repeat(8), vec![], json!({}))])]),
+        &export(vec![(
+            vec![],
+            vec![span(&"02".repeat(8), vec![], json!({}))],
+        )]),
         &tenant,
         MAX_VALUE_BYTES,
     )[0];
     for field in NORMALIZED_FIELD_DEFINITIONS {
-        assert!(row.get(field.clickhouse_column).is_some(), "{}", field.clickhouse_column);
+        assert!(
+            row.get(field.clickhouse_column).is_some(),
+            "{}",
+            field.clickhouse_column
+        );
     }
     assert_eq!(row["Duration"], 4000);
     assert_eq!(row["AgentMetadata"], "{}");

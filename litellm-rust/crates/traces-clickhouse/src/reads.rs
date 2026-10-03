@@ -14,9 +14,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Connection, Error,
     query::named::{
-        ListTraces, ListTracesParams, ReadAccessParams, SpanDetail as SpanDetailQuery, SpanDetailParams,
-        SpanError, SpanErrorParams, SpendByResponseIds, SpendByResponseIdsParams, TraceIdentity,
-        TraceIdentityParams, TracePageSpans, TracePageSpansParams, TraceSpans, TraceSpansParams,
+        ListTraces, ListTracesParams, ReadAccessParams, SpanDetail as SpanDetailQuery,
+        SpanDetailParams, SpanError, SpanErrorParams, SpendByResponseIds, SpendByResponseIdsParams,
+        TraceIdentity, TraceIdentityParams, TracePageSpans, TracePageSpansParams, TraceSpans,
+        TraceSpansParams,
     },
 };
 
@@ -27,7 +28,10 @@ fn encode_cursor<T: Serialize>(position: &T) -> String {
     URL_SAFE.encode(serde_json::to_vec(position).unwrap_or_default())
 }
 
-fn decode_cursor<T: for<'de> Deserialize<'de>>(cursor: &str, kind: &'static str) -> Result<T, Error> {
+fn decode_cursor<T: for<'de> Deserialize<'de>>(
+    cursor: &str,
+    kind: &'static str,
+) -> Result<T, Error> {
     URL_SAFE
         .decode(cursor)
         .ok()
@@ -157,7 +161,10 @@ pub async fn list_traces(
         page.iter().map(|row| row.start_ms).min(),
         page.iter().map(|row| row.start_ms + row.duration_ms).max(),
     ) else {
-        return Ok(TracePage { data: Vec::new(), next_cursor });
+        return Ok(TracePage {
+            data: Vec::new(),
+            next_cursor,
+        });
     };
     let span_params = TracePageSpansParams::from(contracts::TracePageSpansParams {
         access: access.clone(),
@@ -165,22 +172,32 @@ pub async fn list_traces(
         start_ms: page_start,
         end_ms: page_end + 1,
     });
-    let span_rows: Vec<contracts::TraceSpansRow> = fetch::<TracePageSpans>(client, connection, &span_params)
-        .await?
-        .into_iter()
-        .map(|row| row.0)
-        .collect();
+    let span_rows: Vec<contracts::TraceSpansRow> =
+        fetch::<TracePageSpans>(client, connection, &span_params)
+            .await?
+            .into_iter()
+            .map(|row| row.0)
+            .collect();
     let spend_rows = spend(client, connection, access, &span_rows).await;
-    let mut by_trace: HashMap<(String, String, String), Vec<contracts::TraceSpansRow>> = HashMap::new();
+    let mut by_trace: HashMap<(String, String, String), Vec<contracts::TraceSpansRow>> =
+        HashMap::new();
     for span in span_rows {
-        let key = (span.team_id.clone(), span.api_key_hash.clone(), span.trace_id.clone());
+        let key = (
+            span.team_id.clone(),
+            span.api_key_hash.clone(),
+            span.trace_id.clone(),
+        );
         by_trace.entry(key).or_default().push(span);
     }
     let data = page
         .iter()
         .map(|row| {
             let spans = by_trace
-                .get(&(row.team_id.clone(), row.api_key_hash.clone(), row.trace_id.clone()))
+                .get(&(
+                    row.team_id.clone(),
+                    row.api_key_hash.clone(),
+                    row.trace_id.clone(),
+                ))
                 .map(Vec::as_slice)
                 .unwrap_or_default();
             resolve_trace(&row.trace_id, &row.trace_ref, spans, &spend_rows)
@@ -234,7 +251,10 @@ pub async fn get_span(
         trace_ref,
         span_id: span_id.to_owned(),
     };
-    let row = fetch::<SpanDetailQuery>(client, connection, &params).await?.into_iter().next();
+    let row = fetch::<SpanDetailQuery>(client, connection, &params)
+        .await?
+        .into_iter()
+        .next();
     Ok(row.map(|row| SpanDetail {
         input_ui: to_ui_content(&row.input),
         output_ui: to_ui_content(&row.output),
@@ -265,9 +285,15 @@ pub async fn get_span_error(
         trace_ref,
         span_id: span_id.to_owned(),
         error_offset: offset,
-        error_version: position.map(|position| position.version).unwrap_or_default(),
+        error_version: position
+            .map(|position| position.version)
+            .unwrap_or_default(),
     });
-    let Some(row) = fetch::<SpanError>(client, connection, &params).await?.into_iter().next() else {
+    let Some(row) = fetch::<SpanError>(client, connection, &params)
+        .await?
+        .into_iter()
+        .next()
+    else {
         return Ok(None);
     };
     let row = row.0;
@@ -297,7 +323,10 @@ mod tests {
         let cursor = encode_cursor(&(1_790_742_989_377_i64, "4bad42b84e9de3ba46fc870185f8f023"));
         assert_eq!(
             trace_position(Some(&cursor)).unwrap(),
-            (1_790_742_989_377, "4bad42b84e9de3ba46fc870185f8f023".to_owned())
+            (
+                1_790_742_989_377,
+                "4bad42b84e9de3ba46fc870185f8f023".to_owned()
+            )
         );
         assert_eq!(trace_position(None).unwrap(), (0, String::new()));
         assert_eq!(trace_position(Some("")).unwrap(), (0, String::new()));
@@ -309,7 +338,10 @@ mod tests {
     #[case::numeric_reference("WzEsIDJd")]
     #[case::zero_start("WzAsICJ0Il0=")]
     fn malformed_trace_cursors_are_rejected(#[case] cursor: &str) {
-        assert!(matches!(trace_position(Some(cursor)), Err(Error::InvalidCursor("trace"))));
+        assert!(matches!(
+            trace_position(Some(cursor)),
+            Err(Error::InvalidCursor("trace"))
+        ));
     }
 
     #[rstest]
@@ -317,7 +349,10 @@ mod tests {
     #[case::missing_fields("e30=")]
     #[case::not_an_object("WzEsMl0=")]
     fn malformed_diagnostic_cursors_are_rejected(#[case] cursor: &str) {
-        assert!(matches!(error_position(Some(cursor)), Err(Error::InvalidCursor("diagnostic"))));
+        assert!(matches!(
+            error_position(Some(cursor)),
+            Err(Error::InvalidCursor("diagnostic"))
+        ));
     }
 
     #[rstest]
@@ -325,6 +360,9 @@ mod tests {
     #[case::short_version("A".repeat(63))]
     fn diagnostic_cursor_requires_a_content_version(#[case] version: String) {
         let cursor = encode_cursor(&ErrorPosition { offset: 1, version });
-        assert!(matches!(error_position(Some(&cursor)), Err(Error::InvalidCursor("diagnostic"))));
+        assert!(matches!(
+            error_position(Some(&cursor)),
+            Err(Error::InvalidCursor("diagnostic"))
+        ));
     }
 }

@@ -31,11 +31,16 @@ pub fn truncate_messages(value: String, max_bytes: usize) -> String {
     let encoded: Vec<String> = messages.iter().map(encode).collect();
     let marker_bytes = elided(messages.len()).len();
     let fixed = 4 + encoded[0].len() + marker_bytes;
-    let kept = newest_that_fit(&encoded[1..], max_bytes.saturating_sub(fixed)).min(messages.len() - 2);
+    let kept =
+        newest_that_fit(&encoded[1..], max_bytes.saturating_sub(fixed)).min(messages.len() - 2);
     if kept > 0 {
         let marker = elided(messages.len() - 1 - kept);
         let tail = &encoded[encoded.len() - kept..];
-        return array(std::iter::once(encoded[0].as_str()).chain([marker.as_str()]).chain(tail.iter().map(String::as_str)));
+        return array(
+            std::iter::once(encoded[0].as_str())
+                .chain([marker.as_str()])
+                .chain(tail.iter().map(String::as_str)),
+        );
     }
     let half = max_bytes.saturating_sub(marker_bytes + 4) / 2;
     let first = shrunk(&messages[0], half);
@@ -158,22 +163,31 @@ mod tests {
 
     #[rstest]
     fn long_history_drops_middle_messages_and_counts_them() {
-        let history = (0..12).map(|turn| json!({"role": "user", "content": format!("turn {turn} {}", "x".repeat(60))}));
-        let messages: Vec<Value> = std::iter::once(json!({"role": "system", "content": "be brief"}))
-            .chain(history)
-            .collect();
+        let history = (0..12).map(
+            |turn| json!({"role": "user", "content": format!("turn {turn} {}", "x".repeat(60))}),
+        );
+        let messages: Vec<Value> =
+            std::iter::once(json!({"role": "system", "content": "be brief"}))
+                .chain(history)
+                .collect();
+        let original_count = messages.len();
         let output = truncate_messages(Value::Array(messages).to_string(), 400);
         let kept = parsed(&output);
         assert!(output.len() <= 400);
         assert_eq!(kept[0]["content"], "be brief");
-        assert!(kept.last().unwrap()["content"].as_str().unwrap().starts_with("turn 11 "));
+        assert!(
+            kept.last().unwrap()["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("turn 11 ")
+        );
         let elided: usize = kept[1]["content"].as_str().unwrap()["…[".len()..]
             .split_whitespace()
             .next()
             .unwrap()
             .parse()
             .unwrap();
-        assert_eq!(elided + kept.len() - 2, 13);
+        assert_eq!(elided + kept.len() - 1, original_count);
     }
 
     #[rstest]
@@ -197,7 +211,10 @@ mod tests {
         let kept = parsed(&output);
         assert!(output.len() <= 400);
         assert_eq!(kept[0]["role"], messages[0]["role"]);
-        assert_eq!(kept.last().unwrap()["role"], messages.as_array().unwrap().last().unwrap()["role"]);
+        assert_eq!(
+            kept.last().unwrap()["role"],
+            messages.as_array().unwrap().last().unwrap()["role"]
+        );
         assert!(kept.iter().all(|message| message["content"].is_string()));
     }
 
@@ -211,7 +228,9 @@ mod tests {
         let kept = parsed(&output);
         assert!(output.len() <= 400);
         assert_eq!(
-            kept.iter().map(|message| message["role"].as_str().unwrap()).collect::<Vec<_>>(),
+            kept.iter()
+                .map(|message| message["role"].as_str().unwrap())
+                .collect::<Vec<_>>(),
             ["assistant", "user"]
         );
         assert!(kept[0]["content"].as_str().unwrap().starts_with('x'));

@@ -3,9 +3,7 @@ use litellm_traces::{AgentType, Integration, ObservationType, Shared};
 use opentelemetry_proto::tonic::trace::v1::Span;
 use rstest::rstest;
 
-const FIXTURE: &[u8] = include_bytes!(
-    "fixtures/langsmith_deep_agent_export.json"
-);
+const FIXTURE: &[u8] = include_bytes!("fixtures/langsmith_deep_agent_export.json");
 
 #[rstest]
 #[case::root(include_bytes!("fixtures/query_root.json"), ObservationType::Agent, 0, 0)]
@@ -971,11 +969,9 @@ fn langsmith_tool_output_unwraps_supported_shapes(
     assert_eq!(decoded.normalized.output, expected);
 }
 
-const CLAUDE_AGENT_SDK_FIXTURE: &[u8] =
-    include_bytes!("fixtures/claude_agent_sdk_export.json");
-const CLAUDE_AGENT_SDK_DETAILED_FIXTURE: &[u8] = include_bytes!(
-    "fixtures/claude_agent_sdk_detailed_export.json"
-);
+const CLAUDE_AGENT_SDK_FIXTURE: &[u8] = include_bytes!("fixtures/claude_agent_sdk_export.json");
+const CLAUDE_AGENT_SDK_DETAILED_FIXTURE: &[u8] =
+    include_bytes!("fixtures/claude_agent_sdk_detailed_export.json");
 
 fn raw_spans(fixture: &[u8]) -> Vec<serde_json::Value> {
     let export: serde_json::Value = serde_json::from_slice(fixture).expect("fixture JSON");

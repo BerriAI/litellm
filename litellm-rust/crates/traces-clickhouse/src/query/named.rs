@@ -84,7 +84,10 @@ struct TraceSpansRowEncoding {
     pub span_id: String,
     pub parent_span_id: String,
     pub name: String,
-    #[serde(rename = "type")]
+    #[serde(
+        rename = "type",
+        deserialize_with = "litellm_traces::deserialize_span_type"
+    )]
     pub kind: String,
     #[serde(default, deserialize_with = "super::number::deserialize")]
     pub wrapper_candidate: u8,

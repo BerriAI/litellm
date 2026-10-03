@@ -182,8 +182,9 @@ impl NativeTraceStorage {
             py,
             async move {
                 let rows = tokio::task::spawn_blocking(move || {
-                    litellm_traces::decode_otlp(&payload, content_type.as_deref())
-                        .map(|spans| litellm_traces_clickhouse::span_rows(spans, &tenant, max_value_bytes))
+                    litellm_traces::decode_otlp(&payload, content_type.as_deref()).map(|spans| {
+                        litellm_traces_clickhouse::span_rows(spans, &tenant, max_value_bytes)
+                    })
                 })
                 .await
                 .map_err(|_| Error::Task)??;
@@ -244,8 +245,14 @@ impl NativeTraceStorage {
         crate::execution::run_async(
             py,
             async move {
-                litellm_traces_clickhouse::get_trace(&client, &connection, &scope, &trace_id, &trace_ref)
-                    .await
+                litellm_traces_clickhouse::get_trace(
+                    &client,
+                    &connection,
+                    &scope,
+                    &trace_id,
+                    &trace_ref,
+                )
+                .await
             },
             map_error,
         )
@@ -464,7 +471,10 @@ mod tests {
     ) {
         Python::initialize();
         Python::attach(|py| {
-            assert_eq!(map_error(error).get_type(py).name().unwrap(), exception_name);
+            assert_eq!(
+                map_error(error).get_type(py).name().unwrap(),
+                exception_name
+            );
         });
     }
 }

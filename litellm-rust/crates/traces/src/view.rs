@@ -2,11 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
-
 use crate::ui::UiContent;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SpanStatus {
     Ok,
@@ -24,12 +23,14 @@ impl SpanStatus {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 pub struct Span {
     pub span_id: String,
     pub parent_span_id: Option<String>,
     pub name: String,
     #[serde(rename = "type")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::ObservationType"))]
     pub kind: String,
     pub agent: String,
     pub framework: String,
@@ -47,7 +48,8 @@ pub struct Span {
 }
 
 /// One distinct agent in a trace: 200 invocations of `researcher` are one node.
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 pub struct AgentNode {
     pub name: String,
     pub parent_agent: Option<String>,
@@ -58,13 +60,17 @@ pub struct AgentNode {
     pub spend: Option<f64>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 pub struct TraceSummary {
     pub trace_id: String,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub trace_ref: String,
     pub name: String,
     pub service: String,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub agent_names: Vec<String>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub frameworks: Vec<String>,
     pub input_preview: String,
     pub start_time: String,
@@ -82,20 +88,23 @@ pub struct TraceSummary {
     pub spend: Option<f64>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 pub struct Trace {
     pub summary: TraceSummary,
     pub agents: Vec<AgentNode>,
     pub spans: Vec<Span>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 pub struct TracePage {
     pub data: Vec<TraceSummary>,
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 pub struct SpanDetail {
     pub span_id: String,
     pub input_ui: UiContent,
@@ -105,7 +114,8 @@ pub struct SpanDetail {
     pub attributes: BTreeMap<String, String>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 pub struct SpanErrorPage {
     pub span_id: String,
     pub message: String,

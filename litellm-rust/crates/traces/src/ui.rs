@@ -1,22 +1,39 @@
 //! The LiteLLM UI content format: span input / output reduced to messages, key/value fields or
 //! plain text.
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::normalize::{HIDDEN_BLOCK_TYPES, encode};
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", schemars(rename = "UIContent"))]
 pub enum UiContent {
+    #[cfg_attr(feature = "schema", schemars(title = "UIMessages"))]
     Messages { messages: Vec<UiMessage> },
+    #[cfg_attr(feature = "schema", schemars(title = "UIFields"))]
     Fields { fields: Vec<UiField> },
+    #[cfg_attr(feature = "schema", schemars(title = "UIText"))]
     Text { text: String },
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "schema", schemars(rename = "UIMessage"))]
 pub struct UiMessage {
-    pub role: &'static str,
+    pub role: ChatRole,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -24,13 +41,17 @@ pub struct UiMessage {
     pub tool_calls: Option<Vec<UiToolCall>>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "schema", schemars(rename = "UIToolCall"))]
 pub struct UiToolCall {
     pub name: String,
     pub arguments: String,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Debug, PartialEq)]
+#[cfg_attr(feature = "schema", schemars(rename = "UIField"))]
 pub struct UiField {
     pub key: String,
     pub value: String,
@@ -75,12 +96,12 @@ fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, 
     Value::deserialize(deserializer).map(Some)
 }
 
-fn known_role(role: &str) -> Option<&'static str> {
+fn known_role(role: &str) -> Option<ChatRole> {
     match role {
-        "human" | "user" => Some("user"),
-        "ai" | "assistant" => Some("assistant"),
-        "system" => Some("system"),
-        "tool" => Some("tool"),
+        "human" | "user" => Some(ChatRole::User),
+        "ai" | "assistant" => Some(ChatRole::Assistant),
+        "system" => Some(ChatRole::System),
+        "tool" => Some(ChatRole::Tool),
         _ => None,
     }
 }
@@ -94,9 +115,13 @@ impl RawMessage {
     }
 
     fn is_message(&self) -> bool {
-        let has_role =
-            self.role.is_some() || self.kind.as_deref().and_then(known_role).is_some();
-        has_role && (self.content.is_some() || self.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty()))
+        let has_role = self.role.is_some() || self.kind.as_deref().and_then(known_role).is_some();
+        has_role
+            && (self.content.is_some()
+                || self
+                    .tool_calls
+                    .as_ref()
+                    .is_some_and(|calls| !calls.is_empty()))
     }
 
     fn into_ui(self) -> UiMessage {
@@ -112,7 +137,11 @@ impl RawMessage {
             .filter(|role| !role.is_empty())
             .or(self.kind.as_deref())
             .unwrap_or_default();
-        let role = known_role(label).unwrap_or(if calls.is_empty() { "user" } else { "assistant" });
+        let role = known_role(label).unwrap_or(if calls.is_empty() {
+            ChatRole::User
+        } else {
+            ChatRole::Assistant
+        });
         UiMessage {
             role,
             content: content_text(self.content),
@@ -126,7 +155,11 @@ impl RawToolCall {
     fn into_ui(self) -> UiToolCall {
         match self.function {
             Some(function) => UiToolCall {
-                name: if function.name.is_empty() { self.name } else { function.name },
+                name: if function.name.is_empty() {
+                    self.name
+                } else {
+                    function.name
+                },
                 arguments: arguments_text(function.arguments),
             },
             None => UiToolCall {
@@ -180,7 +213,9 @@ fn messages(parsed: &Value) -> Option<Vec<UiMessage>> {
 }
 
 pub fn to_ui_content(raw: &str) -> UiContent {
-    let text = || UiContent::Text { text: raw.to_owned() };
+    let text = || UiContent::Text {
+        text: raw.to_owned(),
+    };
     if raw.is_empty() {
         return text();
     }
@@ -218,7 +253,7 @@ mod tests {
 
     fn message(role: &'static str, content: &str) -> UiMessage {
         UiMessage {
-            role,
+            role: known_role(role).unwrap(),
             content: content.to_owned(),
             name: None,
             tool_calls: None,
@@ -246,7 +281,10 @@ mod tests {
                 messages: vec![
                     message("system", "be brief"),
                     message("user", "hi"),
-                    UiMessage { name: Some("lookup".into()), ..message("tool", "42") },
+                    UiMessage {
+                        name: Some("lookup".into()),
+                        ..message("tool", "42")
+                    },
                     message("user", "aside"),
                 ]
             }
@@ -272,7 +310,8 @@ mod tests {
 
     #[rstest]
     fn unknown_role_with_tool_calls_is_the_assistant() {
-        let raw = json!({"role": "model", "content": "", "tool_calls": [{"name": "f", "args": null}]});
+        let raw =
+            json!({"role": "model", "content": "", "tool_calls": [{"name": "f", "args": null}]});
         assert_eq!(
             to_ui_content(&raw.to_string()),
             UiContent::Messages {
@@ -292,7 +331,9 @@ mod tests {
         let raw = json!({"role": "assistant", "content": content});
         assert_eq!(
             to_ui_content(&raw.to_string()),
-            UiContent::Messages { messages: vec![message("assistant", expected)] }
+            UiContent::Messages {
+                messages: vec![message("assistant", expected)]
+            }
         );
     }
 
@@ -319,7 +360,10 @@ mod tests {
     #[rstest]
     fn plain_objects_become_fields_in_key_order() {
         let raw = r#"{"zeta": "plain", "alpha": {"nested": [1, 2]}, "count": 3, "missing": null}"#;
-        let field = |key: &str, value: &str| UiField { key: key.into(), value: value.into() };
+        let field = |key: &str, value: &str| UiField {
+            key: key.into(),
+            value: value.into(),
+        };
         assert_eq!(
             to_ui_content(raw),
             UiContent::Fields {
@@ -342,13 +386,21 @@ mod tests {
 
     #[rstest]
     #[case::json_string(r#""line one\n\"quoted\"""#, "line one\n\"quoted\"")]
-    #[case::cut_json(r#"[{"role": "user", "content": "cut of"#, r#"[{"role": "user", "content": "cut of"#)]
+    #[case::cut_json(
+        r#"[{"role": "user", "content": "cut of"#,
+        r#"[{"role": "user", "content": "cut of"#
+    )]
     #[case::plain_words("plain words", "plain words")]
     #[case::number("42", "42")]
     #[case::non_message_list("[1, 2]", "[1, 2]")]
     #[case::empty_list("[]", "[]")]
     #[case::empty("", "")]
     fn other_payloads_are_text(#[case] raw: &str, #[case] expected: &str) {
-        assert_eq!(to_ui_content(raw), UiContent::Text { text: expected.to_owned() });
+        assert_eq!(
+            to_ui_content(raw),
+            UiContent::Text {
+                text: expected.to_owned()
+            }
+        );
     }
 }

@@ -1,3 +1,15 @@
+macro_rules_attribute::attribute_alias! {
+    #[apply(wire_type)] =
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(response_type)] =
+        #[derive(serde::Serialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(request_type)] =
+        #[derive(serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+}
+
 mod config;
 mod error;
 mod insert;
@@ -8,6 +20,8 @@ mod schema;
 mod span_row;
 mod sql;
 mod table;
+#[cfg(feature = "schema")]
+pub mod wire_schema;
 
 pub use config::Config;
 pub use error::Error;

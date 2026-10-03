@@ -1,14 +1,29 @@
+macro_rules_attribute::attribute_alias! {
+    #[apply(wire_type)] =
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(response_type)] =
+        #[derive(serde::Serialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(request_type)] =
+        #[derive(serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+}
+
 mod error;
 mod normalize;
 mod otlp;
 pub mod query;
 mod query_access;
 mod resolve;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod shared;
 mod tenant;
 mod truncate;
 mod ui;
 mod view;
+mod wire;
 
 pub use error::{Error, InvalidQuery, InvalidScope};
 pub use normalize::{AgentMetadata, AgentType, Integration, NormalizedSpan, ObservationType};
@@ -19,5 +34,9 @@ pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};
 pub use shared::{Shared, SharedIdentity};
 pub use tenant::Tenant;
 pub use truncate::{truncate_messages, truncate_value};
-pub use ui::{UiContent, UiField, UiMessage, UiToolCall, to_ui_content};
-pub use view::{AgentNode, Span, SpanDetail, SpanErrorPage, SpanStatus, Trace, TracePage, TraceSummary};
+pub use ui::{ChatRole, UiContent, UiField, UiMessage, UiToolCall, to_ui_content};
+pub use view::{
+    AgentNode, Span, SpanDetail, SpanErrorPage, SpanStatus, Trace, TracePage, TraceSummary,
+};
+
+pub use wire::span_type as deserialize_span_type;

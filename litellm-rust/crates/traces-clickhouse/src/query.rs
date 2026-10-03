@@ -39,21 +39,24 @@ struct MetadataRow {
     metadata: String,
 }
 
-#[derive(Deserialize)]
+#[macro_rules_attribute::apply(request_type)]
 struct AttributeRow {
     key: String,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(untagged)]
 enum PathPart {
     Key(String),
     Index(usize),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, strum::Display)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, strum::Display)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
+#[cfg_attr(feature = "schema", schemars(rename = "MetadataValueType"))]
 enum JsonKind {
     Array,
     Boolean,
@@ -78,19 +81,23 @@ impl JsonKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, strum::Display)]
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Copy, Debug, strum::Display)]
 enum MapValueType {
     String,
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryMetadataField"))]
 struct MetadataField {
     path: Vec<PathPart>,
     types: BTreeSet<JsonKind>,
     expression: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryColumn"))]
 struct ColumnSchema {
     name: String,
     #[serde(rename = "type")]
@@ -99,7 +106,9 @@ struct ColumnSchema {
     details: BTreeMap<String, Value>,
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryTable"))]
 struct TableSchema {
     name: TraceTable,
     columns: Vec<ColumnSchema>,
@@ -112,6 +121,38 @@ trait Unobserved {
 enum Discovery<T> {
     Observed(T),
     Unavailable(String),
+}
+
+#[cfg(feature = "schema")]
+impl<T: schemars::JsonSchema> schemars::JsonSchema for Discovery<T> {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        format!("Discovery{}", T::schema_name()).into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = T::json_schema(generator);
+        schema
+            .as_object_mut()
+            .unwrap()
+            .get_mut("properties")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "error".into(),
+                serde_json::json!({"type": ["string", "null"], "default": null}),
+            );
+        schema
+    }
+}
+
+#[cfg(feature = "schema")]
+pub(crate) fn help_schema() -> schemars::Schema {
+    schemars::generate::SchemaSettings::draft2020_12()
+        .for_serialize()
+        .with_transform(litellm_traces::schema::integer_bounds)
+        .into_generator()
+        .into_root_schema_for::<QueryHelp>()
 }
 
 impl<T: Serialize + Unobserved> Serialize for Discovery<T> {
@@ -133,7 +174,7 @@ impl<T: Serialize + Unobserved> Serialize for Discovery<T> {
     }
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
 struct MetadataSample {
     fields: Vec<MetadataField>,
     sampled_rows: usize,
@@ -152,7 +193,9 @@ impl Unobserved for MetadataSample {
     }
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryMetadata"))]
 struct MetadataCatalog {
     table: TraceTable,
     column: &'static str,
@@ -162,7 +205,9 @@ struct MetadataCatalog {
     scope: &'static str,
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryAttributeField"))]
 struct AttributeField {
     key: String,
     #[serde(rename = "type")]
@@ -170,7 +215,7 @@ struct AttributeField {
     expression: String,
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
 struct AttributeSample {
     fields: Vec<AttributeField>,
     truncated: bool,
@@ -185,7 +230,9 @@ impl Unobserved for AttributeSample {
     }
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryAttributes"))]
 struct AttributeCatalog {
     table: TraceTable,
     column: &'static str,
@@ -195,7 +242,9 @@ struct AttributeCatalog {
     scope: &'static str,
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryNormalizedField"))]
 struct NormalizedField {
     table: TraceTable,
     name: &'static str,
@@ -217,7 +266,9 @@ impl From<&NormalizedFieldDefinition> for NormalizedField {
     }
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryRelationship"))]
 struct Relationship {
     left: &'static str,
     right: &'static str,
@@ -232,7 +283,9 @@ const RELATIONSHIPS: [Relationship; 1] = [Relationship {
     meaning: "The normalized ID is the response ID, not request_id. Cached requests can share response_id; joins may return multiple spend rows",
 }];
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryHelp"))]
 pub struct QueryHelp {
     dialect: &'static str,
     access: &'static str,
@@ -242,7 +295,9 @@ pub struct QueryHelp {
     metadata: MetadataCatalog,
     attributes: Vec<AttributeCatalog>,
     relationships: &'static [Relationship],
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<guide::Example>"))]
     examples: [guide::Example; 5],
+    #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     gotchas: [String; 11],
     guide: String,
 }
@@ -446,6 +501,33 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use serde_json::json;
+
+    #[cfg(feature = "schema")]
+    #[rstest]
+    #[case::observed(false)]
+    #[case::unavailable(true)]
+    fn discovery_serialization_matches_its_schema(#[case] unavailable: bool) {
+        let discovery = if unavailable {
+            Discovery::Unavailable("discovery failed".into())
+        } else {
+            Discovery::Observed(MetadataSample::unobserved())
+        };
+        let catalog = MetadataCatalog {
+            table: TraceTable::SpendLogs,
+            column: "metadata",
+            discovery,
+            sample_sql: METADATA_SQL,
+            scope: METADATA_SCOPE,
+        };
+        let schema = schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<MetadataCatalog>();
+        let serialized = serde_json::to_value(&catalog).unwrap();
+        assert!(jsonschema::is_valid(schema.as_value(), &serialized));
+        assert_eq!(serialized.get("error").is_some(), unavailable);
+        assert!(serialized["fields"].is_array());
+    }
 
     #[rstest]
     fn metadata_discovery_preserves_mixed_types_and_reports_invalid_rows() {

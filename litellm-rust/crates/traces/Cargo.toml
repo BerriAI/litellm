@@ -5,7 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
+macro_rules_attribute.workspace = true
+schemars = { workspace = true, optional = true }
 indexmap = { version = "2", features = ["serde"] }
 litellm-llms-types.workspace = true
 opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
@@ -23,3 +28,8 @@ rstest.workspace = true
 [[bench]]
 name = "resource-fanout"
 harness = false
+
+[[bin]]
+name = "export-traces-schema"
+path = "src/bin/export_schema.rs"
+required-features = ["schema"]

@@ -1,5 +1,4 @@
 use askama::Template;
-use serde::Serialize;
 
 use super::{AttributeCatalog, Discovery, MetadataCatalog, TableSchema};
 use crate::{Error, NormalizedFieldDefinition, query_access::ReaderLimits};
@@ -36,7 +35,8 @@ pub(super) struct QueryGuide<'a> {
     pub limits: &'a ReaderLimits,
 }
 
-#[derive(Serialize)]
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryExample"))]
 pub(super) struct Example {
     name: String,
     sql: String,

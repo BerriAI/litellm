@@ -1,11 +1,12 @@
-use serde::{Deserialize, Serialize};
-
 use crate::InvalidScope;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Clone, Debug)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryScope {
+    #[cfg_attr(feature = "schema", schemars(title = "AllQueryScope"))]
     All,
+    #[cfg_attr(feature = "schema", schemars(title = "OwnedQueryScope"))]
     Owned {
         user_id: String,
         team_ids: Vec<String>,

@@ -42,11 +42,17 @@ fn call_keys(row: &TraceSpansRow) -> Vec<CallKey<'_>> {
     if row.call_keys.is_empty() && !row.litellm_request_id.is_empty() {
         return vec![CallKey::ProviderResponse(&row.litellm_request_id)];
     }
-    row.call_keys.iter().map(|key| CallKey::parse(key)).collect()
+    row.call_keys
+        .iter()
+        .map(|key| CallKey::parse(key))
+        .collect()
 }
 
 fn call_evidence(row: &TraceSpansRow) -> &str {
-    match (row.call_evidence.as_str(), row.litellm_request_id.is_empty()) {
+    match (
+        row.call_evidence.as_str(),
+        row.litellm_request_id.is_empty(),
+    ) {
         ("", false) => "complete",
         ("", true) => "unknown",
         (recorded, _) => recorded,
@@ -125,11 +131,16 @@ impl<'a> Graph<'a> {
             .collect();
         let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
         for (index, row) in rows.iter().enumerate() {
-            if row.parent_span_id != row.span_id && by_id.contains_key(row.parent_span_id.as_str()) {
+            if row.parent_span_id != row.span_id && by_id.contains_key(row.parent_span_id.as_str())
+            {
                 children.entry(&row.parent_span_id).or_default().push(index);
             }
         }
-        Self { rows, by_id, children }
+        Self {
+            rows,
+            by_id,
+            children,
+        }
     }
 
     fn id(&self, index: usize) -> &'a str {
@@ -161,7 +172,13 @@ impl<'a> Graph<'a> {
     }
 
     fn descendants(&self, index: usize) -> Vec<usize> {
-        let children = |index: usize| self.children.get(self.id(index)).into_iter().flatten().copied();
+        let children = |index: usize| {
+            self.children
+                .get(self.id(index))
+                .into_iter()
+                .flatten()
+                .copied()
+        };
         let mut seen = HashSet::from([self.id(index)]);
         let mut found = Vec::new();
         let mut stack: Vec<usize> = children(index).collect();
@@ -176,7 +193,11 @@ impl<'a> Graph<'a> {
 }
 
 fn agent_label(row: &TraceSpansRow) -> &str {
-    if row.agent.is_empty() { &row.name } else { &row.agent }
+    if row.agent.is_empty() {
+        &row.name
+    } else {
+        &row.agent
+    }
 }
 
 type Requests<'a> = Vec<&'a SpendRow>;
@@ -263,7 +284,10 @@ impl<'a> Resolution<'a> {
     /// Spend records the span's keys resolve to, and whether they are all of its requests.
     fn requests(&self, index: usize) -> (Requests<'a>, bool) {
         let row = self.row(index);
-        let resolved: Vec<_> = call_keys(row).iter().map(|key| self.matches(key, row)).collect();
+        let resolved: Vec<_> = call_keys(row)
+            .iter()
+            .map(|key| self.matches(key, row))
+            .collect();
         let complete = call_evidence(row) == "complete"
             && !resolved.is_empty()
             && resolved.iter().all(|matches| matches.len() == 1);
@@ -276,9 +300,14 @@ impl<'a> Resolution<'a> {
     fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == "llm"
-                && self.graph.descendants(*ancestor).into_iter().all(|descendant| {
-                    self.graph.id(descendant) == self.graph.id(call) || self.kind(descendant) != "llm"
-                })
+                && self
+                    .graph
+                    .descendants(*ancestor)
+                    .into_iter()
+                    .all(|descendant| {
+                        self.graph.id(descendant) == self.graph.id(call)
+                            || self.kind(descendant) != "llm"
+                    })
         });
         let transports: Vec<usize> = self
             .graph
@@ -294,11 +323,18 @@ impl<'a> Resolution<'a> {
         let mut known = false;
         for source in std::iter::once(call).chain(wrappers) {
             let (requests, complete) = self.requests(source);
-            found.extend(requests.into_iter().map(|spend| (spend.request_id.as_str(), spend)));
+            found.extend(
+                requests
+                    .into_iter()
+                    .map(|spend| (spend.request_id.as_str(), spend)),
+            );
             known |= complete;
         }
         if !transports.is_empty() {
-            let outcomes: Vec<_> = transports.into_iter().map(|transport| self.requests(transport)).collect();
+            let outcomes: Vec<_> = transports
+                .into_iter()
+                .map(|transport| self.requests(transport))
+                .collect();
             known = known || outcomes.iter().all(|(_, complete)| *complete);
             found.extend(
                 outcomes
@@ -315,7 +351,11 @@ impl<'a> Resolution<'a> {
         let mut by_call: IndexMap<&str, usize> = IndexMap::new();
         for index in (0..self.graph.rows.len()).filter(|index| self.kind(*index) == "tool") {
             let row = self.row(index);
-            let key = if row.tool_call_id.is_empty() { &row.span_id } else { &row.tool_call_id };
+            let key = if row.tool_call_id.is_empty() {
+                &row.span_id
+            } else {
+                &row.tool_call_id
+            };
             by_call.entry(key).or_insert(index);
         }
         by_call.into_values().collect()
@@ -348,7 +388,12 @@ fn total(calls: &[Option<Requests<'_>>]) -> Option<f64> {
     }
     let mut unique: IndexMap<&str, f64> = IndexMap::new();
     for requests in calls {
-        unique.extend(requests.as_ref()?.iter().map(|spend| (spend.request_id.as_str(), spend.spend)));
+        unique.extend(
+            requests
+                .as_ref()?
+                .iter()
+                .map(|spend| (spend.request_id.as_str(), spend.spend)),
+        );
     }
     Some(unique.values().sum())
 }
@@ -367,7 +412,8 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         kind: resolution.kind(index).to_owned(),
         agent: row.agent.clone(),
         framework: row.framework.clone(),
-        start_offset_ms: (i128::from(row.start_ns) - i128::from(trace_start_ns)) as f64 / NANOS_PER_MS,
+        start_offset_ms: (i128::from(row.start_ns) - i128::from(trace_start_ns)) as f64
+            / NANOS_PER_MS,
         duration_ms: row.duration_ns as f64 / NANOS_PER_MS,
         status: SpanStatus::from_code(&row.status),
         error: optional(&row.status_message),
@@ -386,12 +432,20 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
     let graph = &resolution.graph;
     let mut entries: IndexMap<&str, Vec<usize>> = IndexMap::new();
     for index in (0..graph.rows.len()).filter(|index| resolution.is_agent(*index)) {
-        entries.entry(agent_label(resolution.row(index))).or_default().push(index);
+        entries
+            .entry(agent_label(resolution.row(index)))
+            .or_default()
+            .push(index);
     }
     let explicit: HashSet<&str> = entries.keys().copied().collect();
     for (index, row) in graph.rows.iter().enumerate() {
-        let parent_agent = graph.parent(index).map(|parent| graph.rows[parent].agent.as_str());
-        if !row.agent.is_empty() && !explicit.contains(row.agent.as_str()) && parent_agent != Some(row.agent.as_str()) {
+        let parent_agent = graph
+            .parent(index)
+            .map(|parent| graph.rows[parent].agent.as_str());
+        if !row.agent.is_empty()
+            && !explicit.contains(row.agent.as_str())
+            && parent_agent != Some(row.agent.as_str())
+        {
             entries.entry(&row.agent).or_default().push(index);
         }
     }
@@ -418,8 +472,14 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                 parent_agent,
                 invocations: spans.len() as u64,
                 llm_calls: owned_calls.len() as u64,
-                tool_calls: tools.iter().filter(|tool| resolution.owner(**tool) == name).count() as u64,
-                duration_ms: spans.iter().map(|span| graph.rows[*span].duration_ns).sum::<u64>() as f64
+                tool_calls: tools
+                    .iter()
+                    .filter(|tool| resolution.owner(**tool) == name)
+                    .count() as u64,
+                duration_ms: spans
+                    .iter()
+                    .map(|span| graph.rows[*span].duration_ns)
+                    .sum::<u64>() as f64
                     / NANOS_PER_MS,
                 spend: total(&owned_calls),
             }
@@ -468,8 +528,12 @@ pub fn resolve_trace(
         .iter()
         .map(|row| i128::from(row.start_ns) + i128::from(row.duration_ns))
         .max()?;
-    let spans: Vec<Span> = (0..rows.len()).map(|index| span(&resolution, index, trace_start_ns)).collect();
-    let root = (0..rows.len()).find(|index| resolution.graph.is_root(*index)).unwrap_or_default();
+    let spans: Vec<Span> = (0..rows.len())
+        .map(|index| span(&resolution, index, trace_start_ns))
+        .collect();
+    let root = (0..rows.len())
+        .find(|index| resolution.graph.is_root(*index))
+        .unwrap_or_default();
     let agents = agents(&resolution);
     let calls = &resolution.model_calls;
     let counted: Vec<&TraceSpansRow> = if calls.is_empty() {
@@ -481,7 +545,9 @@ pub fn resolve_trace(
         .iter()
         .zip(rows)
         .enumerate()
-        .filter(|(_, (span, _))| !span.input_preview.is_empty() && matches!(span.kind.as_str(), "agent" | "llm"))
+        .filter(|(_, (span, _))| {
+            !span.input_preview.is_empty() && matches!(span.kind.as_str(), "agent" | "llm")
+        })
         .min_by_key(|(index, (_, row))| (row.start_ns, *index))
         .map(|(_, (span, _))| span.input_preview.clone())
         .unwrap_or_default();
@@ -490,7 +556,12 @@ pub fn resolve_trace(
         trace_ref: trace_ref.to_owned(),
         name: spans[root].name.clone(),
         service: first.service.clone(),
-        agent_names: agents.iter().map(|agent| agent.name.clone()).collect::<BTreeSet<_>>().into_iter().collect(),
+        agent_names: agents
+            .iter()
+            .map(|agent| agent.name.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
         frameworks: sorted_unique(spans.iter().map(|span| span.framework.as_str())),
         input_preview: optional(&spans[root].input_preview).unwrap_or(first_input),
         start_time: iso_time(trace_start_ns.div_euclid(1_000_000)),
@@ -501,14 +572,26 @@ pub fn resolve_trace(
         agent_invocations: agents.iter().map(|agent| agent.invocations).sum(),
         llm_calls: calls.len() as u64,
         tool_calls: resolution.unique_tools().len() as u64,
-        error_count: spans.iter().filter(|span| span.status == SpanStatus::Error).count() as u64,
+        error_count: spans
+            .iter()
+            .filter(|span| span.status == SpanStatus::Error)
+            .count() as u64,
         // Agent spans repeat their calls' usage, so totals count model calls when there are any.
         input_tokens: counted.iter().map(|row| u64::from(row.input_tokens)).sum(),
         output_tokens: counted.iter().map(|row| u64::from(row.output_tokens)).sum(),
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),
-        spend: total(&calls.iter().map(|call| resolution.call_requests(*call)).collect::<Vec<_>>()),
+        spend: total(
+            &calls
+                .iter()
+                .map(|call| resolution.call_requests(*call))
+                .collect::<Vec<_>>(),
+        ),
     };
-    Some(Trace { summary, agents, spans })
+    Some(Trace {
+        summary,
+        agents,
+        spans,
+    })
 }
 
 /// A listed trace whose spans could not be read: rollup counts only, cost unknown.
@@ -526,7 +609,11 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         status: SpanStatus::from_code(&row.status),
         span_count: row.span_count,
         agent_count: row.agent_count,
-        agent_invocations: if row.agent_invocations == 0 { row.agent_count } else { row.agent_invocations },
+        agent_invocations: if row.agent_invocations == 0 {
+            row.agent_count
+        } else {
+            row.agent_invocations
+        },
         llm_calls: row.llm_calls,
         tool_calls: row.tool_calls,
         error_count: row.error_count,
