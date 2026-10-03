@@ -63,6 +63,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    KUBERNETES_POD_ROUTING_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -4027,6 +4028,7 @@ class Router:
                 "model_info": model_info,
                 "api_base": deployment_api_base,
                 "deployment_model_name": deployment_model_name,
+                KUBERNETES_POD_ROUTING_KEY: deployment.get(KUBERNETES_POD_ROUTING_KEY),
             }
         )
 

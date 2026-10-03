@@ -11,12 +11,13 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.types.utils import ModelResponseStream
+    from litellm.types.utils import ModelResponseStream, StandardLoggingKubernetesPodRouting
 
     Span = _Span | Any
 else:
@@ -344,6 +345,52 @@ def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapp
     if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
         return litellm_metadata["used_client_oauth_token"]
     return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
+def proxy_stamped_kubernetes_pod_routing(
+    metadata: object,
+    litellm_params: Mapping[str, object] | None,
+) -> "StandardLoggingKubernetesPodRouting | None":
+    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
+    litellm_routing: Final = _standard_logging_kubernetes_pod_routing(litellm_metadata)
+    if litellm_routing is not None:
+        return litellm_routing
+    return _standard_logging_kubernetes_pod_routing(metadata)
+
+
+def _standard_logging_kubernetes_pod_routing(
+    metadata: object,
+) -> "StandardLoggingKubernetesPodRouting | None":
+    if not isinstance(metadata, Mapping):
+        return None
+    metadata_mapping: Final[Mapping[str, object]] = metadata
+    routing: Final = metadata_mapping.get(KUBERNETES_POD_ROUTING_KEY)
+    if not isinstance(routing, Mapping):
+        return None
+    routing_mapping: Final[Mapping[str, object]] = routing
+    service_host: Final = routing_mapping.get("service_host")
+    pod_ip: Final = routing_mapping.get("pod_ip")
+    pod_count: Final = routing_mapping.get("pod_count")
+    selection: Final = routing_mapping.get("selection")
+    if (
+        not isinstance(service_host, str)
+        or not isinstance(pod_ip, str)
+        or not isinstance(pod_count, int)
+        or isinstance(pod_count, bool)
+        or pod_count < 1
+    ):
+        return None
+    match selection:
+        case "round_robin" | "session_affinity" | "session_affinity_retry":
+            routing_record: Final[StandardLoggingKubernetesPodRouting] = {
+                "service_host": service_host,
+                "pod_ip": pod_ip,
+                "pod_count": pod_count,
+                "selection": selection,
+            }
+            return routing_record
+        case _:
+            return None
 
 
 def get_litellm_metadata_from_kwargs(kwargs: dict):

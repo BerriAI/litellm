@@ -431,6 +431,37 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("Configured key")).not.toBeInTheDocument();
   });
 
+  it.each([
+    { selection: "round_robin", label: "Round robin" },
+    { selection: "session_affinity", label: "Session affinity" },
+    { selection: "session_affinity_retry", label: "Session affinity (retry)" },
+  ] as const)("shows the selected Kubernetes pod and routing mode", ({ selection, label }) => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          metadata: {
+            status: "success",
+            kubernetes_pod_routing: {
+              service_host: "vllm-headless.ns.svc.cluster.local",
+              pod_ip: "10.0.0.2",
+              pod_count: 3,
+              selection,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Pod")).toBeInTheDocument();
+    expect(screen.getByText(`10.0.0.2 · ${label} · 3 pods`)).toBeInTheDocument();
+  });
+
+  it("omits the Pod row when routing metadata is absent", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ metadata: { status: "success" } })} />);
+
+    expect(screen.queryByText("Pod")).not.toBeInTheDocument();
+  });
+
   it("should display guardrail label when guardrail data exists", () => {
     render(
       <LogDetailContent
