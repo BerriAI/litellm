@@ -2449,22 +2449,22 @@ def _complete_aiohttp_openai(
 
 
 def _complete_clinepass(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
-    acompletion = ctx.acompletion
+    acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client = ctx.client
-    custom_llm_provider = ctx.custom_llm_provider
-    headers = ctx.headers
-    litellm_params = ctx.litellm_params
-    logging = ctx.logging
-    messages = ctx.messages
-    model = ctx.model
-    model_response = ctx.model_response
-    optional_params = ctx.optional_params
-    provider_config = ctx.provider_config
-    shared_session = ctx.shared_session
-    stream = ctx.stream
-    timeout = ctx.timeout
+    client: Final = _dispatch_client_http(ctx)
+    custom_llm_provider: Final = ctx.custom_llm_provider
+    headers: Final = ctx.headers
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    provider_config: Final = ctx.provider_config
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
 
     api_key = api_key or get_secret_str("CLINEPASS_API_KEY") or litellm.api_key
 
@@ -2473,7 +2473,7 @@ def _complete_clinepass(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
     ## COMPLETION CALL
-    response = base_llm_http_handler.completion(
+    response: Final = base_llm_http_handler.completion(
         model=model,
         messages=messages,
         headers=headers,
@@ -2492,9 +2492,6 @@ def _complete_clinepass(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
         stream=stream,
         provider_config=provider_config,
     )
-
-    ## LOGGING
-    logging.post_call(input=messages, api_key=api_key, original_response=response)
 
     return response
 

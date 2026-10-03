@@ -15,7 +15,7 @@ Documentation: https://docs.cline.bot/
 """
 
 import json
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Final
 
 import httpx
 
@@ -27,10 +27,10 @@ from litellm.types.utils import ModelResponse
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import ClinePassException
 
-CLINEPASS_API_BASE = "https://api.cline.bot/api/v1"
+CLINEPASS_API_BASE: Final = "https://api.cline.bot/api/v1"
 
 # ClinePass nests the completion under this key on non-streaming responses.
-CLINEPASS_RESPONSE_ENVELOPE_KEY = "data"
+CLINEPASS_RESPONSE_ENVELOPE_KEY: Final = "data"
 
 # The qualifier ClinePass expects on outbound model ids.
 #
@@ -42,14 +42,14 @@ CLINEPASS_RESPONSE_ENVELOPE_KEY = "data"
 # model an unrecognised namespace resolves to a different, date-pinned snapshot
 # (``cline-pass/deepseek-v4-flash`` -> ``deepseek/deepseek-v4-flash``, while
 # ``clinepass/deepseek-v4-flash`` -> ``deepseek/deepseek-v4-flash-0731``).
-CLINEPASS_MODEL_PREFIX = "cline-pass/"
+CLINEPASS_MODEL_PREFIX: Final = "cline-pass/"
 
 # Headers that describe the original byte stream and would be wrong once the
 # body is rewritten by _unwrap_response_envelope().
-_BODY_SPECIFIC_HEADERS = ("content-length", "content-encoding")
+_BODY_SPECIFIC_HEADERS: Final = ("content-length", "content-encoding")
 
 
-def _as_positive_number(value: Any) -> Optional[float]:
+def _as_positive_number(value: Any) -> float | None:
     """Return ``value`` as a positive number, or ``None`` if it is not one.
 
     ``bool`` is rejected explicitly: it is a subclass of ``int``, and ``True``
@@ -100,8 +100,6 @@ def _correct_truncated_finish_reason(response: ModelResponse, request_data: dict
 
     max_tokens = _as_positive_number(request_data.get("max_tokens"))
     if max_tokens is None:
-        max_tokens = _as_positive_number(request_data.get("max_completion_tokens"))
-    if max_tokens is None:
         return response
 
     usage = getattr(response, "usage", None)
@@ -128,9 +126,8 @@ def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
     """
     try:
         payload = raw_response.json()
-    except (ValueError, httpx.StreamError):
-        # Not a JSON body, or a streaming response that has not been read --
-        # either way there is no envelope to strip.
+    except ValueError:
+        # Not a JSON body -- there is no envelope to strip.
         return raw_response
 
     if not isinstance(payload, dict) or "choices" in payload:
@@ -153,7 +150,7 @@ def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
     return httpx.Response(
         status_code=raw_response.status_code,
         headers=headers,
-        content=json.dumps(inner).encode("utf-8"),
+        content=json.dumps(inner, ensure_ascii=False).encode("utf-8"),
         request=original_request,
     )
 
@@ -180,7 +177,7 @@ class ClinePassConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
-    ) -> Tuple[str | None, str | None]:
+    ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("CLINEPASS_API_BASE") or CLINEPASS_API_BASE
         dynamic_api_key = api_key or get_secret_str("CLINEPASS_API_KEY")
         return api_base, dynamic_api_key
@@ -203,7 +200,7 @@ class ClinePassConfig(OpenAIGPTConfig):
 
         return f"{api_base}/chat/completions"
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """ClinePass exposes no model catalog.
 
         ``GET https://api.cline.bot/api/v1/models`` returns HTTP 404, and the
@@ -235,7 +232,7 @@ class ClinePassConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -259,7 +256,7 @@ class ClinePassConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         logging_obj: Any,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
@@ -282,7 +279,7 @@ class ClinePassConfig(OpenAIGPTConfig):
         return _correct_truncated_finish_reason(response, request_data)
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers
     ) -> BaseLLMException:
         return ClinePassException(
             message=error_message,
