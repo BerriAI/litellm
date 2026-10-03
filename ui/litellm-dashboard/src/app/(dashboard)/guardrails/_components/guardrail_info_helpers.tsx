@@ -272,3 +272,86 @@ export function choiceToSkipToolForCreate(choice: SkipToolMessageChoice | undefi
   if (choice === "no") return false;
   return undefined;
 }
+
+export const GUARDRAIL_STREAM_SCOPES = ["both", "streaming", "non_streaming"] as const;
+export type GuardrailStreamScope = (typeof GUARDRAIL_STREAM_SCOPES)[number];
+
+export const STREAM_SCOPE_OPTIONS: { value: GuardrailStreamScope; label: string }[] = [
+  { value: "both", label: "Streaming and non-streaming" },
+  { value: "streaming", label: "Streaming only" },
+  { value: "non_streaming", label: "Non-streaming only" },
+];
+
+export const isGuardrailStreamScope = (value: unknown): value is GuardrailStreamScope =>
+  value === "both" || value === "streaming" || value === "non_streaming";
+
+export const streamScopeForMode = (raw: unknown, mode: string): GuardrailStreamScope => {
+  if (isGuardrailStreamScope(raw)) return raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const value = (raw as Record<string, unknown>)[mode];
+    if (isGuardrailStreamScope(value)) return value;
+  }
+  return "both";
+};
+
+export const streamScopeByModeFromConfig = (raw: unknown, modes: string[]): Record<string, GuardrailStreamScope> =>
+  Object.fromEntries(modes.map((mode) => [mode, streamScopeForMode(raw, mode)]));
+
+export const streamScopePayload = (
+  modes: string[],
+  scopes: Record<string, GuardrailStreamScope>,
+): GuardrailStreamScope | Record<string, GuardrailStreamScope> | undefined => {
+  const perMode: Record<string, GuardrailStreamScope> = Object.fromEntries(
+    modes.map((mode) => [mode, scopes[mode] ?? "both"]),
+  );
+  const values = Object.values(perMode);
+  if (values.length === 0 || values.every((scope) => scope === "both")) return undefined;
+  const unique = new Set(values);
+  if (unique.size === 1) return values[0];
+  return Object.fromEntries(Object.entries(perMode).filter((entry) => entry[1] !== "both"));
+};
+
+export const formatGuardrailStreamScope = (raw: unknown): string => {
+  if (isGuardrailStreamScope(raw)) {
+    return STREAM_SCOPE_OPTIONS.find((option) => option.value === raw)?.label ?? raw;
+  }
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const entries = Object.entries(raw as Record<string, unknown>).filter(
+      (entry): entry is [string, GuardrailStreamScope] => isGuardrailStreamScope(entry[1]),
+    );
+    if (entries.length === 0) return "";
+    return entries.map(([mode, scope]) => `${mode}: ${formatGuardrailStreamScope(scope)}`).join(", ");
+  }
+  return "";
+};
+
+export const streamScopeForUpdate = (
+  modes: string[],
+  nextByMode: Record<string, GuardrailStreamScope>,
+  previousRaw: unknown,
+  previousModes: string[] = modes,
+): GuardrailStreamScope | Record<string, GuardrailStreamScope> | undefined => {
+  const previousMap: Record<string, unknown> =
+    previousRaw !== null && typeof previousRaw === "object" && !Array.isArray(previousRaw)
+      ? (previousRaw as Record<string, unknown>)
+      : {};
+  const preserved: Record<string, GuardrailStreamScope> = Object.fromEntries(
+    Object.entries(previousMap).filter(
+      (entry): entry is [string, GuardrailStreamScope] => !modes.includes(entry[0]) && isGuardrailStreamScope(entry[1]),
+    ),
+  );
+  const nextModes = [...modes, ...Object.keys(preserved)];
+  const nextStreamScope = streamScopePayload(nextModes, {
+    ...preserved,
+    ...Object.fromEntries(modes.map((mode) => [mode, nextByMode[mode] ?? "both"])),
+  });
+  const previousCompareModes = Object.keys(previousMap).length > 0 ? Object.keys(previousMap) : previousModes;
+  const previousStreamScope = streamScopePayload(
+    previousCompareModes,
+    streamScopeByModeFromConfig(previousRaw, previousCompareModes),
+  );
+  if (JSON.stringify(nextStreamScope ?? "both") === JSON.stringify(previousStreamScope ?? "both")) {
+    return undefined;
+  }
+  return nextStreamScope ?? "both";
+};

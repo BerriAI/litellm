@@ -1,7 +1,7 @@
 import json
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -413,12 +413,30 @@ async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
     """Test getting guardrail info from DB"""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    response = await get_guardrail_info("test-db-guardrail")
+    response: Final = await get_guardrail_info("test-db-guardrail")
 
     assert response.guardrail_id == "test-db-guardrail"
     assert response.guardrail_name == "Test DB Guardrail"
     assert isinstance(response.litellm_params, BaseLitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from DB"}
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_tolerates_invalid_stored_stream_scope(mocker, mock_prisma_client):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
+        return_value={
+            **MOCK_DB_GUARDRAIL,
+            "litellm_params": {
+                **MOCK_DB_GUARDRAIL["litellm_params"],
+                "stream_scope": "sometimes",
+            },
+        }
+    )
+
+    response = await get_guardrail_info("test-db-guardrail")
+
+    assert response.litellm_params.stream_scope is None
 
 
 @pytest.mark.asyncio
@@ -559,6 +577,40 @@ def test_get_guardrails_list_response_includes_guardrail_id():
     )
 
     assert response.guardrails[0].guardrail_id == "stable-config-id"
+
+
+def test_get_guardrails_list_response_tolerates_invalid_config_stream_scope():
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_guardrails_list_response,
+    )
+
+    response = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_id": "invalid-scope",
+                "guardrail_name": "invalid-scope",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "stream_scope": "sometimes",
+                },
+            },
+            {
+                "guardrail_id": "valid-scope",
+                "guardrail_name": "valid-scope",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "stream_scope": "STREAMING",
+                },
+            },
+        ]
+    )
+
+    assert response.guardrails[0].litellm_params is not None
+    assert response.guardrails[0].litellm_params.stream_scope is None
+    assert response.guardrails[1].litellm_params is not None
+    assert response.guardrails[1].litellm_params.stream_scope == "streaming"
 
 
 def test_get_provider_specific_params():

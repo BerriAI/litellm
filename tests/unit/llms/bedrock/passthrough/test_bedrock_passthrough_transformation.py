@@ -10,14 +10,35 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
+import pytest
+
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
-from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
+from litellm.llms.bedrock.passthrough.transformation import (
+    BedrockPassthroughConfig,
+    is_bedrock_streaming_endpoint,
+)
 from litellm.types.utils import ModelResponse
 
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 CONVERSE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/converse-stream"
 INVOKE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/invoke-with-response-stream"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected"),
+    [
+        ("converse-stream", True),
+        ("invoke-with-response-stream", True),
+        ("converse", False),
+        ("invoke", False),
+        ("model/my-converse-stream-model/converse", False),
+        ("model/x/converse-stream?foo=1", True),
+        ("model/x/converse-stream/", True),
+    ],
+)
+def test_is_bedrock_streaming_endpoint_matches_final_action_segment(endpoint: str, expected: bool) -> None:
+    assert is_bedrock_streaming_endpoint(endpoint) is expected
 
 
 def test_bedrock_passthrough_get_complete_url_default_endpoint():

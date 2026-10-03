@@ -21,10 +21,13 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
+    DEFAULT_GUARDRAIL_STREAM_SCOPE,
     DynamicGuardrailParams,
     GuardrailEventHooks,
+    GuardrailStreamScope,
     LitellmParams,
     Mode,
+    runtime_stream_scope,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
@@ -48,6 +51,8 @@ from litellm.constants import (
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
     LOGS_GUARDRAIL_INFORMATION_MARKER,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SERVER_STREAMING_CLASSIFICATION_KEY,
+    SERVER_STREAMING_CLASSIFICATION_MARKER,
 )
 from litellm.exceptions import (
     BlockedPiiEntityError,
@@ -172,6 +177,42 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
     return None
 
 
+_REALTIME_STREAMING_HOOKS: Final = frozenset({GuardrailEventHooks.realtime_input_transcription})
+
+
+def without_server_streaming_classification(data: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in data.items()
+        if key != SERVER_STREAMING_CLASSIFICATION_KEY or value != SERVER_STREAMING_CLASSIFICATION_MARKER
+    }
+
+
+def guardrail_request_data_with_streaming(
+    data: Mapping[str, object],
+    *,
+    is_streaming: bool,
+) -> dict[str, object]:
+    data_without_server_classification: Final = without_server_streaming_classification(data)
+    if not is_streaming:
+        return data_without_server_classification
+    return {
+        **data_without_server_classification,
+        SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER,
+    }
+
+
+def _request_is_streaming(data: object, event_type: GuardrailEventHooks | None = None) -> bool:
+    if event_type in _REALTIME_STREAMING_HOOKS:
+        return True
+    if not isinstance(data, Mapping):
+        return False
+    return (
+        data.get("stream") is True
+        or data.get(SERVER_STREAMING_CLASSIFICATION_KEY) is SERVER_STREAMING_CLASSIFICATION_MARKER
+    )
+
+
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
@@ -180,6 +221,9 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+
+    stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
+    stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
 
     timeout: float | httpx.Timeout | None = None
 
@@ -208,6 +252,7 @@ class CustomGuardrail(CustomLogger):
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
+        stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None = None,
         timeout: float | None = None,
         **kwargs,
     ):
@@ -256,6 +301,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.apply_stream_scope(stream_scope)
         if timeout is not None:
             self.timeout = timeout
 
@@ -1060,6 +1106,23 @@ class CustomGuardrail(CustomLogger):
 
         return name in suppressed_compression_guardrails()
 
+    def apply_stream_scope(self, stream_scope: object) -> None:
+        default, by_hook = runtime_stream_scope(stream_scope)
+        self.stream_scope_default = default
+        self.stream_scope_by_hook = tuple(by_hook.items())
+
+    def stream_scope_allows(self, data: object, event_type: GuardrailEventHooks) -> bool:
+        scope: Final = next(
+            (scope for hook, scope in self.stream_scope_by_hook if hook == event_type.value),
+            self.stream_scope_default,
+        )
+        if scope == "both":
+            return True
+        is_streaming: Final = _request_is_streaming(data, event_type)
+        if scope == "streaming":
+            return is_streaming
+        return not is_streaming
+
     def should_run_guardrail(
         self,
         data,
@@ -1103,8 +1166,8 @@ class CustomGuardrail(CustomLogger):
                         data, self.event_hook, event_type
                     )
                     if result is not None:
-                        return result
-                return True
+                        return bool(result) and self.stream_scope_allows(data, event_type)
+                return self.stream_scope_allows(data, event_type)
             return False
 
         if (
@@ -1128,8 +1191,8 @@ class CustomGuardrail(CustomLogger):
                 )
             result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(data, self.event_hook, event_type)
             if result is not None:
-                return result
-        return True
+                return bool(result) and self.stream_scope_allows(data, event_type)
+        return self.stream_scope_allows(data, event_type)
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """

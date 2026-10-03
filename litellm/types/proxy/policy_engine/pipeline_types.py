@@ -85,7 +85,7 @@ class PipelineStepResult(BaseModel):
     """Result of executing a single pipeline step."""
 
     guardrail_name: str
-    outcome: Literal["pass", "fail", "error"]
+    outcome: Literal["pass", "fail", "error", "skip"]
     action_taken: str
     modified_data: dict[str, Any] | None = None
     error_detail: str | None = None

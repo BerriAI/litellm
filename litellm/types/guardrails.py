@@ -7,6 +7,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365GuardrailConfigModel,
@@ -899,6 +900,89 @@ class ContentFilterConfigModel(BaseModel):
 
 MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
 
+GuardrailStreamScope = Literal["streaming", "non_streaming", "both"]
+DEFAULT_GUARDRAIL_STREAM_SCOPE: Final[GuardrailStreamScope] = "both"
+
+
+class GuardrailEventHooks(str, Enum):
+    pre_call = "pre_call"
+    post_call = "post_call"
+    during_call = "during_call"
+    logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
+    post_mcp_call = "post_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
+
+
+GUARDRAIL_EVENT_HOOK_VALUES: Final = frozenset(member.value for member in GuardrailEventHooks)
+
+_GUARDRAIL_STREAM_SCOPES: Final[Mapping[str, GuardrailStreamScope]] = MappingProxyType(
+    {
+        "streaming": "streaming",
+        "non_streaming": "non_streaming",
+        "both": "both",
+    }
+)
+
+
+def _as_guardrail_stream_scope(value: object) -> GuardrailStreamScope:
+    if not isinstance(value, str):
+        raise ValueError(f"stream_scope values must be strings, got {type(value).__name__}")
+    scope: Final = _GUARDRAIL_STREAM_SCOPES.get(value.lower())
+    if scope is None:
+        raise ValueError(f"stream_scope must be one of both, streaming, non_streaming, got {value!r}")
+    return scope
+
+
+def _validated_stream_scope_hook(key: object) -> str:
+    if not isinstance(key, str):
+        raise ValueError(f"stream_scope keys must be strings, got {type(key).__name__}")
+    hook: Final = key.lower()
+    if hook not in GUARDRAIL_EVENT_HOOK_VALUES:
+        raise ValueError(
+            f"stream_scope keys must be guardrail modes ({sorted(GUARDRAIL_EVENT_HOOK_VALUES)}), got {key!r}"
+        )
+    return hook
+
+
+def coerce_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _as_guardrail_stream_scope(value)
+    if isinstance(value, Mapping):
+        return {_validated_stream_scope_hook(key): _as_guardrail_stream_scope(scope) for key, scope in value.items()}
+    raise ValueError(f"stream_scope must be a string or mapping, got {type(value).__name__}")
+
+
+def stored_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    try:
+        return coerce_stream_scope(value)
+    except ValueError:
+        verbose_logger.warning("Ignoring invalid stored stream_scope value of type %s", type(value).__name__)
+        return None
+
+
+def with_tolerated_stream_scope(params: Mapping[str, object]) -> dict[str, object]:
+    if "stream_scope" not in params:
+        return dict(params)
+    return {
+        **params,
+        "stream_scope": stored_stream_scope(params["stream_scope"]),
+    }
+
+
+def runtime_stream_scope(
+    stream_scope: object,
+) -> tuple[GuardrailStreamScope, MappingProxyType[str, GuardrailStreamScope]]:
+    coerced: Final = coerce_stream_scope(stream_scope)
+    if coerced is None:
+        return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType({})
+    if isinstance(coerced, str):
+        return coerced, MappingProxyType({})
+    return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(coerced)
+
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
@@ -1140,6 +1224,21 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    stream_scope: GuardrailStreamScope | dict[str, GuardrailStreamScope] | None = Field(
+        default=None,
+        description=(
+            "Whether this guardrail runs on streaming requests, non-streaming requests, or both. "
+            "A string applies to every configured mode. A map overrides named modes "
+            "(pre_call, during_call, post_call, ...); omitted keys default to both. "
+            "Unset means both, matching historical behavior."
+        ),
+    )
+
+    @field_validator("stream_scope", mode="before")
+    @classmethod
+    def normalize_stream_scope(cls, v: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+        return coerce_stream_scope(v)
+
     @field_validator(
         "mode",
         "default_action",
@@ -1264,17 +1363,6 @@ class Guardrail(TypedDict, total=False):
 
 class guardrailConfig(TypedDict):
     guardrails: list[Guardrail]
-
-
-class GuardrailEventHooks(str, Enum):
-    pre_call = "pre_call"
-    post_call = "post_call"
-    during_call = "during_call"
-    logging_only = "logging_only"
-    pre_mcp_call = "pre_mcp_call"
-    during_mcp_call = "during_mcp_call"
-    post_mcp_call = "post_mcp_call"
-    realtime_input_transcription = "realtime_input_transcription"
 
 
 class DynamicGuardrailParams(TypedDict):
