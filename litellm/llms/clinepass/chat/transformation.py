@@ -101,7 +101,7 @@ def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
     )
 
 
-def _apply_model_prefix(data: dict) -> dict:
+def _apply_model_prefix(data: dict) -> dict:  # mutable-ok: request body handed to the dict-typed base transform_request
     """Restore the ``modelType/model`` qualifier on the outbound model id.
 
     Only prefix ids that lost their qualifier, so a cross-provider id
@@ -133,8 +133,8 @@ class ClinePassConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        litellm_params: dict,  # mutable-ok: matches the dict-typed base-class signature
         stream: bool | None = None,
     ) -> str:
         if not api_base:
@@ -146,7 +146,9 @@ class ClinePassConfig(OpenAIGPTConfig):
 
         return f"{api_base}/chat/completions"
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: matches the dict-typed base-class signature
         """ClinePass exposes no model catalog.
 
         ``GET https://api.cline.bot/api/v1/models`` returns HTTP 404, and the
@@ -159,11 +161,11 @@ class ClinePassConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: matches the dict-typed base-class signature
         """ClinePass takes the legacy ``max_tokens`` spelling only."""
         mapped_params = super().map_openai_params(
             non_default_params=non_default_params,
@@ -178,11 +180,11 @@ class ClinePassConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        messages: list[AllMessageValues],  # mutable-ok: matches the dict-typed base-class signature
+        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        litellm_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        headers: dict,  # mutable-ok: matches the dict-typed base-class signature
+    ) -> dict:  # mutable-ok: matches the dict-typed base-class signature
         # BaseLLMHTTPHandler builds the body with this synchronous method on
         # both the sync and the async path, so there is deliberately no
         # async_transform_request() override -- it would never be called.
@@ -201,10 +203,10 @@ class ClinePassConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: dict,  # mutable-ok: matches the dict-typed base-class signature
+        messages: list[AllMessageValues],  # mutable-ok: matches the dict-typed base-class signature
+        optional_params: dict,  # mutable-ok: matches the dict-typed base-class signature
+        litellm_params: dict,  # mutable-ok: matches the dict-typed base-class signature
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -228,7 +230,12 @@ class ClinePassConfig(OpenAIGPTConfig):
             json_mode=json_mode,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: matches the dict-typed base-class signature
+    ) -> BaseLLMException:
         return ClinePassException(
             message=error_message,
             status_code=status_code,
