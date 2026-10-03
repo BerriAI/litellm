@@ -29,13 +29,16 @@ export function PullReasoningDialog({
   summary: ROISummary | null;
   onClose: () => void;
 }) {
+  const titleRef = React.useRef<HTMLHeadingElement>(null);
   return (
     <Dialog open={Boolean(pull)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl" initialFocus={titleRef}>
         {pull && (
           <>
             <DialogHeader>
-              <DialogTitle>{pull.title}</DialogTitle>
+              <DialogTitle ref={titleRef} tabIndex={-1}>
+                {pull.title}
+              </DialogTitle>
               <DialogDescription>
                 {pull.repo} #{pull.number} · {pull.login}
               </DialogDescription>
