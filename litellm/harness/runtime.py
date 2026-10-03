@@ -68,11 +68,6 @@ verbose_logger: Final = logging.getLogger("LiteLLM")
 PROPAGATED_ERRORS: Final = (HarnessInstallFailed, CapabilityUnsupported)
 
 
-# ---------------------------------------------------------------------------
-# Configuration + validation
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class SessionConfig:
     """Every per-session parameter a caller can pass, already normalized."""
@@ -249,11 +244,6 @@ def _context_for(config: SessionConfig) -> SessionContext:
     )
 
 
-# ---------------------------------------------------------------------------
-# Structured output
-# ---------------------------------------------------------------------------
-
-
 def parse_output(output: type[BaseModel], output_json: str | None, text: str) -> tuple[BaseModel | None, str | None]:
     """Return (model, None) on success or (None, error message) on failure."""
     raw = output_json or last_json_object(text)
@@ -263,11 +253,6 @@ def parse_output(output: type[BaseModel], output_json: str | None, text: str) ->
         return output.model_validate_json(raw), None
     except ValidationError as e:
         return None, str(e)
-
-
-# ---------------------------------------------------------------------------
-# Turn machinery
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -392,8 +377,6 @@ class _Turn:
         self.usage_before: tuple[int, int, int, float] = (0, 0, 0, 0.0)
         self.deadline: float | None = None
 
-    # -- setup / teardown ---------------------------------------------------
-
     async def _begin(self) -> None:
         sandbox = self.ctx.sandbox
         self.before = await sandbox.snapshot()
@@ -418,8 +401,6 @@ class _Turn:
             task.cancel()
         if pending:
             await asyncio.wait(pending)
-
-    # -- event loop ---------------------------------------------------------
 
     async def _next_item(self) -> Event | _End:
         if self.deadline is None:
@@ -475,8 +456,6 @@ class _Turn:
             if isinstance(item, Approval) and self.ctx.on_approval is None:
                 # The consumer asked for the next event without answering.
                 item.deny("approval not answered")
-
-    # -- results ------------------------------------------------------------
 
     async def _file_changes(self) -> list[FileChange]:  # mutable-ok: becomes the public Result.files list
         sandbox = self.ctx.sandbox
@@ -535,8 +514,6 @@ class _Turn:
         parsed, error = parse_output(output_type, self.ctx.output_json, text)
         return parsed, self.ctx.output_json or text, error
 
-    # -- entry --------------------------------------------------------------
-
     async def run(self) -> AsyncIterator[Event]:
         await self._begin()
         self._start_producer()
@@ -562,11 +539,6 @@ class _Turn:
                 raw=raw or "",
                 result=result,
             )
-
-
-# ---------------------------------------------------------------------------
-# Streams
-# ---------------------------------------------------------------------------
 
 
 class AsyncEventStream:
@@ -609,11 +581,6 @@ async def _one_shot(session: AsyncSession, prompt: str, control: TurnControl) ->
         await session.aclose()
 
 
-# ---------------------------------------------------------------------------
-# Sessions
-# ---------------------------------------------------------------------------
-
-
 class AsyncSession:
     """A multi-turn conversation with one harness. Use `async with` or `await`."""
 
@@ -640,8 +607,6 @@ class AsyncSession:
         self._closed = False
         self._busy = False
         self._restart_needed = False
-
-    # -- lifecycle ----------------------------------------------------------
 
     def __await__(self) -> Generator[object, None, AsyncSession]:
         return self.start().__await__()
@@ -752,8 +717,6 @@ class AsyncSession:
     detach = adetach
     stop = astop
 
-    # -- turns --------------------------------------------------------------
-
     def usage_counters(self) -> tuple[int, int, int, float]:
         """(input_tokens, output_tokens, calls, cost) so far, from endpoint or handler."""
         endpoint = self.ctx.endpoint
@@ -821,11 +784,6 @@ async def _collect(events: AsyncIterator[Event]) -> Result:
     if result is None:
         raise HarnessError("turn ended without a result")
     return result
-
-
-# ---------------------------------------------------------------------------
-# Public async API
-# ---------------------------------------------------------------------------
 
 
 def aagent_session(

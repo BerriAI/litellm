@@ -78,6 +78,23 @@ class _InvalidIndex:
     table_size: str
 
 MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
+LIBPQ_URL_PARAMS: Final = frozenset(
+    {
+        "sslmode",
+        "sslcert",
+        "sslkey",
+        "sslrootcert",
+        "sslpassword",
+        "application_name",
+        "connect_timeout",
+        "client_encoding",
+        "options",
+        "service",
+        "gssencmode",
+        "krbsrvname",
+        "target_session_attrs",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -689,30 +706,43 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _strip_prisma_query_params(url: str) -> str:
-        """Remove Prisma-specific query params (connection_limit, pool_timeout,
-        schema, etc.) from DATABASE_URL so psycopg can parse it."""
+        """Rewrite a Prisma-dialect URL for libpq: drop the Prisma-only params
+        (connection_limit, pool_timeout, schema, pgbouncer, sslaccept, ...) and
+        translate Prisma's TLS params back, since libpq reads ``sslcert`` as a
+        client certificate where Prisma reads it as the CA."""
         from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
-        parsed = urlparse(url)
+        parsed: Final = urlparse(url)
         if not parsed.query:
             return url
-        libpq_params = {
-            "sslmode",
-            "sslcert",
-            "sslkey",
-            "sslrootcert",
-            "sslpassword",
-            "application_name",
-            "connect_timeout",
-            "client_encoding",
-            "options",
-            "service",
-            "gssencmode",
-            "krbsrvname",
-            "target_session_attrs",
-        }
-        kept = [(k, v) for k, v in parse_qsl(parsed.query) if k in libpq_params]
-        return urlunparse(parsed._replace(query=urlencode(kept, quote_via=quote)))
+        pairs: Final = tuple(parse_qsl(parsed.query))
+        kept: Final = tuple((k, v) for k, v in pairs if k in LIBPQ_URL_PARAMS)
+        sslaccept: Final = next((v for k, v in pairs if k == "sslaccept"), None)
+        libpq_pairs: Final = ProxyExtrasDBManager._libpq_tls_params(kept, sslaccept)
+        return urlunparse(parsed._replace(query=urlencode(libpq_pairs, quote_via=quote)))
+
+    @staticmethod
+    def _libpq_tls_params(
+        pairs: "tuple[tuple[str, str], ...]", sslaccept: "str | None"
+    ) -> "tuple[tuple[str, str], ...]":
+        """Undo ``translate_libpq_ssl_params``. Prisma's ``sslcert`` is the CA and
+        ``sslaccept=strict`` checks chain and hostname, which libpq only does in
+        ``sslmode=verify-full``, so strict becomes ``sslrootcert`` plus
+        ``verify-full`` whatever ``sslmode`` said (``disable`` stays off). Prisma
+        defaults an absent ``sslaccept`` to ``accept_invalid_certs`` and anything
+        else to strict. Without strict it checks nothing, so the CA is dropped and
+        ``sslmode`` is kept as is: libpq only verifies when a root cert is present.
+        A URL that also carries ``sslkey`` is libpq's own client-certificate form
+        and is kept."""
+        keys: Final = frozenset(k for k, _ in pairs)
+        if "sslcert" not in keys or "sslkey" in keys:
+            return pairs
+        sslmode: Final = next((v for k, v in pairs if k == "sslmode"), None)
+        rest: Final = tuple((k, v) for k, v in pairs if k not in ("sslcert", "sslmode"))
+        if sslaccept in (None, "accept_invalid_certs") or sslmode == "disable":
+            return rest if sslmode is None else rest + (("sslmode", sslmode),)
+        root_cert: Final = tuple(("sslrootcert", v) for k, v in pairs if k == "sslcert" and "sslrootcert" not in keys)
+        return rest + root_cert + (("sslmode", "verify-full"),)
 
     @staticmethod
     def _warn_if_db_ahead_of_head(migrations_dir: str) -> None:

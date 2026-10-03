@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from prisma import Json, models
+from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.db import (
     create_mcp_server,
@@ -35,7 +36,7 @@ def _mock_prisma():
     mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
     mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=row)
     mock_prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=row)
     tx_client = MagicMock()
     tx_client.execute_raw = AsyncMock()
     tx_client.litellm_mcpservertable = mock_prisma.db.litellm_mcpservertable
@@ -1141,6 +1142,42 @@ async def test_set_mcp_server_pinned_tools_writes_the_snapshot_and_null_clears_i
 @pytest.mark.asyncio
 async def test_set_mcp_server_pinned_tools_on_a_missing_server_writes_nothing():
     mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_unique.return_value = None
 
     assert await set_mcp_server_pinned_tools(mock_prisma, "ghost", None, "admin") is None
     mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_only", [False, True])
+async def test_protocol_update_revalidates_current_stored_configuration_before_writing(protocol_only: bool):
+    prisma = _mock_prisma()
+    table = prisma.db.litellm_mcpservertable
+    table.find_unique.return_value = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="test-server", transport="sse" if protocol_only else "http",
+        mcp_info={} if protocol_only else {"protocol_version": "2026-07-28"}, env={}, env_vars=[],
+    )
+    payload = UpdateMCPServerRequest.model_validate({
+        "server_id": "test-server",
+        **({"mcp_info": {"protocol_version": "2026-07-28"}} if protocol_only else {"transport": "sse", "url": "https://upstream.example/sse"}),
+    })
+    with pytest.raises(HTTPException) as error:
+        await update_mcp_server(prisma, payload, "admin")
+    assert error.value.status_code == 400
+    assert "Modern MCP requires HTTP or stdio" in str(error.value.detail)
+    table.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("clear_alias", [False, True])
+async def test_protocol_update_preserves_missing_server_without_writing(clear_alias: bool):
+    prisma = _mock_prisma()
+    table = prisma.db.litellm_mcpservertable
+    table.find_unique.return_value = None
+    payload = UpdateMCPServerRequest.model_validate({
+        "server_id": "missing", "mcp_info": {"protocol_version": "2026-07-28"},
+        **({"alias": None} if clear_alias else {}),
+    })
+    result = await update_mcp_server(prisma, payload, "admin")
+    assert result is None
+    table.update.assert_not_awaited()

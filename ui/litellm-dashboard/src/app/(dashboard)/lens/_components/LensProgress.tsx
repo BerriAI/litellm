@@ -53,7 +53,7 @@ export function LensProgress({ job, onCancel }: { job: Job; onCancel?: () => voi
         >
           <div
             className={`h-full rounded-full bg-foreground/70 transition-[width] duration-500 ${percent === undefined ? "motion-safe:animate-pulse" : ""}`}
-            style={{ width: percent === undefined ? "100%" : `${percent}%` }}
+            style={{ width: percent === undefined ? "33%" : `${percent}%` }}
           />
         </div>
       </div>

@@ -9,11 +9,15 @@ import functools
 import json
 import os
 import re
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict
+from collections.abc import Iterator, Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
+
+from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
-    from botocore.model import Shape
+    from botocore.eventstream import EventStreamMessage
+    from botocore.model import ServiceModel, Shape
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
@@ -1493,10 +1497,77 @@ def get_bedrock_response_stream_shape():
     return _load_bedrock_response_stream_shape()
 
 
+_BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
+
+
+def _modeled_error_status(member: Shape) -> int | None:
+    status: Final = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+    return None if status is None else int(status)
+
+
+def _structure_members(shape: Shape | None) -> Mapping[str, Shape]:
+    from botocore.model import StructureShape
+
+    return shape.members if isinstance(shape, StructureShape) else {}
+
+
+def _bedrock_stream_output_members(service_model: ServiceModel) -> Iterator[tuple[str, Shape]]:
+    for shape_name in _BEDROCK_STREAM_OUTPUT_SHAPES:
+        yield from _structure_members(service_model.shape_for(shape_name)).items()
+
+
+def _load_bedrock_stream_event_statuses() -> Mapping[str, int | None] | None:
+    try:
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
+
+        service_description: Final = TypeAdapter(Mapping[str, object]).validate_python(
+            Loader().load_service_model("bedrock-runtime", "service-2")
+        )
+        service_model: Final = ServiceModel(service_description)
+        return MappingProxyType(
+            {name: _modeled_error_status(member) for name, member in _bedrock_stream_output_members(service_model)}
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            "litellm: could not load the bedrock-runtime stream event types, "
+            "so unrecognized Bedrock stream events will pass through undetected. Error: %s",
+            e,
+        )
+        return None
+
+
+@functools.lru_cache(maxsize=1)
+def get_bedrock_stream_event_statuses() -> Mapping[str, int | None] | None:
+    """Every modeled Bedrock stream event type mapped to its error status (None for a content event)."""
+    return _load_bedrock_stream_event_statuses()
+
+
+def bedrock_stream_event_error_status(event_type: str | None) -> int | None:
+    statuses: Final = get_bedrock_stream_event_statuses()
+    return None if event_type is None or statuses is None else statuses.get(event_type)
+
+
 class BedrockEventStreamResponseDict(TypedDict):
-    status_code: int
-    headers: Mapping[str, str]
-    body: bytes
+    status_code: ReadOnly[int]
+    headers: ReadOnly[Mapping[str, object]]
+    body: ReadOnly[bytes]
+
+
+_BEDROCK_EVENT_STREAM_RESPONSE: Final = TypeAdapter(BedrockEventStreamResponseDict)
+
+
+def bedrock_event_stream_response(event: EventStreamMessage) -> BedrockEventStreamResponseDict:
+    return _BEDROCK_EVENT_STREAM_RESPONSE.validate_python(event.to_response_dict())
+
+
+def bedrock_event_stream_header(headers: Mapping[str, object], name: str) -> str | None:
+    value: Final = headers.get(name)
+    return value if isinstance(value, str) else None
+
+
+def build_bedrock_stream_event_error(event_type: str, status_code: int, body: bytes) -> BedrockError:
+    return BedrockError(status_code=status_code, message=f"{event_type} {body.decode(errors='replace')}")
 
 
 def build_bedrock_stream_error(
@@ -1509,19 +1580,14 @@ def build_bedrock_stream_error(
     ResponseStream member's httpStatusCode is the real status. Resolve it from the
     shape and fall back to the raw status when the type is not modeled.
     """
-    exception_type: Final = response_dict["headers"].get(":exception-type")
-    decoded_body: Final = response_dict["body"].decode()
-    message: Final = f"{exception_type} {decoded_body}" if exception_type else decoded_body
+    exception_type: Final = bedrock_event_stream_header(response_dict["headers"], ":exception-type")
+    if exception_type is None:
+        return BedrockError(status_code=response_dict["status_code"], message=response_dict["body"].decode())
 
-    status_code = response_dict["status_code"]
-    if exception_type is not None and response_stream_shape is not None:
-        member: Final = response_stream_shape.members.get(exception_type)
-        if member is not None:
-            modeled_status: Final = (member.metadata or {}).get("error", {}).get("httpStatusCode")
-            if modeled_status is not None:
-                status_code = int(modeled_status)
-
-    return BedrockError(status_code=status_code, message=message)
+    member: Final = _structure_members(response_stream_shape).get(exception_type)
+    modeled_status: Final = None if member is None else _modeled_error_status(member)
+    status_code: Final = response_dict["status_code"] if modeled_status is None else modeled_status
+    return build_bedrock_stream_event_error(exception_type, status_code, response_dict["body"])
 
 
 class BedrockEventStreamDecoderBase:

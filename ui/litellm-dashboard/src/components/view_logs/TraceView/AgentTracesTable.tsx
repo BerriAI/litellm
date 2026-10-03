@@ -7,8 +7,9 @@ import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 
 import { StatusMark } from "./StatusMark";
+import { FrameworkLogo, traceFramework } from "./TraceFramework";
 import type { TraceSummary } from "./traceTypes";
-import { fmtMs, previewText, traceDisplayName } from "./traceUtils";
+import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "./traceUtils";
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
@@ -32,6 +33,20 @@ const TH = "px-3 font-medium";
 const TH_NUM = "px-3 text-right font-medium";
 const TD_NUM = "px-3 text-right font-mono tabular-nums text-muted-foreground";
 
+function AgentCell({ run }: { run: TraceSummary }) {
+  const framework = traceFramework(run);
+  const agents = traceAgentNames(run).join(", ");
+  const title = [agents, framework?.label].filter(Boolean).join(" · ");
+  return (
+    <td className="px-3 text-muted-foreground" title={title}>
+      <div className="flex min-w-0 items-center gap-1.5">
+        {framework && <FrameworkLogo framework={framework} />}
+        <span className="truncate">{agents || framework?.label || "—"}</span>
+      </div>
+    </td>
+  );
+}
+
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
@@ -53,7 +68,7 @@ export function AgentTracesTable({
                 Time <ArrowDown className="size-2.5" />
               </span>
             </th>
-            <th className={`w-[160px] ${TH}`}>Service</th>
+            <th className={`w-[160px] ${TH}`}>Agent</th>
             <th className={TH}>Input</th>
             <th className={`w-[72px] ${TH_NUM}`}>Agents</th>
             <th className={`w-[74px] ${TH_NUM}`}>Steps</th>
@@ -83,9 +98,7 @@ export function AgentTracesTable({
               >
                 {formatActivityTimestamp(run.start_time)}
               </td>
-              <td className="truncate px-3 text-muted-foreground" title={run.service}>
-                {run.service}
-              </td>
+              <AgentCell run={run} />
               <td className="px-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
