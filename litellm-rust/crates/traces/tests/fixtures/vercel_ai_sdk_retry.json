@@ -6,7 +6,7 @@
           {
             "key": "host.name",
             "value": {
-              "stringValue": "Yujongs-MacBook-Pro-2.local"
+              "stringValue": "fixture-host"
             }
           },
           {
@@ -18,13 +18,13 @@
           {
             "key": "host.id",
             "value": {
-              "stringValue": "0CED4796-41E3-5964-96A8-70915F7FCC94"
+              "stringValue": "00000000-0000-0000-0000-000000000000"
             }
           },
           {
             "key": "process.pid",
             "value": {
-              "intValue": "41632"
+              "intValue": "85502"
             }
           },
           {
@@ -36,7 +36,7 @@
           {
             "key": "process.executable.path",
             "value": {
-              "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+              "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
             }
           },
           {
@@ -45,10 +45,13 @@
               "arrayValue": {
                 "values": [
                   {
-                    "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+                    "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
                   },
                   {
-                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+                    "stringValue": "--env-file=.env"
+                  },
+                  {
+                    "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/validate-attempts.ts"
                   },
                   {
                     "stringValue": "retry"
@@ -60,7 +63,7 @@
           {
             "key": "process.runtime.version",
             "value": {
-              "stringValue": "24.18.0"
+              "stringValue": "25.8.1"
             }
           },
           {
@@ -78,13 +81,13 @@
           {
             "key": "process.command",
             "value": {
-              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+              "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/validate-attempts.ts"
             }
           },
           {
             "key": "process.owner",
             "value": {
-              "stringValue": "yujonglee"
+              "stringValue": "user"
             }
           },
           {
@@ -120,14 +123,20 @@
           },
           "spans": [
             {
-              "traceId": "6be78653fa58241d2f4b477da5917ee1",
-              "spanId": "503b939199f33606",
-              "parentSpanId": "527095f2ca954c8a",
+              "traceId": "18b74e8029c4c62d6ee2acbfaccd05d7",
+              "spanId": "c2bdb1aefaca871b",
+              "parentSpanId": "a06df2bcb5afedd9",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791057911211000000",
-              "endTimeUnixNano": "1791057912705603250",
+              "startTimeUnixNano": "1791061413988000000",
+              "endTimeUnixNano": "1791061415446111584",
               "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
                 {
                   "key": "http.request.method",
                   "value": {
@@ -137,13 +146,13 @@
                 {
                   "key": "url.full",
                   "value": {
-                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
                   }
                 },
                 {
-                  "key": "litellm.gateway.attempt",
+                  "key": "server.address",
                   "value": {
-                    "boolValue": true
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -155,7 +164,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "d17500d4-114c-490d-b0b9-8858b1df1dd3"
+                    "stringValue": "cd72f919-eb8e-4854-8c74-1a2d22fbe271"
                   }
                 }
               ],
@@ -165,14 +174,20 @@
               "flags": 257
             },
             {
-              "traceId": "6be78653fa58241d2f4b477da5917ee1",
-              "spanId": "dbaed0240576e68e",
-              "parentSpanId": "527095f2ca954c8a",
+              "traceId": "18b74e8029c4c62d6ee2acbfaccd05d7",
+              "spanId": "75cf929b3549bf74",
+              "parentSpanId": "a06df2bcb5afedd9",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791057914709000000",
-              "endTimeUnixNano": "1791057916072918792",
+              "startTimeUnixNano": "1791061417449000000",
+              "endTimeUnixNano": "1791061418712098416",
               "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
                 {
                   "key": "http.request.method",
                   "value": {
@@ -182,13 +197,13 @@
                 {
                   "key": "url.full",
                   "value": {
-                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
                   }
                 },
                 {
-                  "key": "litellm.gateway.attempt",
+                  "key": "server.address",
                   "value": {
-                    "boolValue": true
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -200,7 +215,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "9ad77dfc-8442-401f-966e-71eeed7189d8"
+                    "stringValue": "13406f69-913c-4ed9-87fd-03785496f128"
                   }
                 }
               ],
@@ -215,13 +230,13 @@
           },
           "spans": [
             {
-              "traceId": "6be78653fa58241d2f4b477da5917ee1",
-              "spanId": "527095f2ca954c8a",
-              "parentSpanId": "76c37ff8dd9e581d",
+              "traceId": "18b74e8029c4c62d6ee2acbfaccd05d7",
+              "spanId": "a06df2bcb5afedd9",
+              "parentSpanId": "07480d8af91ab2a5",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791057911210000000",
-              "endTimeUnixNano": "1791057916075035542",
+              "startTimeUnixNano": "1791061413986000000",
+              "endTimeUnixNano": "1791061418714608083",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -250,7 +265,7 @@
                 {
                   "key": "gen_ai.client.operation.duration",
                   "value": {
-                    "doubleValue": 4.8648602919999995
+                    "doubleValue": 4.727941082999999
                   }
                 },
                 {
@@ -268,7 +283,7 @@
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EV0GorGuSXrP5EwzyNFc2yvJmDJAG"
+                    "stringValue": "chatcmpl-EV1BJQ4BvQRI5X8f1m4LZ7uTX4sKt"
                   }
                 },
                 {
@@ -286,7 +301,7 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "40"
+                    "intValue": "42"
                   }
                 },
                 {
@@ -298,7 +313,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces show the steps an AI agent takes to complete a task.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces record an agent\u2019s actions, decisions, and tool calls over time.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],
@@ -306,13 +321,13 @@
               "flags": 257
             },
             {
-              "traceId": "6be78653fa58241d2f4b477da5917ee1",
-              "spanId": "76c37ff8dd9e581d",
-              "parentSpanId": "dd27fdf69f7ad2a9",
+              "traceId": "18b74e8029c4c62d6ee2acbfaccd05d7",
+              "spanId": "07480d8af91ab2a5",
+              "parentSpanId": "7f3f5611278bf45d",
               "name": "step 1",
               "kind": 1,
-              "startTimeUnixNano": "1791057911209000000",
-              "endTimeUnixNano": "1791057916074725417",
+              "startTimeUnixNano": "1791061413986000000",
+              "endTimeUnixNano": "1791061418715245250",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -325,12 +340,12 @@
               "flags": 257
             },
             {
-              "traceId": "6be78653fa58241d2f4b477da5917ee1",
-              "spanId": "dd27fdf69f7ad2a9",
+              "traceId": "18b74e8029c4c62d6ee2acbfaccd05d7",
+              "spanId": "7f3f5611278bf45d",
               "name": "invoke_agent openai/gpt-6-luna",
               "kind": 1,
-              "startTimeUnixNano": "1791057911205000000",
-              "endTimeUnixNano": "1791057916075648791",
+              "startTimeUnixNano": "1791061413984000000",
+              "endTimeUnixNano": "1791061418716212750",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -383,7 +398,7 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "40"
+                    "intValue": "42"
                   }
                 },
                 {
@@ -395,7 +410,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces show the steps an AI agent takes to complete a task.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces record an agent\u2019s actions, decisions, and tool calls over time.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],

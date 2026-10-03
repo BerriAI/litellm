@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "9432cc9d-4181-46c4-9afe-81f1fd34ab32"
+              "stringValue": "f4d7cce9-2e1d-428d-bd43-6a7cf51804ef"
             }
           },
           {
@@ -48,13 +48,13 @@
           },
           "spans": [
             {
-              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
-              "spanId": "d0a64037f2202474",
-              "parentSpanId": "c00506c043013866",
+              "traceId": "213790ddf7f01594d52d54818775b98d",
+              "spanId": "10cd8cbd5f72b220",
+              "parentSpanId": "b730242cc7698d6f",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791058179646366000",
-              "endTimeUnixNano": "1791058180266825000",
+              "startTimeUnixNano": "1791061622553239000",
+              "endTimeUnixNano": "1791061623933306000",
               "attributes": [
                 {
                   "key": "litellm.gateway.attempt",
@@ -71,13 +71,13 @@
                 {
                   "key": "url.full",
                   "value": {
-                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
                   }
                 },
                 {
                   "key": "server.address",
                   "value": {
-                    "stringValue": "127.0.0.1"
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -89,7 +89,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "2177b1e3-8647-4144-87a3-fd0fe4905f79"
+                    "stringValue": "bbff9fcc-930d-47fe-b0eb-0ab1eba0eff0"
                   }
                 }
               ],
@@ -99,13 +99,13 @@
               "flags": 256
             },
             {
-              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
-              "spanId": "e54b1fbb23a786dc",
-              "parentSpanId": "c00506c043013866",
+              "traceId": "213790ddf7f01594d52d54818775b98d",
+              "spanId": "c80b675f9912b72c",
+              "parentSpanId": "b730242cc7698d6f",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791058180268754000",
-              "endTimeUnixNano": "1791058180812133000",
+              "startTimeUnixNano": "1791061624396320000",
+              "endTimeUnixNano": "1791061625776764000",
               "attributes": [
                 {
                   "key": "litellm.gateway.attempt",
@@ -122,13 +122,13 @@
                 {
                   "key": "url.full",
                   "value": {
-                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
                   }
                 },
                 {
                   "key": "server.address",
                   "value": {
-                    "stringValue": "127.0.0.1"
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -140,7 +140,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "687662f4-644a-434d-9b1c-fc6314a2f7e1"
+                    "stringValue": "b1b0392c-9022-4369-88ce-7d8bdc57c90c"
                   }
                 }
               ],
@@ -156,13 +156,13 @@
           },
           "spans": [
             {
-              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
-              "spanId": "c00506c043013866",
-              "parentSpanId": "22671f262756bf7c",
+              "traceId": "213790ddf7f01594d52d54818775b98d",
+              "spanId": "b730242cc7698d6f",
+              "parentSpanId": "c820226f9e157926",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791058179633997000",
-              "endTimeUnixNano": "1791058180819707000",
+              "startTimeUnixNano": "1791061622542709000",
+              "endTimeUnixNano": "1791061625782151000",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -185,7 +185,7 @@
                 {
                   "key": "server.address",
                   "value": {
-                    "stringValue": "127.0.0.1"
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -209,13 +209,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a10362-f625-75b5-bdf2-efbc01d53658"
+                    "stringValue": "01a10397-7f05-701f-abe9-6d45efbbf059"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "01a10362-f625-75b5-bdf2-efbdc6d0ce05"
+                    "stringValue": "01a10397-7f05-701f-abe9-6d469e9ac27e"
                   }
                 },
                 {
@@ -225,21 +225,15 @@
                   }
                 },
                 {
-                  "key": "gen_ai.request.max_tokens",
-                  "value": {
-                    "intValue": "1024"
-                  }
-                },
-                {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with OK\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"OK\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces record an agent\u2019s actions and decisions over time.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {
@@ -251,13 +245,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "9"
+                    "intValue": "15"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "4"
+                    "intValue": "48"
                   }
                 },
                 {
@@ -275,7 +269,7 @@
                 {
                   "key": "gen_ai.usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "0"
+                    "intValue": "27"
                   }
                 },
                 {
@@ -293,13 +287,13 @@
                 {
                   "key": "operation.cost",
                   "value": {
-                    "doubleValue": 2.9e-06
+                    "doubleValue": 2.55e-5
                   }
                 },
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EV0L60bU2h7venn7fMuHQwxkO8wrZ"
+                    "stringValue": "chatcmpl-EV1Ee6ZsIx2AYZLIIcwgTLCt8rYAp"
                   }
                 },
                 {
@@ -319,12 +313,12 @@
               "flags": 256
             },
             {
-              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
-              "spanId": "22671f262756bf7c",
+              "traceId": "213790ddf7f01594d52d54818775b98d",
+              "spanId": "c820226f9e157926",
               "name": "invoke_agent research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791058179626835000",
-              "endTimeUnixNano": "1791058180820865000",
+              "startTimeUnixNano": "1791061622536769000",
+              "endTimeUnixNano": "1791061625782963000",
               "attributes": [
                 {
                   "key": "model_name",
@@ -347,13 +341,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a10362-f625-75b5-bdf2-efbc01d53658"
+                    "stringValue": "01a10397-7f05-701f-abe9-6d45efbbf059"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "01a10362-f625-75b5-bdf2-efbdc6d0ce05"
+                    "stringValue": "01a10397-7f05-701f-abe9-6d469e9ac27e"
                   }
                 },
                 {
@@ -371,19 +365,19 @@
                 {
                   "key": "final_result",
                   "value": {
-                    "stringValue": "OK"
+                    "stringValue": "Agent traces record an agent\u2019s actions and decisions over time."
                   }
                 },
                 {
                   "key": "gen_ai.aggregated_usage.input_tokens",
                   "value": {
-                    "intValue": "9"
+                    "intValue": "15"
                   }
                 },
                 {
                   "key": "gen_ai.aggregated_usage.output_tokens",
                   "value": {
-                    "intValue": "4"
+                    "intValue": "48"
                   }
                 },
                 {
@@ -401,7 +395,7 @@
                 {
                   "key": "gen_ai.aggregated_usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "0"
+                    "intValue": "27"
                   }
                 },
                 {
@@ -413,7 +407,7 @@
                 {
                   "key": "pydantic_ai.all_messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with OK\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"OK\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces record an agent\u2019s actions and decisions over time.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {

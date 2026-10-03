@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "7f90461c-2435-4564-a1b4-1bb329cb2cbb"
+              "stringValue": "ab58f52e-4016-4af6-9591-cf695ecf7ad5"
             }
           },
           {
@@ -48,13 +48,13 @@
           },
           "spans": [
             {
-              "traceId": "6cf995b92c97c68c1cb543778370a901",
-              "spanId": "2996dd92c20e38dd",
-              "parentSpanId": "d819d14754a2d9ea",
+              "traceId": "f3f8852c4f360b03ce2a36e6d3ed6f51",
+              "spanId": "a383ecf3f8beb7a6",
+              "parentSpanId": "ab941fc1b528a0aa",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791058017071825000",
-              "endTimeUnixNano": "1791058019559402000",
+              "startTimeUnixNano": "1791061491440301000",
+              "endTimeUnixNano": "1791061494417800000",
               "attributes": [
                 {
                   "key": "litellm.gateway.attempt",
@@ -71,13 +71,13 @@
                 {
                   "key": "url.full",
                   "value": {
-                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
                   }
                 },
                 {
                   "key": "server.address",
                   "value": {
-                    "stringValue": "127.0.0.1"
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -89,7 +89,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "eb445a36-61c8-47c3-aa78-ef1a666c2713"
+                    "stringValue": "94605f85-b0da-4596-8538-9072fce7119e"
                   }
                 }
               ],
@@ -105,13 +105,13 @@
           },
           "spans": [
             {
-              "traceId": "6cf995b92c97c68c1cb543778370a901",
-              "spanId": "d819d14754a2d9ea",
-              "parentSpanId": "49f956a2aa42efa9",
+              "traceId": "f3f8852c4f360b03ce2a36e6d3ed6f51",
+              "spanId": "ab941fc1b528a0aa",
+              "parentSpanId": "3d68d31cca0b440f",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791058017059802000",
-              "endTimeUnixNano": "1791058019561818000",
+              "startTimeUnixNano": "1791061491429076000",
+              "endTimeUnixNano": "1791061494419171000",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -134,7 +134,7 @@
                 {
                   "key": "server.address",
                   "value": {
-                    "stringValue": "127.0.0.1"
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -158,13 +158,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a10360-7b18-7720-9568-47c2f9bc6dc4"
+                    "stringValue": "01a10395-7eda-7547-aa1b-802d534ffa83"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "01a10360-7b18-7720-9568-47c3794108fa"
+                    "stringValue": "01a10395-7eda-7547-aa1b-802ea21e8858"
                   }
                 },
                 {
@@ -182,7 +182,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s activity during a task. It may show the steps the agent took\u2014such as messages it received, tools it called, results it got back, and its final response\u2014often with timestamps and status information.\\n\\nTraces are useful for debugging, evaluating, and auditing an agent. They don\u2019t necessarily include the agent\u2019s private internal reasoning; many traces record only observable actions and outputs.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a chronological record of an AI agent\u2019s activity while completing a task. It may include:\\n\\n- The task or input it received\\n- Actions it took, such as tool calls\\n- Results or observations it received\\n- Changes in state or decisions\\n- The final response or outcome\\n\\nFor example: *User asks for the weather \u2192 agent calls a weather API \u2192 API returns the forecast \u2192 agent summarizes it.*\\n\\nA trace helps people debug or evaluate an agent. It doesn\u2019t necessarily include the agent\u2019s private reasoning; often it records only observable steps and tool interactions.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {
@@ -200,7 +200,7 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "155"
+                    "intValue": "221"
                   }
                 },
                 {
@@ -218,7 +218,7 @@
                 {
                   "key": "gen_ai.usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "57"
+                    "intValue": "93"
                   }
                 },
                 {
@@ -236,13 +236,13 @@
                 {
                   "key": "operation.cost",
                   "value": {
-                    "doubleValue": 7.87e-05
+                    "doubleValue": 0.0001117
                   }
                 },
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EV0ITV8IY56jA9BORE2T39XOMo8Xg"
+                    "stringValue": "chatcmpl-EV1CVbDkWDEsratBuf9bhvEG3Av51"
                   }
                 },
                 {
@@ -260,7 +260,7 @@
                 {
                   "key": "gen_ai.client.operation.time_to_first_chunk",
                   "value": {
-                    "doubleValue": 1.5855945840012282
+                    "doubleValue": 1.7067450829781592
                   }
                 }
               ],
@@ -268,12 +268,12 @@
               "flags": 256
             },
             {
-              "traceId": "6cf995b92c97c68c1cb543778370a901",
-              "spanId": "49f956a2aa42efa9",
+              "traceId": "f3f8852c4f360b03ce2a36e6d3ed6f51",
+              "spanId": "3d68d31cca0b440f",
               "name": "invoke_agent research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791058017053055000",
-              "endTimeUnixNano": "1791058019562283000",
+              "startTimeUnixNano": "1791061491422577000",
+              "endTimeUnixNano": "1791061494419566000",
               "attributes": [
                 {
                   "key": "model_name",
@@ -296,13 +296,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a10360-7b18-7720-9568-47c2f9bc6dc4"
+                    "stringValue": "01a10395-7eda-7547-aa1b-802d534ffa83"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "01a10360-7b18-7720-9568-47c3794108fa"
+                    "stringValue": "01a10395-7eda-7547-aa1b-802ea21e8858"
                   }
                 },
                 {
@@ -320,7 +320,7 @@
                 {
                   "key": "final_result",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s activity during a task. It may show the steps the agent took\u2014such as messages it received, tools it called, results it got back, and its final response\u2014often with timestamps and status information.\n\nTraces are useful for debugging, evaluating, and auditing an agent. They don\u2019t necessarily include the agent\u2019s private internal reasoning; many traces record only observable actions and outputs."
+                    "stringValue": "An **agent trace** is a chronological record of an AI agent\u2019s activity while completing a task. It may include:\n\n- The task or input it received\n- Actions it took, such as tool calls\n- Results or observations it received\n- Changes in state or decisions\n- The final response or outcome\n\nFor example: *User asks for the weather \u2192 agent calls a weather API \u2192 API returns the forecast \u2192 agent summarizes it.*\n\nA trace helps people debug or evaluate an agent. It doesn\u2019t necessarily include the agent\u2019s private reasoning; often it records only observable steps and tool interactions."
                   }
                 },
                 {
@@ -332,7 +332,7 @@
                 {
                   "key": "gen_ai.aggregated_usage.output_tokens",
                   "value": {
-                    "intValue": "155"
+                    "intValue": "221"
                   }
                 },
                 {
@@ -350,7 +350,7 @@
                 {
                   "key": "gen_ai.aggregated_usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "57"
+                    "intValue": "93"
                   }
                 },
                 {
@@ -362,7 +362,7 @@
                 {
                   "key": "pydantic_ai.all_messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s activity during a task. It may show the steps the agent took\u2014such as messages it received, tools it called, results it got back, and its final response\u2014often with timestamps and status information.\\n\\nTraces are useful for debugging, evaluating, and auditing an agent. They don\u2019t necessarily include the agent\u2019s private internal reasoning; many traces record only observable actions and outputs.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a chronological record of an AI agent\u2019s activity while completing a task. It may include:\\n\\n- The task or input it received\\n- Actions it took, such as tool calls\\n- Results or observations it received\\n- Changes in state or decisions\\n- The final response or outcome\\n\\nFor example: *User asks for the weather \u2192 agent calls a weather API \u2192 API returns the forecast \u2192 agent summarizes it.*\\n\\nA trace helps people debug or evaluate an agent. It doesn\u2019t necessarily include the agent\u2019s private reasoning; often it records only observable steps and tool interactions.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {

@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "8f6aeac8-0122-4e52-9222-f32bba40d852"
+              "stringValue": "bb9a5828-a214-49e6-ad30-3272c76d1ac4"
             }
           },
           {
@@ -49,13 +49,13 @@
           },
           "spans": [
             {
-              "traceId": "6bd908147a7fa8734c3225887463d3b9",
-              "spanId": "81a4d0547d5efd47",
-              "parentSpanId": "a928f5c2d6aef799",
+              "traceId": "f4186abf7a7c72775ff23cf3b843d260",
+              "spanId": "c549ef07a22735bd",
+              "parentSpanId": "5bbb6a7a2cd23019",
               "name": "PatchToolCallsMiddleware.before_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056610719148032",
-              "endTimeUnixNano": "1791056610719389952",
+              "startTimeUnixNano": "1791061316849356800",
+              "endTimeUnixNano": "1791061316849515008",
               "attributes": [
                 {
                   "key": "output.value",
@@ -66,7 +66,7 @@
                 {
                   "key": "metadata",
                   "value": {
-                    "stringValue": "{\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"research_agent\", \"lc_versions\": {\"deepagents\": \"0.7.21\"}, \"langgraph_step\": 1, \"langgraph_node\": \"PatchToolCallsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:PatchToolCallsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"PatchToolCallsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"PatchToolCallsMiddleware.before_agent:2cedf8e4-57cb-a1eb-b2d3-4291d1a8c99f\"}"
+                    "stringValue": "{\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"research_agent\", \"lc_versions\": {\"deepagents\": \"0.7.21\"}, \"langgraph_step\": 1, \"langgraph_node\": \"PatchToolCallsMiddleware.before_agent\", \"langgraph_triggers\": [\"branch:to:PatchToolCallsMiddleware.before_agent\"], \"langgraph_path\": [\"__pregel_pull\", \"PatchToolCallsMiddleware.before_agent\"], \"langgraph_checkpoint_ns\": \"PatchToolCallsMiddleware.before_agent:b604663c-6ac0-dd9e-e1eb-42ae1c11973f\"}"
                   }
                 },
                 {
@@ -80,72 +80,20 @@
                 "code": 1
               },
               "flags": 256
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "resource": {
-        "attributes": [
-          {
-            "key": "telemetry.sdk.language",
-            "value": {
-              "stringValue": "python"
-            }
-          },
-          {
-            "key": "telemetry.sdk.name",
-            "value": {
-              "stringValue": "opentelemetry"
-            }
-          },
-          {
-            "key": "telemetry.sdk.version",
-            "value": {
-              "stringValue": "1.45.0"
-            }
-          },
-          {
-            "key": "service.instance.id",
-            "value": {
-              "stringValue": "8f6aeac8-0122-4e52-9222-f32bba40d852"
-            }
-          },
-          {
-            "key": "telemetry.auto.version",
-            "value": {
-              "stringValue": "0.66b0"
-            }
-          },
-          {
-            "key": "service.name",
-            "value": {
-              "stringValue": "unknown_service:python3"
-            }
-          }
-        ]
-      },
-      "scopeSpans": [
-        {
-          "scope": {
-            "name": "openinference.instrumentation.langchain",
-            "version": "0.1.78"
-          },
-          "spans": [
+            },
             {
-              "traceId": "6bd908147a7fa8734c3225887463d3b9",
-              "spanId": "b659c8a4ed1667e1",
-              "parentSpanId": "789038c7c4986d7d",
+              "traceId": "f4186abf7a7c72775ff23cf3b843d260",
+              "spanId": "5cb5b0adf6820736",
+              "parentSpanId": "b7dac413027ac08c",
               "name": "ChatOpenAI",
               "kind": 1,
-              "startTimeUnixNano": "1791056610728524032",
-              "endTimeUnixNano": "1791056614607141888",
+              "startTimeUnixNano": "1791061316853681920",
+              "endTimeUnixNano": "1791061320696200960",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is an agent trace?\", \"type\": \"human\", \"id\": \"3d2ceaa8-acb5-4875-ae0c-cc19d9d44da7\"}}]]}"
+                    "stringValue": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is an agent trace?\", \"type\": \"human\", \"id\": \"527c715b-7af7-4368-802f-e08f238cc315\"}}]]}"
                   }
                 },
                 {
@@ -157,7 +105,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"generations\": [[{\"text\": \"An **agent trace** is a record of an AI agent\u2019s execution: what it received, the steps it took, any tools it called, the results it got, and how it reached an outcome.\\n\\nFor example, a trace might show:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather API.\\n3. API returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help developers debug behavior, measure performance, and understand failures. They usually capture observable actions and outputs\u2014not necessarily the model\u2019s private internal reasoning.\", \"generation_info\": null, \"type\": \"ChatGeneration\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": [{\"id\": \"rs_0d671d047d874849006ac15ae4215087d0aa1d8f424eed0148\", \"summary\": [], \"type\": \"reasoning\", \"content\": [], \"encrypted_content\": \"gAAAAABqwVrmvET53-j4sHF6U30wkOt1-HRTCfVAagRh-kv6jxJE2UMMzaV_qfUWZIX41SwGlK6HLCuafbT4IjZZ5qL-MRIVVM9WXHK6xPafjGWlUDHFLFdLHnNYgerUYQ6KoFqY1GMFyFvK1CI8BoA2D1pI8jM627tK8vPsGtqGlLqJSiHbNVfyCBmIIqglY3wmbZx77KbPdWznCteBH4gvvZ_ZR8GNmlhjBgtCSWICsMmRxZGjudGM4bU0r0cZugE2weLStR8kmEx7O4St2ylIye4XGv1p3cTTc0JEGiEIlULGzsnAtwrQMujMj60-QwEtDhV6EJ94ZQoOAX3O9a0W6HPx0eBuWQnRZlFL7WCN_btq_KagP2MIGLufX4QJC79sU_fGQNLteK-agmp6E9Li3cWpqxe2cOi_NMwk7lPOCN1_1R5-SDOURZdyGsHfc7f1vnmiyf56-ALQxX6vQwo3uF9nRC9g5e0gSgqyCIGfOcSSZZqlVkXQiRHzoifhAfoU0WeSl_85KFbdA2HzBWYgg-rG6D3EZ2Ke4LqrDga7z5U-emiYKRQvkbVd6PS3uDWEp0cGpsZHCJXX92f-Avyz8OdixBXntcXmavM24fpuP3fRTYHgwgAPJloZ3UIt739Ew95CkJHjzx8YuJdaRfgVyhnRquKeozqMVgYnHekWyzqdby20beiAWCCu0DVWlxRdkdH4VcGeKLgdXaF9R2ps731ruMCSmkspT0VZzDdxX7KCbmNTmiYfOAQKtzbga9LvjclZ6EhdVwS-L92SGIXmMfTFN6Q-7HmLv0Cyjd0Zx5LXaKiR1anTXZVco35FI87dlQPryqlj_fDUh24yxZhinA65reg88TRaCJ075J1rw22kUCPLe6CvChUMwIY29UTp7adTM519ZRPz5tRmtw6kw2JLwp-NBNl8vJDUk1W8sH2nO1qgtYuZueBs56WCpI-kze3J76VkdCEhD6BCuqQXs-XZwwNMo4n3SoGUSB5_bneyqIPVyLUrgzNV2ZEHWEtVaeAhx4cwdJ-HgbrquyCbbhRhRK_w5Np2l_GzZweCryVi8GKffAaIsYcCzmx-x4IwLKICPlDwZHOs2dZiAxH_xFNihNVneTn82Ce9HTI9AcGPPmN4oBc0-OAs0boJOxwAEsqAifRuprYBQGbQ7cAJRo_jY7TcPwHa2Srq6p3kXQW_ZA8KFQUuNTE2p6HhbeF8akGwT1uGab4i4ukea-liekiD_Moz5Ziq0ecNdUYefzUxsicAsA-Fa_zt27XjPs4gBS8Z6Ni9qU9g0zLSKCMF0SAzoLndxFVJy7blmAn8ywe8nhpn09sWv8gVhELT1ovhcg_kVbO25El0xH4H5OmAni7HWezZ90Ao1MpJaxtlIZZlQ5skmQ11n5oys4CRVqKGnf_PINGHI4VTdjC7ggR_-rZJFOST00ys_TIBp420r3Bbe2ldJa-5H6mSocdpbJrvyOG-oG2yfdq0E6qwTxQrziGjCqCiiIMbBGTMBfT43s5ZNto2KZhYSU9WSUC2YHBzAfBOwmlrt7qxOmmUAZqDePF8LCTDZ90lMdSJJys5rLCcuaBZQc5toV0zYdV4kI4RjoQZgFI0gQJzZnenI9gl7-S8f1PiNr1owAzpirrsm9vv_EnFwBA=\"}, {\"type\": \"text\", \"text\": \"An **agent trace** is a record of an AI agent\u2019s execution: what it received, the steps it took, any tools it called, the results it got, and how it reached an outcome.\\n\\nFor example, a trace might show:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather API.\\n3. API returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help developers debug behavior, measure performance, and understand failures. They usually capture observable actions and outputs\u2014not necessarily the model\u2019s private internal reasoning.\", \"annotations\": [], \"id\": \"msg_0d671d047d874849006ac15ae4ffe887d0b9dfa8ae2e2b3d75\", \"phase\": \"final_answer\"}], \"response_metadata\": {\"id\": \"resp_s_S9pb_fg4peKgFdqKPOb5jiEFgJ8dMVYW2g5CcSQunnIUsbGbfJTc5aJJe81qw9v9dP8p6wwaP8OwPfiI_NVo2fpGDXsSyI0NIjd174wdTALYKiZC83bVZK84TB5lKtyxSY7pp9GVWRDrOsWVjiZDo5o6DHjRY4U6_l4DUFn-ro73eVK-zKptdgR8cl_NyTjJuJLfvLIjc06MfVtBMTZVvUIGLCskcR3RPY8d8ddoZ1iTF2RRalBigXuq43boR08b169EADdHCMmvByiAFbTKbWl1vSSwamx_v_eEBaYQPpftcoMcf9D1xXvc82uveEWXcT_SyPgLtzLAp0RPqBcEhDwfia3BgZRbiBGyiM-5leewHgd7jDIV7Nh7EvnhnhIHFuo58KNujUm0eW-BpTDCRN5zQopaAbpk-X-UxAaU3fKPKWZrmJoHG97TafFke8-8oE0nYCCS8EZ5Y8ANtRUyIq\", \"created_at\": 1791056610.0, \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"object\": \"response\", \"service_tier\": \"default\", \"status\": \"completed\", \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\"}, \"type\": \"ai\", \"id\": \"resp_s_S9pb_fg4peKgFdqKPOb5jiEFgJ8dMVYW2g5CcSQunnIUsbGbfJTc5aJJe81qw9v9dP8p6wwaP8OwPfiI_NVo2fpGDXsSyI0NIjd174wdTALYKiZC83bVZK84TB5lKtyxSY7pp9GVWRDrOsWVjiZDo5o6DHjRY4U6_l4DUFn-ro73eVK-zKptdgR8cl_NyTjJuJLfvLIjc06MfVtBMTZVvUIGLCskcR3RPY8d8ddoZ1iTF2RRalBigXuq43boR08b169EADdHCMmvByiAFbTKbWl1vSSwamx_v_eEBaYQPpftcoMcf9D1xXvc82uveEWXcT_SyPgLtzLAp0RPqBcEhDwfia3BgZRbiBGyiM-5leewHgd7jDIV7Nh7EvnhnhIHFuo58KNujUm0eW-BpTDCRN5zQopaAbpk-X-UxAaU3fKPKWZrmJoHG97TafFke8-8oE0nYCCS8EZ5Y8ANtRUyIq\", \"usage_metadata\": {\"input_tokens\": 1975, \"output_tokens\": 183, \"total_tokens\": 2158, \"input_token_details\": {\"cache_creation\": 1972, \"cache_read\": 0}, \"output_token_details\": {\"reasoning\": 66}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}}]], \"llm_output\": null, \"run\": null, \"type\": \"LLMResult\"}"
+                    "stringValue": "{\"generations\": [[{\"text\": \"An **agent trace** is a record of an AI agent\u2019s run: the steps it took from a request to a result. It commonly includes the messages it received, actions or tool calls it made, tool responses, and the final output\u2014often with timestamps and errors.\\n\\nTraces help people debug, evaluate, and understand an agent\u2019s behavior. They show the observable sequence of events, not necessarily the model\u2019s private reasoning.\", \"generation_info\": null, \"type\": \"ChatGeneration\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": [{\"id\": \"rs_05e5d44b09fe0f10006ac16d45a92487d0842ce0adbba226df\", \"summary\": [], \"type\": \"reasoning\", \"content\": [], \"encrypted_content\": \"gAAAAABqwW1IiM8ZHSPBlFmixN4sgD9eCCnq9SYBCSPQzidkd7uHOEtiQUQrukphZGR6JBcON88FvjudIDhWGcKNNxIprZbz1FB1cPHDpwOb01jUpI8_Himmi0QDUpMyR7UtjtMaqzo7hwzRNKxrqYLxDfOSGMdT0dPPEztXjSD2jFRPejs1GKEQXscKW1X6dyv9-wGRUUfEi9Teiwnpl2Hv-BvhMALK7sFl3PevB4zzJn_qx76av8kTB7Te7Y7anWGt4asP7j_O0DcPnm9ucxslWSRjuBDDOwTlfISI0pPST399Dz60QtVAZtUgz-qLiIv8wVIoD6rwOXl84VtG86Vx8BQUXwoWrJWYgLwAxlqoO7M9LAlanDnfIoOKI5J_E1bdQGqShkODpcnfKT2_fOac45gfrqY-DZls3UFlBiDGx95RQAvvPYXtRZGjR4lVOps-lrrJXDXgoCCSj03blmQDPmKpWhBOiZoibm4_8WgFesxroCdwjoZUdf6CJ4FqNpnjoESB6O26NQjehWBBWPP_mCuS0QRoM7CsXFGHIMlLkA8qfE0O3fcOM_gE6d7wSjZpC_1-WCkk87PkyOXkKD6SinnTyCQqseKvBQSIn21qMcQ37F-JKT9UsEDPYQs7UegQJSnmGozJ-c1UCRvewnsmYCqriRcvmq5XgBufH_FuVGAs4fdCSELdnwVTNpUgho1bM-vqSyeWAT6DVqTRi6bg-sp5vLCkoJEHOQHd7K6X9AiJhNC2GrNaold-Y168mAh4ZlNTR1ebwMxX0C4ioJwg6Gm_y_rIkmRFcfSUuahntXqRtHpk9PM0MhaEFLImuADz0f1OfMeUlMEsY3jY7u6pt47_aotoyKREhKSctlmbvF9Mc97OqWOaO9JAx5OHsPZrI9rFg1GkFdc7cvpK8dke1rzBbSMYxR_uxtzvTg7ATgpO5khyyltq7A63c5yVTs_1E_WMSp6-61lkfvCDMrwcu4-6FuHVYfMZl2HfhZfDo_GPviFBl4zKD2iq8PvjhjcCwKv7XOQfTbj_PF-bYeiVBB_vwboax9yF7MkNJB5kxIfrank9A6i9jFvhmhlDvaxNdoOh9HMa_tkucrolGt3pe_xqCvgfqg03Os2ZvwLNWu6GD67fxtq8H29PeEici8ywOnWuyODeDIN81a3gki0EQCz8TjRSYT4ikbiR1_n7wfdZH1Sb50wexRDUo7cl1ZcHdrhylDj2xRDXL5MrNwCVRYp6sQj3h8l1kQoYrJTgl1vI4A1P_ubnIGHDxGe1juMu6VDH6t6tOgIWViuYMt0N2xiPOMBK-N4w3X156LkgZWmV-Z1dhzeGuFxUl6iPYO9g1dbB8KnOf18XI40poByKcv_E67zZx-eO5CLcN2KWPLkBF0Mx5FnqaYGiYrvR9pHNBeepjJq3BfgEm5Pt2Wm6HUjHkemesYijBdRVONUmu_M3klFoA-7z3hIdDbp2dpx1zcz4Hxa7Kk40WucYZHz1_biMhaeCKV6u-Li5xaIkHJoRfahbRp2J839ohKQ4AnWGb7dTqNZ7rwOC4KYdE9pCjlFnAB0rrYxz-MJjQzzTCl7xKFQy4hxXYHFGSbAfqvFYr7qPK4EDGKCdJVSW21IBiybSHmHnObbwtQRbTCtt4JaLUYrrOz0=\"}, {\"type\": \"text\", \"text\": \"An **agent trace** is a record of an AI agent\u2019s run: the steps it took from a request to a result. It commonly includes the messages it received, actions or tool calls it made, tool responses, and the final output\u2014often with timestamps and errors.\\n\\nTraces help people debug, evaluate, and understand an agent\u2019s behavior. They show the observable sequence of events, not necessarily the model\u2019s private reasoning.\", \"annotations\": [], \"id\": \"msg_05e5d44b09fe0f10006ac16d467af887d0bb54de149a82fae4\", \"phase\": \"final_answer\"}], \"response_metadata\": {\"id\": \"resp_meLQFnIN19A9gV6IpErXPP376KOMVFwkXKET6ifFVY_INxGhgnY-PCYYBgnq_njGDlEXr4DAaM2OP6Jw8e-JQm_kuACo_4BvMCURCx_Qp1vMcP8hKHG2HnMBvpUgdcZAz1LUCQLaZR-ZYqkrCa8WFIPbj3ZnVCMM_4EcEWrKzy-UiYrmP7MRkDIVd-Rqno3yEMNAbfb1Vc9k2IDRQRlWvtbJpqboGxLWiyEdn19Nqadcxg_cQGZc3m6YtLSBivg1pN4QaOU4RMVoq178_3cWC7TA8wKesxYSwxo7KWiEcO9gCRcgAwnEV3MQqK-6VKCtH1KStBklsLSEvLQTluasM0K87m_roMpThDi7buKq9wFyIcz8AIfP0--hUer4lJo2eQjxRkYthUtFNN5ymDyzs2bwt5bkG7Ta-yJmbWARVfBejowl6CXMiZ0Fz_PVy_2C7ms9xwbcPLztBriX1jpyqABC\", \"created_at\": 1791061317.0, \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"object\": \"response\", \"service_tier\": \"default\", \"status\": \"completed\", \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\"}, \"type\": \"ai\", \"id\": \"resp_meLQFnIN19A9gV6IpErXPP376KOMVFwkXKET6ifFVY_INxGhgnY-PCYYBgnq_njGDlEXr4DAaM2OP6Jw8e-JQm_kuACo_4BvMCURCx_Qp1vMcP8hKHG2HnMBvpUgdcZAz1LUCQLaZR-ZYqkrCa8WFIPbj3ZnVCMM_4EcEWrKzy-UiYrmP7MRkDIVd-Rqno3yEMNAbfb1Vc9k2IDRQRlWvtbJpqboGxLWiyEdn19Nqadcxg_cQGZc3m6YtLSBivg1pN4QaOU4RMVoq178_3cWC7TA8wKesxYSwxo7KWiEcO9gCRcgAwnEV3MQqK-6VKCtH1KStBklsLSEvLQTluasM0K87m_roMpThDi7buKq9wFyIcz8AIfP0--hUer4lJo2eQjxRkYthUtFNN5ymDyzs2bwt5bkG7Ta-yJmbWARVfBejowl6CXMiZ0Fz_PVy_2C7ms9xwbcPLztBriX1jpyqABC\", \"usage_metadata\": {\"input_tokens\": 1975, \"output_tokens\": 160, \"total_tokens\": 2135, \"input_token_details\": {\"cache_creation\": 1972, \"cache_read\": 0}, \"output_token_details\": {\"reasoning\": 68}}, \"tool_calls\": [], \"invalid_tool_calls\": []}}}]], \"llm_output\": null, \"run\": null, \"type\": \"LLMResult\"}"
                   }
                 },
                 {
@@ -199,7 +147,7 @@
                 {
                   "key": "llm.output_messages.0.message.contents.1.message_content.text",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s execution: what it received, the steps it took, any tools it called, the results it got, and how it reached an outcome.\n\nFor example, a trace might show:\n\n1. User asks for the weather.\n2. Agent calls a weather API.\n3. API returns the forecast.\n4. Agent summarizes it for the user.\n\nTraces help developers debug behavior, measure performance, and understand failures. They usually capture observable actions and outputs\u2014not necessarily the model\u2019s private internal reasoning."
+                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s run: the steps it took from a request to a result. It commonly includes the messages it received, actions or tool calls it made, tool responses, and the final output\u2014often with timestamps and errors.\n\nTraces help people debug, evaluate, and understand an agent\u2019s behavior. They show the observable sequence of events, not necessarily the model\u2019s private reasoning."
                   }
                 },
                 {
@@ -283,13 +231,13 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "183"
+                    "intValue": "160"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "2158"
+                    "intValue": "2135"
                   }
                 },
                 {
@@ -301,13 +249,13 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "66"
+                    "intValue": "68"
                   }
                 },
                 {
                   "key": "metadata",
                   "value": {
-                    "stringValue": "{\"ls_integration\": \"langchain_chat_model\", \"lc_agent_name\": \"research_agent\", \"lc_versions\": {\"deepagents\": \"0.7.21\", \"langchain-core\": \"1.6.6\", \"langchain\": \"1.4.3\", \"langchain-openai\": \"1.6.7\"}, \"langgraph_step\": 2, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:47ed9003-d844-3663-304b-96a7a269659f\", \"checkpoint_ns\": \"model:47ed9003-d844-3663-304b-96a7a269659f\", \"ls_provider\": \"openai\", \"ls_model_name\": \"openai/gpt-6-luna\", \"ls_model_type\": \"chat\", \"ls_temperature\": null}"
+                    "stringValue": "{\"ls_integration\": \"langchain_chat_model\", \"lc_agent_name\": \"research_agent\", \"lc_versions\": {\"deepagents\": \"0.7.21\", \"langchain-core\": \"1.6.6\", \"langchain\": \"1.4.3\", \"langchain-openai\": \"1.6.7\"}, \"langgraph_step\": 2, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:16ddf5e1-acd4-537c-f714-7cfc54f529f8\", \"checkpoint_ns\": \"model:16ddf5e1-acd4-537c-f714-7cfc54f529f8\", \"ls_provider\": \"openai\", \"ls_model_name\": \"openai/gpt-6-luna\", \"ls_model_type\": \"chat\", \"ls_temperature\": null}"
                   }
                 },
                 {
@@ -323,18 +271,18 @@
               "flags": 256
             },
             {
-              "traceId": "6bd908147a7fa8734c3225887463d3b9",
-              "spanId": "789038c7c4986d7d",
-              "parentSpanId": "a928f5c2d6aef799",
+              "traceId": "f4186abf7a7c72775ff23cf3b843d260",
+              "spanId": "b7dac413027ac08c",
+              "parentSpanId": "5bbb6a7a2cd23019",
               "name": "model",
               "kind": 1,
-              "startTimeUnixNano": "1791056610719742976",
-              "endTimeUnixNano": "1791056614608439808",
+              "startTimeUnixNano": "1791061316849745152",
+              "endTimeUnixNano": "1791061320697050112",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"3d2ceaa8-acb5-4875-ae0c-cc19d9d44da7\"}}], \"files\": {}}"
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"527c715b-7af7-4368-802f-e08f238cc315\"}}], \"files\": {}}"
                   }
                 },
                 {
@@ -346,7 +294,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "[{\"graph\": null, \"update\": {\"messages\": [{\"type\": \"ai\", \"data\": {\"content\": [{\"id\": \"rs_0d671d047d874849006ac15ae4215087d0aa1d8f424eed0148\", \"summary\": [], \"type\": \"reasoning\", \"content\": [], \"encrypted_content\": \"gAAAAABqwVrmvET53-j4sHF6U30wkOt1-HRTCfVAagRh-kv6jxJE2UMMzaV_qfUWZIX41SwGlK6HLCuafbT4IjZZ5qL-MRIVVM9WXHK6xPafjGWlUDHFLFdLHnNYgerUYQ6KoFqY1GMFyFvK1CI8BoA2D1pI8jM627tK8vPsGtqGlLqJSiHbNVfyCBmIIqglY3wmbZx77KbPdWznCteBH4gvvZ_ZR8GNmlhjBgtCSWICsMmRxZGjudGM4bU0r0cZugE2weLStR8kmEx7O4St2ylIye4XGv1p3cTTc0JEGiEIlULGzsnAtwrQMujMj60-QwEtDhV6EJ94ZQoOAX3O9a0W6HPx0eBuWQnRZlFL7WCN_btq_KagP2MIGLufX4QJC79sU_fGQNLteK-agmp6E9Li3cWpqxe2cOi_NMwk7lPOCN1_1R5-SDOURZdyGsHfc7f1vnmiyf56-ALQxX6vQwo3uF9nRC9g5e0gSgqyCIGfOcSSZZqlVkXQiRHzoifhAfoU0WeSl_85KFbdA2HzBWYgg-rG6D3EZ2Ke4LqrDga7z5U-emiYKRQvkbVd6PS3uDWEp0cGpsZHCJXX92f-Avyz8OdixBXntcXmavM24fpuP3fRTYHgwgAPJloZ3UIt739Ew95CkJHjzx8YuJdaRfgVyhnRquKeozqMVgYnHekWyzqdby20beiAWCCu0DVWlxRdkdH4VcGeKLgdXaF9R2ps731ruMCSmkspT0VZzDdxX7KCbmNTmiYfOAQKtzbga9LvjclZ6EhdVwS-L92SGIXmMfTFN6Q-7HmLv0Cyjd0Zx5LXaKiR1anTXZVco35FI87dlQPryqlj_fDUh24yxZhinA65reg88TRaCJ075J1rw22kUCPLe6CvChUMwIY29UTp7adTM519ZRPz5tRmtw6kw2JLwp-NBNl8vJDUk1W8sH2nO1qgtYuZueBs56WCpI-kze3J76VkdCEhD6BCuqQXs-XZwwNMo4n3SoGUSB5_bneyqIPVyLUrgzNV2ZEHWEtVaeAhx4cwdJ-HgbrquyCbbhRhRK_w5Np2l_GzZweCryVi8GKffAaIsYcCzmx-x4IwLKICPlDwZHOs2dZiAxH_xFNihNVneTn82Ce9HTI9AcGPPmN4oBc0-OAs0boJOxwAEsqAifRuprYBQGbQ7cAJRo_jY7TcPwHa2Srq6p3kXQW_ZA8KFQUuNTE2p6HhbeF8akGwT1uGab4i4ukea-liekiD_Moz5Ziq0ecNdUYefzUxsicAsA-Fa_zt27XjPs4gBS8Z6Ni9qU9g0zLSKCMF0SAzoLndxFVJy7blmAn8ywe8nhpn09sWv8gVhELT1ovhcg_kVbO25El0xH4H5OmAni7HWezZ90Ao1MpJaxtlIZZlQ5skmQ11n5oys4CRVqKGnf_PINGHI4VTdjC7ggR_-rZJFOST00ys_TIBp420r3Bbe2ldJa-5H6mSocdpbJrvyOG-oG2yfdq0E6qwTxQrziGjCqCiiIMbBGTMBfT43s5ZNto2KZhYSU9WSUC2YHBzAfBOwmlrt7qxOmmUAZqDePF8LCTDZ90lMdSJJys5rLCcuaBZQc5toV0zYdV4kI4RjoQZgFI0gQJzZnenI9gl7-S8f1PiNr1owAzpirrsm9vv_EnFwBA=\"}, {\"type\": \"text\", \"text\": \"An **agent trace** is a record of an AI agent\u2019s execution: what it received, the steps it took, any tools it called, the results it got, and how it reached an outcome.\\n\\nFor example, a trace might show:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather API.\\n3. API returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help developers debug behavior, measure performance, and understand failures. They usually capture observable actions and outputs\u2014not necessarily the model\u2019s private internal reasoning.\", \"annotations\": [], \"id\": \"msg_0d671d047d874849006ac15ae4ffe887d0b9dfa8ae2e2b3d75\", \"phase\": \"final_answer\"}], \"additional_kwargs\": {}, \"response_metadata\": {\"id\": \"resp_s_S9pb_fg4peKgFdqKPOb5jiEFgJ8dMVYW2g5CcSQunnIUsbGbfJTc5aJJe81qw9v9dP8p6wwaP8OwPfiI_NVo2fpGDXsSyI0NIjd174wdTALYKiZC83bVZK84TB5lKtyxSY7pp9GVWRDrOsWVjiZDo5o6DHjRY4U6_l4DUFn-ro73eVK-zKptdgR8cl_NyTjJuJLfvLIjc06MfVtBMTZVvUIGLCskcR3RPY8d8ddoZ1iTF2RRalBigXuq43boR08b169EADdHCMmvByiAFbTKbWl1vSSwamx_v_eEBaYQPpftcoMcf9D1xXvc82uveEWXcT_SyPgLtzLAp0RPqBcEhDwfia3BgZRbiBGyiM-5leewHgd7jDIV7Nh7EvnhnhIHFuo58KNujUm0eW-BpTDCRN5zQopaAbpk-X-UxAaU3fKPKWZrmJoHG97TafFke8-8oE0nYCCS8EZ5Y8ANtRUyIq\", \"created_at\": 1791056610.0, \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"object\": \"response\", \"service_tier\": \"default\", \"status\": \"completed\", \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\"}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"resp_s_S9pb_fg4peKgFdqKPOb5jiEFgJ8dMVYW2g5CcSQunnIUsbGbfJTc5aJJe81qw9v9dP8p6wwaP8OwPfiI_NVo2fpGDXsSyI0NIjd174wdTALYKiZC83bVZK84TB5lKtyxSY7pp9GVWRDrOsWVjiZDo5o6DHjRY4U6_l4DUFn-ro73eVK-zKptdgR8cl_NyTjJuJLfvLIjc06MfVtBMTZVvUIGLCskcR3RPY8d8ddoZ1iTF2RRalBigXuq43boR08b169EADdHCMmvByiAFbTKbWl1vSSwamx_v_eEBaYQPpftcoMcf9D1xXvc82uveEWXcT_SyPgLtzLAp0RPqBcEhDwfia3BgZRbiBGyiM-5leewHgd7jDIV7Nh7EvnhnhIHFuo58KNujUm0eW-BpTDCRN5zQopaAbpk-X-UxAaU3fKPKWZrmJoHG97TafFke8-8oE0nYCCS8EZ5Y8ANtRUyIq\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 1975, \"output_tokens\": 183, \"total_tokens\": 2158, \"input_token_details\": {\"cache_creation\": 1972, \"cache_read\": 0}, \"output_token_details\": {\"reasoning\": 66}}}}]}, \"resume\": null, \"goto\": []}]"
+                    "stringValue": "[{\"graph\": null, \"update\": {\"messages\": [{\"type\": \"ai\", \"data\": {\"content\": [{\"id\": \"rs_05e5d44b09fe0f10006ac16d45a92487d0842ce0adbba226df\", \"summary\": [], \"type\": \"reasoning\", \"content\": [], \"encrypted_content\": \"gAAAAABqwW1IiM8ZHSPBlFmixN4sgD9eCCnq9SYBCSPQzidkd7uHOEtiQUQrukphZGR6JBcON88FvjudIDhWGcKNNxIprZbz1FB1cPHDpwOb01jUpI8_Himmi0QDUpMyR7UtjtMaqzo7hwzRNKxrqYLxDfOSGMdT0dPPEztXjSD2jFRPejs1GKEQXscKW1X6dyv9-wGRUUfEi9Teiwnpl2Hv-BvhMALK7sFl3PevB4zzJn_qx76av8kTB7Te7Y7anWGt4asP7j_O0DcPnm9ucxslWSRjuBDDOwTlfISI0pPST399Dz60QtVAZtUgz-qLiIv8wVIoD6rwOXl84VtG86Vx8BQUXwoWrJWYgLwAxlqoO7M9LAlanDnfIoOKI5J_E1bdQGqShkODpcnfKT2_fOac45gfrqY-DZls3UFlBiDGx95RQAvvPYXtRZGjR4lVOps-lrrJXDXgoCCSj03blmQDPmKpWhBOiZoibm4_8WgFesxroCdwjoZUdf6CJ4FqNpnjoESB6O26NQjehWBBWPP_mCuS0QRoM7CsXFGHIMlLkA8qfE0O3fcOM_gE6d7wSjZpC_1-WCkk87PkyOXkKD6SinnTyCQqseKvBQSIn21qMcQ37F-JKT9UsEDPYQs7UegQJSnmGozJ-c1UCRvewnsmYCqriRcvmq5XgBufH_FuVGAs4fdCSELdnwVTNpUgho1bM-vqSyeWAT6DVqTRi6bg-sp5vLCkoJEHOQHd7K6X9AiJhNC2GrNaold-Y168mAh4ZlNTR1ebwMxX0C4ioJwg6Gm_y_rIkmRFcfSUuahntXqRtHpk9PM0MhaEFLImuADz0f1OfMeUlMEsY3jY7u6pt47_aotoyKREhKSctlmbvF9Mc97OqWOaO9JAx5OHsPZrI9rFg1GkFdc7cvpK8dke1rzBbSMYxR_uxtzvTg7ATgpO5khyyltq7A63c5yVTs_1E_WMSp6-61lkfvCDMrwcu4-6FuHVYfMZl2HfhZfDo_GPviFBl4zKD2iq8PvjhjcCwKv7XOQfTbj_PF-bYeiVBB_vwboax9yF7MkNJB5kxIfrank9A6i9jFvhmhlDvaxNdoOh9HMa_tkucrolGt3pe_xqCvgfqg03Os2ZvwLNWu6GD67fxtq8H29PeEici8ywOnWuyODeDIN81a3gki0EQCz8TjRSYT4ikbiR1_n7wfdZH1Sb50wexRDUo7cl1ZcHdrhylDj2xRDXL5MrNwCVRYp6sQj3h8l1kQoYrJTgl1vI4A1P_ubnIGHDxGe1juMu6VDH6t6tOgIWViuYMt0N2xiPOMBK-N4w3X156LkgZWmV-Z1dhzeGuFxUl6iPYO9g1dbB8KnOf18XI40poByKcv_E67zZx-eO5CLcN2KWPLkBF0Mx5FnqaYGiYrvR9pHNBeepjJq3BfgEm5Pt2Wm6HUjHkemesYijBdRVONUmu_M3klFoA-7z3hIdDbp2dpx1zcz4Hxa7Kk40WucYZHz1_biMhaeCKV6u-Li5xaIkHJoRfahbRp2J839ohKQ4AnWGb7dTqNZ7rwOC4KYdE9pCjlFnAB0rrYxz-MJjQzzTCl7xKFQy4hxXYHFGSbAfqvFYr7qPK4EDGKCdJVSW21IBiybSHmHnObbwtQRbTCtt4JaLUYrrOz0=\"}, {\"type\": \"text\", \"text\": \"An **agent trace** is a record of an AI agent\u2019s run: the steps it took from a request to a result. It commonly includes the messages it received, actions or tool calls it made, tool responses, and the final output\u2014often with timestamps and errors.\\n\\nTraces help people debug, evaluate, and understand an agent\u2019s behavior. They show the observable sequence of events, not necessarily the model\u2019s private reasoning.\", \"annotations\": [], \"id\": \"msg_05e5d44b09fe0f10006ac16d467af887d0bb54de149a82fae4\", \"phase\": \"final_answer\"}], \"additional_kwargs\": {}, \"response_metadata\": {\"id\": \"resp_meLQFnIN19A9gV6IpErXPP376KOMVFwkXKET6ifFVY_INxGhgnY-PCYYBgnq_njGDlEXr4DAaM2OP6Jw8e-JQm_kuACo_4BvMCURCx_Qp1vMcP8hKHG2HnMBvpUgdcZAz1LUCQLaZR-ZYqkrCa8WFIPbj3ZnVCMM_4EcEWrKzy-UiYrmP7MRkDIVd-Rqno3yEMNAbfb1Vc9k2IDRQRlWvtbJpqboGxLWiyEdn19Nqadcxg_cQGZc3m6YtLSBivg1pN4QaOU4RMVoq178_3cWC7TA8wKesxYSwxo7KWiEcO9gCRcgAwnEV3MQqK-6VKCtH1KStBklsLSEvLQTluasM0K87m_roMpThDi7buKq9wFyIcz8AIfP0--hUer4lJo2eQjxRkYthUtFNN5ymDyzs2bwt5bkG7Ta-yJmbWARVfBejowl6CXMiZ0Fz_PVy_2C7ms9xwbcPLztBriX1jpyqABC\", \"created_at\": 1791061317.0, \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"object\": \"response\", \"service_tier\": \"default\", \"status\": \"completed\", \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\"}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"resp_meLQFnIN19A9gV6IpErXPP376KOMVFwkXKET6ifFVY_INxGhgnY-PCYYBgnq_njGDlEXr4DAaM2OP6Jw8e-JQm_kuACo_4BvMCURCx_Qp1vMcP8hKHG2HnMBvpUgdcZAz1LUCQLaZR-ZYqkrCa8WFIPbj3ZnVCMM_4EcEWrKzy-UiYrmP7MRkDIVd-Rqno3yEMNAbfb1Vc9k2IDRQRlWvtbJpqboGxLWiyEdn19Nqadcxg_cQGZc3m6YtLSBivg1pN4QaOU4RMVoq178_3cWC7TA8wKesxYSwxo7KWiEcO9gCRcgAwnEV3MQqK-6VKCtH1KStBklsLSEvLQTluasM0K87m_roMpThDi7buKq9wFyIcz8AIfP0--hUer4lJo2eQjxRkYthUtFNN5ymDyzs2bwt5bkG7Ta-yJmbWARVfBejowl6CXMiZ0Fz_PVy_2C7ms9xwbcPLztBriX1jpyqABC\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 1975, \"output_tokens\": 160, \"total_tokens\": 2135, \"input_token_details\": {\"cache_creation\": 1972, \"cache_read\": 0}, \"output_token_details\": {\"reasoning\": 68}}}}]}, \"resume\": null, \"goto\": []}]"
                   }
                 },
                 {
@@ -370,7 +318,7 @@
                 {
                   "key": "metadata",
                   "value": {
-                    "stringValue": "{\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"research_agent\", \"lc_versions\": {\"deepagents\": \"0.7.21\"}, \"langgraph_step\": 2, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:47ed9003-d844-3663-304b-96a7a269659f\"}"
+                    "stringValue": "{\"ls_integration\": \"deepagents\", \"lc_agent_name\": \"research_agent\", \"lc_versions\": {\"deepagents\": \"0.7.21\"}, \"langgraph_step\": 2, \"langgraph_node\": \"model\", \"langgraph_triggers\": [\"branch:to:model\"], \"langgraph_path\": [\"__pregel_pull\", \"model\"], \"langgraph_checkpoint_ns\": \"model:16ddf5e1-acd4-537c-f714-7cfc54f529f8\"}"
                   }
                 },
                 {
@@ -386,17 +334,17 @@
               "flags": 256
             },
             {
-              "traceId": "6bd908147a7fa8734c3225887463d3b9",
-              "spanId": "a928f5c2d6aef799",
+              "traceId": "f4186abf7a7c72775ff23cf3b843d260",
+              "spanId": "5bbb6a7a2cd23019",
               "name": "research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056610717606912",
-              "endTimeUnixNano": "1791056614609248000",
+              "startTimeUnixNano": "1791061316848026880",
+              "endTimeUnixNano": "1791061320697488896",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"3d2ceaa8-acb5-4875-ae0c-cc19d9d44da7\"}}]}"
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"527c715b-7af7-4368-802f-e08f238cc315\"}}]}"
                   }
                 },
                 {
@@ -408,7 +356,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"3d2ceaa8-acb5-4875-ae0c-cc19d9d44da7\"}}, {\"type\": \"ai\", \"data\": {\"content\": [{\"id\": \"rs_0d671d047d874849006ac15ae4215087d0aa1d8f424eed0148\", \"summary\": [], \"type\": \"reasoning\", \"content\": [], \"encrypted_content\": \"gAAAAABqwVrmvET53-j4sHF6U30wkOt1-HRTCfVAagRh-kv6jxJE2UMMzaV_qfUWZIX41SwGlK6HLCuafbT4IjZZ5qL-MRIVVM9WXHK6xPafjGWlUDHFLFdLHnNYgerUYQ6KoFqY1GMFyFvK1CI8BoA2D1pI8jM627tK8vPsGtqGlLqJSiHbNVfyCBmIIqglY3wmbZx77KbPdWznCteBH4gvvZ_ZR8GNmlhjBgtCSWICsMmRxZGjudGM4bU0r0cZugE2weLStR8kmEx7O4St2ylIye4XGv1p3cTTc0JEGiEIlULGzsnAtwrQMujMj60-QwEtDhV6EJ94ZQoOAX3O9a0W6HPx0eBuWQnRZlFL7WCN_btq_KagP2MIGLufX4QJC79sU_fGQNLteK-agmp6E9Li3cWpqxe2cOi_NMwk7lPOCN1_1R5-SDOURZdyGsHfc7f1vnmiyf56-ALQxX6vQwo3uF9nRC9g5e0gSgqyCIGfOcSSZZqlVkXQiRHzoifhAfoU0WeSl_85KFbdA2HzBWYgg-rG6D3EZ2Ke4LqrDga7z5U-emiYKRQvkbVd6PS3uDWEp0cGpsZHCJXX92f-Avyz8OdixBXntcXmavM24fpuP3fRTYHgwgAPJloZ3UIt739Ew95CkJHjzx8YuJdaRfgVyhnRquKeozqMVgYnHekWyzqdby20beiAWCCu0DVWlxRdkdH4VcGeKLgdXaF9R2ps731ruMCSmkspT0VZzDdxX7KCbmNTmiYfOAQKtzbga9LvjclZ6EhdVwS-L92SGIXmMfTFN6Q-7HmLv0Cyjd0Zx5LXaKiR1anTXZVco35FI87dlQPryqlj_fDUh24yxZhinA65reg88TRaCJ075J1rw22kUCPLe6CvChUMwIY29UTp7adTM519ZRPz5tRmtw6kw2JLwp-NBNl8vJDUk1W8sH2nO1qgtYuZueBs56WCpI-kze3J76VkdCEhD6BCuqQXs-XZwwNMo4n3SoGUSB5_bneyqIPVyLUrgzNV2ZEHWEtVaeAhx4cwdJ-HgbrquyCbbhRhRK_w5Np2l_GzZweCryVi8GKffAaIsYcCzmx-x4IwLKICPlDwZHOs2dZiAxH_xFNihNVneTn82Ce9HTI9AcGPPmN4oBc0-OAs0boJOxwAEsqAifRuprYBQGbQ7cAJRo_jY7TcPwHa2Srq6p3kXQW_ZA8KFQUuNTE2p6HhbeF8akGwT1uGab4i4ukea-liekiD_Moz5Ziq0ecNdUYefzUxsicAsA-Fa_zt27XjPs4gBS8Z6Ni9qU9g0zLSKCMF0SAzoLndxFVJy7blmAn8ywe8nhpn09sWv8gVhELT1ovhcg_kVbO25El0xH4H5OmAni7HWezZ90Ao1MpJaxtlIZZlQ5skmQ11n5oys4CRVqKGnf_PINGHI4VTdjC7ggR_-rZJFOST00ys_TIBp420r3Bbe2ldJa-5H6mSocdpbJrvyOG-oG2yfdq0E6qwTxQrziGjCqCiiIMbBGTMBfT43s5ZNto2KZhYSU9WSUC2YHBzAfBOwmlrt7qxOmmUAZqDePF8LCTDZ90lMdSJJys5rLCcuaBZQc5toV0zYdV4kI4RjoQZgFI0gQJzZnenI9gl7-S8f1PiNr1owAzpirrsm9vv_EnFwBA=\"}, {\"type\": \"text\", \"text\": \"An **agent trace** is a record of an AI agent\u2019s execution: what it received, the steps it took, any tools it called, the results it got, and how it reached an outcome.\\n\\nFor example, a trace might show:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather API.\\n3. API returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help developers debug behavior, measure performance, and understand failures. They usually capture observable actions and outputs\u2014not necessarily the model\u2019s private internal reasoning.\", \"annotations\": [], \"id\": \"msg_0d671d047d874849006ac15ae4ffe887d0b9dfa8ae2e2b3d75\", \"phase\": \"final_answer\"}], \"additional_kwargs\": {}, \"response_metadata\": {\"id\": \"resp_s_S9pb_fg4peKgFdqKPOb5jiEFgJ8dMVYW2g5CcSQunnIUsbGbfJTc5aJJe81qw9v9dP8p6wwaP8OwPfiI_NVo2fpGDXsSyI0NIjd174wdTALYKiZC83bVZK84TB5lKtyxSY7pp9GVWRDrOsWVjiZDo5o6DHjRY4U6_l4DUFn-ro73eVK-zKptdgR8cl_NyTjJuJLfvLIjc06MfVtBMTZVvUIGLCskcR3RPY8d8ddoZ1iTF2RRalBigXuq43boR08b169EADdHCMmvByiAFbTKbWl1vSSwamx_v_eEBaYQPpftcoMcf9D1xXvc82uveEWXcT_SyPgLtzLAp0RPqBcEhDwfia3BgZRbiBGyiM-5leewHgd7jDIV7Nh7EvnhnhIHFuo58KNujUm0eW-BpTDCRN5zQopaAbpk-X-UxAaU3fKPKWZrmJoHG97TafFke8-8oE0nYCCS8EZ5Y8ANtRUyIq\", \"created_at\": 1791056610.0, \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"object\": \"response\", \"service_tier\": \"default\", \"status\": \"completed\", \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\"}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"resp_s_S9pb_fg4peKgFdqKPOb5jiEFgJ8dMVYW2g5CcSQunnIUsbGbfJTc5aJJe81qw9v9dP8p6wwaP8OwPfiI_NVo2fpGDXsSyI0NIjd174wdTALYKiZC83bVZK84TB5lKtyxSY7pp9GVWRDrOsWVjiZDo5o6DHjRY4U6_l4DUFn-ro73eVK-zKptdgR8cl_NyTjJuJLfvLIjc06MfVtBMTZVvUIGLCskcR3RPY8d8ddoZ1iTF2RRalBigXuq43boR08b169EADdHCMmvByiAFbTKbWl1vSSwamx_v_eEBaYQPpftcoMcf9D1xXvc82uveEWXcT_SyPgLtzLAp0RPqBcEhDwfia3BgZRbiBGyiM-5leewHgd7jDIV7Nh7EvnhnhIHFuo58KNujUm0eW-BpTDCRN5zQopaAbpk-X-UxAaU3fKPKWZrmJoHG97TafFke8-8oE0nYCCS8EZ5Y8ANtRUyIq\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 1975, \"output_tokens\": 183, \"total_tokens\": 2158, \"input_token_details\": {\"cache_creation\": 1972, \"cache_read\": 0}, \"output_token_details\": {\"reasoning\": 66}}}}], \"files\": {}}"
+                    "stringValue": "{\"messages\": [{\"type\": \"human\", \"data\": {\"content\": \"What is an agent trace?\", \"additional_kwargs\": {}, \"response_metadata\": {}, \"type\": \"human\", \"name\": null, \"id\": \"527c715b-7af7-4368-802f-e08f238cc315\"}}, {\"type\": \"ai\", \"data\": {\"content\": [{\"id\": \"rs_05e5d44b09fe0f10006ac16d45a92487d0842ce0adbba226df\", \"summary\": [], \"type\": \"reasoning\", \"content\": [], \"encrypted_content\": \"gAAAAABqwW1IiM8ZHSPBlFmixN4sgD9eCCnq9SYBCSPQzidkd7uHOEtiQUQrukphZGR6JBcON88FvjudIDhWGcKNNxIprZbz1FB1cPHDpwOb01jUpI8_Himmi0QDUpMyR7UtjtMaqzo7hwzRNKxrqYLxDfOSGMdT0dPPEztXjSD2jFRPejs1GKEQXscKW1X6dyv9-wGRUUfEi9Teiwnpl2Hv-BvhMALK7sFl3PevB4zzJn_qx76av8kTB7Te7Y7anWGt4asP7j_O0DcPnm9ucxslWSRjuBDDOwTlfISI0pPST399Dz60QtVAZtUgz-qLiIv8wVIoD6rwOXl84VtG86Vx8BQUXwoWrJWYgLwAxlqoO7M9LAlanDnfIoOKI5J_E1bdQGqShkODpcnfKT2_fOac45gfrqY-DZls3UFlBiDGx95RQAvvPYXtRZGjR4lVOps-lrrJXDXgoCCSj03blmQDPmKpWhBOiZoibm4_8WgFesxroCdwjoZUdf6CJ4FqNpnjoESB6O26NQjehWBBWPP_mCuS0QRoM7CsXFGHIMlLkA8qfE0O3fcOM_gE6d7wSjZpC_1-WCkk87PkyOXkKD6SinnTyCQqseKvBQSIn21qMcQ37F-JKT9UsEDPYQs7UegQJSnmGozJ-c1UCRvewnsmYCqriRcvmq5XgBufH_FuVGAs4fdCSELdnwVTNpUgho1bM-vqSyeWAT6DVqTRi6bg-sp5vLCkoJEHOQHd7K6X9AiJhNC2GrNaold-Y168mAh4ZlNTR1ebwMxX0C4ioJwg6Gm_y_rIkmRFcfSUuahntXqRtHpk9PM0MhaEFLImuADz0f1OfMeUlMEsY3jY7u6pt47_aotoyKREhKSctlmbvF9Mc97OqWOaO9JAx5OHsPZrI9rFg1GkFdc7cvpK8dke1rzBbSMYxR_uxtzvTg7ATgpO5khyyltq7A63c5yVTs_1E_WMSp6-61lkfvCDMrwcu4-6FuHVYfMZl2HfhZfDo_GPviFBl4zKD2iq8PvjhjcCwKv7XOQfTbj_PF-bYeiVBB_vwboax9yF7MkNJB5kxIfrank9A6i9jFvhmhlDvaxNdoOh9HMa_tkucrolGt3pe_xqCvgfqg03Os2ZvwLNWu6GD67fxtq8H29PeEici8ywOnWuyODeDIN81a3gki0EQCz8TjRSYT4ikbiR1_n7wfdZH1Sb50wexRDUo7cl1ZcHdrhylDj2xRDXL5MrNwCVRYp6sQj3h8l1kQoYrJTgl1vI4A1P_ubnIGHDxGe1juMu6VDH6t6tOgIWViuYMt0N2xiPOMBK-N4w3X156LkgZWmV-Z1dhzeGuFxUl6iPYO9g1dbB8KnOf18XI40poByKcv_E67zZx-eO5CLcN2KWPLkBF0Mx5FnqaYGiYrvR9pHNBeepjJq3BfgEm5Pt2Wm6HUjHkemesYijBdRVONUmu_M3klFoA-7z3hIdDbp2dpx1zcz4Hxa7Kk40WucYZHz1_biMhaeCKV6u-Li5xaIkHJoRfahbRp2J839ohKQ4AnWGb7dTqNZ7rwOC4KYdE9pCjlFnAB0rrYxz-MJjQzzTCl7xKFQy4hxXYHFGSbAfqvFYr7qPK4EDGKCdJVSW21IBiybSHmHnObbwtQRbTCtt4JaLUYrrOz0=\"}, {\"type\": \"text\", \"text\": \"An **agent trace** is a record of an AI agent\u2019s run: the steps it took from a request to a result. It commonly includes the messages it received, actions or tool calls it made, tool responses, and the final output\u2014often with timestamps and errors.\\n\\nTraces help people debug, evaluate, and understand an agent\u2019s behavior. They show the observable sequence of events, not necessarily the model\u2019s private reasoning.\", \"annotations\": [], \"id\": \"msg_05e5d44b09fe0f10006ac16d467af887d0bb54de149a82fae4\", \"phase\": \"final_answer\"}], \"additional_kwargs\": {}, \"response_metadata\": {\"id\": \"resp_meLQFnIN19A9gV6IpErXPP376KOMVFwkXKET6ifFVY_INxGhgnY-PCYYBgnq_njGDlEXr4DAaM2OP6Jw8e-JQm_kuACo_4BvMCURCx_Qp1vMcP8hKHG2HnMBvpUgdcZAz1LUCQLaZR-ZYqkrCa8WFIPbj3ZnVCMM_4EcEWrKzy-UiYrmP7MRkDIVd-Rqno3yEMNAbfb1Vc9k2IDRQRlWvtbJpqboGxLWiyEdn19Nqadcxg_cQGZc3m6YtLSBivg1pN4QaOU4RMVoq178_3cWC7TA8wKesxYSwxo7KWiEcO9gCRcgAwnEV3MQqK-6VKCtH1KStBklsLSEvLQTluasM0K87m_roMpThDi7buKq9wFyIcz8AIfP0--hUer4lJo2eQjxRkYthUtFNN5ymDyzs2bwt5bkG7Ta-yJmbWARVfBejowl6CXMiZ0Fz_PVy_2C7ms9xwbcPLztBriX1jpyqABC\", \"created_at\": 1791061317.0, \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"object\": \"response\", \"service_tier\": \"default\", \"status\": \"completed\", \"model_provider\": \"openai\", \"model_name\": \"openai/gpt-6-luna\"}, \"type\": \"ai\", \"name\": \"research_agent\", \"id\": \"resp_meLQFnIN19A9gV6IpErXPP376KOMVFwkXKET6ifFVY_INxGhgnY-PCYYBgnq_njGDlEXr4DAaM2OP6Jw8e-JQm_kuACo_4BvMCURCx_Qp1vMcP8hKHG2HnMBvpUgdcZAz1LUCQLaZR-ZYqkrCa8WFIPbj3ZnVCMM_4EcEWrKzy-UiYrmP7MRkDIVd-Rqno3yEMNAbfb1Vc9k2IDRQRlWvtbJpqboGxLWiyEdn19Nqadcxg_cQGZc3m6YtLSBivg1pN4QaOU4RMVoq178_3cWC7TA8wKesxYSwxo7KWiEcO9gCRcgAwnEV3MQqK-6VKCtH1KStBklsLSEvLQTluasM0K87m_roMpThDi7buKq9wFyIcz8AIfP0--hUer4lJo2eQjxRkYthUtFNN5ymDyzs2bwt5bkG7Ta-yJmbWARVfBejowl6CXMiZ0Fz_PVy_2C7ms9xwbcPLztBriX1jpyqABC\", \"tool_calls\": [], \"invalid_tool_calls\": [], \"usage_metadata\": {\"input_tokens\": 1975, \"output_tokens\": 160, \"total_tokens\": 2135, \"input_token_details\": {\"cache_creation\": 1972, \"cache_read\": 0}, \"output_token_details\": {\"reasoning\": 68}}}}], \"files\": {}}"
                   }
                 },
                 {

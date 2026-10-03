@@ -49,13 +49,13 @@
           },
           "spans": [
             {
-              "traceId": "a01b1b6e7a86b96728abaad47c8ede5a",
-              "spanId": "ed19b9b2c7b166d3",
-              "parentSpanId": "1c600261866d50e8",
+              "traceId": "207bf859f653150fd4346add5cb11ad3",
+              "spanId": "1825d4fb63cffcec",
+              "parentSpanId": "8a420dd58d6ff237",
               "name": "claude_code.llm_request",
               "kind": 1,
-              "startTimeUnixNano": "1791056940091000000",
-              "endTimeUnixNano": "1791056945364602500",
+              "startTimeUnixNano": "1791061376589000000",
+              "endTimeUnixNano": "1791061384361645125",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -72,13 +72,13 @@
                 {
                   "key": "session.id",
                   "value": {
-                    "stringValue": "48cec825-9a38-4bbb-83bf-2b28ab0236a7"
+                    "stringValue": "0e5bb47c-6b08-4a1b-bde4-9ab142589572"
                   }
                 },
                 {
                   "key": "terminal.type",
                   "value": {
-                    "stringValue": "dumb"
+                    "stringValue": "ghostty"
                   }
                 },
                 {
@@ -168,7 +168,7 @@
                 {
                   "key": "system_reminders_count",
                   "value": {
-                    "intValue": "1"
+                    "intValue": "2"
                   }
                 },
                 {
@@ -180,25 +180,25 @@
                 {
                   "key": "system_reminders",
                   "value": {
-                    "stringValue": "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /Users/yujonglee/dev/litellm-lens-example/claude-agent-sdk\n - Is a git repository: true\n - Platform: darwin\n - Shell: zsh\n - OS Version: Darwin 25.6.0\n\nYou are powered by the model openai/gpt-6-luna.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nToday's date is 2026-10-03."
+                    "stringValue": "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.\n\nContents of /home/user/.claude/projects/-home-user-dev-litellm-lens-example/memory/MEMORY.md (user's auto-memory, persists across conversations):\n\n- [LiteLLM spend correlation contract](litellm-spend-correlation-contract.md) \u2014 source PR #44421, offline validation with mock gateway + recorder\n- [SDK wiring limits](litellm-lens-example-sdk-wiring-limits.md) \u2014 which SDKs cannot take the shared gateway transport and why\n\n---\n\n# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /home/user/dev/litellm-lens-example/claude-agent-sdk\n - Is a git repository: true\n - Platform: darwin\n - Shell: zsh\n - OS Version: Darwin 25.6.0\n\nYou are powered by the model openai/gpt-6-luna.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nToday's date is 2026-10-03."
                   }
                 },
                 {
                   "key": "duration_ms",
                   "value": {
-                    "intValue": "5273"
+                    "intValue": "7772"
                   }
                 },
                 {
                   "key": "input_tokens",
                   "value": {
-                    "intValue": "171"
+                    "intValue": "323"
                   }
                 },
                 {
                   "key": "output_tokens",
                   "value": {
-                    "intValue": "533"
+                    "intValue": "671"
                   }
                 },
                 {
@@ -234,25 +234,25 @@
                 {
                   "key": "request_id",
                   "value": {
-                    "stringValue": "msg_3da1c5dc-4468-48e7-ab61-209cda714197"
+                    "stringValue": "msg_b65eb4b6-da48-4eb3-a564-0f65202f4797"
                   }
                 },
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "msg_3da1c5dc-4468-48e7-ab61-209cda714197"
+                    "stringValue": "msg_b65eb4b6-da48-4eb3-a564-0f65202f4797"
                   }
                 },
                 {
                   "key": "ttft_ms",
                   "value": {
-                    "intValue": "881"
+                    "intValue": "769"
                   }
                 },
                 {
                   "key": "first_content_ms",
                   "value": {
-                    "intValue": "4128"
+                    "intValue": "6113"
                   }
                 },
                 {
@@ -264,7 +264,7 @@
                 {
                   "key": "response.model_output",
                   "value": {
-                    "stringValue": "An **agent trace** is a chronological record of what happened during an agent run: the request, the agent\u2019s messages, tool calls and their results, and whether the run completed or failed. It may also include timing and token-use metadata.\n\nFor example:\n\n```text\nUser asks for the latest release\n\u2192 Agent calls a search tool\n\u2192 Search tool returns results\n\u2192 Agent summarizes the results\n```\n\nTraces help you debug runs, understand tool use, and measure performance. The term varies by framework; a trace generally records observable actions, not necessarily the model\u2019s private reasoning."
+                    "stringValue": "An **agent trace** is the connected record of one agent task from start to finish\u2014not just a single LLM request.\n\nFor example, a task might produce a trace containing:\n1. The agent\u2019s model call\n2. A weather-tool call and its result\n3. A follow-up model call that writes the answer\n\nThose steps are linked as spans in a timeline, often with timestamps, status, token usage, and cost. Traces help you understand what the agent did, where it failed or spent time, and which calls contributed to the cost.\n\nA trace may contain prompts and tool inputs or outputs, depending on the instrumentation, but it **doesn\u2019t mean the agent\u2019s hidden chain-of-thought is being recorded**."
                   }
                 },
                 {
@@ -288,7 +288,7 @@
               ],
               "events": [
                 {
-                  "timeUnixNano": "1791056940095198750",
+                  "timeUnixNano": "1791061376591988250",
                   "name": "gen_ai.request.attempt",
                   "attributes": [
                     {
@@ -304,13 +304,13 @@
               "flags": 257
             },
             {
-              "traceId": "a01b1b6e7a86b96728abaad47c8ede5a",
-              "spanId": "1c600261866d50e8",
-              "parentSpanId": "13f0bcda373e4fe7",
+              "traceId": "207bf859f653150fd4346add5cb11ad3",
+              "spanId": "8a420dd58d6ff237",
+              "parentSpanId": "c2c6b0971076f31c",
               "name": "claude_code.interaction",
               "kind": 1,
-              "startTimeUnixNano": "1791056940031000000",
-              "endTimeUnixNano": "1791056945372983500",
+              "startTimeUnixNano": "1791061376541000000",
+              "endTimeUnixNano": "1791061384366705375",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -327,13 +327,13 @@
                 {
                   "key": "session.id",
                   "value": {
-                    "stringValue": "48cec825-9a38-4bbb-83bf-2b28ab0236a7"
+                    "stringValue": "0e5bb47c-6b08-4a1b-bde4-9ab142589572"
                   }
                 },
                 {
                   "key": "terminal.type",
                   "value": {
-                    "stringValue": "dumb"
+                    "stringValue": "ghostty"
                   }
                 },
                 {
@@ -381,7 +381,7 @@
                 {
                   "key": "interaction.duration_ms",
                   "value": {
-                    "intValue": "5342"
+                    "intValue": "7826"
                   }
                 }
               ],
@@ -416,7 +416,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "97fb1130-fc1b-4976-b012-cda4a36a5448"
+              "stringValue": "5ac3598e-aed9-4cda-ac0e-1ab2f82a2673"
             }
           },
           {
@@ -447,12 +447,12 @@
           },
           "spans": [
             {
-              "traceId": "a01b1b6e7a86b96728abaad47c8ede5a",
-              "spanId": "13f0bcda373e4fe7",
+              "traceId": "207bf859f653150fd4346add5cb11ad3",
+              "spanId": "c2c6b0971076f31c",
               "name": "ClaudeAgentSDK.query",
               "kind": 1,
-              "startTimeUnixNano": "1791056936132359000",
-              "endTimeUnixNano": "1791056945427716000",
+              "startTimeUnixNano": "1791061376098056000",
+              "endTimeUnixNano": "1791061384413648000",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -481,7 +481,7 @@
                 {
                   "key": "llm.output_messages.0.message.content.0",
                   "value": {
-                    "stringValue": "An **agent trace** is a chronological record of what happened during an agent run: the request, the agent\u2019s messages, tool calls and their results, and whether the run completed or failed. It may also include timing and token-use metadata.\n\nFor example:\n\n```text\nUser asks for the latest release\n\u2192 Agent calls a search tool\n\u2192 Search tool returns results\n\u2192 Agent summarizes the results\n```\n\nTraces help you debug runs, understand tool use, and measure performance. The term varies by framework; a trace generally records observable actions, not necessarily the model\u2019s private reasoning."
+                    "stringValue": "An **agent trace** is the connected record of one agent task from start to finish\u2014not just a single LLM request.\n\nFor example, a task might produce a trace containing:\n1. The agent\u2019s model call\n2. A weather-tool call and its result\n3. A follow-up model call that writes the answer\n\nThose steps are linked as spans in a timeline, often with timestamps, status, token usage, and cost. Traces help you understand what the agent did, where it failed or spent time, and which calls contributed to the cost.\n\nA trace may contain prompts and tool inputs or outputs, depending on the instrumentation, but it **doesn\u2019t mean the agent\u2019s hidden chain-of-thought is being recorded**."
                   }
                 },
                 {
@@ -499,7 +499,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "An **agent trace** is a chronological record of what happened during an agent run: the request, the agent\u2019s messages, tool calls and their results, and whether the run completed or failed. It may also include timing and token-use metadata.\n\nFor example:\n\n```text\nUser asks for the latest release\n\u2192 Agent calls a search tool\n\u2192 Search tool returns results\n\u2192 Agent summarizes the results\n```\n\nTraces help you debug runs, understand tool use, and measure performance. The term varies by framework; a trace generally records observable actions, not necessarily the model\u2019s private reasoning."
+                    "stringValue": "An **agent trace** is the connected record of one agent task from start to finish\u2014not just a single LLM request.\n\nFor example, a task might produce a trace containing:\n1. The agent\u2019s model call\n2. A weather-tool call and its result\n3. A follow-up model call that writes the answer\n\nThose steps are linked as spans in a timeline, often with timestamps, status, token usage, and cost. Traces help you understand what the agent did, where it failed or spent time, and which calls contributed to the cost.\n\nA trace may contain prompts and tool inputs or outputs, depending on the instrumentation, but it **doesn\u2019t mean the agent\u2019s hidden chain-of-thought is being recorded**."
                   }
                 },
                 {
@@ -517,19 +517,19 @@
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "171"
+                    "intValue": "323"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "533"
+                    "intValue": "671"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "704"
+                    "intValue": "994"
                   }
                 },
                 {
@@ -547,13 +547,13 @@
                 {
                   "key": "llm.cost.total",
                   "value": {
-                    "doubleValue": 0.011344000000000002
+                    "doubleValue": 0.014712000000000001
                   }
                 },
                 {
                   "key": "session.id",
                   "value": {
-                    "stringValue": "48cec825-9a38-4bbb-83bf-2b28ab0236a7"
+                    "stringValue": "0e5bb47c-6b08-4a1b-bde4-9ab142589572"
                   }
                 },
                 {

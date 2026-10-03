@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "3538e761-7e45-453c-88a8-f1d3bfc9a181"
+              "stringValue": "749f68a4-a242-411c-8b98-2f04e76440c7"
             }
           },
           {
@@ -55,18 +55,18 @@
           },
           "spans": [
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "78cf37b049f5faed",
-              "parentSpanId": "110fbaf3102f8c6b",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "54587196de83a2aa",
+              "parentSpanId": "a2fc2e42b9c1473c",
               "name": "BaseWorkflowAgent.init_run",
               "kind": 1,
-              "startTimeUnixNano": "1791056706237749000",
-              "endTimeUnixNano": "1791056706374697000",
+              "startTimeUnixNano": "1791061318589170000",
+              "endTimeUnixNano": "1791061318634027000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10c104690>\", \"ev\": \"AgentWorkflowStartEvent()\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10bc907d0>\", \"ev\": \"AgentWorkflowStartEvent()\"}"
                   }
                 },
                 {
@@ -100,18 +100,18 @@
               "flags": 256
             },
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "486363a3e9cc91c7",
-              "parentSpanId": "110fbaf3102f8c6b",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "5744c4b1fdc04353",
+              "parentSpanId": "a2fc2e42b9c1473c",
               "name": "BaseWorkflowAgent.setup_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056706377557000",
-              "endTimeUnixNano": "1791056706378039000",
+              "startTimeUnixNano": "1791061318634555000",
+              "endTimeUnixNano": "1791061318634735000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10bde9f30>\", \"ev\": \"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10b972060>\", \"ev\": \"AgentInput(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
                   }
                 },
                 {
@@ -145,13 +145,13 @@
               "flags": 256
             },
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "237a126b60cf2fc9",
-              "parentSpanId": "7a73c02df024b1cf",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "80c2ccfeafad686c",
+              "parentSpanId": "11925e4853324bb6",
               "name": "OpenAILike._prepare_chat_with_tools",
               "kind": 1,
-              "startTimeUnixNano": "1791056706380194000",
-              "endTimeUnixNano": "1791056706381326000",
+              "startTimeUnixNano": "1791061318635388000",
+              "endTimeUnixNano": "1791061318635673000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -162,7 +162,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"context_window\":3900,\"num_output\":1024,\"is_chat_model\":true,\"is_function_calling_model\":true,\"model_name\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"context_window\":3900,\"num_output\":-1,\"is_chat_model\":true,\"is_function_calling_model\":true,\"model_name\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -212,73 +212,15 @@
                 "code": 1
               },
               "flags": 256
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "resource": {
-        "attributes": [
-          {
-            "key": "telemetry.sdk.language",
-            "value": {
-              "stringValue": "python"
-            }
-          },
-          {
-            "key": "telemetry.sdk.name",
-            "value": {
-              "stringValue": "opentelemetry"
-            }
-          },
-          {
-            "key": "telemetry.sdk.version",
-            "value": {
-              "stringValue": "1.45.0"
-            }
-          },
-          {
-            "key": "service.instance.id",
-            "value": {
-              "stringValue": "3538e761-7e45-453c-88a8-f1d3bfc9a181"
-            }
-          },
-          {
-            "key": "gen_ai.agent.name",
-            "value": {
-              "stringValue": "research_agent"
-            }
-          },
-          {
-            "key": "telemetry.auto.version",
-            "value": {
-              "stringValue": "0.66b0"
-            }
-          },
-          {
-            "key": "service.name",
-            "value": {
-              "stringValue": "unknown_service:python3"
-            }
-          }
-        ]
-      },
-      "scopeSpans": [
-        {
-          "scope": {
-            "name": "openinference.instrumentation.llama_index",
-            "version": "4.5.4"
-          },
-          "spans": [
+            },
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "efbc3cc37592429a",
-              "parentSpanId": "85066baff92d1ef5",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "96e19f1abe31d05f",
+              "parentSpanId": "ce9f00faf30e8880",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791056706382706000",
-              "endTimeUnixNano": "1791056710614819000",
+              "startTimeUnixNano": "1791061318635787000",
+              "endTimeUnixNano": "1791061321978416000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -289,7 +231,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"context_window\":3900,\"num_output\":1024,\"is_chat_model\":true,\"is_function_calling_model\":true,\"model_name\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"context_window\":3900,\"num_output\":-1,\"is_chat_model\":true,\"is_function_calling_model\":true,\"model_name\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -331,7 +273,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "assistant: An **agent trace** is a record of what an AI agent did during a run. It typically includes the sequence of events\u2014such as the user\u2019s request, the agent\u2019s responses, tool calls and their results, and any errors or timing information.\n\nFor example:\n\n1. User asks for the weather.\n2. Agent calls a weather tool.\n3. Tool returns the forecast.\n4. Agent summarizes it for the user.\n\nTraces help developers debug, evaluate, and monitor agents. The exact contents vary by system, and a trace does **not** necessarily include the agent\u2019s private reasoning."
+                    "stringValue": "assistant: An **agent trace** is a record of the steps an AI agent took to complete a task. It may include the agent\u2019s inputs, decisions, tool calls, tool results, and final response.\n\nFor example, a trace might show that an agent:\n1. Received a question about the weather\n2. Called a weather service for a city\n3. Got the forecast\n4. Summarized it for the user\n\nTraces help people understand, debug, and evaluate an agent\u2019s behavior. The exact details recorded depend on the system; some traces omit internal reasoning and keep only observable actions and results."
                   }
                 },
                 {
@@ -355,13 +297,13 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "212"
+                    "intValue": "172"
                   }
                 },
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "83"
+                    "intValue": "40"
                   }
                 },
                 {
@@ -373,7 +315,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "224"
+                    "intValue": "184"
                   }
                 },
                 {
@@ -385,7 +327,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of what an AI agent did during a run. It typically includes the sequence of events\u2014such as the user\u2019s request, the agent\u2019s responses, tool calls and their results, and any errors or timing information.\n\nFor example:\n\n1. User asks for the weather.\n2. Agent calls a weather tool.\n3. Tool returns the forecast.\n4. Agent summarizes it for the user.\n\nTraces help developers debug, evaluate, and monitor agents. The exact contents vary by system, and a trace does **not** necessarily include the agent\u2019s private reasoning."
+                    "stringValue": "An **agent trace** is a record of the steps an AI agent took to complete a task. It may include the agent\u2019s inputs, decisions, tool calls, tool results, and final response.\n\nFor example, a trace might show that an agent:\n1. Received a question about the weather\n2. Called a weather service for a city\n3. Got the forecast\n4. Summarized it for the user\n\nTraces help people understand, debug, and evaluate an agent\u2019s behavior. The exact details recorded depend on the system; some traces omit internal reasoning and keep only observable actions and results."
                   }
                 },
                 {
@@ -401,13 +343,13 @@
               "flags": 256
             },
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "85066baff92d1ef5",
-              "parentSpanId": "7a73c02df024b1cf",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "ce9f00faf30e8880",
+              "parentSpanId": "11925e4853324bb6",
               "name": "OpenAILike.achat",
               "kind": 1,
-              "startTimeUnixNano": "1791056706381612000",
-              "endTimeUnixNano": "1791056710615808000",
+              "startTimeUnixNano": "1791061318635704000",
+              "endTimeUnixNano": "1791061321978645000",
               "attributes": [
                 {
                   "key": "llm.model_name",
@@ -418,7 +360,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"context_window\":3900,\"num_output\":1024,\"is_chat_model\":true,\"is_function_calling_model\":true,\"model_name\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"context_window\":3900,\"num_output\":-1,\"is_chat_model\":true,\"is_function_calling_model\":true,\"model_name\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -448,7 +390,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{},\"blocks\":[{\"text\":\"An **agent trace** is a record of what an AI agent did during a run. It typically includes the sequence of events\u2014such as the user\u2019s request, the agent\u2019s responses, tool calls and their results, and any errors or timing information.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather tool.\\n3. Tool returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help developers debug, evaluate, and monitor agents. The exact contents vary by system, and a trace does **not** necessarily include the agent\u2019s private reasoning.\"}]},\"raw\":{\"id\":\"chatcmpl-EUzxLa2ndpTYGwD6mJDEDmBgUrlhg\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of what an AI agent did during a run. It typically includes the sequence of events\u2014such as the user\u2019s request, the agent\u2019s responses, tool calls and their results, and any errors or timing information.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather tool.\\n3. Tool returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help developers debug, evaluate, and monitor agents. The exact contents vary by system, and a trace does **not** necessarily include the agent\u2019s private reasoning.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791056707,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":212,\"prompt_tokens\":12,\"total_tokens\":224,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":83,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":12,\"completion_tokens\":212,\"total_tokens\":224}}"
+                    "stringValue": "{\"message\":{\"role\":\"assistant\",\"additional_kwargs\":{},\"blocks\":[{\"text\":\"An **agent trace** is a record of the steps an AI agent took to complete a task. It may include the agent\u2019s inputs, decisions, tool calls, tool results, and final response.\\n\\nFor example, a trace might show that an agent:\\n1. Received a question about the weather\\n2. Called a weather service for a city\\n3. Got the forecast\\n4. Summarized it for the user\\n\\nTraces help people understand, debug, and evaluate an agent\u2019s behavior. The exact details recorded depend on the system; some traces omit internal reasoning and keep only observable actions and results.\"}]},\"raw\":{\"id\":\"chatcmpl-EV19jEfCO0SY72VSv5R3IZoTd1Pp8\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of the steps an AI agent took to complete a task. It may include the agent\u2019s inputs, decisions, tool calls, tool results, and final response.\\n\\nFor example, a trace might show that an agent:\\n1. Received a question about the weather\\n2. Called a weather service for a city\\n3. Got the forecast\\n4. Summarized it for the user\\n\\nTraces help people understand, debug, and evaluate an agent\u2019s behavior. The exact details recorded depend on the system; some traces omit internal reasoning and keep only observable actions and results.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791061319,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":172,\"prompt_tokens\":12,\"total_tokens\":184,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":40,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}},\"logprobs\":null,\"additional_kwargs\":{\"prompt_tokens\":12,\"completion_tokens\":172,\"total_tokens\":184}}"
                   }
                 },
                 {
@@ -470,18 +412,18 @@
               "flags": 256
             },
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "7a73c02df024b1cf",
-              "parentSpanId": "110fbaf3102f8c6b",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "11925e4853324bb6",
+              "parentSpanId": "a2fc2e42b9c1473c",
               "name": "BaseWorkflowAgent.run_agent_step",
               "kind": 1,
-              "startTimeUnixNano": "1791056706379663000",
-              "endTimeUnixNano": "1791056710617152000",
+              "startTimeUnixNano": "1791061318635218000",
+              "endTimeUnixNano": "1791061321978975000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10bdea2c0>\", \"ev\": \"AgentSetup(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10b9723f0>\", \"ev\": \"AgentSetup(input=[ChatMessage(role=<MessageRole.USER: 'user'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='What is an agent trace?')])], current_agent_name='research_agent')\"}"
                   }
                 },
                 {
@@ -493,7 +435,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of what an AI agent did d..."
+                    "stringValue": "AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of the steps an AI agent ..."
                   }
                 },
                 {
@@ -515,18 +457,18 @@
               "flags": 256
             },
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "84deab6eb1ade1f3",
-              "parentSpanId": "110fbaf3102f8c6b",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "0f0191662e136960",
+              "parentSpanId": "a2fc2e42b9c1473c",
               "name": "BaseWorkflowAgent.parse_agent_output",
               "kind": 1,
-              "startTimeUnixNano": "1791056710619465000",
-              "endTimeUnixNano": "1791056710621176000",
+              "startTimeUnixNano": "1791061321979792000",
+              "endTimeUnixNano": "1791061321980786000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10c0b5130>\", \"ev\": \"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of what an AI agent did during a run. It typically includes the sequence of events\u2014such as the user\u2019s request, the agent\u2019s responses, tool calls and their results, and any errors or timing information.\\\\n\\\\nFor example:\\\\n\\\\n1. User asks for the weather.\\\\n2. Agent calls a weather tool.\\\\n3. Tool returns the forecast.\\\\n4. Agent summarizes it for the user.\\\\n\\\\nTraces help developers debug, evaluate, and monitor agents. The exact contents vary by system, and a trace does **not** necessarily include the agent\u2019s private reasoning.')]), structured_response=None, current_agent_name='research_agent', raw={'id': 'chatcmpl-EUzxLa2ndpTYGwD6mJDEDmBgUrlhg', 'choices': [{'finish_reason': 'stop', 'index': 0, 'logprobs': None, 'message': {'content': 'An **agent trace** is a record of what an AI agent did during a run. It typically includes the sequence of events\u2014such as the user\u2019s request, the agent\u2019s responses, tool calls and their results, and any errors or timing information.\\\\n\\\\nFor example:\\\\n\\\\n1. User asks for the weather.\\\\n2. Agent calls a weather tool.\\\\n3. Tool returns the forecast.\\\\n4. Agent summarizes it for the user.\\\\n\\\\nTraces help developers debug, evaluate, and monitor agents. The exact contents vary by system, and a trace does **not** necessarily include the agent\u2019s private reasoning.', 'refusal': None, 'role': 'assistant', 'annotations': [], 'audio': None, 'function_call': None, 'tool_calls': None, 'provider_specific_fields': {'refusal': None}}, 'provider_specific_fields': {}}], 'created': 1791056707, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 212, 'prompt_tokens': 12, 'total_tokens': 224, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 83, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}}, tool_calls=[], retry_messages=[])\"}"
+                    "stringValue": "{\"ctx\": \"<workflows.context.context.Context object at 0x10cfdfe30>\", \"ev\": \"AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of the steps an AI agent took to complete a task. It may include the agent\u2019s inputs, decisions, tool calls, tool results, and final response.\\\\n\\\\nFor example, a trace might show that an agent:\\\\n1. Received a question about the weather\\\\n2. Called a weather service for a city\\\\n3. Got the forecast\\\\n4. Summarized it for the user\\\\n\\\\nTraces help people understand, debug, and evaluate an agent\u2019s behavior. The exact details recorded depend on the system; some traces omit internal reasoning and keep only observable actions and results.')]), structured_response=None, current_agent_name='research_agent', raw={'id': 'chatcmpl-EV19jEfCO0SY72VSv5R3IZoTd1Pp8', 'choices': [{'finish_reason': 'stop', 'index': 0, 'logprobs': None, 'message': {'content': 'An **agent trace** is a record of the steps an AI agent took to complete a task. It may include the agent\u2019s inputs, decisions, tool calls, tool results, and final response.\\\\n\\\\nFor example, a trace might show that an agent:\\\\n1. Received a question about the weather\\\\n2. Called a weather service for a city\\\\n3. Got the forecast\\\\n4. Summarized it for the user\\\\n\\\\nTraces help people understand, debug, and evaluate an agent\u2019s behavior. The exact details recorded depend on the system; some traces omit internal reasoning and keep only observable actions and results.', 'refusal': None, 'role': 'assistant', 'annotations': [], 'audio': None, 'function_call': None, 'tool_calls': None, 'provider_specific_fields': {'refusal': None}}, 'provider_specific_fields': {}}], 'created': 1791061319, 'model': 'openai/gpt-6-luna', 'object': 'chat.completion', 'moderation': None, 'service_tier': 'default', 'system_fingerprint': None, 'usage': {'completion_tokens': 172, 'prompt_tokens': 12, 'total_tokens': 184, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 40, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cache_write_tokens': 0, 'cached_tokens': 0, 'cache_creation_tokens': 0}}}, tool_calls=[], retry_messages=[])\"}"
                   }
                 },
                 {
@@ -538,7 +480,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of what ..."
+                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of the s..."
                   }
                 },
                 {
@@ -560,17 +502,17 @@
               "flags": 256
             },
             {
-              "traceId": "af403b36f3e6fe1f2952a97d5c5020a5",
-              "spanId": "110fbaf3102f8c6b",
+              "traceId": "09d8bfab716aa7a077cf178a77abdce4",
+              "spanId": "a2fc2e42b9c1473c",
               "name": "FunctionAgent.run",
               "kind": 1,
-              "startTimeUnixNano": "1791056706235843000",
-              "endTimeUnixNano": "1791056710621881000",
+              "startTimeUnixNano": "1791061318588070000",
+              "endTimeUnixNano": "1791061321981142000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"init_state\": {\"is_running\": false, \"config\": {\"steps\": {\"aggregate_tool_results\": {\"accepted_events\": [\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"call_tool\": {\"accepted_events\": [\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"init_run\": {\"accepted_events\": [\"<AgentWorkflowStartEvent() -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"parse_agent_output\": {\"accepted_events\": [\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"run_agent_step\": {\"accepted_events\": [\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"setup_agent\": {\"accepted_events\": [\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}}, \"timeout\": null, \"catch_error_handlers\": {}, \"handler_for_step\": {}, \"collection_bindings\": {}}, \"workers\": {\"aggregate_tool_results\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"call_tool\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"init_run\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentWorkflowStartEvent() -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"parse_agent_output\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"run_agent_step\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"setup_agent\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}}, \"stream_seq\": 0, \"work_item_seq\": 0, \"streams\": {}, \"collection_release_states\": {}, \"children\": {}, \"elapsed_alive\": 0.0, \"last_alive_stamp\": null}, \"start_event\": \"AgentWorkflowStartEvent()\", \"tags\": {\"instrument_tags\": {\"llamaindex.run_id\": \"T0rFa7tpqc\"}}}"
+                    "stringValue": "{\"init_state\": {\"is_running\": false, \"config\": {\"steps\": {\"aggregate_tool_results\": {\"accepted_events\": [\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"call_tool\": {\"accepted_events\": [\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"init_run\": {\"accepted_events\": [\"<AgentWorkflowStartEvent() -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"parse_agent_output\": {\"accepted_events\": [\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"run_agent_step\": {\"accepted_events\": [\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"setup_agent\": {\"accepted_events\": [\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}}, \"timeout\": null, \"catch_error_handlers\": {}, \"handler_for_step\": {}, \"collection_bindings\": {}}, \"workers\": {\"aggregate_tool_results\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<ToolCallResult(*, tool_name: str, tool_kwargs: dict, tool_id: str, tool_output: llama_index.core.tools.types.ToolOutput, return_direct: bool) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"call_tool\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<ToolCall(*, tool_name: str, tool_kwargs: dict, tool_id: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"init_run\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentWorkflowStartEvent() -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"parse_agent_output\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentOutput(*, response: llama_index.core.base.llms.types.ChatMessage, structured_response: Optional[Dict[str, Any]] = None, current_agent_name: str, raw: Optional[Any] = None, tool_calls: list[llama_index.core.llms.llm.ToolSelection] = <factory>, retry_messages: list[llama_index.core.base.llms.types.ChatMessage] = <factory>) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"run_agent_step\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentSetup(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}, \"setup_agent\": {\"queue\": [], \"config\": {\"accepted_events\": [\"<AgentInput(*, input: list[llama_index.core.base.llms.types.ChatMessage], current_agent_name: str) -> None>\"], \"retry_policy\": null, \"num_workers\": 4, \"accept_event_subclasses\": false, \"collection_param\": null, \"collect_params\": null, \"collection_policy\": null}, \"in_progress\": [], \"collected_events\": {}, \"collected_waiters\": [], \"static_collect_events\": []}}, \"stream_seq\": 0, \"work_item_seq\": 0, \"streams\": {}, \"collection_release_states\": {}, \"children\": {}, \"elapsed_alive\": 0.0, \"last_alive_stamp\": null}, \"start_event\": \"AgentWorkflowStartEvent()\", \"tags\": {\"instrument_tags\": {\"llamaindex.run_id\": \"8OyCfEsvjE\"}}}"
                   }
                 },
                 {
@@ -582,7 +524,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of what ..."
+                    "stringValue": "StopEvent(result=AgentOutput(response=ChatMessage(role=<MessageRole.ASSISTANT: 'assistant'>, additional_kwargs={}, blocks=[TextBlock(block_type='text', text='An **agent trace** is a record of the s..."
                   }
                 },
                 {

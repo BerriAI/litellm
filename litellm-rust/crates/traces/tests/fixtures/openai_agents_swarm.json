@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "2b1cac18-14bb-48e4-a94a-c0ef0755f923"
+              "stringValue": "9e946a2c-3235-4d42-9b82-dd5156d37c37"
             }
           },
           {
@@ -44,18 +44,74 @@
       "scopeSpans": [
         {
           "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "9dc9fe00f57d1ea5",
+              "parentSpanId": "8b8beb8cd168e0bc",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061355573692000",
+              "endTimeUnixNano": "1791061357055738000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/responses"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "009293ee-c67c-4bc0-af62-f6fc4682a2fa"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
             "name": "openinference.instrumentation.openai_agents",
             "version": "2.5.2"
           },
           "spans": [
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "1cdb8af3016e8f3e",
-              "parentSpanId": "09c51f10aaa0e1d0",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "8b8beb8cd168e0bc",
+              "parentSpanId": "7ab56882886748e5",
               "name": "response",
               "kind": 1,
-              "startTimeUnixNano": "1791056413417011968",
-              "endTimeUnixNano": "1791056414956829952",
+              "startTimeUnixNano": "1791061355534168064",
+              "endTimeUnixNano": "1791061357112108032",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -72,7 +128,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"resp_78bcvmdz_zd5Uy6k5rc28ejNYZPlMsyLzfbQdqBDYVdfrVnGaPup4QeqoU9aWJKzvB-_4oO0EKF8MJz_WuDfbvojL0lrizrPQrNxQHEh9BVWukhyQ-ez1XamueySGaGXshQpBcEwNx9l3jM-ai_lYZCdj5MOVa9t6b0f0nqGhD1HeWIvirFz2eVR7OEi4OCUvKUDHMo4F1oaM9MIRyYU2FhuCDZn804kM3IwO7YEiYyfWLTkd2Yoe1ODBtVjDPTiMFkPgAYMvEUwhI2tEF5gu1M80ND7kyqbfMkN9BYjg1bCVJ5TrTllGcWDKh7GFT6AwsijXUpgiFxVKTGOk6lHhH_Z1hyjYO9_jPo6-T7npeBxa8xAA_-NWe9G9emZ8GHvqRL-hpw5EreRm5Cg1lrccpj6t7H-GCxQ2b9swZ5Q79W7WKuT-RvrVnMXuBdezfNX56vz8XOUf9FhhtCgQ0DW6hYF\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791056413.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Use search_agent to gather facts, then writer_agent to write the answer.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"input\\\":\\\"Define \\\\\\\"agent trace\\\\\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\\\"}\",\"call_id\":\"call_bY1w9SKHukwkuZ5GmTugfdzm\",\"name\":\"search_agent\",\"type\":\"function_call\",\"id\":\"fc_014a0510027525e4006ac15a1e0a0c87d0a67ef6122b33ea08\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Find key facts about a topic.\",\"output_schema\":null},{\"name\":\"writer_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Write a short answer from facts.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1791056414.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":127,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":59,\"output_tokens_details\":{\"reasoning_tokens\":0,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":186,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
+                    "stringValue": "{\"id\":\"resp_Y6ZHh_IFyETc_8stC83CogV4KDra716W-YChon-6C_w_3einmQSY8OX7M1OLVdvV0qZkIjriG-oNfDrabeTBUhTPtbLasj9srYe-_iY97S91qTgZuXleeQB_tMaUoKV6jOsNjS6rkYyYkWTlxLc8NsBhMPkbFukCP1XYvhPEmn2SSIC2WNrFFIwrK9dK-xGs_0RtGjjqZd83qMSsdd7PaAoKiM6RTJOT33xYLFtpKS9Ubz3vP-R6HKJUhVuKFwJxWcAFWnCsfRmWtp6d4tK7s7tBAFlPYMvT2PzH9kNNC1C3vNa4Ichbwjz8BlZ0jgIxr3flAAc7q8NEOWsy9NWBPPOD-Zv9uiu9oK_HYHdMT-r0TMemjsmP4Rym7xGSOg4ZaHeL2p8TzuI8jUnM9Uwy2fzMjJQlN00wuO46IY2vm-dXNC48nRYAHonFmdk6shqfFGEIKYMATInZ_O4I9XeYiGM7\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791061355.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Use search_agent to gather facts, then writer_agent to write the answer.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"input\\\":\\\"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\\\"}\",\"call_id\":\"call_uwOQtsDUxrMRpQkdlMtOTmYw\",\"name\":\"search_agent\",\"type\":\"function_call\",\"id\":\"fc_075ab79c84fd5fba006ac16d6c51a887d0b30b0726ef3ab5b1\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Find key facts about a topic.\",\"output_schema\":null},{\"name\":\"writer_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Write a short answer from facts.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1791061356.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":127,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":55,\"output_tokens_details\":{\"reasoning_tokens\":0,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":182,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
                   }
                 },
                 {
@@ -90,7 +146,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "59"
+                    "intValue": "55"
                   }
                 },
                 {
@@ -102,7 +158,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "186"
+                    "intValue": "182"
                   }
                 },
                 {
@@ -132,7 +188,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_bY1w9SKHukwkuZ5GmTugfdzm"
+                    "stringValue": "call_uwOQtsDUxrMRpQkdlMtOTmYw"
                   }
                 },
                 {
@@ -144,7 +200,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"input\":\"Define \\\"agent trace\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\"}"
+                    "stringValue": "{\"input\":\"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\"}"
                   }
                 },
                 {
@@ -174,7 +230,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"id\": \"resp_78bcvmdz_zd5Uy6k5rc28ejNYZPlMsyLzfbQdqBDYVdfrVnGaPup4QeqoU9aWJKzvB-_4oO0EKF8MJz_WuDfbvojL0lrizrPQrNxQHEh9BVWukhyQ-ez1XamueySGaGXshQpBcEwNx9l3jM-ai_lYZCdj5MOVa9t6b0f0nqGhD1HeWIvirFz2eVR7OEi4OCUvKUDHMo4F1oaM9MIRyYU2FhuCDZn804kM3IwO7YEiYyfWLTkd2Yoe1ODBtVjDPTiMFkPgAYMvEUwhI2tEF5gu1M80ND7kyqbfMkN9BYjg1bCVJ5TrTllGcWDKh7GFT6AwsijXUpgiFxVKTGOk6lHhH_Z1hyjYO9_jPo6-T7npeBxa8xAA_-NWe9G9emZ8GHvqRL-hpw5EreRm5Cg1lrccpj6t7H-GCxQ2b9swZ5Q79W7WKuT-RvrVnMXuBdezfNX56vz8XOUf9FhhtCgQ0DW6hYF\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791056413.0, \"instructions\": \"Use search_agent to gather facts, then writer_agent to write the answer.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791056414.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
+                    "stringValue": "{\"id\": \"resp_Y6ZHh_IFyETc_8stC83CogV4KDra716W-YChon-6C_w_3einmQSY8OX7M1OLVdvV0qZkIjriG-oNfDrabeTBUhTPtbLasj9srYe-_iY97S91qTgZuXleeQB_tMaUoKV6jOsNjS6rkYyYkWTlxLc8NsBhMPkbFukCP1XYvhPEmn2SSIC2WNrFFIwrK9dK-xGs_0RtGjjqZd83qMSsdd7PaAoKiM6RTJOT33xYLFtpKS9Ubz3vP-R6HKJUhVuKFwJxWcAFWnCsfRmWtp6d4tK7s7tBAFlPYMvT2PzH9kNNC1C3vNa4Ichbwjz8BlZ0jgIxr3flAAc7q8NEOWsy9NWBPPOD-Zv9uiu9oK_HYHdMT-r0TMemjsmP4Rym7xGSOg4ZaHeL2p8TzuI8jUnM9Uwy2fzMjJQlN00wuO46IY2vm-dXNC48nRYAHonFmdk6shqfFGEIKYMATInZ_O4I9XeYiGM7\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791061355.0, \"instructions\": \"Use search_agent to gather facts, then writer_agent to write the answer.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791061356.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
                   }
                 },
                 {
@@ -241,7 +297,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "2b1cac18-14bb-48e4-a94a-c0ef0755f923"
+              "stringValue": "9e946a2c-3235-4d42-9b82-dd5156d37c37"
             }
           },
           {
@@ -261,18 +317,123 @@
       "scopeSpans": [
         {
           "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "5ec64bca8fc983d3",
+              "parentSpanId": "44d0619448326006",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061357115843000",
+              "endTimeUnixNano": "1791061361575774000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/responses"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "16f2db74-b3af-4e1f-a1b3-4479188c4582"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "89ea2ca67e58f4ff",
+              "parentSpanId": "a1d67606578aecc8",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061361580206000",
+              "endTimeUnixNano": "1791061363533117000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/responses"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "608f69fc-cd83-4a1c-ac7c-4b9254fc58f4"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
             "name": "openinference.instrumentation.openai_agents",
             "version": "2.5.2"
           },
           "spans": [
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "1f3dc0b285401539",
-              "parentSpanId": "a41b7dc77cf662d9",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "44d0619448326006",
+              "parentSpanId": "a265832cb4c0bd19",
               "name": "response",
               "kind": 1,
-              "startTimeUnixNano": "1791056414964647936",
-              "endTimeUnixNano": "1791056424059058944",
+              "startTimeUnixNano": "1791061357115212800",
+              "endTimeUnixNano": "1791061361576494080",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -289,25 +450,25 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"resp_-eieKxERa3FIyRg5gHH6yAhi90xaw_RH9OOqaKEJwInv7T9lcPhna9jXkXP3pANXJtM5AsyuOqk6pWE1hiwTUKbmK4DnrZt_9WQQsDFm3K47cPM9UScQHtVnL912CuOaoNrVBfNebeqqwnUylOETFvseETm_n4UreXFxjcShi88AyAuVBr3xs6v2NM4FazJCH1A-j4x9bz3Zo8VsNlrREoU6ddeLlvgc0lSvVBIeBKzgQcHpJmXMN9vuQQPnjIC2dDw4rGElkw2rp9dTdBgdvTmshAMxzkU4j5lRznYVkN7o2GlaMwDUxzhrWZ_5Gqg2VRdcXV9zQfwwGZ0Y9MKOSnX2OzOHJWHzGVWNSBH1B6IF4apAWZjPlmLKWCfK73P_-kz-d4ZC15BiYs8BbrdnN9zu857_ldCl2oV0JeLNfD2b7pAti0Nc4U_7SBdimgRTfTAVdzGeyX9N1M1-i2mPIoIo\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791056415.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Find key facts about the topic.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"rs_089212d083f24490006ac15a1f929087d09dfce3b58e7274f7\",\"summary\":[],\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"gAAAAABqwVooMwNW82vmH76g-7aj-KPQ1pHM0gHsOMzR61eenKThpWklVonGlo8kRCwYRItUpiZQla2yqY9PjCIGr89roJJzmwJGx67LS66NGdx6x9MvIwF-kSsw-mPR-d8wiuv4seBMPggRPxrqxrLASme9aIo6Ow-piYXk4cdUVH2rCpSo-p531a_PuFIqpDMU2qAs8W1CEsRO2ION5NrLVmNEg15D_r5BsZ_ef6qxhKnxLRVUDXSHcn30FWbPzKIpdPrhxawPLlXE3Ddh0IZAjUZGKMCPaEXGh5YSIx0VKH4wFAUe8YHH1oonMg0MrhmPnXUdNlYCyzVIQwSOtFiCTJMz7pbMB048IRwPWEvIlP8u2qHDvLXZSTd44cqTMMk-D3GPX1h6N2_6c25NdZu5LOkvYZmzdGTw2ShnYd4hssVm7h1Uwi14Huk10b11Aea58Vn1FWjAN6eLVOi-cj0CllQJjJziNttQWmDapw7kONaWFeuQWiO0wv8hrMRTHumiXI9a8_Yh4vg2kRQX7SQTsjV67MWRQhYpuhMLMlL_IPRvCo5UO-nhgfggCN0aMGxBUKIhoCoSoCr-Zhm9Oc_daBjnrYDnoY8Sfx6k0hgYpIq-jQxXYcgtuKKQCwNRYYUfvjIIk_HvWUXLKTn1DLfp_KwQEhlukHabykashBDr6m8TNOxU2mmp7RunUYt6kooNGC9tBnpLDwZe3ArpCGdU74t7F8R6eGfOjpk6yTGTKTJZMZTDuM-Zxe6_LrlSqUVXrtPrh_6NR8192Jc0NMU_tuj40IlG2Rkm_l8_hl_zIGnvuMEl6bHXui5dYokJFS2cAdC_yHL_b9Cg8ldmUWmhUaVsKLKOQaEfuxhp7w8lrrgX9OOgZCb5dX0rd3lh-PUXgDK7uGLuB8P2dDE5lfQMzF1_m5ImeLs6DPK8SH_sbtMloSP62k6S7qnaXmuITGni2qz1U_hF3mqnuk5j94yCx9ssWrjyQlo9QK-b8jMFVbLfU7hxArDGAM6tZ6tA9oS8Q3f9Z44EPUOisjyzqSR0_BM_WRL6LsxaoOsjg47WEsQe9izNPZBV2YwLScOVcA_pkjbz-W9pqRnIPbT65rXT0FpU-KISD0rtS29_ne0fLR4STCJ53KjnrFd1KviNJFEfNp6Y6gz02juUNV0qW0qvYRfD_E404mCz9KQeFJEXuP201IiB2lA-z42q1uCPGm81hqV0J9L5FKnqbFfL5TIzOWHXLM3N7MG7YbnVFFkFiu0W3NNHCmyYfyyfPaLofoYjbDgf4I3bGpr4knU2KFIXatP_6swNVVwg2vXdH0ZjkNV8kTZ-PPdxCENO0iQMkVJHI3-beSNb4arDaoaTsvm9w-XE-2bVG74xIJV5c-2Tk1_53b9BY-nC585YfR6Og-SvqsIzKGVXjOdEDYKCCA0cUDWNI7Un-pRG7xXoHcrIugFRRl0_-fkbs2BpNu_zi-Vfy8kXFIoMpqqhfkatTX97jG-kVxjnNwmLtkzwnWc66T7jOG-Lzta4d3u667fw_yMZcrL5mO2z85V9jPJHeqyi0E4M_1UVIgRv7jHkk9doJBPEuJZ_uiFgjNUbZSK-48ou8HFVewwQhFDe2-PkIIQ6XQltr9werBZ3lJkhnQJ_KusrQ1B_KOBDnpzmfc35npvAApubQnH75IeJ0cwFO6Db9BMtgbyv4Cu2DtsV5-_efJGDQmjuFRUmwTSMQ9z7Nkb9xbixtUK7jGDZiFUeDWgwPTPqIR8JYJMoe65RXoBhguXhQhJbRUDzxgpkMfi8y4twNJqwOdULHRrzedDLBgPyROl5QHRSCFL65FyOm-Zw-4SsNrjKxG2AD-bBt1VkHagQ8pij3u1oRW_VJcnCepOjLWtuGUibkCW-5-D5C_aXtYwsCWW2RhxpgDPCqAveo34VWRAWkyGdtyWOKqCb6CG8YCbRztST1oAqX_68f1GMejG8gy1uSxpx93xH7wv84toB7JNS4CwI-65CJICOc-V7dQbzW5pU3ftrRofh7gfjcZZGe1Ml8DWSuo47skE4LjsOTk9nOmLjOok5q8zQ5BrApTybubtXkzk22gjlA_NTM4SifGP3fDftdLX41VO97o6zjeAe_WwV12-znt5JWDNodhbE3Y86q4zDq0CptkKjdaazwqysDxy-IU6jSg7H6PI3llzsgrwlJVmapdlUlqKJh8p2GYlZJq30UCxAYjXLbU7Lu8DUANI1_Mu9LSTQxST8WPhphHKVYkz2AndRgQsHeL-1w2Ctd-2z-q2q8mipBvyeN5-aAbtK8W2G6vD6RbMKfw0bGQG36LpfchX5t1czEBj9F0lckr1WQ6J6HDln-1NUqv8FUdzla6jxI0dxNCj9br_VJl7PLCPz3SHzfm0urQQro2-KQhZ7Q2psLpqxYfmkFgAzUUiTQOBfQFabUdFJMakmxWcZ5O6lIxySs_Zi4LNUKRZWatU0xnIxx5BdYi50bpmJKbNooDkXjRISlrKzNTuYh4u7bkfJVE9lwfIr93PS7xwD-zMJ_UktdlmZmPPvJkCwQ1GbsgX82IAnT7Od6RAA7HegpAtdNDRrSTq6vNaZQuSsTCMlKq1f4cBYzrRPS-D-Kpm2BBkCcDcnig1Mhzx6ywUMqXRBvzvH0tkL2W0vhV3i_HJ9enWaq5OR04-OJQ-Ao27xg90dGVZFtiDlpWrqUpQj\",\"status\":null},{\"id\":\"msg_089212d083f24490006ac15a22b52c87d0a5c66a30b210bef3\",\"content\":[{\"annotations\":[],\"text\":\"An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\\n\\nA trace may record:\\n\\n- The initial request and relevant conversation or state\\n- Model calls, including the model or version and the messages sent\\n- Tool calls, their arguments, and the results returned\\n- Step order, timestamps, and parent\u2013child relationships between operations\\n- Retries, errors, intermediate outputs, and the final response\\n- Operational details such as latency, token usage, and cost\\n\\nFor example, a trace might show:\\n\\n```text\\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\\n2. Model requests a weather tool call: get_weather(city=\\\"Paris\\\")\\n3. Weather service returns: 18\u00b0C, light rain\\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\\n```\\n\\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\\n\\n### Why traces are useful\\n\\nTraces help developers and evaluators:\\n\\n- Debug failed or unexpected runs by seeing which step went wrong\\n- Check whether the agent used tools appropriately\\n- Measure latency, cost, and reliability\\n- Compare behavior across prompts, models, or system versions\\n- Support monitoring, auditing, and incident investigation\\n\\n### Trace versus chain-of-thought\\n\\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\\n\\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits.\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":0.98,\"background\":false,\"completed_at\":1791056423.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":59,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":684,\"output_tokens_details\":{\"reasoning_tokens\":214,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":743,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
+                    "stringValue": "{\"id\":\"resp_WXxHd6g81o64NErUYvhYmwSga4nELpzjyWt--rdSzAZ5xNUDdupXwB1vE6ScEt-1QRHvTaEJsU3gizZac7kM3jTfq7fpjYm4pLv5WaNZs-q7mj35CJcl5p6G6-EtaA9cOdtjmAjIPgFduHSv_O0jcvdJT9hpdPveNh5BuiNRkMViVYGU6KDLuEm4Xh9S5pK9_utD8kxDD1ZXKY6XqV8JEerpIxyyj_n3lP5ilUk2FNg68kWPVc64qV4g6NLW9xypmMcLVyGOWzLrFV6Ee24gVFUNawjAHVH_ATr6AiIrgqVRYNIC1wBTNy6-cyRE2t7mhFqNxjIz7LFiYwYlPbcoryVj_87svK-Ek1_3Iw8w1s4OhbKrLtGY3E8SMlrxd7Krbtzv4aXAAzeaRQnSFsi0E0eXLurWWobn5errPYJfCcTeFTq-axpLi8UoMX5Xk-lrl4g1ah6aEuolOAttZbRaovcK\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791061357.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Find key facts about the topic.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"rs_017e713916d10324006ac16d6db3d087d09f6fd0e35a995982\",\"summary\":[],\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"gAAAAABqwW1xGMSy8d3izVOqLIJsxMlMoA12dWzENbftlp9x-83fwOFpZSEloK2u0AZ05cNC2Eaws-1ufurTzpqBWXxadhF6GyhQF8jU382ZE_WRo98_1V6btM2y8-lwghTF-nWFuBpwIsDpoGMgOkLLdhTCelpu8CH4Ej92zpyyZ49Gsq1wP508ec2K0Z-zmIX5vfI6UHxLFSHgDSIn90VMH65UMPhLlJ-_WXlHTAwcypoh5Tc32AlJnncYRsPv6zLWbM1RPN3BkgIwT-myscmWcOEGmJHQ4vxo8x97zbzDv_nDHAkbzi66RhasocXUdVbXayi222RsUKxA_yS_N6YT9syTGENziJJqn9XJpRVR6CHoMJrMhQKO1J7mpa9Ab6f7CItcKrvP3tl-DoBu8W1HlZO60WA0o9IYAdQ5xURMinUTXdgguyNl39hCUUOx5vBgCdg9wxFvfKJZSSJhMRhRU1ahrddeEJlbb3SAALofDhS36Nc4_U4cebuShhwUSikar18xmNTRShhvtT2yNSD0G4KaPt2XSVQyiSJ1r-StF7QC-skgYjLEroDixav8muxZSH_wf0YOVqoR_27II03ZACDbT7AjdHPx1NYAxRDf6MfX_1zAZv4Q6-rGpYrEcqH4U_dHV1AD01jvgYItbZ_mES2OZKZCXytuaBSwOfJRlpw0Kj6hrQbqlPCZ8f4hZXZO6Kf7GLtZKCgoEJv2Q5MIbOW_Gxsnt446bpTkZiwqHDN8Ru_w5-ZDJNMrfto5ITpQ6fRfKJl8VeuJUEKEfl1qU6DSO8RxpD6uqfsj1qxlcY5_Emzh8Mt5-FcOH9-fRmHS5OZ4iaoexvP-rhEMot789Yj7gtEOb-b-sx4GZkAIEcd9ZIIlm3EuodCb9HmwPQRJ9l0HhxebOxP8Xo--fXsZGRK8xhGki-oiwuTDU7FzZh_U9Ke7WGlTxzfBuncCjeUUVbM4Wg6BSEQxBdh4hLarsKiYkLHnZbvGaDlj_w2MQC8Yu5GT_FXNzz8bprdrMIrVDYoUW29SSikTth2Mto1QO7Uxj1-_vpNCp4AQOQcZCbSOLI1KnPkJlS8SvUB94ctDoFA4iAj86fyuKQOC1KJP0p4n7x2jhE4kA0Eyf1V84iXgyewE5TEoEQoeAS-PQ3qAzrGc1Ljg_9OFH0WeXMZpNM9CxPZUqvMue1xOR70H7K0zW7l7y60jXKi8311V6jRMBx1JLPCydDKqHLAKH-QHJ-oIc7SV66fV52apEN68S_jwnNQjAX3XDnmYg1zLkiRfF_SnBFLg7TkaXLe4WjOPzwxWF_J_AEmU1yiqCHs8vNVyakb1NfX1xikd8A0jyOsJR3L6ttAtEPx6xIwL0w8QJvNDIajaTdmiVwm1ESvZKYPcR89MhuzGbYtwok9PwiXrMcQJ9bw6lLP6M6XFYKUC8VdbJKqW-kQ8zLsNYUYdmQou_Yzi9LicB39eDNdq3dq5KYNOV-eJTJtAU-3HixZw9xc2zZIesoVMU9383JZjlgVMTfTu70h5-MGy3uXCayAbyguV1UpwlyC8bafzqsdHJwF4qQwIr9X-Vx1-MMggTdYQyb7PCf8_-qfsrI3lumwIbXq2VM47e2FLcGxewNUVRAN6M78AoSjI3MSPepQ73JNMl7WjN1GJuwZxyPLZfQT92ey2q9izzcsPK-QX5b1zYeb79Gl7PUdxAJPA_z_2X8gG_cwzy03TsKA4ul9C2aRTnFuZFvxZkC99Ml8Qley2Kxt0TXm3jVJOa00UzneMV0r_AXa0meVCdzwCm2PI0WUf4hEH7ui_LpqDdAKjpueF5F6NHbCcygaOWg0VYUYO2O9IMWXd7TWOnLAjEQoLxjWFYx8eQWCshSZje1lalB68zByvS4N2-ScrJA86FQDwMAnlix85-2X4n-zL_JNCeyWMAvoomyX3kgOBxXFt_3YBz0aOAFWTDjQvnjSykYRXwERG9YRWSwLRjioZPm9qAFdE5Imnn_N1Ig0tD3a0pRj3sWpVgjqxqMlXjooK32OY5kVtpBGzioJnljM-Zrbbl7ezhYHZR-rQ_Q1sZzFUqg_woN4iVQBjoACLK8_UyWPBWeBZ0JxgCXX1Cm8EnRuUXNEAt2Zyi3bw9Twa4k2_7BwSUQRnwP2wOJsYVvRHIRU4LWg-z8k3gy_jEBT030mXobjGTjBTLqAQtUai1zuRFfyKYFt3y6um6w==\",\"status\":null},{\"id\":\"msg_017e713916d10324006ac16d6f83e487d08aafce4e37fbc886\",\"content\":[{\"annotations\":[],\"text\":\"An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\\n\\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\\n\\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying.\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":0.98,\"background\":false,\"completed_at\":1791061361.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":55,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":314,\"output_tokens_details\":{\"reasoning_tokens\":141,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":369,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "684"
+                    "intValue": "314"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "59"
+                    "intValue": "55"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "743"
+                    "intValue": "369"
                   }
                 },
                 {
@@ -325,7 +486,7 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "214"
+                    "intValue": "141"
                   }
                 },
                 {
@@ -343,13 +504,13 @@
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.encrypted_content",
                   "value": {
-                    "stringValue": "gAAAAABqwVooMwNW82vmH76g-7aj-KPQ1pHM0gHsOMzR61eenKThpWklVonGlo8kRCwYRItUpiZQla2yqY9PjCIGr89roJJzmwJGx67LS66NGdx6x9MvIwF-kSsw-mPR-d8wiuv4seBMPggRPxrqxrLASme9aIo6Ow-piYXk4cdUVH2rCpSo-p531a_PuFIqpDMU2qAs8W1CEsRO2ION5NrLVmNEg15D_r5BsZ_ef6qxhKnxLRVUDXSHcn30FWbPzKIpdPrhxawPLlXE3Ddh0IZAjUZGKMCPaEXGh5YSIx0VKH4wFAUe8YHH1oonMg0MrhmPnXUdNlYCyzVIQwSOtFiCTJMz7pbMB048IRwPWEvIlP8u2qHDvLXZSTd44cqTMMk-D3GPX1h6N2_6c25NdZu5LOkvYZmzdGTw2ShnYd4hssVm7h1Uwi14Huk10b11Aea58Vn1FWjAN6eLVOi-cj0CllQJjJziNttQWmDapw7kONaWFeuQWiO0wv8hrMRTHumiXI9a8_Yh4vg2kRQX7SQTsjV67MWRQhYpuhMLMlL_IPRvCo5UO-nhgfggCN0aMGxBUKIhoCoSoCr-Zhm9Oc_daBjnrYDnoY8Sfx6k0hgYpIq-jQxXYcgtuKKQCwNRYYUfvjIIk_HvWUXLKTn1DLfp_KwQEhlukHabykashBDr6m8TNOxU2mmp7RunUYt6kooNGC9tBnpLDwZe3ArpCGdU74t7F8R6eGfOjpk6yTGTKTJZMZTDuM-Zxe6_LrlSqUVXrtPrh_6NR8192Jc0NMU_tuj40IlG2Rkm_l8_hl_zIGnvuMEl6bHXui5dYokJFS2cAdC_yHL_b9Cg8ldmUWmhUaVsKLKOQaEfuxhp7w8lrrgX9OOgZCb5dX0rd3lh-PUXgDK7uGLuB8P2dDE5lfQMzF1_m5ImeLs6DPK8SH_sbtMloSP62k6S7qnaXmuITGni2qz1U_hF3mqnuk5j94yCx9ssWrjyQlo9QK-b8jMFVbLfU7hxArDGAM6tZ6tA9oS8Q3f9Z44EPUOisjyzqSR0_BM_WRL6LsxaoOsjg47WEsQe9izNPZBV2YwLScOVcA_pkjbz-W9pqRnIPbT65rXT0FpU-KISD0rtS29_ne0fLR4STCJ53KjnrFd1KviNJFEfNp6Y6gz02juUNV0qW0qvYRfD_E404mCz9KQeFJEXuP201IiB2lA-z42q1uCPGm81hqV0J9L5FKnqbFfL5TIzOWHXLM3N7MG7YbnVFFkFiu0W3NNHCmyYfyyfPaLofoYjbDgf4I3bGpr4knU2KFIXatP_6swNVVwg2vXdH0ZjkNV8kTZ-PPdxCENO0iQMkVJHI3-beSNb4arDaoaTsvm9w-XE-2bVG74xIJV5c-2Tk1_53b9BY-nC585YfR6Og-SvqsIzKGVXjOdEDYKCCA0cUDWNI7Un-pRG7xXoHcrIugFRRl0_-fkbs2BpNu_zi-Vfy8kXFIoMpqqhfkatTX97jG-kVxjnNwmLtkzwnWc66T7jOG-Lzta4d3u667fw_yMZcrL5mO2z85V9jPJHeqyi0E4M_1UVIgRv7jHkk9doJBPEuJZ_uiFgjNUbZSK-48ou8HFVewwQhFDe2-PkIIQ6XQltr9werBZ3lJkhnQJ_KusrQ1B_KOBDnpzmfc35npvAApubQnH75IeJ0cwFO6Db9BMtgbyv4Cu2DtsV5-_efJGDQmjuFRUmwTSMQ9z7Nkb9xbixtUK7jGDZiFUeDWgwPTPqIR8JYJMoe65RXoBhguXhQhJbRUDzxgpkMfi8y4twNJqwOdULHRrzedDLBgPyROl5QHRSCFL65FyOm-Zw-4SsNrjKxG2AD-bBt1VkHagQ8pij3u1oRW_VJcnCepOjLWtuGUibkCW-5-D5C_aXtYwsCWW2RhxpgDPCqAveo34VWRAWkyGdtyWOKqCb6CG8YCbRztST1oAqX_68f1GMejG8gy1uSxpx93xH7wv84toB7JNS4CwI-65CJICOc-V7dQbzW5pU3ftrRofh7gfjcZZGe1Ml8DWSuo47skE4LjsOTk9nOmLjOok5q8zQ5BrApTybubtXkzk22gjlA_NTM4SifGP3fDftdLX41VO97o6zjeAe_WwV12-znt5JWDNodhbE3Y86q4zDq0CptkKjdaazwqysDxy-IU6jSg7H6PI3llzsgrwlJVmapdlUlqKJh8p2GYlZJq30UCxAYjXLbU7Lu8DUANI1_Mu9LSTQxST8WPhphHKVYkz2AndRgQsHeL-1w2Ctd-2z-q2q8mipBvyeN5-aAbtK8W2G6vD6RbMKfw0bGQG36LpfchX5t1czEBj9F0lckr1WQ6J6HDln-1NUqv8FUdzla6jxI0dxNCj9br_VJl7PLCPz3SHzfm0urQQro2-KQhZ7Q2psLpqxYfmkFgAzUUiTQOBfQFabUdFJMakmxWcZ5O6lIxySs_Zi4LNUKRZWatU0xnIxx5BdYi50bpmJKbNooDkXjRISlrKzNTuYh4u7bkfJVE9lwfIr93PS7xwD-zMJ_UktdlmZmPPvJkCwQ1GbsgX82IAnT7Od6RAA7HegpAtdNDRrSTq6vNaZQuSsTCMlKq1f4cBYzrRPS-D-Kpm2BBkCcDcnig1Mhzx6ywUMqXRBvzvH0tkL2W0vhV3i_HJ9enWaq5OR04-OJQ-Ao27xg90dGVZFtiDlpWrqUpQj"
+                    "stringValue": "gAAAAABqwW1xGMSy8d3izVOqLIJsxMlMoA12dWzENbftlp9x-83fwOFpZSEloK2u0AZ05cNC2Eaws-1ufurTzpqBWXxadhF6GyhQF8jU382ZE_WRo98_1V6btM2y8-lwghTF-nWFuBpwIsDpoGMgOkLLdhTCelpu8CH4Ej92zpyyZ49Gsq1wP508ec2K0Z-zmIX5vfI6UHxLFSHgDSIn90VMH65UMPhLlJ-_WXlHTAwcypoh5Tc32AlJnncYRsPv6zLWbM1RPN3BkgIwT-myscmWcOEGmJHQ4vxo8x97zbzDv_nDHAkbzi66RhasocXUdVbXayi222RsUKxA_yS_N6YT9syTGENziJJqn9XJpRVR6CHoMJrMhQKO1J7mpa9Ab6f7CItcKrvP3tl-DoBu8W1HlZO60WA0o9IYAdQ5xURMinUTXdgguyNl39hCUUOx5vBgCdg9wxFvfKJZSSJhMRhRU1ahrddeEJlbb3SAALofDhS36Nc4_U4cebuShhwUSikar18xmNTRShhvtT2yNSD0G4KaPt2XSVQyiSJ1r-StF7QC-skgYjLEroDixav8muxZSH_wf0YOVqoR_27II03ZACDbT7AjdHPx1NYAxRDf6MfX_1zAZv4Q6-rGpYrEcqH4U_dHV1AD01jvgYItbZ_mES2OZKZCXytuaBSwOfJRlpw0Kj6hrQbqlPCZ8f4hZXZO6Kf7GLtZKCgoEJv2Q5MIbOW_Gxsnt446bpTkZiwqHDN8Ru_w5-ZDJNMrfto5ITpQ6fRfKJl8VeuJUEKEfl1qU6DSO8RxpD6uqfsj1qxlcY5_Emzh8Mt5-FcOH9-fRmHS5OZ4iaoexvP-rhEMot789Yj7gtEOb-b-sx4GZkAIEcd9ZIIlm3EuodCb9HmwPQRJ9l0HhxebOxP8Xo--fXsZGRK8xhGki-oiwuTDU7FzZh_U9Ke7WGlTxzfBuncCjeUUVbM4Wg6BSEQxBdh4hLarsKiYkLHnZbvGaDlj_w2MQC8Yu5GT_FXNzz8bprdrMIrVDYoUW29SSikTth2Mto1QO7Uxj1-_vpNCp4AQOQcZCbSOLI1KnPkJlS8SvUB94ctDoFA4iAj86fyuKQOC1KJP0p4n7x2jhE4kA0Eyf1V84iXgyewE5TEoEQoeAS-PQ3qAzrGc1Ljg_9OFH0WeXMZpNM9CxPZUqvMue1xOR70H7K0zW7l7y60jXKi8311V6jRMBx1JLPCydDKqHLAKH-QHJ-oIc7SV66fV52apEN68S_jwnNQjAX3XDnmYg1zLkiRfF_SnBFLg7TkaXLe4WjOPzwxWF_J_AEmU1yiqCHs8vNVyakb1NfX1xikd8A0jyOsJR3L6ttAtEPx6xIwL0w8QJvNDIajaTdmiVwm1ESvZKYPcR89MhuzGbYtwok9PwiXrMcQJ9bw6lLP6M6XFYKUC8VdbJKqW-kQ8zLsNYUYdmQou_Yzi9LicB39eDNdq3dq5KYNOV-eJTJtAU-3HixZw9xc2zZIesoVMU9383JZjlgVMTfTu70h5-MGy3uXCayAbyguV1UpwlyC8bafzqsdHJwF4qQwIr9X-Vx1-MMggTdYQyb7PCf8_-qfsrI3lumwIbXq2VM47e2FLcGxewNUVRAN6M78AoSjI3MSPepQ73JNMl7WjN1GJuwZxyPLZfQT92ey2q9izzcsPK-QX5b1zYeb79Gl7PUdxAJPA_z_2X8gG_cwzy03TsKA4ul9C2aRTnFuZFvxZkC99Ml8Qley2Kxt0TXm3jVJOa00UzneMV0r_AXa0meVCdzwCm2PI0WUf4hEH7ui_LpqDdAKjpueF5F6NHbCcygaOWg0VYUYO2O9IMWXd7TWOnLAjEQoLxjWFYx8eQWCshSZje1lalB68zByvS4N2-ScrJA86FQDwMAnlix85-2X4n-zL_JNCeyWMAvoomyX3kgOBxXFt_3YBz0aOAFWTDjQvnjSykYRXwERG9YRWSwLRjioZPm9qAFdE5Imnn_N1Ig0tD3a0pRj3sWpVgjqxqMlXjooK32OY5kVtpBGzioJnljM-Zrbbl7ezhYHZR-rQ_Q1sZzFUqg_woN4iVQBjoACLK8_UyWPBWeBZ0JxgCXX1Cm8EnRuUXNEAt2Zyi3bw9Twa4k2_7BwSUQRnwP2wOJsYVvRHIRU4LWg-z8k3gy_jEBT030mXobjGTjBTLqAQtUai1zuRFfyKYFt3y6um6w=="
                   }
                 },
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.id",
                   "value": {
-                    "stringValue": "rs_089212d083f24490006ac15a1f929087d09dfce3b58e7274f7"
+                    "stringValue": "rs_017e713916d10324006ac16d6db3d087d09f6fd0e35a995982"
                   }
                 },
                 {
@@ -367,13 +528,13 @@
                 {
                   "key": "llm.output_messages.1.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\n\nA trace may record:\n\n- The initial request and relevant conversation or state\n- Model calls, including the model or version and the messages sent\n- Tool calls, their arguments, and the results returned\n- Step order, timestamps, and parent\u2013child relationships between operations\n- Retries, errors, intermediate outputs, and the final response\n- Operational details such as latency, token usage, and cost\n\nFor example, a trace might show:\n\n```text\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\n2. Model requests a weather tool call: get_weather(city=\"Paris\")\n3. Weather service returns: 18\u00b0C, light rain\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\n```\n\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\n\n### Why traces are useful\n\nTraces help developers and evaluators:\n\n- Debug failed or unexpected runs by seeing which step went wrong\n- Check whether the agent used tools appropriately\n- Measure latency, cost, and reliability\n- Compare behavior across prompts, models, or system versions\n- Support monitoring, auditing, and incident investigation\n\n### Trace versus chain-of-thought\n\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\n\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits."
+                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\n\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\n\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying."
                   }
                 },
                 {
                   "key": "llm.output_messages.1.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\n\nA trace may record:\n\n- The initial request and relevant conversation or state\n- Model calls, including the model or version and the messages sent\n- Tool calls, their arguments, and the results returned\n- Step order, timestamps, and parent\u2013child relationships between operations\n- Retries, errors, intermediate outputs, and the final response\n- Operational details such as latency, token usage, and cost\n\nFor example, a trace might show:\n\n```text\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\n2. Model requests a weather tool call: get_weather(city=\"Paris\")\n3. Weather service returns: 18\u00b0C, light rain\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\n```\n\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\n\n### Why traces are useful\n\nTraces help developers and evaluators:\n\n- Debug failed or unexpected runs by seeing which step went wrong\n- Check whether the agent used tools appropriately\n- Measure latency, cost, and reliability\n- Compare behavior across prompts, models, or system versions\n- Support monitoring, auditing, and incident investigation\n\n### Trace versus chain-of-thought\n\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\n\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits."
+                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\n\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\n\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying."
                   }
                 },
                 {
@@ -403,7 +564,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"id\": \"resp_-eieKxERa3FIyRg5gHH6yAhi90xaw_RH9OOqaKEJwInv7T9lcPhna9jXkXP3pANXJtM5AsyuOqk6pWE1hiwTUKbmK4DnrZt_9WQQsDFm3K47cPM9UScQHtVnL912CuOaoNrVBfNebeqqwnUylOETFvseETm_n4UreXFxjcShi88AyAuVBr3xs6v2NM4FazJCH1A-j4x9bz3Zo8VsNlrREoU6ddeLlvgc0lSvVBIeBKzgQcHpJmXMN9vuQQPnjIC2dDw4rGElkw2rp9dTdBgdvTmshAMxzkU4j5lRznYVkN7o2GlaMwDUxzhrWZ_5Gqg2VRdcXV9zQfwwGZ0Y9MKOSnX2OzOHJWHzGVWNSBH1B6IF4apAWZjPlmLKWCfK73P_-kz-d4ZC15BiYs8BbrdnN9zu857_ldCl2oV0JeLNfD2b7pAti0Nc4U_7SBdimgRTfTAVdzGeyX9N1M1-i2mPIoIo\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791056415.0, \"instructions\": \"Find key facts about the topic.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791056423.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
+                    "stringValue": "{\"id\": \"resp_WXxHd6g81o64NErUYvhYmwSga4nELpzjyWt--rdSzAZ5xNUDdupXwB1vE6ScEt-1QRHvTaEJsU3gizZac7kM3jTfq7fpjYm4pLv5WaNZs-q7mj35CJcl5p6G6-EtaA9cOdtjmAjIPgFduHSv_O0jcvdJT9hpdPveNh5BuiNRkMViVYGU6KDLuEm4Xh9S5pK9_utD8kxDD1ZXKY6XqV8JEerpIxyyj_n3lP5ilUk2FNg68kWPVc64qV4g6NLW9xypmMcLVyGOWzLrFV6Ee24gVFUNawjAHVH_ATr6AiIrgqVRYNIC1wBTNy6-cyRE2t7mhFqNxjIz7LFiYwYlPbcoryVj_87svK-Ek1_3Iw8w1s4OhbKrLtGY3E8SMlrxd7Krbtzv4aXAAzeaRQnSFsi0E0eXLurWWobn5errPYJfCcTeFTq-axpLi8UoMX5Xk-lrl4g1ah6aEuolOAttZbRaovcK\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791061357.0, \"instructions\": \"Find key facts about the topic.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791061361.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
                   }
                 },
                 {
@@ -415,7 +576,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "[{\"content\": \"Define \\\"agent trace\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\", \"role\": \"user\"}]"
+                    "stringValue": "[{\"content\": \"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\", \"role\": \"user\"}]"
                   }
                 },
                 {
@@ -427,7 +588,7 @@
                 {
                   "key": "llm.input_messages.1.message.content",
                   "value": {
-                    "stringValue": "Define \"agent trace\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable."
+                    "stringValue": "Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer."
                   }
                 },
                 {
@@ -443,13 +604,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "a41b7dc77cf662d9",
-              "parentSpanId": "eaf386595c249c0b",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "a265832cb4c0bd19",
+              "parentSpanId": "88ff480c94bff771",
               "name": "turn",
               "kind": 1,
-              "startTimeUnixNano": "1791056414963331840",
-              "endTimeUnixNano": "1791056424069283072",
+              "startTimeUnixNano": "1791061357114712064",
+              "endTimeUnixNano": "1791061361577417984",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -464,13 +625,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "eaf386595c249c0b",
-              "parentSpanId": "52a825ace0f9f740",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "88ff480c94bff771",
+              "parentSpanId": "e145f3b198cc69a4",
               "name": "search_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056414963215104",
-              "endTimeUnixNano": "1791056424070046976",
+              "startTimeUnixNano": "1791061357114658048",
+              "endTimeUnixNano": "1791061361577588992",
               "attributes": [
                 {
                   "key": "graph.node.id",
@@ -497,13 +658,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "52a825ace0f9f740",
-              "parentSpanId": "93f99c366a76ed9e",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "e145f3b198cc69a4",
+              "parentSpanId": "c639f6d00622cbfb",
               "name": "research_workflow",
               "kind": 1,
-              "startTimeUnixNano": "1791056414962791936",
-              "endTimeUnixNano": "1791056424071384832",
+              "startTimeUnixNano": "1791061357114451968",
+              "endTimeUnixNano": "1791061361577629184",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -518,13 +679,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "93f99c366a76ed9e",
-              "parentSpanId": "09c51f10aaa0e1d0",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "c639f6d00622cbfb",
+              "parentSpanId": "7ab56882886748e5",
               "name": "search_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056414961448960",
-              "endTimeUnixNano": "1791056424076843008",
+              "startTimeUnixNano": "1791061357113745920",
+              "endTimeUnixNano": "1791061361577822976",
               "attributes": [
                 {
                   "key": "tool.name",
@@ -535,7 +696,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"input\":\"Define \\\"agent trace\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\"}"
+                    "stringValue": "{\"input\":\"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\"}"
                   }
                 },
                 {
@@ -547,7 +708,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\n\nA trace may record:\n\n- The initial request and relevant conversation or state\n- Model calls, including the model or version and the messages sent\n- Tool calls, their arguments, and the results returned\n- Step order, timestamps, and parent\u2013child relationships between operations\n- Retries, errors, intermediate outputs, and the final response\n- Operational details such as latency, token usage, and cost\n\nFor example, a trace might show:\n\n```text\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\n2. Model requests a weather tool call: get_weather(city=\"Paris\")\n3. Weather service returns: 18\u00b0C, light rain\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\n```\n\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\n\n### Why traces are useful\n\nTraces help developers and evaluators:\n\n- Debug failed or unexpected runs by seeing which step went wrong\n- Check whether the agent used tools appropriately\n- Measure latency, cost, and reliability\n- Compare behavior across prompts, models, or system versions\n- Support monitoring, auditing, and incident investigation\n\n### Trace versus chain-of-thought\n\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\n\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits."
+                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\n\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\n\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying."
                   }
                 },
                 {
@@ -575,13 +736,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "09c51f10aaa0e1d0",
-              "parentSpanId": "acc9704cf50c89f9",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "7ab56882886748e5",
+              "parentSpanId": "d4f9776c66412a99",
               "name": "turn",
               "kind": 1,
-              "startTimeUnixNano": "1791056413415941120",
-              "endTimeUnixNano": "1791056424084964096",
+              "startTimeUnixNano": "1791061355533561088",
+              "endTimeUnixNano": "1791061361578035200",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -596,13 +757,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "157aacbce2e2db93",
-              "parentSpanId": "9da3f52ba4ef1490",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "a1d67606578aecc8",
+              "parentSpanId": "edb7e0b62f26d1ed",
               "name": "response",
               "kind": 1,
-              "startTimeUnixNano": "1791056424093470208",
-              "endTimeUnixNano": "1791056426263483904",
+              "startTimeUnixNano": "1791061361578835968",
+              "endTimeUnixNano": "1791061363533584128",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -619,7 +780,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"resp_75bqC2xI-Bp8MC5JHE0guHFBeiUw750DjHHImTJ4k40_Ia5ylgwUqdhCV_j6fkV5PjGAclqo3DiUwxbkzSMJGjxPuF9nxa4Zhi2UrpnCZxijZO0l7tkwNsMl2mnK55OMBPQATS0verwDxYHniXWq6mZ7QlBc5fi2nUgUX3uK53ovlKQ7OCOKBBfoxXaNyFh-WsESqm4SQHYSfTfmtHdjVX6OOVOpTm17XAUiG6Fw_OPK8VK4BbCpcwlx6NUUvLxbyX1HyV0lIcCqdMWQn75-mjLkd5ZunlM6LJTu2oo7dgohNgDL7WM8RsndUnYOxempgS5f6Fri0tqurD7rTPxBwhFSTSbqhwZM226zEkXhZd2hYgFhByZhbJJS_a0bxmLrnwXk63u29wOhAasmW1SUBx0A2Ou_fDFizmpJO5IBmHFaOuiaFiRFP2hVDHDKfAJKrckGlHUSNpI4i8nwqZBBs5C1\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791056424.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Use search_agent to gather facts, then writer_agent to write the answer.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"input\\\":\\\"Answer the user asking \u201cWhat is an agent trace?\u201d Use this definition and key points: structured record of AI agent execution, ordered steps/interactions with model, tools, environment, input/state, tool arguments/results, errors/retries, timestamps and operational metrics; example brief weather tool cycle; useful for debugging, evaluation, monitoring and cost/latency; not necessarily chain-of-thought/internal reasoning; schemas vary and may need privacy safeguards. Keep clear, moderate length.\\\"}\",\"call_id\":\"call_7ie1gAVzdnqUHw73TGdo5OJT\",\"name\":\"writer_agent\",\"type\":\"function_call\",\"id\":\"fc_014a0510027525e4006ac15a28e45087d0badb5192c8ebfa30\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Find key facts about a topic.\",\"output_schema\":null},{\"name\":\"writer_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Write a short answer from facts.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1791056425.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":661,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":111,\"output_tokens_details\":{\"reasoning_tokens\":0,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":772,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
+                    "stringValue": "{\"id\":\"resp_TpKOuxhfQp1mDdS-PHlE4OTnn-WtDX0TJyvgqL9-FIVNYF8nLrer49_ZM7XBQjNi3rrdnmAc-fGH_U4cyAKySovzpVYS2dOlERfRu0InQ_loYDSqZ5cu1d3bzhMYyf98yhEUOZX_6YNwtDY0uOG7I5CKxBgsSQ56QhnxZWx7-q0uN9BEUlr-lcNFCDrZCUGDsBvZSUrinPeFHADa06aHVRtI7-LRQIswmXLZczI27J_1lNbOIZHZSzVuyQHafaUHoXX84puJeN7famSJNbCP2H1vhoDXJmXb8vK3AXwa5nEhXzMnnPV33kkad-n6gLcV7euwer9WjRDHcMVuIzy8egJrY1--QzTeLPPHkG4AzTIanOdCe2msHOEdasQ0UBIoyX7y793yYEju8YnBXmXRE71TVghGB8hKmcZWWMFumI4VBj9JLhXxsSWV4nzwauC3pSOMmOyAGzKLFbuHUtWv85Fs\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791061361.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Use search_agent to gather facts, then writer_agent to write the answer.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"arguments\":\"{\\\"input\\\":\\\"Answer user: \u201cWhat is an agent trace?\u201d Use the search facts. Define plainly; mention typical contents and purpose, distinction from chat transcript. Concise, no claims about standardized format.\\\"}\",\"call_id\":\"call_mNgv81wDwjs9OBnZXI2O2080\",\"name\":\"writer_agent\",\"type\":\"function_call\",\"id\":\"fc_075ab79c84fd5fba006ac16d727bc487d084e988e089ffd50c\",\"async_\":null,\"caller\":null,\"namespace\":null,\"status\":\"completed\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Find key facts about a topic.\",\"output_schema\":null},{\"name\":\"writer_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Write a short answer from facts.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1791061363.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":360,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":55,\"output_tokens_details\":{\"reasoning_tokens\":0,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":415,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
                   }
                 },
                 {
@@ -637,19 +798,19 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "111"
+                    "intValue": "55"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "661"
+                    "intValue": "360"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "772"
+                    "intValue": "415"
                   }
                 },
                 {
@@ -679,7 +840,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_7ie1gAVzdnqUHw73TGdo5OJT"
+                    "stringValue": "call_mNgv81wDwjs9OBnZXI2O2080"
                   }
                 },
                 {
@@ -691,7 +852,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"input\":\"Answer the user asking \u201cWhat is an agent trace?\u201d Use this definition and key points: structured record of AI agent execution, ordered steps/interactions with model, tools, environment, input/state, tool arguments/results, errors/retries, timestamps and operational metrics; example brief weather tool cycle; useful for debugging, evaluation, monitoring and cost/latency; not necessarily chain-of-thought/internal reasoning; schemas vary and may need privacy safeguards. Keep clear, moderate length.\"}"
+                    "stringValue": "{\"input\":\"Answer user: \u201cWhat is an agent trace?\u201d Use the search facts. Define plainly; mention typical contents and purpose, distinction from chat transcript. Concise, no claims about standardized format.\"}"
                   }
                 },
                 {
@@ -721,7 +882,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"id\": \"resp_75bqC2xI-Bp8MC5JHE0guHFBeiUw750DjHHImTJ4k40_Ia5ylgwUqdhCV_j6fkV5PjGAclqo3DiUwxbkzSMJGjxPuF9nxa4Zhi2UrpnCZxijZO0l7tkwNsMl2mnK55OMBPQATS0verwDxYHniXWq6mZ7QlBc5fi2nUgUX3uK53ovlKQ7OCOKBBfoxXaNyFh-WsESqm4SQHYSfTfmtHdjVX6OOVOpTm17XAUiG6Fw_OPK8VK4BbCpcwlx6NUUvLxbyX1HyV0lIcCqdMWQn75-mjLkd5ZunlM6LJTu2oo7dgohNgDL7WM8RsndUnYOxempgS5f6Fri0tqurD7rTPxBwhFSTSbqhwZM226zEkXhZd2hYgFhByZhbJJS_a0bxmLrnwXk63u29wOhAasmW1SUBx0A2Ou_fDFizmpJO5IBmHFaOuiaFiRFP2hVDHDKfAJKrckGlHUSNpI4i8nwqZBBs5C1\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791056424.0, \"instructions\": \"Use search_agent to gather facts, then writer_agent to write the answer.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791056425.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
+                    "stringValue": "{\"id\": \"resp_TpKOuxhfQp1mDdS-PHlE4OTnn-WtDX0TJyvgqL9-FIVNYF8nLrer49_ZM7XBQjNi3rrdnmAc-fGH_U4cyAKySovzpVYS2dOlERfRu0InQ_loYDSqZ5cu1d3bzhMYyf98yhEUOZX_6YNwtDY0uOG7I5CKxBgsSQ56QhnxZWx7-q0uN9BEUlr-lcNFCDrZCUGDsBvZSUrinPeFHADa06aHVRtI7-LRQIswmXLZczI27J_1lNbOIZHZSzVuyQHafaUHoXX84puJeN7famSJNbCP2H1vhoDXJmXb8vK3AXwa5nEhXzMnnPV33kkad-n6gLcV7euwer9WjRDHcMVuIzy8egJrY1--QzTeLPPHkG4AzTIanOdCe2msHOEdasQ0UBIoyX7y793yYEju8YnBXmXRE71TVghGB8hKmcZWWMFumI4VBj9JLhXxsSWV4nzwauC3pSOMmOyAGzKLFbuHUtWv85Fs\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791061361.0, \"instructions\": \"Use search_agent to gather facts, then writer_agent to write the answer.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791061363.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
                   }
                 },
                 {
@@ -733,7 +894,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "[{\"content\": \"What is an agent trace?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"input\\\":\\\"Define \\\\\\\"agent trace\\\\\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\\\"}\", \"call_id\": \"call_bY1w9SKHukwkuZ5GmTugfdzm\", \"name\": \"search_agent\", \"type\": \"function_call\", \"id\": \"fc_014a0510027525e4006ac15a1e0a0c87d0a67ef6122b33ea08\", \"namespace\": null, \"status\": \"completed\"}, {\"call_id\": \"call_bY1w9SKHukwkuZ5GmTugfdzm\", \"output\": \"An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\\n\\nA trace may record:\\n\\n- The initial request and relevant conversation or state\\n- Model calls, including the model or version and the messages sent\\n- Tool calls, their arguments, and the results returned\\n- Step order, timestamps, and parent\u2013child relationships between operations\\n- Retries, errors, intermediate outputs, and the final response\\n- Operational details such as latency, token usage, and cost\\n\\nFor example, a trace might show:\\n\\n```text\\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\\n2. Model requests a weather tool call: get_weather(city=\\\"Paris\\\")\\n3. Weather service returns: 18\u00b0C, light rain\\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\\n```\\n\\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\\n\\n### Why traces are useful\\n\\nTraces help developers and evaluators:\\n\\n- Debug failed or unexpected runs by seeing which step went wrong\\n- Check whether the agent used tools appropriately\\n- Measure latency, cost, and reliability\\n- Compare behavior across prompts, models, or system versions\\n- Support monitoring, auditing, and incident investigation\\n\\n### Trace versus chain-of-thought\\n\\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\\n\\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits.\", \"type\": \"function_call_output\"}]"
+                    "stringValue": "[{\"content\": \"What is an agent trace?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"input\\\":\\\"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\\\"}\", \"call_id\": \"call_uwOQtsDUxrMRpQkdlMtOTmYw\", \"name\": \"search_agent\", \"type\": \"function_call\", \"id\": \"fc_075ab79c84fd5fba006ac16d6c51a887d0b30b0726ef3ab5b1\", \"namespace\": null, \"status\": \"completed\"}, {\"call_id\": \"call_uwOQtsDUxrMRpQkdlMtOTmYw\", \"output\": \"An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\\n\\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\\n\\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying.\", \"type\": \"function_call_output\"}]"
                   }
                 },
                 {
@@ -757,7 +918,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_bY1w9SKHukwkuZ5GmTugfdzm"
+                    "stringValue": "call_uwOQtsDUxrMRpQkdlMtOTmYw"
                   }
                 },
                 {
@@ -769,7 +930,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"input\":\"Define \\\"agent trace\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\"}"
+                    "stringValue": "{\"input\":\"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\"}"
                   }
                 },
                 {
@@ -781,13 +942,13 @@
                 {
                   "key": "llm.input_messages.3.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_bY1w9SKHukwkuZ5GmTugfdzm"
+                    "stringValue": "call_uwOQtsDUxrMRpQkdlMtOTmYw"
                   }
                 },
                 {
                   "key": "llm.input_messages.3.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\n\nA trace may record:\n\n- The initial request and relevant conversation or state\n- Model calls, including the model or version and the messages sent\n- Tool calls, their arguments, and the results returned\n- Step order, timestamps, and parent\u2013child relationships between operations\n- Retries, errors, intermediate outputs, and the final response\n- Operational details such as latency, token usage, and cost\n\nFor example, a trace might show:\n\n```text\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\n2. Model requests a weather tool call: get_weather(city=\"Paris\")\n3. Weather service returns: 18\u00b0C, light rain\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\n```\n\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\n\n### Why traces are useful\n\nTraces help developers and evaluators:\n\n- Debug failed or unexpected runs by seeing which step went wrong\n- Check whether the agent used tools appropriately\n- Measure latency, cost, and reliability\n- Compare behavior across prompts, models, or system versions\n- Support monitoring, auditing, and incident investigation\n\n### Trace versus chain-of-thought\n\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\n\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits."
+                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\n\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\n\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying."
                   }
                 },
                 {
@@ -830,7 +991,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "2b1cac18-14bb-48e4-a94a-c0ef0755f923"
+              "stringValue": "9e946a2c-3235-4d42-9b82-dd5156d37c37"
             }
           },
           {
@@ -850,18 +1011,123 @@
       "scopeSpans": [
         {
           "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "689679f05dc541c9",
+              "parentSpanId": "26f83a3f766cfc1c",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061363536218000",
+              "endTimeUnixNano": "1791061366555540000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/responses"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "edc69781-831c-4964-a279-686316933fcf"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "daceaa8b5b1eb345",
+              "parentSpanId": "66847f39f23693c7",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061366559860000",
+              "endTimeUnixNano": "1791061368215391000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/responses"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "0f2cab96-2a65-497d-8bf6-275cfbce5df6"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
             "name": "openinference.instrumentation.openai_agents",
             "version": "2.5.2"
           },
           "spans": [
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "c35fadd5cf54087b",
-              "parentSpanId": "5470e8d5a99f5290",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "26f83a3f766cfc1c",
+              "parentSpanId": "2ea75c70ba233a42",
               "name": "response",
               "kind": 1,
-              "startTimeUnixNano": "1791056426291112960",
-              "endTimeUnixNano": "1791056428603742976",
+              "startTimeUnixNano": "1791061363535748864",
+              "endTimeUnixNano": "1791061366555984896",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -878,25 +1144,25 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"resp_Hr5nlAMja-rG8iII3wvYd8Sys5HN96ym56Qb46ukFVJiS5PyxQ46ZvUf9zd3oJP7RcopeqfbJCJPcCZrhNI9Q1XFVXQ2v61Vob5gY3koXxTAfzvhKrxcSfuC2n73AARJxKAMpyusKaZ4y6dYLvyEgQ_EfXb16qSoEksvj_DoXfY5Lk46aVFyH1XwrxRjN2W5LlDFooZzCwRy_bTm8mcIB8iiQkWMahVgfWLPbCgGeBIA2bqVrymwH6vekqfHdFLOCDiDB-Kq_tLLjO13YS6ST7V7LDcfSTSlv8c04ZX43uk3KqG5azyjd-gSgczX-Tz7OQAYWSwRWji6sFnlOlGow9nyIpt8sKTw6sjld66sR1SLolSRsmKEM8LtqDEqKcpE8t3DL_1iu2YQ96DvbLQe4GhRi0d7YehkXE0oi6el3dTphRDNbVTQyPyEgLdAsovpKR86WOF6RRcHlAZD1cI6X91L\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791056426.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Write a short answer from the given facts.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"rs_0750e8a5c1157741006ac15a2ac83887d0bb458918f8bab758\",\"summary\":[],\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"gAAAAABqwVosV0eiHxN3Wa5b_4s1Jen4ZrGo5NMcafUFr07IewlpX9WjXGugK2wAj8ZMNWqJ5YedTVGk-QTgTNa8q2fbIZXy5NYkZnH1-tm2TOxJs3aG0cOmFBHpekv7HBQwCS_nSRmtjWMIE9hx-red9SLnKZnXia3DT3dbN_8ql--RUcbAp5IunbgPRdMpQRMbkIU8eiIiu1NhXikn0XLCJR5e0lVJauNLBc3gRm0aNs1L38FCj-NA1oRpg6iPAW4lWweMJ7ypQ7g1UiHPAaH8J4fkwYgdNv6LCXbO4wDD5tuEVo6oN-BBdQf-HstnPI0dnnpRrvWhW7voNsTGaRbOLtULprXTG1RZLERUBpYxfERZlcX4JbARbh1My-WhkpanEXBpgGdPAGuwxLFDkw9OHsxn3BgPbgF-956WMmHSXf_7P1ckeOm4EqFfUtb-32NJhUbps251DL1B-0KrygdTA2caT4leTUtH-L7jFw-cIdJFX9CrsVr_XlstrTGzlMwBvsCZmhJVDTn_xAquK6N1rZrsa6SFChslS3qRF3foFhkCzSw5iruZwGYpOPD6KV4MUfai8ri4LuzLxBZt-beZ7CPktnFqhAwzTMJoU3YGBW_t3Rt4d3CV5iblJILO8BEyhwEfbBXzVzh35igIU9RtDCmYWlVAPSjx3LnUDG-FUeFgoZTYHopomSZzVFlwPDuHQDGiKvG9pzIdJmsrdv64gs7mvobM8IHkCYhuglnZxlTwPrLjJNE6dtX3AfEO5UUOPwG39xtrxh6wRvECSSFufK2mcoSvCYIeC1HZU-Lq9NuvXJALyo4chfcR3pHEuGvug7j6_kZJ7RmaFNPtQuelKcRvyyRz1-3pst7yjY_iNaUtyuvCV_gjWiWA7Hex7Atnm15TZ_FenFcY74QFUwLyjt5-iVrkLetXJ-e6ZV7fKccwo4jwpzxRuZoohb7kgeVZ-pLsbj8kG7LNVP40YECJStmegk6JXY2ry05JGla8aXeYEYFf0dOmBD2LL1-iACpRueGObR5IahH-Fhg7vrKSnyew2W83qmg7Pc_jxafCRlyBsx317FCM4xnlEEPPM2WTjmbdUVZ_YtSgQNm1qQQRm2omH5vcSfzriaMDASDI6Lb8DeSny26iZOtE40r7eT8xooDXGJBsf-7YlMMG5ruigU1Cx0HpArROxj_Iisd5V8jGPw7ennjjtB7DhNeHESq5nv_jjrOiJD8BHiCi__9QV1DW3Kt4omtAtya4z40IzVxWcgt00SrAhb5geJW9AeUm8d3_us_g\",\"status\":null},{\"id\":\"msg_0750e8a5c1157741006ac15a2afc6487d0ab1d17a9be4e0668\",\"content\":[{\"annotations\":[],\"text\":\"An **agent trace** is a structured record of an AI agent\u2019s execution: the ordered interactions between the model, tools, and its environment. It may include inputs and state, tool arguments and results, errors or retries, timestamps, and operational metrics.\\n\\nFor example, a weather-agent trace might show: the user asks for the forecast \u2192 the agent calls a weather tool with a location \u2192 the tool returns conditions \u2192 the agent responds.\\n\\nTraces help with debugging, evaluation, monitoring, and analyzing cost or latency. They don\u2019t necessarily include the model\u2019s private internal reasoning; formats vary, and traces may need privacy safeguards.\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":0.98,\"background\":false,\"completed_at\":1791056428.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":113,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":150,\"output_tokens_details\":{\"reasoning_tokens\":19,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":263,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
+                    "stringValue": "{\"id\":\"resp_9ROkDw6N_GANowpEhOL6fDAiIutO3Q9RIfDLkcomI6hE8NT9Dt6EYiC7zq44k_fxfX0B8wQFarxm9b-X8U_8r2l424ArH64FJkUHaa36sF7bHyFyLdLg7WA2XWS6un68V1z7aXqzOkc_iSaSKPB4OG6tOeJ27Tt7AE3wWEKnXpcOfIiFJos_t-vWRWOIU68ZxtfsDJZl8qO3xp0q2qu6uhZLks31UcVJq9d4HI5CPOdqNEXebjRqLWcVFzLcbLkYNPuJQh1BRBVO_jterj4GhHBHe2kTc5MEwKojyDVqQEsNOLrrnikQxZ0UVk90eAS8Ry1KE2AFGlBNiFYxhrd1ArA8gvF18EUXrH8xnpvTCbNKZaxWWUsvw1SpoFWBZx7Dx5Lw-1FyFZqHqUwLK8z-J7eOI60W58ADBxa5TQT_jOR-lMz0SHzp1EHA7BVUNvBUyeFfCjxttAGoF0OJvA9XVOZV\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791061363.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Write a short answer from the given facts.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"rs_0b8ebbf4fe3724b8006ac16d74b71487d0b4d2a8f6ee81057c\",\"summary\":[],\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"gAAAAABqwW12Co0_9fpZcIjUaqfD9qRd3TXYsBlZGnHV0DXwuOFEJwZqGUYt-wfM6TCj8hPAj5O0SVMr_GGMt9NXsv27sjRiedtxGhAi5cDCXKXPFbD8LdAIKM4DBarFuB8jZ5PeBheThS6neoIEwCLs68muSnsclnWykOdNdvfxyxszOY9e4uiBmlEXjVHSl8xa1yFpe_slJ2eT2YMVmAFd0fe4Nog95w4AXPxdsNcjpVa_5LjzX7hU3uaJl6b6lQeOlB0t3FuLqo_YsFJvZ-ddVd7mtGGGlmJ0Y3bY0JrHLP7bvKJRRcIdlVbs9YsZGeQ7MRoC6AzIHobyOf_JlZVhYY_2kp7RMORds8XgjH_9jUPhmeX7kKsN8knvkfBCWGFKrwch17HrZEHQKBMrhWfO7ZbNy0CdxsaOE5sta_lLvP0jQRu8TFngKk0T-gZ9dkuFuXLRCcq9YHJ7l_RvpaebCgVK7Ef7dBYLqGcYT_eNWIgS6fEAUhCk9m-T3S6ukQj5L3hhuXJRXTMQ-B840nMY1KlUxux33ebiKDjuWt1DTUMMW87fPFSrp7zbj9mjSvXNeMpg8ab06xH2d1g-0I6FmRSyB_DqPrNU_1wF7yl-61urVoNz6cOweWuv9Yz4pSKm0yIIEnj7DNE5VyfP6aCkkLKFhCczuWhDUqXUJNTCHBkYJDN7c7MVmDPXSlHJGe1Jt_JWRnPcCJSyoSqOPH0HLBHfh14BzgVmxsMZ6vwxJ15Iy8-nNOsUCg83m6pDOt6GXgYLAaY5JddUNilkTM43220sOfKINVJtmnlAfO0_Ggc7JfdYLLSZ7ltVtR_1hDJdDd08jsCW9tF0B3kY_ERvi8d5YAlIEKmII3z6DKDswJKISqVPGA-82CMNqBoJ_f1lg2daKZjbFKuUqmFZ0tT3V-ZpL9S6R70NaMWj7fsMvs6H2LoIF1CBOkfJwiYcK0K6WC_YhwPdYdwR2bghWfs6Y2Q3KAcWlg1knPgmCrQrogQfVYC-gm8HKAMZHOj_sBOehICkkcc_DCp0Wzd6I0ZhEfj8NL-GMenBB9AFJTldgpMDzstWPxX9pIhwUvhH7d9KcbO0jieD0cMYuhn0yB4FZidsSHzRzhQvN4t2Hwo5MqCy1NVpLaGIaigGBrRpaqkZ6s1ejtSendMTH9ETSqKh-_em4PPj2g06HifG1VJwHwBbepVmQPQHQBzoPBXOJqTMc40zt4YBNi62J1gOB7DIyP7upKrfCplr0uGXb7b0mwmCySlir0dtuoYslOjpnbzDgG-ZQsWbsBZw2_hvrGTzM8gVMTQ-eAJJtNGlHFdnVaJ3nU8AV-PsJkcfBZ395teqI2s9pTqvuB018GIbdEZphwV8kJa-JZw-HxaIvEx1KvQTifj5zket_kZvLV8PO_OrphC4Pyst8kWxASH02MOOUDPAi--XaOA8p_u-qGcXIMx1Zzl3jg4uCbaw9ZeU8tSWKVag0xdLyg6YozyXDGtPgzlTD9Sb0rEuFNxLbB5IUpuWO9eOT_aarW5_x-QIaiQP2yJPNGz37OEfXHlSFahE_h1DQW7ogaGyYI-fgl-3UcX2PoGwQRZO4PLrXs-lQSD1cGl9PO0DAQlvKY-7pxTlxVFV9U755UHbCs3_8KV2cMqJ0by-B2M7TlUSFBq5Zn1FYLNnd01nNLU7XUYKuGP4zDctYLjXVWYczUpHQfSjLyV30B-MfdHfBC5Ag5mvJcsSswJzdFbL\",\"status\":null},{\"id\":\"msg_0b8ebbf4fe3724b8006ac16d75873087d0867b22230124e05a\",\"content\":[{\"annotations\":[],\"text\":\"An **agent trace** is a record of how an AI agent carried out a task. It may include the agent\u2019s inputs, intermediate steps, tool calls and results, and any errors.\\n\\nUnlike a chat transcript, which shows the conversation, a trace can show the behind-the-scenes execution. It helps people debug and understand the agent\u2019s behavior.\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[],\"top_p\":0.98,\"background\":false,\"completed_at\":1791061366.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":57,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":156,\"output_tokens_details\":{\"reasoning_tokens\":81,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":213,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "150"
+                    "intValue": "156"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "113"
+                    "intValue": "57"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "263"
+                    "intValue": "213"
                   }
                 },
                 {
@@ -914,7 +1180,7 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "19"
+                    "intValue": "81"
                   }
                 },
                 {
@@ -932,13 +1198,13 @@
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.encrypted_content",
                   "value": {
-                    "stringValue": "gAAAAABqwVosV0eiHxN3Wa5b_4s1Jen4ZrGo5NMcafUFr07IewlpX9WjXGugK2wAj8ZMNWqJ5YedTVGk-QTgTNa8q2fbIZXy5NYkZnH1-tm2TOxJs3aG0cOmFBHpekv7HBQwCS_nSRmtjWMIE9hx-red9SLnKZnXia3DT3dbN_8ql--RUcbAp5IunbgPRdMpQRMbkIU8eiIiu1NhXikn0XLCJR5e0lVJauNLBc3gRm0aNs1L38FCj-NA1oRpg6iPAW4lWweMJ7ypQ7g1UiHPAaH8J4fkwYgdNv6LCXbO4wDD5tuEVo6oN-BBdQf-HstnPI0dnnpRrvWhW7voNsTGaRbOLtULprXTG1RZLERUBpYxfERZlcX4JbARbh1My-WhkpanEXBpgGdPAGuwxLFDkw9OHsxn3BgPbgF-956WMmHSXf_7P1ckeOm4EqFfUtb-32NJhUbps251DL1B-0KrygdTA2caT4leTUtH-L7jFw-cIdJFX9CrsVr_XlstrTGzlMwBvsCZmhJVDTn_xAquK6N1rZrsa6SFChslS3qRF3foFhkCzSw5iruZwGYpOPD6KV4MUfai8ri4LuzLxBZt-beZ7CPktnFqhAwzTMJoU3YGBW_t3Rt4d3CV5iblJILO8BEyhwEfbBXzVzh35igIU9RtDCmYWlVAPSjx3LnUDG-FUeFgoZTYHopomSZzVFlwPDuHQDGiKvG9pzIdJmsrdv64gs7mvobM8IHkCYhuglnZxlTwPrLjJNE6dtX3AfEO5UUOPwG39xtrxh6wRvECSSFufK2mcoSvCYIeC1HZU-Lq9NuvXJALyo4chfcR3pHEuGvug7j6_kZJ7RmaFNPtQuelKcRvyyRz1-3pst7yjY_iNaUtyuvCV_gjWiWA7Hex7Atnm15TZ_FenFcY74QFUwLyjt5-iVrkLetXJ-e6ZV7fKccwo4jwpzxRuZoohb7kgeVZ-pLsbj8kG7LNVP40YECJStmegk6JXY2ry05JGla8aXeYEYFf0dOmBD2LL1-iACpRueGObR5IahH-Fhg7vrKSnyew2W83qmg7Pc_jxafCRlyBsx317FCM4xnlEEPPM2WTjmbdUVZ_YtSgQNm1qQQRm2omH5vcSfzriaMDASDI6Lb8DeSny26iZOtE40r7eT8xooDXGJBsf-7YlMMG5ruigU1Cx0HpArROxj_Iisd5V8jGPw7ennjjtB7DhNeHESq5nv_jjrOiJD8BHiCi__9QV1DW3Kt4omtAtya4z40IzVxWcgt00SrAhb5geJW9AeUm8d3_us_g"
+                    "stringValue": "gAAAAABqwW12Co0_9fpZcIjUaqfD9qRd3TXYsBlZGnHV0DXwuOFEJwZqGUYt-wfM6TCj8hPAj5O0SVMr_GGMt9NXsv27sjRiedtxGhAi5cDCXKXPFbD8LdAIKM4DBarFuB8jZ5PeBheThS6neoIEwCLs68muSnsclnWykOdNdvfxyxszOY9e4uiBmlEXjVHSl8xa1yFpe_slJ2eT2YMVmAFd0fe4Nog95w4AXPxdsNcjpVa_5LjzX7hU3uaJl6b6lQeOlB0t3FuLqo_YsFJvZ-ddVd7mtGGGlmJ0Y3bY0JrHLP7bvKJRRcIdlVbs9YsZGeQ7MRoC6AzIHobyOf_JlZVhYY_2kp7RMORds8XgjH_9jUPhmeX7kKsN8knvkfBCWGFKrwch17HrZEHQKBMrhWfO7ZbNy0CdxsaOE5sta_lLvP0jQRu8TFngKk0T-gZ9dkuFuXLRCcq9YHJ7l_RvpaebCgVK7Ef7dBYLqGcYT_eNWIgS6fEAUhCk9m-T3S6ukQj5L3hhuXJRXTMQ-B840nMY1KlUxux33ebiKDjuWt1DTUMMW87fPFSrp7zbj9mjSvXNeMpg8ab06xH2d1g-0I6FmRSyB_DqPrNU_1wF7yl-61urVoNz6cOweWuv9Yz4pSKm0yIIEnj7DNE5VyfP6aCkkLKFhCczuWhDUqXUJNTCHBkYJDN7c7MVmDPXSlHJGe1Jt_JWRnPcCJSyoSqOPH0HLBHfh14BzgVmxsMZ6vwxJ15Iy8-nNOsUCg83m6pDOt6GXgYLAaY5JddUNilkTM43220sOfKINVJtmnlAfO0_Ggc7JfdYLLSZ7ltVtR_1hDJdDd08jsCW9tF0B3kY_ERvi8d5YAlIEKmII3z6DKDswJKISqVPGA-82CMNqBoJ_f1lg2daKZjbFKuUqmFZ0tT3V-ZpL9S6R70NaMWj7fsMvs6H2LoIF1CBOkfJwiYcK0K6WC_YhwPdYdwR2bghWfs6Y2Q3KAcWlg1knPgmCrQrogQfVYC-gm8HKAMZHOj_sBOehICkkcc_DCp0Wzd6I0ZhEfj8NL-GMenBB9AFJTldgpMDzstWPxX9pIhwUvhH7d9KcbO0jieD0cMYuhn0yB4FZidsSHzRzhQvN4t2Hwo5MqCy1NVpLaGIaigGBrRpaqkZ6s1ejtSendMTH9ETSqKh-_em4PPj2g06HifG1VJwHwBbepVmQPQHQBzoPBXOJqTMc40zt4YBNi62J1gOB7DIyP7upKrfCplr0uGXb7b0mwmCySlir0dtuoYslOjpnbzDgG-ZQsWbsBZw2_hvrGTzM8gVMTQ-eAJJtNGlHFdnVaJ3nU8AV-PsJkcfBZ395teqI2s9pTqvuB018GIbdEZphwV8kJa-JZw-HxaIvEx1KvQTifj5zket_kZvLV8PO_OrphC4Pyst8kWxASH02MOOUDPAi--XaOA8p_u-qGcXIMx1Zzl3jg4uCbaw9ZeU8tSWKVag0xdLyg6YozyXDGtPgzlTD9Sb0rEuFNxLbB5IUpuWO9eOT_aarW5_x-QIaiQP2yJPNGz37OEfXHlSFahE_h1DQW7ogaGyYI-fgl-3UcX2PoGwQRZO4PLrXs-lQSD1cGl9PO0DAQlvKY-7pxTlxVFV9U755UHbCs3_8KV2cMqJ0by-B2M7TlUSFBq5Zn1FYLNnd01nNLU7XUYKuGP4zDctYLjXVWYczUpHQfSjLyV30B-MfdHfBC5Ag5mvJcsSswJzdFbL"
                   }
                 },
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.id",
                   "value": {
-                    "stringValue": "rs_0750e8a5c1157741006ac15a2ac83887d0bb458918f8bab758"
+                    "stringValue": "rs_0b8ebbf4fe3724b8006ac16d74b71487d0b4d2a8f6ee81057c"
                   }
                 },
                 {
@@ -956,13 +1222,13 @@
                 {
                   "key": "llm.output_messages.1.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the ordered interactions between the model, tools, and its environment. It may include inputs and state, tool arguments and results, errors or retries, timestamps, and operational metrics.\n\nFor example, a weather-agent trace might show: the user asks for the forecast \u2192 the agent calls a weather tool with a location \u2192 the tool returns conditions \u2192 the agent responds.\n\nTraces help with debugging, evaluation, monitoring, and analyzing cost or latency. They don\u2019t necessarily include the model\u2019s private internal reasoning; formats vary, and traces may need privacy safeguards."
+                    "stringValue": "An **agent trace** is a record of how an AI agent carried out a task. It may include the agent\u2019s inputs, intermediate steps, tool calls and results, and any errors.\n\nUnlike a chat transcript, which shows the conversation, a trace can show the behind-the-scenes execution. It helps people debug and understand the agent\u2019s behavior."
                   }
                 },
                 {
                   "key": "llm.output_messages.1.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the ordered interactions between the model, tools, and its environment. It may include inputs and state, tool arguments and results, errors or retries, timestamps, and operational metrics.\n\nFor example, a weather-agent trace might show: the user asks for the forecast \u2192 the agent calls a weather tool with a location \u2192 the tool returns conditions \u2192 the agent responds.\n\nTraces help with debugging, evaluation, monitoring, and analyzing cost or latency. They don\u2019t necessarily include the model\u2019s private internal reasoning; formats vary, and traces may need privacy safeguards."
+                    "stringValue": "An **agent trace** is a record of how an AI agent carried out a task. It may include the agent\u2019s inputs, intermediate steps, tool calls and results, and any errors.\n\nUnlike a chat transcript, which shows the conversation, a trace can show the behind-the-scenes execution. It helps people debug and understand the agent\u2019s behavior."
                   }
                 },
                 {
@@ -992,7 +1258,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"id\": \"resp_Hr5nlAMja-rG8iII3wvYd8Sys5HN96ym56Qb46ukFVJiS5PyxQ46ZvUf9zd3oJP7RcopeqfbJCJPcCZrhNI9Q1XFVXQ2v61Vob5gY3koXxTAfzvhKrxcSfuC2n73AARJxKAMpyusKaZ4y6dYLvyEgQ_EfXb16qSoEksvj_DoXfY5Lk46aVFyH1XwrxRjN2W5LlDFooZzCwRy_bTm8mcIB8iiQkWMahVgfWLPbCgGeBIA2bqVrymwH6vekqfHdFLOCDiDB-Kq_tLLjO13YS6ST7V7LDcfSTSlv8c04ZX43uk3KqG5azyjd-gSgczX-Tz7OQAYWSwRWji6sFnlOlGow9nyIpt8sKTw6sjld66sR1SLolSRsmKEM8LtqDEqKcpE8t3DL_1iu2YQ96DvbLQe4GhRi0d7YehkXE0oi6el3dTphRDNbVTQyPyEgLdAsovpKR86WOF6RRcHlAZD1cI6X91L\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791056426.0, \"instructions\": \"Write a short answer from the given facts.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791056428.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
+                    "stringValue": "{\"id\": \"resp_9ROkDw6N_GANowpEhOL6fDAiIutO3Q9RIfDLkcomI6hE8NT9Dt6EYiC7zq44k_fxfX0B8wQFarxm9b-X8U_8r2l424ArH64FJkUHaa36sF7bHyFyLdLg7WA2XWS6un68V1z7aXqzOkc_iSaSKPB4OG6tOeJ27Tt7AE3wWEKnXpcOfIiFJos_t-vWRWOIU68ZxtfsDJZl8qO3xp0q2qu6uhZLks31UcVJq9d4HI5CPOdqNEXebjRqLWcVFzLcbLkYNPuJQh1BRBVO_jterj4GhHBHe2kTc5MEwKojyDVqQEsNOLrrnikQxZ0UVk90eAS8Ry1KE2AFGlBNiFYxhrd1ArA8gvF18EUXrH8xnpvTCbNKZaxWWUsvw1SpoFWBZx7Dx5Lw-1FyFZqHqUwLK8z-J7eOI60W58ADBxa5TQT_jOR-lMz0SHzp1EHA7BVUNvBUyeFfCjxttAGoF0OJvA9XVOZV\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791061363.0, \"instructions\": \"Write a short answer from the given facts.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791061366.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
                   }
                 },
                 {
@@ -1004,7 +1270,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "[{\"content\": \"Answer the user asking \u201cWhat is an agent trace?\u201d Use this definition and key points: structured record of AI agent execution, ordered steps/interactions with model, tools, environment, input/state, tool arguments/results, errors/retries, timestamps and operational metrics; example brief weather tool cycle; useful for debugging, evaluation, monitoring and cost/latency; not necessarily chain-of-thought/internal reasoning; schemas vary and may need privacy safeguards. Keep clear, moderate length.\", \"role\": \"user\"}]"
+                    "stringValue": "[{\"content\": \"Answer user: \u201cWhat is an agent trace?\u201d Use the search facts. Define plainly; mention typical contents and purpose, distinction from chat transcript. Concise, no claims about standardized format.\", \"role\": \"user\"}]"
                   }
                 },
                 {
@@ -1016,7 +1282,7 @@
                 {
                   "key": "llm.input_messages.1.message.content",
                   "value": {
-                    "stringValue": "Answer the user asking \u201cWhat is an agent trace?\u201d Use this definition and key points: structured record of AI agent execution, ordered steps/interactions with model, tools, environment, input/state, tool arguments/results, errors/retries, timestamps and operational metrics; example brief weather tool cycle; useful for debugging, evaluation, monitoring and cost/latency; not necessarily chain-of-thought/internal reasoning; schemas vary and may need privacy safeguards. Keep clear, moderate length."
+                    "stringValue": "Answer user: \u201cWhat is an agent trace?\u201d Use the search facts. Define plainly; mention typical contents and purpose, distinction from chat transcript. Concise, no claims about standardized format."
                   }
                 },
                 {
@@ -1032,13 +1298,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "5470e8d5a99f5290",
-              "parentSpanId": "8c74f22a82888deb",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "2ea75c70ba233a42",
+              "parentSpanId": "7000125462cedb9e",
               "name": "turn",
               "kind": 1,
-              "startTimeUnixNano": "1791056426275697920",
-              "endTimeUnixNano": "1791056428612889088",
+              "startTimeUnixNano": "1791061363535326976",
+              "endTimeUnixNano": "1791061366556685824",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -1053,13 +1319,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "8c74f22a82888deb",
-              "parentSpanId": "a69be5ea22df272c",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "7000125462cedb9e",
+              "parentSpanId": "a939f1d645b3cc28",
               "name": "writer_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056426275512064",
-              "endTimeUnixNano": "1791056428614803968",
+              "startTimeUnixNano": "1791061363535270912",
+              "endTimeUnixNano": "1791061366556859904",
               "attributes": [
                 {
                   "key": "graph.node.id",
@@ -1086,13 +1352,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "a69be5ea22df272c",
-              "parentSpanId": "89b6b352d9981b23",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "a939f1d645b3cc28",
+              "parentSpanId": "0c948ee3f3e6d39e",
               "name": "research_workflow",
               "kind": 1,
-              "startTimeUnixNano": "1791056426274164992",
-              "endTimeUnixNano": "1791056428615858944",
+              "startTimeUnixNano": "1791061363535084032",
+              "endTimeUnixNano": "1791061366556911104",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -1107,13 +1373,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "89b6b352d9981b23",
-              "parentSpanId": "9da3f52ba4ef1490",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "0c948ee3f3e6d39e",
+              "parentSpanId": "edb7e0b62f26d1ed",
               "name": "writer_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056426270333952",
-              "endTimeUnixNano": "1791056428621203968",
+              "startTimeUnixNano": "1791061363534398976",
+              "endTimeUnixNano": "1791061366557161216",
               "attributes": [
                 {
                   "key": "tool.name",
@@ -1124,7 +1390,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"input\":\"Answer the user asking \u201cWhat is an agent trace?\u201d Use this definition and key points: structured record of AI agent execution, ordered steps/interactions with model, tools, environment, input/state, tool arguments/results, errors/retries, timestamps and operational metrics; example brief weather tool cycle; useful for debugging, evaluation, monitoring and cost/latency; not necessarily chain-of-thought/internal reasoning; schemas vary and may need privacy safeguards. Keep clear, moderate length.\"}"
+                    "stringValue": "{\"input\":\"Answer user: \u201cWhat is an agent trace?\u201d Use the search facts. Define plainly; mention typical contents and purpose, distinction from chat transcript. Concise, no claims about standardized format.\"}"
                   }
                 },
                 {
@@ -1136,7 +1402,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the ordered interactions between the model, tools, and its environment. It may include inputs and state, tool arguments and results, errors or retries, timestamps, and operational metrics.\n\nFor example, a weather-agent trace might show: the user asks for the forecast \u2192 the agent calls a weather tool with a location \u2192 the tool returns conditions \u2192 the agent responds.\n\nTraces help with debugging, evaluation, monitoring, and analyzing cost or latency. They don\u2019t necessarily include the model\u2019s private internal reasoning; formats vary, and traces may need privacy safeguards."
+                    "stringValue": "An **agent trace** is a record of how an AI agent carried out a task. It may include the agent\u2019s inputs, intermediate steps, tool calls and results, and any errors.\n\nUnlike a chat transcript, which shows the conversation, a trace can show the behind-the-scenes execution. It helps people debug and understand the agent\u2019s behavior."
                   }
                 },
                 {
@@ -1164,13 +1430,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "9da3f52ba4ef1490",
-              "parentSpanId": "acc9704cf50c89f9",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "edb7e0b62f26d1ed",
+              "parentSpanId": "d4f9776c66412a99",
               "name": "turn",
               "kind": 1,
-              "startTimeUnixNano": "1791056424085208064",
-              "endTimeUnixNano": "1791056428623226880",
+              "startTimeUnixNano": "1791061361578105088",
+              "endTimeUnixNano": "1791061366557383168",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -1185,13 +1451,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "dabe0baad7868766",
-              "parentSpanId": "7e4950485218c128",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "66847f39f23693c7",
+              "parentSpanId": "9a3cb7d495e7d569",
               "name": "response",
               "kind": 1,
-              "startTimeUnixNano": "1791056428626658048",
-              "endTimeUnixNano": "1791056431774931968",
+              "startTimeUnixNano": "1791061366558002944",
+              "endTimeUnixNano": "1791061368215894016",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -1208,7 +1474,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"resp_Xf7i1diV7ANuvS26tF6UUsZV9x6GNCOxp090biVpxGrtbnBd-B76LtzbQSYEGJgunSwpi7_UAiX9C1EC5dGaDGKGXPcUcrHG0xLfdtQdiZ17OQtKlffgv2U-1-fTJkcdmnY3ITJLqqy0dNX3kaELgKRhBn7NyvTbHPy1ITfVDYN1oSaxB80AMi9ttDrENteE9Vi5ftWo2gPIoa0CNtUKTIIFqrza8Fon_pfKJI6XismzukhBz_YYF2ltAv4RGKU1I6K44Nn2HXkQNCxpi6YFGqj2irx8yB0Lr3xLIPoZuDWVUMngotOvcBpGAvSY75yEkHabiHgTVhypidyEubkQW7Tfk0ZvLupcAe4MY4L-K_YmYG2vB_KHRqapFXVp01ycH2OUvukUTwCt_GGpWm_PMlspd30xzHwgDgjFsrIObZuW8UtEviZmrF90hd6lOD4ov8Kich3U_RvM_3YEvt49sfz6\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791056428.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Use search_agent to gather facts, then writer_agent to write the answer.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"msg_014a0510027525e4006ac15a2d680487d09cb58b6d3fdfc61e\",\"content\":[{\"annotations\":[],\"text\":\"An **agent trace** is a structured record of an AI agent\u2019s execution\u2014the sequence of interactions between the model, its tools, and its environment. It might capture the request, tool calls and results, errors or retries, timestamps, and metrics such as latency or cost.\\n\\nFor example, a trace could show an agent receiving a weather question, calling a weather tool, getting its result, and then replying. Traces help with debugging, evaluation, and monitoring. They don\u2019t necessarily reveal the model\u2019s private internal reasoning, and their format varies by system.\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Find key facts about a topic.\",\"output_schema\":null},{\"name\":\"writer_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Write a short answer from facts.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1791056430.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":908,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":116,\"output_tokens_details\":{\"reasoning_tokens\":0,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":1024,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
+                    "stringValue": "{\"id\":\"resp_7Wqg-REDN7mOX_sKCOIYzzaAMgzVa3qrUI8pLB2QqUNNKc02Zy-wGW-2zrp3tVOD3Gb1GLEF_e2wfm5Eq_suf8vF66c3e7uDaVnbgsU860g5TALLLwbilwOKFOrV-KUNJ4tBBsM6GT5_KDqNKGMUqu2oVE-wwKOzOkcHxHnw91kXro27NgCGm6rmhadJ9DL3gJnXZO4piHWaFUInsU1fTwm15_86JhV_Z4xy2W6Bk0wlw76kEqKkgTr28D0LZXyltRbkxfto5wuRfGebPFn9zCr1wB5VMWLyWxjCirjtsuFJ5xggjud1PK95aLnQe2Pym9dBImfnFxbELU7XN88qJRiz4qRTipdPzk7KXy6MyxU6C0OKdm6ZG8skqVKpmIdxshcZcvVPiEK1MJeo8h2Tnk_ooto01fLBxoXR-PFboMJyMv8xYAtjbg2gCPiOvNVjjjLLS0NKA_MVCegemjpIQJ5J\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"created_at\":1791061366.0,\"error\":null,\"incomplete_details\":null,\"instructions\":\"Use search_agent to gather facts, then writer_agent to write the answer.\",\"metadata\":{},\"model\":\"openai/gpt-6-luna\",\"object\":\"response\",\"output\":[{\"id\":\"msg_075ab79c84fd5fba006ac16d774a7887d09ebaba0844e8ac87\",\"content\":[{\"annotations\":[],\"text\":\"An **agent trace** is a record of how an AI agent carried out a task. It may include the inputs, intermediate steps, tool calls and results, and any errors.\\n\\nUnlike a chat transcript, which mainly shows the conversation, a trace can reveal behind-the-scenes execution. It\u2019s useful for debugging and understanding the agent\u2019s behavior.\",\"type\":\"output_text\",\"logprobs\":[]}],\"role\":\"assistant\",\"status\":\"completed\",\"type\":\"message\",\"phase\":\"final_answer\"}],\"parallel_tool_calls\":true,\"temperature\":1.0,\"tool_choice\":\"auto\",\"tools\":[{\"name\":\"search_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Find key facts about a topic.\",\"output_schema\":null},{\"name\":\"writer_agent\",\"parameters\":{\"description\":\"Default input schema for agent-as-tool calls.\",\"properties\":{\"input\":{\"title\":\"Input\",\"type\":\"string\"}},\"required\":[\"input\"],\"title\":\"AgentAsToolInput\",\"type\":\"object\",\"additionalProperties\":false},\"strict\":true,\"type\":\"function\",\"allowed_callers\":null,\"async_\":null,\"defer_loading\":null,\"description\":\"Write a short answer from facts.\",\"output_schema\":null}],\"top_p\":0.98,\"background\":false,\"completed_at\":1791061367.0,\"conversation\":null,\"max_output_tokens\":null,\"max_tool_calls\":null,\"moderation\":null,\"previous_response_id\":null,\"prompt\":null,\"prompt_cache_diagnostics\":null,\"prompt_cache_key\":null,\"prompt_cache_options\":null,\"prompt_cache_retention\":\"24h\",\"reasoning\":{\"context\":\"all_turns\",\"effort\":\"medium\",\"generate_summary\":null,\"mode\":\"standard\",\"summary\":null},\"safety_identifier\":null,\"service_tier\":\"default\",\"status\":\"completed\",\"text\":{\"format\":{\"type\":\"text\"},\"verbosity\":\"medium\"},\"top_logprobs\":0,\"truncation\":\"disabled\",\"usage\":{\"input_tokens\":495,\"input_tokens_details\":{\"cache_write_tokens\":0,\"cached_tokens\":0,\"audio_tokens\":null,\"cached_tokens_details\":null,\"image_tokens\":null,\"text_tokens\":null,\"video_tokens\":null},\"output_tokens\":72,\"output_tokens_details\":{\"reasoning_tokens\":0,\"audio_tokens\":null,\"text_tokens\":null},\"total_tokens\":567,\"cost\":null},\"user\":null,\"store\":true,\"billing\":{\"payer\":\"developer\"},\"frequency_penalty\":0.0,\"presence_penalty\":0.0,\"tool_usage\":{\"image_gen\":{\"input_tokens\":0,\"input_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"image_tokens\":0,\"text_tokens\":0},\"total_tokens\":0},\"web_search\":{\"num_requests\":0}}}"
                   }
                 },
                 {
@@ -1226,19 +1492,19 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "116"
+                    "intValue": "72"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "908"
+                    "intValue": "495"
                   }
                 },
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "1024"
+                    "intValue": "567"
                   }
                 },
                 {
@@ -1274,13 +1540,13 @@
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution\u2014the sequence of interactions between the model, its tools, and its environment. It might capture the request, tool calls and results, errors or retries, timestamps, and metrics such as latency or cost.\n\nFor example, a trace could show an agent receiving a weather question, calling a weather tool, getting its result, and then replying. Traces help with debugging, evaluation, and monitoring. They don\u2019t necessarily reveal the model\u2019s private internal reasoning, and their format varies by system."
+                    "stringValue": "An **agent trace** is a record of how an AI agent carried out a task. It may include the inputs, intermediate steps, tool calls and results, and any errors.\n\nUnlike a chat transcript, which mainly shows the conversation, a trace can reveal behind-the-scenes execution. It\u2019s useful for debugging and understanding the agent\u2019s behavior."
                   }
                 },
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution\u2014the sequence of interactions between the model, its tools, and its environment. It might capture the request, tool calls and results, errors or retries, timestamps, and metrics such as latency or cost.\n\nFor example, a trace could show an agent receiving a weather question, calling a weather tool, getting its result, and then replying. Traces help with debugging, evaluation, and monitoring. They don\u2019t necessarily reveal the model\u2019s private internal reasoning, and their format varies by system."
+                    "stringValue": "An **agent trace** is a record of how an AI agent carried out a task. It may include the inputs, intermediate steps, tool calls and results, and any errors.\n\nUnlike a chat transcript, which mainly shows the conversation, a trace can reveal behind-the-scenes execution. It\u2019s useful for debugging and understanding the agent\u2019s behavior."
                   }
                 },
                 {
@@ -1310,7 +1576,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"id\": \"resp_Xf7i1diV7ANuvS26tF6UUsZV9x6GNCOxp090biVpxGrtbnBd-B76LtzbQSYEGJgunSwpi7_UAiX9C1EC5dGaDGKGXPcUcrHG0xLfdtQdiZ17OQtKlffgv2U-1-fTJkcdmnY3ITJLqqy0dNX3kaELgKRhBn7NyvTbHPy1ITfVDYN1oSaxB80AMi9ttDrENteE9Vi5ftWo2gPIoa0CNtUKTIIFqrza8Fon_pfKJI6XismzukhBz_YYF2ltAv4RGKU1I6K44Nn2HXkQNCxpi6YFGqj2irx8yB0Lr3xLIPoZuDWVUMngotOvcBpGAvSY75yEkHabiHgTVhypidyEubkQW7Tfk0ZvLupcAe4MY4L-K_YmYG2vB_KHRqapFXVp01ycH2OUvukUTwCt_GGpWm_PMlspd30xzHwgDgjFsrIObZuW8UtEviZmrF90hd6lOD4ov8Kich3U_RvM_3YEvt49sfz6\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791056428.0, \"instructions\": \"Use search_agent to gather facts, then writer_agent to write the answer.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791056430.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
+                    "stringValue": "{\"id\": \"resp_7Wqg-REDN7mOX_sKCOIYzzaAMgzVa3qrUI8pLB2QqUNNKc02Zy-wGW-2zrp3tVOD3Gb1GLEF_e2wfm5Eq_suf8vF66c3e7uDaVnbgsU860g5TALLLwbilwOKFOrV-KUNJ4tBBsM6GT5_KDqNKGMUqu2oVE-wwKOzOkcHxHnw91kXro27NgCGm6rmhadJ9DL3gJnXZO4piHWaFUInsU1fTwm15_86JhV_Z4xy2W6Bk0wlw76kEqKkgTr28D0LZXyltRbkxfto5wuRfGebPFn9zCr1wB5VMWLyWxjCirjtsuFJ5xggjud1PK95aLnQe2Pym9dBImfnFxbELU7XN88qJRiz4qRTipdPzk7KXy6MyxU6C0OKdm6ZG8skqVKpmIdxshcZcvVPiEK1MJeo8h2Tnk_ooto01fLBxoXR-PFboMJyMv8xYAtjbg2gCPiOvNVjjjLLS0NKA_MVCegemjpIQJ5J\", \"access_programs\": {\"cyber\": \"daybreak_blue\"}, \"created_at\": 1791061366.0, \"instructions\": \"Use search_agent to gather facts, then writer_agent to write the answer.\", \"metadata\": {}, \"model\": \"openai/gpt-6-luna\", \"parallel_tool_calls\": true, \"temperature\": 1.0, \"tool_choice\": \"auto\", \"top_p\": 0.98, \"background\": false, \"completed_at\": 1791061367.0, \"prompt_cache_retention\": \"24h\", \"reasoning\": {\"context\": \"all_turns\", \"effort\": \"medium\", \"mode\": \"standard\"}, \"service_tier\": \"default\", \"text\": {\"format\": {\"type\": \"text\"}, \"verbosity\": \"medium\"}, \"top_logprobs\": 0, \"truncation\": \"disabled\", \"store\": true, \"billing\": {\"payer\": \"developer\"}, \"frequency_penalty\": 0.0, \"presence_penalty\": 0.0, \"tool_usage\": {\"image_gen\": {\"input_tokens\": 0, \"input_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"output_tokens\": 0, \"output_tokens_details\": {\"image_tokens\": 0, \"text_tokens\": 0}, \"total_tokens\": 0}, \"web_search\": {\"num_requests\": 0}}}"
                   }
                 },
                 {
@@ -1322,7 +1588,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "[{\"content\": \"What is an agent trace?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"input\\\":\\\"Define \\\\\\\"agent trace\\\\\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\\\"}\", \"call_id\": \"call_bY1w9SKHukwkuZ5GmTugfdzm\", \"name\": \"search_agent\", \"type\": \"function_call\", \"id\": \"fc_014a0510027525e4006ac15a1e0a0c87d0a67ef6122b33ea08\", \"namespace\": null, \"status\": \"completed\"}, {\"call_id\": \"call_bY1w9SKHukwkuZ5GmTugfdzm\", \"output\": \"An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\\n\\nA trace may record:\\n\\n- The initial request and relevant conversation or state\\n- Model calls, including the model or version and the messages sent\\n- Tool calls, their arguments, and the results returned\\n- Step order, timestamps, and parent\u2013child relationships between operations\\n- Retries, errors, intermediate outputs, and the final response\\n- Operational details such as latency, token usage, and cost\\n\\nFor example, a trace might show:\\n\\n```text\\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\\n2. Model requests a weather tool call: get_weather(city=\\\"Paris\\\")\\n3. Weather service returns: 18\u00b0C, light rain\\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\\n```\\n\\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\\n\\n### Why traces are useful\\n\\nTraces help developers and evaluators:\\n\\n- Debug failed or unexpected runs by seeing which step went wrong\\n- Check whether the agent used tools appropriately\\n- Measure latency, cost, and reliability\\n- Compare behavior across prompts, models, or system versions\\n- Support monitoring, auditing, and incident investigation\\n\\n### Trace versus chain-of-thought\\n\\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\\n\\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits.\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"input\\\":\\\"Answer the user asking \u201cWhat is an agent trace?\u201d Use this definition and key points: structured record of AI agent execution, ordered steps/interactions with model, tools, environment, input/state, tool arguments/results, errors/retries, timestamps and operational metrics; example brief weather tool cycle; useful for debugging, evaluation, monitoring and cost/latency; not necessarily chain-of-thought/internal reasoning; schemas vary and may need privacy safeguards. Keep clear, moderate length.\\\"}\", \"call_id\": \"call_7ie1gAVzdnqUHw73TGdo5OJT\", \"name\": \"writer_agent\", \"type\": \"function_call\", \"id\": \"fc_014a0510027525e4006ac15a28e45087d0badb5192c8ebfa30\", \"namespace\": null, \"status\": \"completed\"}, {\"call_id\": \"call_7ie1gAVzdnqUHw73TGdo5OJT\", \"output\": \"An **agent trace** is a structured record of an AI agent\u2019s execution: the ordered interactions between the model, tools, and its environment. It may include inputs and state, tool arguments and results, errors or retries, timestamps, and operational metrics.\\n\\nFor example, a weather-agent trace might show: the user asks for the forecast \u2192 the agent calls a weather tool with a location \u2192 the tool returns conditions \u2192 the agent responds.\\n\\nTraces help with debugging, evaluation, monitoring, and analyzing cost or latency. They don\u2019t necessarily include the model\u2019s private internal reasoning; formats vary, and traces may need privacy safeguards.\", \"type\": \"function_call_output\"}]"
+                    "stringValue": "[{\"content\": \"What is an agent trace?\", \"role\": \"user\"}, {\"arguments\": \"{\\\"input\\\":\\\"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\\\"}\", \"call_id\": \"call_uwOQtsDUxrMRpQkdlMtOTmYw\", \"name\": \"search_agent\", \"type\": \"function_call\", \"id\": \"fc_075ab79c84fd5fba006ac16d6c51a887d0b30b0726ef3ab5b1\", \"namespace\": null, \"status\": \"completed\"}, {\"call_id\": \"call_uwOQtsDUxrMRpQkdlMtOTmYw\", \"output\": \"An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\\n\\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\\n\\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying.\", \"type\": \"function_call_output\"}, {\"arguments\": \"{\\\"input\\\":\\\"Answer user: \u201cWhat is an agent trace?\u201d Use the search facts. Define plainly; mention typical contents and purpose, distinction from chat transcript. Concise, no claims about standardized format.\\\"}\", \"call_id\": \"call_mNgv81wDwjs9OBnZXI2O2080\", \"name\": \"writer_agent\", \"type\": \"function_call\", \"id\": \"fc_075ab79c84fd5fba006ac16d727bc487d084e988e089ffd50c\", \"namespace\": null, \"status\": \"completed\"}, {\"call_id\": \"call_mNgv81wDwjs9OBnZXI2O2080\", \"output\": \"An **agent trace** is a record of how an AI agent carried out a task. It may include the agent\u2019s inputs, intermediate steps, tool calls and results, and any errors.\\n\\nUnlike a chat transcript, which shows the conversation, a trace can show the behind-the-scenes execution. It helps people debug and understand the agent\u2019s behavior.\", \"type\": \"function_call_output\"}]"
                   }
                 },
                 {
@@ -1346,7 +1612,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_bY1w9SKHukwkuZ5GmTugfdzm"
+                    "stringValue": "call_uwOQtsDUxrMRpQkdlMtOTmYw"
                   }
                 },
                 {
@@ -1358,7 +1624,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"input\":\"Define \\\"agent trace\\\" in AI/LLM agent systems. Explain what information it records, common formats/examples, and why it is useful; distinguish from general model reasoning or chain-of-thought if applicable.\"}"
+                    "stringValue": "{\"input\":\"Define agent trace in AI/LLM agent systems. Explain what it typically contains, why it is useful, and distinguish from a single chat transcript. Aim for a concise, grounded answer.\"}"
                   }
                 },
                 {
@@ -1370,13 +1636,13 @@
                 {
                   "key": "llm.input_messages.3.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_bY1w9SKHukwkuZ5GmTugfdzm"
+                    "stringValue": "call_uwOQtsDUxrMRpQkdlMtOTmYw"
                   }
                 },
                 {
                   "key": "llm.input_messages.3.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the sequence of steps it took to handle a request, including interactions with models, tools, and its environment. The term is used broadly; there is no single required schema.\n\nA trace may record:\n\n- The initial request and relevant conversation or state\n- Model calls, including the model or version and the messages sent\n- Tool calls, their arguments, and the results returned\n- Step order, timestamps, and parent\u2013child relationships between operations\n- Retries, errors, intermediate outputs, and the final response\n- Operational details such as latency, token usage, and cost\n\nFor example, a trace might show:\n\n```text\n1. User asks: \u201cWhat\u2019s the weather in Paris?\u201d\n2. Model requests a weather tool call: get_weather(city=\"Paris\")\n3. Weather service returns: 18\u00b0C, light rain\n4. Model responds: \u201cIt\u2019s 18\u00b0C with light rain.\u201d\n```\n\nCommon representations include **JSON or JSONL event logs**, conversation-and-tool-call transcripts, framework-specific traces (for example, LangChain/LangSmith-style runs), and distributed tracing formats such as **OpenTelemetry spans**. Some systems represent an agent run as a \u201ctrajectory\u201d: an ordered sequence of observations, actions, and results.\n\n### Why traces are useful\n\nTraces help developers and evaluators:\n\n- Debug failed or unexpected runs by seeing which step went wrong\n- Check whether the agent used tools appropriately\n- Measure latency, cost, and reliability\n- Compare behavior across prompts, models, or system versions\n- Support monitoring, auditing, and incident investigation\n\n### Trace versus chain-of-thought\n\nAn agent trace is **not the same as the model\u2019s private reasoning or chain-of-thought**. It usually records observable execution\u2014such as messages, tool calls, and results\u2014not every internal computation that produced them. A trace may include a written explanation or a brief rationale if the system records one, but that does not make it a complete record of the model\u2019s internal reasoning.\n\nTrace contents depend on the system: some log only tool events and outputs; others capture detailed prompts and intermediate messages. Those records can contain sensitive data, so they often need access controls, redaction, and retention limits."
+                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s run: the sequence of steps it took from a request to a result. There is no single standard format, but a trace commonly includes timestamps, model or workflow steps, tool calls and their inputs and outputs, observations returned to the agent, errors, and usage or timing metadata. Some systems also record prompts or state changes; they need not expose the model\u2019s private reasoning.\n\nA trace is useful for **debugging** failures, understanding tool use, measuring latency and cost, evaluating behavior, and auditing what happened.\n\nA **chat transcript** mainly records the messages exchanged between a user and an assistant. A trace may include those messages, but also captures the less visible execution behind them\u2014for example, the assistant calling a search tool, receiving results, and then replying."
                   }
                 },
                 {
@@ -1388,7 +1654,7 @@
                 {
                   "key": "llm.input_messages.4.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_7ie1gAVzdnqUHw73TGdo5OJT"
+                    "stringValue": "call_mNgv81wDwjs9OBnZXI2O2080"
                   }
                 },
                 {
@@ -1400,7 +1666,7 @@
                 {
                   "key": "llm.input_messages.4.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"input\":\"Answer the user asking \u201cWhat is an agent trace?\u201d Use this definition and key points: structured record of AI agent execution, ordered steps/interactions with model, tools, environment, input/state, tool arguments/results, errors/retries, timestamps and operational metrics; example brief weather tool cycle; useful for debugging, evaluation, monitoring and cost/latency; not necessarily chain-of-thought/internal reasoning; schemas vary and may need privacy safeguards. Keep clear, moderate length.\"}"
+                    "stringValue": "{\"input\":\"Answer user: \u201cWhat is an agent trace?\u201d Use the search facts. Define plainly; mention typical contents and purpose, distinction from chat transcript. Concise, no claims about standardized format.\"}"
                   }
                 },
                 {
@@ -1412,13 +1678,13 @@
                 {
                   "key": "llm.input_messages.5.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_7ie1gAVzdnqUHw73TGdo5OJT"
+                    "stringValue": "call_mNgv81wDwjs9OBnZXI2O2080"
                   }
                 },
                 {
                   "key": "llm.input_messages.5.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of an AI agent\u2019s execution: the ordered interactions between the model, tools, and its environment. It may include inputs and state, tool arguments and results, errors or retries, timestamps, and operational metrics.\n\nFor example, a weather-agent trace might show: the user asks for the forecast \u2192 the agent calls a weather tool with a location \u2192 the tool returns conditions \u2192 the agent responds.\n\nTraces help with debugging, evaluation, monitoring, and analyzing cost or latency. They don\u2019t necessarily include the model\u2019s private internal reasoning; formats vary, and traces may need privacy safeguards."
+                    "stringValue": "An **agent trace** is a record of how an AI agent carried out a task. It may include the agent\u2019s inputs, intermediate steps, tool calls and results, and any errors.\n\nUnlike a chat transcript, which shows the conversation, a trace can show the behind-the-scenes execution. It helps people debug and understand the agent\u2019s behavior."
                   }
                 },
                 {
@@ -1434,13 +1700,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "7e4950485218c128",
-              "parentSpanId": "acc9704cf50c89f9",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "9a3cb7d495e7d569",
+              "parentSpanId": "d4f9776c66412a99",
               "name": "turn",
               "kind": 1,
-              "startTimeUnixNano": "1791056428623405056",
-              "endTimeUnixNano": "1791056431777635072",
+              "startTimeUnixNano": "1791061366557449216",
+              "endTimeUnixNano": "1791061368216707072",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -1455,13 +1721,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "acc9704cf50c89f9",
-              "parentSpanId": "884a2384c0551210",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "d4f9776c66412a99",
+              "parentSpanId": "eb044b91ed55be5c",
               "name": "research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791056413415483904",
-              "endTimeUnixNano": "1791056431778163968",
+              "startTimeUnixNano": "1791061355533477120",
+              "endTimeUnixNano": "1791061368216905216",
               "attributes": [
                 {
                   "key": "graph.node.id",
@@ -1488,13 +1754,13 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "884a2384c0551210",
-              "parentSpanId": "dc5ed3f341c7c93d",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "eb044b91ed55be5c",
+              "parentSpanId": "fab1e7e886001c54",
               "name": "research_workflow",
               "kind": 1,
-              "startTimeUnixNano": "1791056413414469120",
-              "endTimeUnixNano": "1791056431778275840",
+              "startTimeUnixNano": "1791061355532839168",
+              "endTimeUnixNano": "1791061368216936192",
               "attributes": [
                 {
                   "key": "openinference.span.kind",
@@ -1509,12 +1775,12 @@
               "flags": 256
             },
             {
-              "traceId": "7d53d1b55412ca957c0c32ee37fcc0af",
-              "spanId": "dc5ed3f341c7c93d",
+              "traceId": "081c70d579baca7d819d464e43a11c91",
+              "spanId": "fab1e7e886001c54",
               "name": "research_workflow",
               "kind": 1,
-              "startTimeUnixNano": "1791056413414373000",
-              "endTimeUnixNano": "1791056431778320000",
+              "startTimeUnixNano": "1791061355532793000",
+              "endTimeUnixNano": "1791061368216953000",
               "attributes": [
                 {
                   "key": "openinference.span.kind",

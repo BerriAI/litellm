@@ -6,7 +6,7 @@
           {
             "key": "host.name",
             "value": {
-              "stringValue": "Yujongs-MacBook-Pro-2.local"
+              "stringValue": "fixture-host"
             }
           },
           {
@@ -18,13 +18,13 @@
           {
             "key": "host.id",
             "value": {
-              "stringValue": "0CED4796-41E3-5964-96A8-70915F7FCC94"
+              "stringValue": "00000000-0000-0000-0000-000000000000"
             }
           },
           {
             "key": "process.pid",
             "value": {
-              "intValue": "46532"
+              "intValue": "85828"
             }
           },
           {
@@ -36,7 +36,7 @@
           {
             "key": "process.executable.path",
             "value": {
-              "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+              "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
             }
           },
           {
@@ -45,10 +45,13 @@
               "arrayValue": {
                 "values": [
                   {
-                    "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+                    "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
                   },
                   {
-                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+                    "stringValue": "--env-file=.env"
+                  },
+                  {
+                    "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/validate-attempts.ts"
                   },
                   {
                     "stringValue": "response-loss"
@@ -60,7 +63,7 @@
           {
             "key": "process.runtime.version",
             "value": {
-              "stringValue": "24.18.0"
+              "stringValue": "25.8.1"
             }
           },
           {
@@ -78,13 +81,13 @@
           {
             "key": "process.command",
             "value": {
-              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+              "stringValue": "/home/user/dev/litellm-lens-example/vercel-ai-sdk-js/validate-attempts.ts"
             }
           },
           {
             "key": "process.owner",
             "value": {
-              "stringValue": "yujonglee"
+              "stringValue": "user"
             }
           },
           {
@@ -120,14 +123,20 @@
           },
           "spans": [
             {
-              "traceId": "dd3530951aa4bd990ecf77922832d078",
-              "spanId": "cd2a0f2cf44ca1af",
-              "parentSpanId": "b5f6c50aeeeb3aa8",
+              "traceId": "da0164cd74393d84076fef5253c18441",
+              "spanId": "5a53a9fc62fda14c",
+              "parentSpanId": "3a9bf8b19ee9e8ce",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791057930934000000",
-              "endTimeUnixNano": "1791057932198693208",
+              "startTimeUnixNano": "1791061438583000000",
+              "endTimeUnixNano": "1791061439641048667",
               "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
                 {
                   "key": "http.request.method",
                   "value": {
@@ -137,13 +146,13 @@
                 {
                   "key": "url.full",
                   "value": {
-                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
                   }
                 },
                 {
-                  "key": "litellm.gateway.attempt",
+                  "key": "server.address",
                   "value": {
-                    "boolValue": true
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -155,7 +164,13 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "1f0e8328-d49e-4f4d-8d1e-ac1c2a24d872"
+                    "stringValue": "5d4283ed-39e1-4530-9200-24585098215f"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "Error"
                   }
                 }
               ],
@@ -172,13 +187,13 @@
           },
           "spans": [
             {
-              "traceId": "dd3530951aa4bd990ecf77922832d078",
-              "spanId": "b5f6c50aeeeb3aa8",
-              "parentSpanId": "3fb380320f4f6e31",
+              "traceId": "da0164cd74393d84076fef5253c18441",
+              "spanId": "3a9bf8b19ee9e8ce",
+              "parentSpanId": "a1466bebc369ae63",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791057930924000000",
-              "endTimeUnixNano": "1791057932203362917",
+              "startTimeUnixNano": "1791061438576000000",
+              "endTimeUnixNano": "1791061439644540125",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -213,7 +228,7 @@
               ],
               "events": [
                 {
-                  "timeUnixNano": "1791057932203337834",
+                  "timeUnixNano": "1791061439644530875",
                   "name": "exception",
                   "attributes": [
                     {
@@ -231,7 +246,7 @@
                     {
                       "key": "exception.stacktrace",
                       "value": {
-                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///home/user/dev/litellm-lens-example/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
                       }
                     }
                   ]
@@ -244,13 +259,13 @@
               "flags": 257
             },
             {
-              "traceId": "dd3530951aa4bd990ecf77922832d078",
-              "spanId": "3fb380320f4f6e31",
-              "parentSpanId": "9cde23100b204eb5",
+              "traceId": "da0164cd74393d84076fef5253c18441",
+              "spanId": "a1466bebc369ae63",
+              "parentSpanId": "d0ad2c5d6c006eae",
               "name": "step 1",
               "kind": 1,
-              "startTimeUnixNano": "1791057930923000000",
-              "endTimeUnixNano": "1791057932202662875",
+              "startTimeUnixNano": "1791061438576000000",
+              "endTimeUnixNano": "1791061439644670417",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -267,7 +282,7 @@
               ],
               "events": [
                 {
-                  "timeUnixNano": "1791057932202650750",
+                  "timeUnixNano": "1791061439644668209",
                   "name": "exception",
                   "attributes": [
                     {
@@ -285,7 +300,7 @@
                     {
                       "key": "exception.stacktrace",
                       "value": {
-                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///home/user/dev/litellm-lens-example/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
                       }
                     }
                   ]
@@ -298,12 +313,12 @@
               "flags": 257
             },
             {
-              "traceId": "dd3530951aa4bd990ecf77922832d078",
-              "spanId": "9cde23100b204eb5",
+              "traceId": "da0164cd74393d84076fef5253c18441",
+              "spanId": "d0ad2c5d6c006eae",
               "name": "invoke_agent openai/gpt-6-luna",
               "kind": 1,
-              "startTimeUnixNano": "1791057930917000000",
-              "endTimeUnixNano": "1791057932202577917",
+              "startTimeUnixNano": "1791061438572000000",
+              "endTimeUnixNano": "1791061439644129708",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -344,7 +359,7 @@
               ],
               "events": [
                 {
-                  "timeUnixNano": "1791057932202568875",
+                  "timeUnixNano": "1791061439644125500",
                   "name": "exception",
                   "attributes": [
                     {
@@ -362,7 +377,7 @@
                     {
                       "key": "exception.stacktrace",
                       "value": {
-                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///home/user/dev/litellm-lens-example/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
                       }
                     }
                   ]

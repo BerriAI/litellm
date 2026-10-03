@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "fea152a0-456c-4cf1-8916-9c4a31b9cb24"
+              "stringValue": "cef9613f-cfb6-4664-8e51-f3be7d834c7a"
             }
           },
           {
@@ -48,13 +48,13 @@
           },
           "spans": [
             {
-              "traceId": "69b30504e2eee1264ae42c9c40e11d18",
-              "spanId": "e970ed3d6ce79c82",
-              "parentSpanId": "345cdebe25311ca5",
+              "traceId": "d59ddcb97fb9bced94931df97e06d02f",
+              "spanId": "3d99b5070f22df12",
+              "parentSpanId": "3cb702edbce111e7",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791058052912323000",
-              "endTimeUnixNano": "1791058055403499000",
+              "startTimeUnixNano": "1791061361049433000",
+              "endTimeUnixNano": "1791061363567498000",
               "attributes": [
                 {
                   "key": "litellm.gateway.attempt",
@@ -71,13 +71,13 @@
                 {
                   "key": "url.full",
                   "value": {
-                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
                   }
                 },
                 {
                   "key": "server.address",
                   "value": {
-                    "stringValue": "127.0.0.1"
+                    "stringValue": "localhost"
                   }
                 },
                 {
@@ -89,7 +89,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "1634865a-fcb3-4785-bdaf-0c4c81512e29"
+                    "stringValue": "25cb4dbf-9676-4b83-a427-bb7e3655dcc3"
                   }
                 }
               ],
@@ -104,18 +104,18 @@
           },
           "spans": [
             {
-              "traceId": "69b30504e2eee1264ae42c9c40e11d18",
-              "spanId": "345cdebe25311ca5",
-              "parentSpanId": "336f84de7976be8e",
+              "traceId": "d59ddcb97fb9bced94931df97e06d02f",
+              "spanId": "3cb702edbce111e7",
+              "parentSpanId": "af8eeb87690dc466",
               "name": "chat",
               "kind": 1,
-              "startTimeUnixNano": "1791058052661383000",
-              "endTimeUnixNano": "1791058055403655000",
+              "startTimeUnixNano": "1791061360813404000",
+              "endTimeUnixNano": "1791061363567665000",
               "attributes": [
                 {
                   "key": "gen_ai.event.start_time",
                   "value": {
-                    "stringValue": "2026-10-03T20:07:32.661384+00:00"
+                    "stringValue": "2026-10-03T21:02:40.813405+00:00"
                   }
                 },
                 {
@@ -145,13 +145,13 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s run: what it received, the actions or tools it used, the results it got back, and how the run ended.\\n\\nTraces help people debug behavior, measure performance, and audit what happened. Depending on the system, a trace may include inputs and outputs but not the agent\u2019s private internal reasoning.\"}], \"finish_reason\": \"end_turn\"}]"
+                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"An **agent trace** is a record of what an AI agent did during a task, step by step. It may include the agent\u2019s inputs and outputs, tool calls, tool results, timing, and errors.\\n\\nTraces help developers understand, debug, and evaluate an agent\u2019s behavior. They don\u2019t necessarily include the model\u2019s private chain-of-thought; they usually capture observable actions and results.\"}], \"finish_reason\": \"end_turn\"}]"
                   }
                 },
                 {
                   "key": "gen_ai.event.end_time",
                   "value": {
-                    "stringValue": "2026-10-03T20:07:35.403633+00:00"
+                    "stringValue": "2026-10-03T21:02:43.567641+00:00"
                   }
                 },
                 {
@@ -169,25 +169,25 @@
                 {
                   "key": "gen_ai.usage.completion_tokens",
                   "value": {
-                    "intValue": "144"
+                    "intValue": "158"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "144"
+                    "intValue": "158"
                   }
                 },
                 {
                   "key": "gen_ai.usage.total_tokens",
                   "value": {
-                    "intValue": "253"
+                    "intValue": "267"
                   }
                 },
                 {
                   "key": "gen_ai.server.time_to_first_token",
                   "value": {
-                    "intValue": "1975"
+                    "intValue": "1886"
                   }
                 }
               ],
@@ -197,18 +197,18 @@
               "flags": 256
             },
             {
-              "traceId": "69b30504e2eee1264ae42c9c40e11d18",
-              "spanId": "336f84de7976be8e",
-              "parentSpanId": "f613e1f992147e11",
+              "traceId": "d59ddcb97fb9bced94931df97e06d02f",
+              "spanId": "af8eeb87690dc466",
+              "parentSpanId": "14de27d8d8573810",
               "name": "execute_event_loop_cycle",
               "kind": 1,
-              "startTimeUnixNano": "1791058052661262000",
-              "endTimeUnixNano": "1791058055403854000",
+              "startTimeUnixNano": "1791061360813321000",
+              "endTimeUnixNano": "1791061363567872000",
               "attributes": [
                 {
                   "key": "gen_ai.event.start_time",
                   "value": {
-                    "stringValue": "2026-10-03T20:07:32.661263+00:00"
+                    "stringValue": "2026-10-03T21:02:40.813323+00:00"
                   }
                 },
                 {
@@ -226,7 +226,7 @@
                 {
                   "key": "event_loop.cycle_id",
                   "value": {
-                    "stringValue": "b79c878e-9fd2-470d-8911-8a59e0ae5247"
+                    "stringValue": "000ad6d9-df30-4bf3-9884-3af13de6c1fc"
                   }
                 },
                 {
@@ -238,7 +238,7 @@
                 {
                   "key": "gen_ai.event.end_time",
                   "value": {
-                    "stringValue": "2026-10-03T20:07:35.403846+00:00"
+                    "stringValue": "2026-10-03T21:02:43.567865+00:00"
                   }
                 }
               ],
@@ -248,17 +248,17 @@
               "flags": 256
             },
             {
-              "traceId": "69b30504e2eee1264ae42c9c40e11d18",
-              "spanId": "f613e1f992147e11",
+              "traceId": "d59ddcb97fb9bced94931df97e06d02f",
+              "spanId": "14de27d8d8573810",
               "name": "invoke_agent research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791058052660911000",
-              "endTimeUnixNano": "1791058055403944000",
+              "startTimeUnixNano": "1791061360812989000",
+              "endTimeUnixNano": "1791061363567984000",
               "attributes": [
                 {
                   "key": "gen_ai.event.start_time",
                   "value": {
-                    "stringValue": "2026-10-03T20:07:32.660917+00:00"
+                    "stringValue": "2026-10-03T21:02:40.812995+00:00"
                   }
                 },
                 {
@@ -294,13 +294,13 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"An **agent trace** is a chronological record of an AI agent\u2019s run: what it received, the actions or tools it used, the results it got back, and how the run ended.\\n\\nTraces help people debug behavior, measure performance, and audit what happened. Depending on the system, a trace may include inputs and outputs but not the agent\u2019s private internal reasoning.\\n\"}], \"finish_reason\": \"end_turn\"}]"
+                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"An **agent trace** is a record of what an AI agent did during a task, step by step. It may include the agent\u2019s inputs and outputs, tool calls, tool results, timing, and errors.\\n\\nTraces help developers understand, debug, and evaluate an agent\u2019s behavior. They don\u2019t necessarily include the model\u2019s private chain-of-thought; they usually capture observable actions and results.\\n\"}], \"finish_reason\": \"end_turn\"}]"
                   }
                 },
                 {
                   "key": "gen_ai.event.end_time",
                   "value": {
-                    "stringValue": "2026-10-03T20:07:35.403938+00:00"
+                    "stringValue": "2026-10-03T21:02:43.567976+00:00"
                   }
                 },
                 {
@@ -312,7 +312,7 @@
                 {
                   "key": "gen_ai.usage.completion_tokens",
                   "value": {
-                    "intValue": "144"
+                    "intValue": "158"
                   }
                 },
                 {
@@ -324,13 +324,13 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "144"
+                    "intValue": "158"
                   }
                 },
                 {
                   "key": "gen_ai.usage.total_tokens",
                   "value": {
-                    "intValue": "253"
+                    "intValue": "267"
                   }
                 },
                 {
