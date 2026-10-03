@@ -409,6 +409,11 @@ async def _drive_update(kind, existing_metadata, payload):
             new=AsyncMock(),
         ),
     ):
+        pc.tx.return_value.start = AsyncMock(return_value=pc.db)
+        pc.tx.return_value.commit = AsyncMock()
+        pc.tx.return_value.rollback = AsyncMock()
+        pc.db.query_raw = AsyncMock(return_value=[])
+        pc.db.litellm_teamtable.update_many = AsyncMock(return_value=1)
         pc.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
         pc.db.litellm_teamtable.update = AsyncMock(
             return_value=LiteLLM_TeamTable(team_id=team_id, team_alias="matrix")

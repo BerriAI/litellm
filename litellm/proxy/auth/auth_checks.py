@@ -16,7 +16,17 @@ import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Generic,
+    Literal,
+    Optional,
+    Protocol,
+    TypeAlias,
+    cast,  # noqa: TID251  # typed view of the untyped bounded task registry
+)
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -85,7 +95,10 @@ from litellm.proxy.auth.budget_throttle import (
 )
 from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    evict_many_and_broadcast,
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
@@ -396,7 +409,10 @@ last_db_access_time: Final = LimitedSizeOrderedDict(max_size=100)
 db_cache_expiry: Final = DEFAULT_IN_MEMORY_TTL  # refresh every 5s
 
 _TEAM_MEMBERSHIP_INFLIGHT_MAX: Final = 10000
-_team_membership_inflight: Final = LimitedSizeOrderedDict(max_size=_TEAM_MEMBERSHIP_INFLIGHT_MAX)
+_team_membership_inflight: Final = cast(  # cast-ok: only get_team_membership inserts membership-loading tasks here
+    "dict[str, asyncio.Task[LiteLLM_TeamMembership | None]]",
+    LimitedSizeOrderedDict(max_size=_TEAM_MEMBERSHIP_INFLIGHT_MAX),
+)
 
 
 class _TeamMembershipCacheMiss:
@@ -2867,6 +2883,27 @@ async def _invalidate_usage_cache_entry(
             stale,
             e,
         )
+
+
+async def invalidate_team_member_budget_caches(
+    user_ids: Sequence[str],
+    team_id: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    reservation_keys: Final = tuple(
+        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id) for user_id in user_ids
+    )
+    inflight: Final = tuple(_team_membership_inflight.pop(key, None) for key in reservation_keys)
+    pending: Final = frozenset(
+        task for task in inflight if isinstance(task, asyncio.Task) and task is not asyncio.current_task()
+    )
+    if pending:
+        await asyncio.wait(pending)
+    auth_keys: Final = tuple(team_membership_auth_cache_key(user_id=user_id, team_id=team_id) for user_id in user_ids)
+    await evict_many_and_broadcast(
+        cache_keys=auth_keys + reservation_keys,
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def invalidate_team_member_spend_state(

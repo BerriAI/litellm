@@ -3,18 +3,25 @@ import hashlib
 import json
 import time
 from collections.abc import Iterable
-from unittest.mock import patch
+from importlib import import_module
+from itertools import chain
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from redis.asyncio import Redis
 
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
     AuthCacheInvalidationSubscriber,
     evict_and_broadcast,
+    evict_many_and_broadcast,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -287,3 +294,65 @@ async def test_publish_holds_at_most_sixteen_redis_connections_while_redis_is_we
         await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
     assert len(client.attempted) == 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_fails", (False, True))
+async def test_bulk_eviction_delivers_every_legacy_message_and_batches_redis_deletes(delete_fails: bool) -> None:
+    _ = import_module("litellm._redis")
+    keys: Final = tuple(f"team_membership:member-{index}:bulk-team" for index in range(2501))
+    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(max_size_in_memory=len(keys) + 1))
+    peer: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(max_size_in_memory=len(keys) + 1))
+    client: Final = MagicMock(spec=Redis)
+    client.ping = AsyncMock(return_value=True)
+    client.delete = AsyncMock(side_effect=ConnectionError("delete failed") if delete_fails else None, return_value=1)
+    pipeline: Final = MagicMock()
+    pipeline.__aenter__ = AsyncMock(return_value=pipeline)
+    pipeline.__aexit__ = AsyncMock(return_value=None)
+    pipeline.execute = AsyncMock(return_value=())
+    client.pipeline.return_value = pipeline
+    for key in keys:
+        cache.in_memory_cache.set_cache(key, "stale")
+        peer.in_memory_cache.set_cache(key, "stale")
+    with patch("redis.Redis", autospec=True), patch("redis.asyncio.Redis", autospec=True, return_value=client):
+        backend: Final = RedisCache(host=f"bulk-invalidation-{delete_fails}", namespace="bulk-cache-test")
+        cache.redis_cache = backend
+        with patch.object(proxy_server, "redis_usage_cache", backend):
+            await evict_many_and_broadcast(keys, cache)
+        subscriber: Final = AuthCacheInvalidationSubscriber(backend, peer)
+        for publish_call in pipeline.publish.call_args_list:
+            assert publish_call.args[0] == "bulk-cache-test:litellm_proxy.auth_cache_invalidation"
+            subscriber._apply_message({"data": publish_call.args[1]})
+        await asyncio.sleep(0)
+    assert all(cache.in_memory_cache.get_cache(key) is None for key in keys)
+    assert all(peer.in_memory_cache.get_cache(key) is None for key in keys)
+    assert pipeline.publish.call_count == len(keys)
+    expected_batches: Final = (len(keys) + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE - 1) // DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+    assert pipeline.execute.await_count == expected_batches
+    assert client.delete.await_count == (1 if delete_fails else expected_batches)
+    assert all(len(call.args) <= DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE for call in client.delete.await_args_list)
+    if not delete_fails:
+        assert frozenset(chain.from_iterable(call.args for call in client.delete.await_args_list)) == frozenset(
+            f"bulk-cache-test:{key}" for key in keys
+        )
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_with_exhausted_publish_budget_still_clears_local_entries(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    cache.in_memory_cache.set_cache("team_membership:timeout-member:timeout-team", "stale")
+    client: Final = MagicMock(spec=Redis)
+    pipeline: Final = MagicMock()
+    pipeline.__aenter__ = AsyncMock(return_value=pipeline)
+    pipeline.__aexit__ = AsyncMock(return_value=None)
+    pipeline.execute = AsyncMock(side_effect=asyncio.Event().wait)
+    client.pipeline.return_value = pipeline
+    with (
+        patch.object(proxy_server, "redis_usage_cache", _FakeRedisCache(client=client)),
+        patch.object(pubsub_module, "_BATCH_PUBLISH_TIMEOUT_SECONDS", 0),
+    ):
+        await evict_many_and_broadcast(("team_membership:timeout-member:timeout-team",), cache)
+    assert cache.in_memory_cache.get_cache("team_membership:timeout-member:timeout-team") is None
+    assert "auth cache invalidation batch timed out" in caplog.text

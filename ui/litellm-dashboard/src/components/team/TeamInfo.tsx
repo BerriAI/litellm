@@ -128,9 +128,8 @@ import {
 } from "./teamMemberBudgetAlertEmails";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
-import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
+import { customBudgetMemberUserIds, isMemberBudgetChanging } from "./memberBudgetReset";
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
-import { fetchClient } from "@/lib/http/api";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -922,28 +921,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   const memberBudgetReset = useMemberBudgetReset({
-    saveTeam: async (updateData) => {
-      if (!accessToken) return;
-      setIsTeamSaving(true);
-      try {
-        await persistTeamUpdate(accessToken, updateData);
-      } finally {
-        setIsTeamSaving(false);
-      }
+    saveTeam: (updateData) => teamUpdateCall(accessToken ?? "", updateData),
+    refreshTeamData: async () => {
+      void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+      void invalidateTeamQueries(queryClient);
+      setIsEditing(false);
+      await refreshTeamData();
     },
-    resetMemberBudgets: async (bulkTeamId, userIds) => {
-      const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
-        params: { path: { team_id: bulkTeamId } },
-        body: { members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })) },
-      });
-      return data?.data ?? [];
-    },
-    refreshTeamData,
   });
 
   const { dismiss: dismissMemberBudgetReset } = memberBudgetReset;
   useEffect(() => {
     dismissMemberBudgetReset();
+    return dismissMemberBudgetReset;
   }, [teamId, dismissMemberBudgetReset]);
 
   const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
@@ -1206,12 +1196,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Handle router_settings - read fresh values from DOM at save time.
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
-        const isMeaningfulValue = (value: unknown) =>
-          value !== null &&
-          value !== undefined &&
-          value !== "" &&
-          value !== false &&
-          !(Array.isArray(value) && value.length === 0);
+        const isMeaningfulValue = (value: unknown) => {
+          if (value == null || value === "" || value === false) return false;
+          return !Array.isArray(value) || value.length > 0;
+        };
 
         const hasNewValues = Object.values(currentRouterSettings.router_settings).some(isMeaningfulValue);
         const hadExistingSettings = info.router_settings && Object.values(info.router_settings).some(isMeaningfulValue);
@@ -1222,23 +1210,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
-      if (
-        newTeamMemberBudget !== undefined &&
-        shouldPromptMemberBudgetReset(
-          newTeamMemberBudget,
-          info.team_member_budget_table?.max_budget,
-          customBudgetUserIds,
-        )
-      ) {
-        const pendingReset = {
-          teamId,
-          updateData,
-          userIds: customBudgetUserIds,
-          newBudget: newTeamMemberBudget,
-        };
-        memberBudgetReset.prompt(pendingReset);
-        return;
+      if (isMemberBudgetChanging(newTeamMemberBudget, info.team_member_budget_table?.max_budget)) {
+        updateData.team_member_budget_update_mode = "keep";
+        const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
+        if (customBudgetUserIds.length > 0 && newTeamMemberBudget !== undefined) {
+          memberBudgetReset.prompt({
+            teamId,
+            updateData,
+            memberCount: customBudgetUserIds.length,
+            newBudget: newTeamMemberBudget,
+          });
+          return;
+        }
       }
 
       await persistTeamUpdate(accessToken, updateData);
@@ -2584,13 +2567,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         confirmLoading={isDeleting}
       />
 
-      <ResetMemberBudgetsDialog
-        state={memberBudgetReset.state}
-        onReset={memberBudgetReset.reset}
-        onRetry={memberBudgetReset.retry}
-        onKeep={memberBudgetReset.keepCustom}
-        onDismiss={memberBudgetReset.dismiss}
-      />
+      {memberBudgetReset.state.phase !== "idle" && (
+        <ResetMemberBudgetsDialog
+          pending={memberBudgetReset.state.pending}
+          busy={memberBudgetReset.state.phase === "saving"}
+          onSave={memberBudgetReset.save}
+          onDismiss={memberBudgetReset.dismiss}
+        />
+      )}
     </div>
   );
 };

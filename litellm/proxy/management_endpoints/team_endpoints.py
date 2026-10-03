@@ -106,6 +106,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_membership,
     get_team_object,
     get_user_object,
+    invalidate_team_member_budget_caches,
     invalidate_team_member_spend_state,
 )
 from litellm.proxy.auth.auth_utils import (
@@ -164,6 +165,11 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
+)
+from litellm.proxy.management_helpers.team_member_budget_update import (
+    TeamMemberBudgetUpdateFailure,
+    lock_team_member_budgets,
+    update_team_member_budget_atomic,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -2143,6 +2149,9 @@ async def update_team(
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
+    - team_member_budget_update_mode: Optional[str] - With a positive team_member_budget, atomically keep, raise, lower,
+      or reset both smaller and larger permanent member amounts ("keep", "raise", "lower", "both"). Equal amounts and
+      different reset schedules are skipped. Selected amounts inherit future defaults; other member limits are preserved
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -2204,6 +2213,10 @@ async def update_team(
         if data.team_id is None:
             raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
         verbose_proxy_logger.debug("/team/update - %s", data)
+        if data.team_member_budget_update_mode is not None and (
+            data.team_member_budget is None or data.team_member_budget <= 0
+        ):
+            raise HTTPException(status_code=400, detail="Member budget updates require a positive team_member_budget")
 
         # Validate budget values are not negative
         if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
@@ -2395,6 +2408,7 @@ async def update_team(
         )
 
         updated_kv = data.json(exclude_unset=True)
+        updated_kv.pop("team_member_budget_update_mode", None)
         if "model_max_budget" in updated_kv and updated_kv["model_max_budget"] is None:
             updated_kv["model_max_budget"] = {}
 
@@ -2456,46 +2470,7 @@ async def update_team(
                     },
                 }
 
-        if _team_member_fields_in_request and TeamMemberBudgetHandler.should_create_budget(
-            team_member_budget=data.team_member_budget,
-            team_member_rpm_limit=data.team_member_rpm_limit,
-            team_member_tpm_limit=data.team_member_tpm_limit,
-            team_member_budget_duration=data.team_member_budget_duration,
-        ):
-            updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
-                team_table=existing_team_row,
-                user_api_key_dict=user_api_key_dict,
-                updated_kv=updated_kv,
-                team_member_budget=data.team_member_budget,
-                team_member_rpm_limit=data.team_member_rpm_limit,
-                team_member_tpm_limit=data.team_member_tpm_limit,
-                team_member_budget_duration=data.team_member_budget_duration,
-                explicitly_set_fields=_team_member_fields_in_request,
-            )
-            # Backfill team_memberships for members who joined before the
-            # budget was configured — they won't have a membership row yet.
-            _backfill_budget_id: Final = (updated_kv.get("metadata") or {}).get("team_member_budget_id")
-            if _backfill_budget_id and existing_team_row.members_with_roles:
-                await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
-                    team_id=data.team_id,
-                    members_with_roles=existing_team_row.members_with_roles,
-                    team_member_budget_id=_backfill_budget_id,
-                    prisma_client=prisma_client,
-                )
-                await _evict_created_membership_caches(
-                    user_ids=_member_user_ids(existing_team_row.members_with_roles),
-                    team_id=data.team_id,
-                    user_api_key_cache=user_api_key_cache,
-                )
-        elif _team_member_fields_in_request:
-            updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
-                team_table=existing_team_row,
-                user_api_key_dict=user_api_key_dict,
-                updated_kv=updated_kv,
-                explicitly_set_fields=_team_member_fields_in_request,
-            )
-        else:
-            TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
 
         # Check object permission
         if data.object_permission is not None:
@@ -2534,7 +2509,41 @@ async def update_team(
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_update_data: Final[Mapping[str, object]] = updated_kv
-        team_row: Final = await _write_team_update(prisma_client, data.team_id, team_update_data, max_budget_guard)
+        budget_update: Final = (
+            await update_team_member_budget_atomic(
+                prisma_client=prisma_client,
+                data=data,
+                team_data=team_update_data,
+                team_where=(
+                    {"team_id": data.team_id, "max_budget": max_budget_guard.expected}
+                    if max_budget_guard is not None
+                    else {"team_id": data.team_id}
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+            if _team_member_fields_in_request or "metadata" in team_update_data
+            else None
+        )
+        if isinstance(budget_update, TeamMemberBudgetUpdateFailure):
+            raise HTTPException(status_code=budget_update.status_code, detail=budget_update.detail)
+        team_row: Final = (
+            budget_update.team
+            if budget_update is not None
+            else await _write_team_update(prisma_client, data.team_id, team_update_data, max_budget_guard)
+        )
+        if budget_update is not None:
+            from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+
+            if budget_update.budget_id is not None:
+                await evict_and_broadcast(
+                    user_api_key_cache=user_api_key_cache,
+                    cache_keys=(f"team_member_default_budget:{budget_update.budget_id}",),
+                )
+            await invalidate_team_member_budget_caches(
+                user_ids=budget_update.member_user_ids,
+                team_id=data.team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         if team_row is None or team_row.team_id is None:
             raise HTTPException(
@@ -2553,14 +2562,27 @@ async def update_team(
         if is_audit_logging_enabled():
             await _create_team_update_audit_log(
                 existing_team_row=existing_team_row,
-                updated_kv=updated_kv,
+                updated_kv=(
+                    {
+                        **updated_kv,
+                        "team_member_budget": data.team_member_budget,
+                        "team_member_budget_update_mode": data.team_member_budget_update_mode,
+                        "updated_member_user_ids": budget_update.changed_user_ids,
+                    }
+                    if budget_update is not None and _team_member_fields_in_request
+                    else updated_kv
+                ),
                 team_id=data.team_id,
                 litellm_changed_by=litellm_changed_by,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
 
-        return {"team_id": team_row.team_id, "data": team_row}
+        return {
+            "team_id": team_row.team_id,
+            "data": team_row,
+            "member_budgets_updated": len(budget_update.changed_user_ids) if budget_update is not None else 0,
+        }
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
@@ -3842,23 +3864,6 @@ async def team_member_update(
             status_code=400,
             detail={"error": f"User id doesn't exist in team table. Data={data}"},
         )
-    ## find the relevant team membership
-    identified_budget_id: str | None = None
-    for tm in returned_team_info["team_memberships"]:
-        if tm.user_id == received_user_id:
-            identified_budget_id = tm.budget_id
-            break
-
-    # If this membership still points at the team's shared default member
-    # budget, _upsert_budget_and_membership will clone-on-write so that the
-    # update only touches this user (not every member sharing the default).
-    team_default_budget_id: str | None = None
-    if team_table.metadata is not None:
-        raw_default_budget_id: Final = team_table.metadata.get("team_member_budget_id")
-        if isinstance(raw_default_budget_id, str):
-            team_default_budget_id = raw_default_budget_id
-
-    ### upsert new budget
     budget_patch: Final = member_budget_patch(data)
     async with prisma_client.tx() as tx:
         role_change: Final = (
@@ -3873,15 +3878,36 @@ async def team_member_update(
             if data.role is not None
             else None
         )
-        await _upsert_budget_and_membership(
-            tx=tx,
-            team_id=data.team_id,
-            user_id=received_user_id,
-            existing_budget_id=identified_budget_id,
-            user_api_key_dict=user_api_key_dict,
-            budget_patch=budget_patch,
-            team_default_budget_id=team_default_budget_id,
-        )
+        if budget_patch:
+            from litellm.proxy.management_helpers.bulk_team_member_budgets import (
+                _shared_budget_ids,  # pyright: ignore[reportPrivateUsage]  # share clone-on-write protection with bulk edits
+                _team_default_budget_id,  # pyright: ignore[reportPrivateUsage]  # read the current default after locking
+            )
+
+            await lock_team_member_budgets(tx, data.team_id, received_user_id)
+            current_team: Final = await _team_tx_db(tx).find_unique(where={"team_id": data.team_id})
+            if current_team is None:
+                raise HTTPException(status_code=404, detail="Team not found")
+            membership: Final = await tx.litellm_teammembership.find_unique(
+                where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}}
+            )
+            identified_budget_id: Final = membership.budget_id if membership is not None else None
+            team_default_budget_id: Final = _team_default_budget_id(
+                LiteLLM_TeamTable.model_validate(current_team.model_dump())
+            )
+            shared_ids: Final = await _shared_budget_ids(
+                tx, frozenset((identified_budget_id,)) if identified_budget_id is not None else frozenset()
+            )
+            await _upsert_budget_and_membership(
+                tx=tx,
+                team_id=data.team_id,
+                user_id=received_user_id,
+                existing_budget_id=identified_budget_id,
+                user_api_key_dict=user_api_key_dict,
+                budget_patch=budget_patch,
+                team_default_budget_id=team_default_budget_id,
+                shared_budget_ids=shared_ids,
+            )
     if budget_patch:
         await invalidate_team_member_spend_state(
             user_id=received_user_id,

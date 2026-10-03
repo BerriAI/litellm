@@ -66,9 +66,14 @@ def happy_path_upsert(monkeypatch):
     prisma_client = MagicMock()
     prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     prisma_client.db.litellm_teamtable.update = AsyncMock()
+    prisma_client.db.litellm_teammembership.find_unique = AsyncMock(
+        return_value=types.SimpleNamespace(user_id="user-1", budget_id="bud-1")
+    )
+    prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
 
     class _FakeTx:
         litellm_teamtable = prisma_client.db.litellm_teamtable
+        litellm_teammembership = prisma_client.db.litellm_teammembership
 
         async def __aenter__(self):
             return self
@@ -76,7 +81,7 @@ def happy_path_upsert(monkeypatch):
         async def __aexit__(self, *args):
             return False
 
-        async def query_raw(self, sql, team_id):
+        async def query_raw(self, sql: str, *params: object) -> list[dict[str, object]]:
             if sql == TEAM_ADVISORY_LOCK_SQL:
                 return []
             return [{"members_with_roles": team_row.model_dump()["members_with_roles"]}]
@@ -150,7 +155,7 @@ async def test_team_member_update_omits_unset_fields_from_patch(happy_path_upser
 
     await team_member_update(data, request, auth)
 
-    assert happy_path_upsert.await_args.kwargs["budget_patch"] == {}
+    happy_path_upsert.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

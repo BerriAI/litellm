@@ -176,6 +176,9 @@ class _Db:
         self.litellm_budgettable = _BudgetTable(budgets)
         self.litellm_teammembership = _MembershipTable(self.litellm_budgettable, memberships)
 
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, str]]:
+        return []
+
 
 class _FakePrisma:
     def __init__(

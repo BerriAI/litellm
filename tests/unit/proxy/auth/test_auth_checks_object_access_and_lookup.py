@@ -9179,6 +9179,47 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
 
 
 @pytest.mark.asyncio
+async def test_bulk_budget_invalidation_waits_for_inflight_membership_reads_and_preserves_spend() -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.auth_checks import get_team_membership, invalidate_team_member_budget_caches
+
+    cache: Final = UserApiKeyCache()
+    spend_cache: Final = DualCache()
+    members: Final = ("bulk-inflight-member", "bulk-cached-member")
+    read_started: Final = asyncio.Event()
+    release_read: Final = asyncio.Event()
+    database: Final = MagicMock()
+
+    async def load_membership(*, where: Mapping[str, object], include: Mapping[str, object]) -> None:
+        _ = where, include
+        read_started.set()
+        await release_read.wait()
+
+    database.db.litellm_teammembership.find_unique = AsyncMock(side_effect=load_membership)
+    for user_id in members:
+        cache.in_memory_cache.set_cache(f"bulk-team_{user_id}", "stale")
+        spend_cache.in_memory_cache.set_cache(f"spend:team_member:{user_id}:bulk-team", 42.0)
+        spend_cache.in_memory_cache.set_cache(f"spend_db_floor:spend:team_member:{user_id}:bulk-team", 37.0)
+    cache.in_memory_cache.set_cache("team_membership:bulk-cached-member:bulk-team", "stale")
+    with (
+        patch.object(proxy_server, "redis_usage_cache", None),
+        patch.object(proxy_server, "spend_counter_cache", spend_cache),
+    ):
+        read: Final = asyncio.create_task(get_team_membership(members[0], "bulk-team", database, cache))
+        await read_started.wait()
+        invalidation: Final = asyncio.create_task(invalidate_team_member_budget_caches(members, "bulk-team", cache))
+        await asyncio.sleep(0)
+        assert not invalidation.done()
+        release_read.set()
+        await asyncio.gather(read, invalidation)
+    for user_id in members:
+        assert cache.in_memory_cache.get_cache(f"bulk-team_{user_id}") is None
+        assert cache.in_memory_cache.get_cache(f"team_membership:{user_id}:bulk-team") is None
+        assert spend_cache.in_memory_cache.get_cache(f"spend:team_member:{user_id}:bulk-team") == 42.0
+        assert spend_cache.in_memory_cache.get_cache(f"spend_db_floor:spend:team_member:{user_id}:bulk-team") == 37.0
+
+
+@pytest.mark.asyncio
 async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_deleting():
     """/key/{key}/reset_spend SETs its counter to the reset value rather than deleting it, so a
     worker's next read reflects it directly instead of falling back through a DB reseed. A reset
