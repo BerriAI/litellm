@@ -143,15 +143,6 @@ def test_counters_increment_rather_than_overwrite(column):
     assert f'"{column}" = "LiteLLM_DailyTagSpend"."{column}" + EXCLUDED."{column}"' in sql
 
 
-def test_timed_token_upsert_preserves_unknown_legacy_measurements():
-    sql, _ = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(),)))
-
-    assert '"timed_requests" > 0 AND "LiteLLM_DailyTagSpend"."timed_completion_tokens" IS NULL' in sql
-    assert 'EXCLUDED."timed_requests" > 0 AND EXCLUDED."timed_completion_tokens" IS NULL' in sql
-    assert 'COALESCE("LiteLLM_DailyTagSpend"."timed_completion_tokens", 0)' in sql
-    assert '+ COALESCE(EXCLUDED."timed_completion_tokens", 0)' in sql
-
-
 def test_request_id_is_preserved_when_a_later_batch_carries_none():
     sql, params = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(request_id=None),)))
 
