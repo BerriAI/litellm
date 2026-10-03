@@ -1,582 +1,573 @@
 import json
+from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.llms.openrouter.image_generation.transformation import (
     OpenRouterImageGenerationConfig,
 )
-from litellm.llms.openrouter.common_utils import OpenRouterException
-from litellm.types.utils import ImageResponse
+from litellm.types.llms.openai import ImageGenerationRequestQuality
+from litellm.types.utils import ImageResponse, ImageUsage, ImageUsageInputTokensDetails
+
+CONFIG: Final = OpenRouterImageGenerationConfig()
+IMAGE_ONLY_MODEL: Final = "openai/gpt-image-1-mini"
+HYBRID_MODEL: Final = "google/gemini-2.5-flash-image"
+RESOLUTION_TIER_MODEL: Final = "google/gemini-3.1-flash-image"
+PROMPT: Final = "a small red apple on a white table, simple flat illustration"
+IMAGES_URL: Final = "https://openrouter.ai/api/v1/images"
+
+# usage object returned by a real POST https://openrouter.ai/api/v1/images call for openai/gpt-image-1-mini
+# (quality low, 1024x1024) on 2026-10-03
+OPENROUTER_IMAGES_USAGE: Final = {
+    "prompt_tokens": 18,
+    "completion_tokens": 272,
+    "total_tokens": 290,
+    "cost": 0.002212,
+    "is_byok": False,
+    "prompt_tokens_details": {"cached_tokens": 0},
+    "cost_details": {
+        "upstream_inference_cost": 0.002212,
+        "upstream_inference_prompt_cost": 3.6e-05,
+        "upstream_inference_completions_cost": 0.002176,
+    },
+    "completion_tokens_details": {"reasoning_tokens": 0, "image_tokens": 272},
+}
 
 
-class TestOpenRouterImageGenerationTransformation:
-    def setup_method(self):
-        """Set up test fixtures before each test method."""
-        self.config = OpenRouterImageGenerationConfig()
-        self.model = "google/gemini-2.5-flash-image"
-        self.logging_obj = MagicMock()
+def _images_response(*b64_images: str, created: int = 1790994427) -> dict[str, object]:
+    return {
+        "created": created,
+        "data": [{"b64_json": image, "media_type": "image/png"} for image in b64_images],
+        "usage": OPENROUTER_IMAGES_USAGE,
+    }
 
-    def test_get_supported_openai_params(self):
-        """Test that get_supported_openai_params returns correct parameters."""
-        supported_params = self.config.get_supported_openai_params(self.model)
 
-        assert "size" in supported_params
-        assert "quality" in supported_params
-        assert "n" in supported_params
-        assert len(supported_params) == 3
+def _transform_response(raw_response: httpx.Response) -> ImageResponse:
+    return CONFIG.transform_image_generation_response(
+        model=IMAGE_ONLY_MODEL,
+        raw_response=raw_response,
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
 
-    def test_map_size_to_aspect_ratio_square(self):
-        """Test mapping square sizes to aspect ratio."""
-        assert self.config._map_size_to_aspect_ratio("256x256") == "1:1"
-        assert self.config._map_size_to_aspect_ratio("512x512") == "1:1"
-        assert self.config._map_size_to_aspect_ratio("1024x1024") == "1:1"
 
-    def test_map_size_to_aspect_ratio_landscape(self):
-        """Test mapping landscape sizes to aspect ratio."""
-        assert self.config._map_size_to_aspect_ratio("1536x1024") == "3:2"
-        assert self.config._map_size_to_aspect_ratio("1792x1024") == "16:9"
+class RequestRecorder:
+    """httpx.MockTransport handler that keeps every request it was called with"""
 
-    def test_map_size_to_aspect_ratio_portrait(self):
-        """Test mapping portrait sizes to aspect ratio."""
-        assert self.config._map_size_to_aspect_ratio("1024x1536") == "2:3"
-        assert self.config._map_size_to_aspect_ratio("1024x1792") == "9:16"
+    def __init__(self, response_payload: object, status_code: int = 200) -> None:
+        self.response_payload = response_payload
+        self.status_code = status_code
+        self.requests: list[httpx.Request] = []
 
-    def test_map_size_to_aspect_ratio_auto(self):
-        """Test mapping auto size to default aspect ratio."""
-        assert self.config._map_size_to_aspect_ratio("auto") == "1:1"
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        return httpx.Response(status_code=self.status_code, json=self.response_payload)
 
-    def test_map_size_to_aspect_ratio_unknown(self):
-        """Test mapping unknown size defaults to 1:1."""
-        assert self.config._map_size_to_aspect_ratio("999x999") == "1:1"
 
-    def test_map_quality_to_image_size_low(self):
-        """Test mapping low quality values to 1K."""
-        assert self.config._map_quality_to_image_size("low") == "1K"
-        assert self.config._map_quality_to_image_size("standard") == "1K"
-        assert self.config._map_quality_to_image_size("auto") == "1K"
+def _client(recorder: RequestRecorder) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(recorder)))
 
-    def test_map_quality_to_image_size_medium(self):
-        """Test mapping medium quality to 2K."""
-        assert self.config._map_quality_to_image_size("medium") == "2K"
 
-    def test_map_quality_to_image_size_high(self):
-        """Test mapping high quality values to 4K."""
-        assert self.config._map_quality_to_image_size("high") == "4K"
-        assert self.config._map_quality_to_image_size("hd") == "4K"
+def test_get_supported_openai_params():
+    assert CONFIG.get_supported_openai_params(IMAGE_ONLY_MODEL) == ["size", "quality", "n"]
 
-    def test_map_quality_to_image_size_unknown(self):
-        """Test mapping unknown quality returns None."""
-        assert self.config._map_quality_to_image_size("unknown") is None
 
-    def test_map_openai_params_size_only(self):
-        """Test that map_openai_params correctly maps size parameter."""
-        non_default_params = {"size": "1024x1024"}
-        optional_params = {}
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (None, IMAGES_URL),
+        ("https://openrouter.ai/api/v1", IMAGES_URL),
+        ("https://openrouter.ai/api/v1/", IMAGES_URL),
+        ("https://openrouter.ai/api/v1/chat/completions", IMAGES_URL),
+        ("https://gateway.example.com/openrouter/v1", "https://gateway.example.com/openrouter/v1/images"),
+        ("https://gateway.example.com/api/v1/images", "https://gateway.example.com/api/v1/images"),
+    ],
+)
+def test_get_complete_url_points_at_the_images_endpoint(api_base: str | None, expected_url: str):
+    url = CONFIG.get_complete_url(
+        api_base=api_base,
+        api_key="sk-test",
+        model=IMAGE_ONLY_MODEL,
+        optional_params={},
+        litellm_params={},
+    )
 
-        result = self.config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=self.model,
-            drop_params=False,
+    assert url == expected_url
+
+
+@pytest.mark.parametrize(
+    ("non_default_params", "expected_params"),
+    [
+        ({"size": "1536x1024"}, {"size": "1536x1024"}),
+        ({"size": "auto"}, {}),
+        ({"quality": "low"}, {"quality": "low"}),
+        ({"quality": "medium"}, {"quality": "medium"}),
+        ({"quality": "high"}, {"quality": "high"}),
+        ({"quality": "auto"}, {"quality": "auto"}),
+        ({"quality": "standard"}, {"quality": "low"}),
+        ({"quality": "hd"}, {"quality": "high"}),
+        ({"n": 2}, {"n": 2}),
+    ],
+)
+def test_map_openai_params_sends_size_quality_and_n_as_images_fields(
+    non_default_params: dict[str, object], expected_params: dict[str, object]
+):
+    mapped = CONFIG.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model=IMAGE_ONLY_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped == expected_params
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_params"),
+    [
+        (False, {"size": "1024x1024", "unsupported_param": "value"}),
+        (True, {"size": "1024x1024"}),
+    ],
+)
+def test_map_openai_params_unsupported_param_follows_drop_params(drop_params: bool, expected_params: dict[str, object]):
+    mapped = CONFIG.map_openai_params(
+        non_default_params={"size": "1024x1024", "unsupported_param": "value"},
+        optional_params={},
+        model=IMAGE_ONLY_MODEL,
+        drop_params=drop_params,
+    )
+
+    assert mapped == expected_params
+
+
+def test_map_openai_params_keeps_params_already_in_optional_params():
+    mapped = CONFIG.map_openai_params(
+        non_default_params={"n": 1},
+        optional_params={"resolution": "2K"},
+        model=HYBRID_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped == {"resolution": "2K", "n": 1}
+
+
+# On 2026-10-03 GET https://openrouter.ai/api/v1/images/models/<id>/endpoints listed resolution and no quality for
+# google/gemini-3-pro-image and google/gemini-3.1-flash-image, and quality and no resolution for openai/gpt-image-*
+# and openai/gpt-5-image. The quality field in https://openrouter.ai/openapi.json says providers without a quality
+# knob ignore it
+@pytest.mark.parametrize(
+    ("non_default_params", "expected_params"),
+    [
+        ({"quality": "low"}, {"image_config": {"image_size": "1K"}}),
+        ({"quality": "standard"}, {"image_config": {"image_size": "1K"}}),
+        ({"quality": "auto"}, {"image_config": {"image_size": "1K"}}),
+        ({"quality": "medium"}, {"image_config": {"image_size": "2K"}}),
+        ({"quality": "high"}, {"image_config": {"image_size": "4K"}}),
+        ({"quality": "hd"}, {"image_config": {"image_size": "4K"}}),
+        (
+            {"quality": "medium", "size": "1024x1024", "n": 1},
+            {"size": "1024x1024", "n": 1, "image_config": {"aspect_ratio": "1:1", "image_size": "2K"}},
+        ),
+        (
+            {"quality": "high", "size": "1536x1024"},
+            {"size": "1536x1024", "image_config": {"aspect_ratio": "3:2", "image_size": "4K"}},
+        ),
+        (
+            {"quality": "hd", "size": "1024x1792"},
+            {"size": "1024x1792", "image_config": {"aspect_ratio": "9:16", "image_size": "4K"}},
+        ),
+        ({"quality": "medium", "size": "1344x768"}, {"size": "1344x768", "image_config": {"image_size": "2K"}}),
+        ({"quality": "high", "size": "2K"}, {"size": "2K"}),
+        ({"quality": "xhigh"}, {}),
+    ],
+)
+def test_map_openai_params_turns_quality_into_a_resolution_tier_on_google_models(
+    non_default_params: dict[str, object], expected_params: dict[str, object]
+):
+    mapped = CONFIG.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params={},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped == expected_params
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_params"),
+    [
+        ("google/gemini-2.5-flash-image", {"image_config": {"image_size": "4K"}}),
+        ("openrouter/google/gemini-3-pro-image", {"image_config": {"image_size": "4K"}}),
+        ("openai/gpt-image-1-mini", {"quality": "high"}),
+        ("openai/gpt-5-image", {"quality": "high"}),
+        ("x-ai/grok-imagine-image-2.0", {"quality": "high"}),
+    ],
+)
+def test_map_openai_params_keeps_native_quality_outside_google_models(model: str, expected_params: dict[str, object]):
+    mapped = CONFIG.map_openai_params(
+        non_default_params={"quality": "high"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert mapped == expected_params
+
+
+def test_map_openai_params_quality_tier_yields_to_an_image_config_already_set():
+    mapped = CONFIG.map_openai_params(
+        non_default_params={"quality": "high", "size": "1536x1024"},
+        optional_params={"image_config": {"image_size": "1K"}},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+
+    assert mapped == {"image_config": {"image_size": "1K"}, "quality": "high", "size": "1536x1024"}
+
+
+@pytest.mark.parametrize("quality", list(ImageGenerationRequestQuality))
+def test_map_openai_params_reads_a_quality_enum_member_like_its_string(quality: ImageGenerationRequestQuality):
+    """litellm.image_generation takes ImageGenerationRequestQuality members as quality"""
+    from_enum = CONFIG.map_openai_params(
+        non_default_params={"quality": quality, "size": "1024x1024"},
+        optional_params={},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+    from_string = CONFIG.map_openai_params(
+        non_default_params={"quality": quality.value, "size": "1024x1024"},
+        optional_params={},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+
+    assert from_enum == from_string
+    assert "image_size" in from_enum["image_config"]
+
+
+@patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
+def test_validate_environment_with_api_key(mock_get_secret: MagicMock):
+    result = CONFIG.validate_environment(
+        headers={},
+        model=HYBRID_MODEL,
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="test_api_key",
+    )
+
+    assert result["Authorization"] == "Bearer test_api_key"
+    mock_get_secret.assert_not_called()
+
+
+@patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
+def test_validate_environment_with_secret_key(mock_get_secret: MagicMock):
+    mock_get_secret.return_value = "secret_api_key"
+
+    result = CONFIG.validate_environment(
+        headers={},
+        model=HYBRID_MODEL,
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+    )
+
+    assert result["Authorization"] == "Bearer secret_api_key"
+    mock_get_secret.assert_called_once_with("OPENROUTER_API_KEY")
+
+
+def test_transform_request_body_holds_only_images_fields():
+    body = CONFIG.transform_image_generation_request(
+        model=IMAGE_ONLY_MODEL,
+        prompt=PROMPT,
+        optional_params={
+            "size": "1024x1024",
+            "quality": "low",
+            "n": 1,
+            "modalities": ["image", "text"],
+            "stream": True,
+            "extra_headers": {"Authorization": "Bearer sk-test"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert body == {"model": IMAGE_ONLY_MODEL, "prompt": PROMPT, "size": "1024x1024", "quality": "low", "n": 1}
+
+
+@pytest.mark.parametrize(
+    ("optional_params", "expected_fields"),
+    [
+        (
+            {"image_config": {"aspect_ratio": "16:9", "image_size": "4K"}},
+            {"aspect_ratio": "16:9", "resolution": "4K"},
+        ),
+        (
+            {"image_config": {"aspect_ratio": "16:9", "image_size": "4K"}, "aspect_ratio": "1:1", "resolution": "2K"},
+            {"aspect_ratio": "1:1", "resolution": "2K"},
+        ),
+    ],
+)
+def test_transform_request_maps_legacy_image_config_and_explicit_fields_win(
+    optional_params: dict[str, object], expected_fields: dict[str, object]
+):
+    body = CONFIG.transform_image_generation_request(
+        model=HYBRID_MODEL,
+        prompt=PROMPT,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert body == {"model": HYBRID_MODEL, "prompt": PROMPT, **expected_fields}
+
+
+# On 2026-10-03 POST https://openrouter.ai/api/v1/images returned 400 for size "1024x1024" with aspect_ratio
+# "3:2" (openai/gpt-image-1-mini) and with resolution "2K" (google/gemini-2.5-flash-image). The size field in
+# https://openrouter.ai/openapi.json says a tier size such as "2K" combines with aspect_ratio
+@pytest.mark.parametrize(
+    ("optional_params", "expected_fields"),
+    [
+        ({"size": "1024x1024", "image_config": {"aspect_ratio": "16:9"}}, {"aspect_ratio": "16:9"}),
+        ({"size": "1024x1024", "resolution": "4K"}, {"resolution": "4K"}),
+        ({"size": "1024x1024", "aspect_ratio": "1:1"}, {"aspect_ratio": "1:1"}),
+        ({"size": "2K", "aspect_ratio": "16:9"}, {"size": "2K", "aspect_ratio": "16:9"}),
+        ({"size": "1024x1024"}, {"size": "1024x1024"}),
+    ],
+)
+def test_transform_request_lets_aspect_ratio_or_resolution_win_over_a_pixel_size(
+    optional_params: dict[str, object], expected_fields: dict[str, object]
+):
+    body = CONFIG.transform_image_generation_request(
+        model=HYBRID_MODEL,
+        prompt=PROMPT,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert body == {"model": HYBRID_MODEL, "prompt": PROMPT, **expected_fields}
+
+
+def test_transform_response_returns_every_image_in_order():
+    response = _transform_response(httpx.Response(200, json=_images_response("aW1hZ2Ux", "aW1hZ2Uy")))
+
+    assert [(image.b64_json, image.url) for image in response.data] == [("aW1hZ2Ux", None), ("aW1hZ2Uy", None)]
+
+
+def test_transform_response_copies_the_openrouter_created_timestamp():
+    response = _transform_response(httpx.Response(200, json=_images_response("aW1hZ2Ux", created=1790994427)))
+
+    assert response.created == 1790994427
+
+
+def test_transform_response_with_zero_created_keeps_a_real_timestamp():
+    response = _transform_response(httpx.Response(200, json=_images_response("aW1hZ2Ux", created=0)))
+
+    assert response.created > 0
+
+
+def test_transform_response_reports_openrouter_usage_and_cost():
+    response = _transform_response(httpx.Response(200, json=_images_response("aW1hZ2Ux")))
+
+    assert response.usage == ImageUsage(
+        input_tokens=18,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=18),
+        output_tokens=272,
+        total_tokens=290,
+    )
+    assert response._hidden_params["additional_headers"] == {
+        "llm_provider-x-litellm-response-cost": OPENROUTER_IMAGES_USAGE["cost"]
+    }
+    assert response._hidden_params["response_cost_details"] == OPENROUTER_IMAGES_USAGE["cost_details"]
+    assert response._hidden_params["model"] == IMAGE_ONLY_MODEL
+
+
+# The ImageGenerationUsage schema in https://openrouter.ai/openapi.json (2026-10-03) requires only
+# prompt_tokens, completion_tokens and total_tokens, allows null for completion_tokens_details and
+# image_tokens, and its example for a per-image priced model has no completion_tokens_details
+PER_IMAGE_USAGE: Final = {"prompt_tokens": 0, "completion_tokens": 4175, "total_tokens": 4175, "cost": 0.04}
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        PER_IMAGE_USAGE,
+        {**PER_IMAGE_USAGE, "completion_tokens_details": None},
+        {**PER_IMAGE_USAGE, "completion_tokens_details": {"image_tokens": None}},
+    ],
+    ids=["no-details", "null-details", "null-image-tokens"],
+)
+def test_transform_response_without_image_tokens_reports_completion_tokens_and_cost(usage: dict[str, object]):
+    response = _transform_response(
+        httpx.Response(200, json={"created": 1790994427, "data": [{"b64_json": "aW1hZ2Ux"}], "usage": usage})
+    )
+
+    assert response.usage == ImageUsage(
+        input_tokens=0,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=0),
+        output_tokens=usage["completion_tokens"],
+        total_tokens=usage["total_tokens"],
+    )
+    assert response._hidden_params["additional_headers"] == {"llm_provider-x-litellm-response-cost": usage["cost"]}
+
+
+def test_transform_response_with_non_json_body_raises_openrouter_exception():
+    with pytest.raises(OpenRouterException, match="Error parsing OpenRouter response") as exc_info:
+        _transform_response(httpx.Response(502, content=b"<html>bad gateway</html>"))
+
+    assert exc_info.value.status_code == 502
+    assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
+
+
+def test_get_error_class():
+    error = CONFIG.get_error_class(
+        error_message="Test error",
+        status_code=400,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert isinstance(error, OpenRouterException)
+    assert "Test error" in str(error)
+    assert error.status_code == 400
+
+
+def test_image_only_model_is_sent_to_the_images_endpoint_and_charged_the_openrouter_cost():
+    recorder = RequestRecorder(_images_response("aW1hZ2Ux"))
+
+    response = litellm.image_generation(
+        model=f"openrouter/{IMAGE_ONLY_MODEL}",
+        prompt=PROMPT,
+        size="1024x1024",
+        quality="low",
+        n=1,
+        api_key="sk-test",
+        client=_client(recorder),
+    )
+
+    (request,) = recorder.requests
+    assert str(request.url) == IMAGES_URL
+    assert request.headers["Authorization"] == "Bearer sk-test"
+    assert json.loads(request.content) == {
+        "model": IMAGE_ONLY_MODEL,
+        "prompt": PROMPT,
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1,
+    }
+    assert [image.b64_json for image in response.data] == ["aW1hZ2Ux"]
+    assert response._hidden_params["response_cost"] == OPENROUTER_IMAGES_USAGE["cost"]
+
+
+def test_hybrid_image_text_model_uses_the_same_images_endpoint():
+    recorder = RequestRecorder(_images_response("aW1hZ2Ux"))
+
+    litellm.image_generation(
+        model=f"openrouter/{HYBRID_MODEL}",
+        prompt=PROMPT,
+        api_key="sk-test",
+        client=_client(recorder),
+    )
+
+    (request,) = recorder.requests
+    assert str(request.url) == IMAGES_URL
+    assert json.loads(request.content) == {"model": HYBRID_MODEL, "prompt": PROMPT}
+
+
+def test_legacy_image_config_with_an_openai_pixel_size_sends_only_the_aspect_ratio():
+    recorder = RequestRecorder(_images_response("aW1hZ2Ux"))
+
+    litellm.image_generation(
+        model=f"openrouter/{HYBRID_MODEL}",
+        prompt=PROMPT,
+        size="1024x1024",
+        image_config={"aspect_ratio": "16:9"},
+        api_key="sk-test",
+        client=_client(recorder),
+    )
+
+    (request,) = recorder.requests
+    assert json.loads(request.content) == {"model": HYBRID_MODEL, "prompt": PROMPT, "aspect_ratio": "16:9"}
+
+
+@pytest.mark.parametrize(
+    ("extra_kwargs", "expected_fields"),
+    [
+        ({}, {"aspect_ratio": "1:1", "resolution": "2K"}),
+        ({"resolution": "1K"}, {"aspect_ratio": "1:1", "resolution": "1K"}),
+        ({"image_config": {"image_size": "4K"}}, {"resolution": "4K"}),
+    ],
+)
+def test_google_model_quality_still_picks_the_resolution_tier_and_explicit_values_win(
+    extra_kwargs: dict[str, object], expected_fields: dict[str, object]
+):
+    recorder = RequestRecorder(_images_response("aW1hZ2Ux"))
+
+    litellm.image_generation(
+        model=f"openrouter/{RESOLUTION_TIER_MODEL}",
+        prompt=PROMPT,
+        size="1024x1024",
+        quality="medium",
+        n=1,
+        api_key="sk-test",
+        client=_client(recorder),
+        **extra_kwargs,
+    )
+
+    (request,) = recorder.requests
+    assert str(request.url) == IMAGES_URL
+    assert json.loads(request.content) == {"model": RESOLUTION_TIER_MODEL, "prompt": PROMPT, "n": 1, **expected_fields}
+
+
+def test_legacy_chat_completions_api_base_still_reaches_the_images_endpoint():
+    recorder = RequestRecorder(_images_response("aW1hZ2Ux"))
+
+    litellm.image_generation(
+        model=f"openrouter/{IMAGE_ONLY_MODEL}",
+        prompt=PROMPT,
+        api_key="sk-test",
+        api_base="https://openrouter.ai/api/v1/chat/completions",
+        client=_client(recorder),
+    )
+
+    (request,) = recorder.requests
+    assert str(request.url) == IMAGES_URL
+
+
+def test_openrouter_error_response_surfaces_as_not_found_error():
+    recorder = RequestRecorder({"error": {"code": 404, "message": "Resource not found"}}, status_code=404)
+
+    with pytest.raises(litellm.NotFoundError, match="Resource not found"):
+        litellm.image_generation(
+            model=f"openrouter/{IMAGE_ONLY_MODEL}",
+            prompt=PROMPT,
+            api_key="sk-test",
+            client=_client(recorder),
         )
 
-        assert "image_config" in result
-        assert result["image_config"]["aspect_ratio"] == "1:1"
 
-    def test_map_openai_params_quality_only(self):
-        """Test that map_openai_params correctly maps quality parameter."""
-        non_default_params = {"quality": "high"}
-        optional_params = {}
-
-        result = self.config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=self.model,
-            drop_params=False,
-        )
-
-        assert "image_config" in result
-        assert result["image_config"]["image_size"] == "4K"
-
-    def test_map_openai_params_size_and_quality(self):
-        """Test that map_openai_params correctly maps both size and quality."""
-        non_default_params = {"size": "1792x1024", "quality": "hd"}
-        optional_params = {}
-
-        result = self.config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=self.model,
-            drop_params=False,
-        )
-
-        assert "image_config" in result
-        assert result["image_config"]["aspect_ratio"] == "16:9"
-        assert result["image_config"]["image_size"] == "4K"
-
-    def test_map_openai_params_with_n_parameter(self):
-        """Test that map_openai_params correctly passes through n parameter."""
-        non_default_params = {"size": "1024x1024", "n": 2}
-        optional_params = {}
-
-        result = self.config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=self.model,
-            drop_params=False,
-        )
-
-        assert "image_config" in result
-        assert result["image_config"]["aspect_ratio"] == "1:1"
-        assert result["n"] == 2
-
-    def test_map_openai_params_unsupported_param_drop_false(self):
-        """Test that unsupported params are passed through when drop_params=False."""
-        non_default_params = {"size": "1024x1024", "unsupported_param": "value"}
-        optional_params = {}
-
-        result = self.config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=self.model,
-            drop_params=False,
-        )
-
-        assert "image_config" in result
-        assert result["unsupported_param"] == "value"
-
-    def test_map_openai_params_unsupported_param_drop_true(self):
-        """Test that unsupported params are dropped when drop_params=True."""
-        non_default_params = {"size": "1024x1024", "unsupported_param": "value"}
-        optional_params = {}
-
-        result = self.config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=self.model,
-            drop_params=True,
-        )
-
-        assert "image_config" in result
-        assert "unsupported_param" not in result
-
-    def test_get_complete_url_default(self):
-        """Test that get_complete_url returns default OpenRouter URL."""
-        result = self.config.get_complete_url(
-            api_base=None,
-            api_key="test_key",
-            model=self.model,
-            optional_params={},
-            litellm_params={},
-        )
-
-        assert result == "https://openrouter.ai/api/v1/chat/completions"
-
-    def test_get_complete_url_with_custom_base(self):
-        """Test that get_complete_url uses custom api_base."""
-        custom_base = "https://custom.openrouter.ai/api/v1"
-
-        result = self.config.get_complete_url(
-            api_base=custom_base,
-            api_key="test_key",
-            model=self.model,
-            optional_params={},
-            litellm_params={},
-        )
-
-        assert result == f"{custom_base}/chat/completions"
-
-    def test_get_complete_url_with_base_already_complete(self):
-        """Test that get_complete_url doesn't duplicate /chat/completions."""
-        custom_base = "https://custom.openrouter.ai/api/v1/chat/completions"
-
-        result = self.config.get_complete_url(
-            api_base=custom_base,
-            api_key="test_key",
-            model=self.model,
-            optional_params={},
-            litellm_params={},
-        )
-
-        assert result == custom_base
-
-    @patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
-    def test_validate_environment_with_api_key(self, mock_get_secret):
-        """Test that validate_environment correctly sets authorization header."""
-        headers = {}
-        api_key = "test_api_key"
-
-        result = self.config.validate_environment(
-            headers=headers,
-            model=self.model,
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=api_key,
-        )
-
-        assert result["Authorization"] == f"Bearer {api_key}"
-        mock_get_secret.assert_not_called()
-
-    @patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
-    def test_validate_environment_with_secret_key(self, mock_get_secret):
-        """Test that validate_environment uses secret API key when api_key is None."""
-        mock_get_secret.return_value = "secret_api_key"
-        headers = {}
-
-        result = self.config.validate_environment(
-            headers=headers,
-            model=self.model,
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=None,
-        )
-
-        assert result["Authorization"] == "Bearer secret_api_key"
-        mock_get_secret.assert_called_once_with("OPENROUTER_API_KEY")
-
-    def test_transform_image_generation_request_basic(self):
-        """Test that transform_image_generation_request creates correct request body."""
-        prompt = "A beautiful sunset over mountains"
-        optional_params = {}
-
-        result = self.config.transform_image_generation_request(
-            model=self.model,
-            prompt=prompt,
-            optional_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
-
-        assert result["model"] == self.model
-        assert result["messages"] == [{"role": "user", "content": prompt}]
-        assert "modalities" not in result  # modalities should not be added by default
-
-    def test_transform_image_generation_request_with_image_config(self):
-        """Test that transform_image_generation_request includes image_config."""
-        prompt = "A beautiful sunset"
-        optional_params = {
-            "image_config": {"aspect_ratio": "16:9", "image_size": "4K"},
-            "n": 2,
-        }
-
-        result = self.config.transform_image_generation_request(
-            model=self.model,
-            prompt=prompt,
-            optional_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
-
-        assert result["model"] == self.model
-        assert result["messages"] == [{"role": "user", "content": prompt}]
-        assert result["image_config"]["aspect_ratio"] == "16:9"
-        assert result["image_config"]["image_size"] == "4K"
-        assert result["n"] == 2
-
-    def test_transform_image_generation_response_with_base64_images(self):
-        """Test that transform_image_generation_response correctly extracts base64 images."""
-        response_data = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Here is your image!",
-                        "role": "assistant",
-                        "images": [
-                            {
-                                "image_url": {
-                                    "url": "data:image/png;base64,iVBORw0KGgoAAAANS"
-                                },
-                                "index": 0,
-                                "type": "image_url",
-                            }
-                        ],
-                    }
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 1300,
-                "total_tokens": 1310,
-                "completion_tokens_details": {"image_tokens": 1290},
-                "cost": 0.0387243,
-            },
-            "model": "google/gemini-2.5-flash-image",
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = response_data
-        mock_response.status_code = 200
-        mock_response.headers = {}
-
-        model_response = ImageResponse(data=[])
-
-        result = self.config.transform_image_generation_response(
-            model=self.model,
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=self.logging_obj,
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-
-        assert len(result.data) == 1
-        assert result.data[0].b64_json == "iVBORw0KGgoAAAANS"
-        assert result.data[0].url is None
-
-    def test_transform_image_generation_response_with_url_images(self):
-        """Test that transform_image_generation_response correctly extracts URL images."""
-        response_data = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Here is your image!",
-                        "role": "assistant",
-                        "images": [
-                            {
-                                "image_url": {"url": "https://example.com/image.png"},
-                                "index": 0,
-                                "type": "image_url",
-                            }
-                        ],
-                    }
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 1300,
-                "total_tokens": 1310,
-            },
-            "model": "google/gemini-2.5-flash-image",
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = response_data
-        mock_response.status_code = 200
-        mock_response.headers = {}
-
-        model_response = ImageResponse(data=[])
-
-        result = self.config.transform_image_generation_response(
-            model=self.model,
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=self.logging_obj,
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-
-        assert len(result.data) == 1
-        assert result.data[0].url == "https://example.com/image.png"
-        assert result.data[0].b64_json is None
-
-    def test_transform_image_generation_response_with_usage_and_cost(self):
-        """Test that transform_image_generation_response correctly extracts usage and cost."""
-        response_data = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Here is your image!",
-                        "role": "assistant",
-                        "images": [
-                            {
-                                "image_url": {"url": "data:image/png;base64,abc123"},
-                                "index": 0,
-                                "type": "image_url",
-                            }
-                        ],
-                    }
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 1300,
-                "total_tokens": 1310,
-                "completion_tokens_details": {"image_tokens": 1290},
-                "cost": 0.0387243,
-                "cost_details": {"input_cost": 0.001, "output_cost": 0.037},
-            },
-            "model": "google/gemini-2.5-flash-image",
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = response_data
-        mock_response.status_code = 200
-        mock_response.headers = {}
-
-        model_response = ImageResponse(data=[])
-
-        result = self.config.transform_image_generation_response(
-            model=self.model,
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=self.logging_obj,
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-
-        # Check usage
-        assert result.usage is not None
-        assert result.usage.input_tokens == 10
-        assert result.usage.output_tokens == 1290
-        assert result.usage.total_tokens == 1310
-        assert result.usage.input_tokens_details.text_tokens == 10
-        assert result.usage.input_tokens_details.image_tokens == 0
-
-        # Check cost
-        assert hasattr(result, "_hidden_params")
-        assert "additional_headers" in result._hidden_params
-        assert (
-            result._hidden_params["additional_headers"][
-                "llm_provider-x-litellm-response-cost"
-            ]
-            == 0.0387243
-        )
-
-        # Check cost details
-        assert "response_cost_details" in result._hidden_params
-        assert result._hidden_params["response_cost_details"]["input_cost"] == 0.001
-        assert result._hidden_params["response_cost_details"]["output_cost"] == 0.037
-
-        # Check model
-        assert result._hidden_params["model"] == "google/gemini-2.5-flash-image"
-
-    def test_transform_image_generation_response_multiple_images(self):
-        """Test that transform_image_generation_response handles multiple images."""
-        response_data = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Here are your images!",
-                        "role": "assistant",
-                        "images": [
-                            {
-                                "image_url": {
-                                    "url": "data:image/png;base64,image1data"
-                                },
-                                "index": 0,
-                                "type": "image_url",
-                            },
-                            {
-                                "image_url": {
-                                    "url": "data:image/png;base64,image2data"
-                                },
-                                "index": 1,
-                                "type": "image_url",
-                            },
-                        ],
-                    }
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 2600,
-                "total_tokens": 2610,
-            },
-            "model": "google/gemini-2.5-flash-image",
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = response_data
-        mock_response.status_code = 200
-        mock_response.headers = {}
-
-        model_response = ImageResponse(data=[])
-
-        result = self.config.transform_image_generation_response(
-            model=self.model,
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=self.logging_obj,
-            request_data={},
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
-
-        assert len(result.data) == 2
-        assert result.data[0].b64_json == "image1data"
-        assert result.data[1].b64_json == "image2data"
-
-    def test_transform_image_generation_response_json_error(self):
-        """Test that transform_image_generation_response raises error on invalid JSON."""
-        mock_response = MagicMock()
-        mock_response.json.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
-        mock_response.status_code = 500
-        mock_response.headers = {}
-
-        model_response = ImageResponse(data=[])
-
-        with pytest.raises(OpenRouterException) as exc_info:
-            self.config.transform_image_generation_response(
-                model=self.model,
-                raw_response=mock_response,
-                model_response=model_response,
-                logging_obj=self.logging_obj,
-                request_data={},
-                optional_params={},
-                litellm_params={},
-                encoding=None,
-            )
-
-        assert "Error parsing OpenRouter response" in str(exc_info.value)
-        assert exc_info.value.status_code == 500
-
-    def test_transform_image_generation_response_transformation_error(self):
-        """Test that transform_image_generation_response handles transformation errors."""
-        response_data = {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Here is your image!",
-                        "role": "assistant",
-                        "images": "invalid_format",  # Invalid format
-                    }
-                }
-            ]
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = response_data
-        mock_response.status_code = 200
-        mock_response.headers = {}
-
-        model_response = ImageResponse(data=[])
-
-        with pytest.raises(OpenRouterException) as exc_info:
-            self.config.transform_image_generation_response(
-                model=self.model,
-                raw_response=mock_response,
-                model_response=model_response,
-                logging_obj=self.logging_obj,
-                request_data={},
-                optional_params={},
-                litellm_params={},
-                encoding=None,
-            )
-
-        assert "Error transforming OpenRouter image generation response" in str(
-            exc_info.value
-        )
-
-    def test_get_error_class(self):
-        """Test that get_error_class returns OpenRouterException."""
-        error = self.config.get_error_class(
-            error_message="Test error",
-            status_code=400,
-            headers={"Content-Type": "application/json"},
-        )
-
-        assert isinstance(error, OpenRouterException)
-        assert "Test error" in str(error)
-        assert error.status_code == 400
+@pytest.mark.parametrize(
+    "matrix_path",
+    [
+        Path(litellm.__file__).parent.parent / "provider_endpoints_support.json",
+        Path(litellm.__file__).parent / "provider_endpoints_support_backup.json",
+    ],
+    ids=["root", "backup"],
+)
+def test_endpoint_matrix_lists_openrouter_image_generations(matrix_path: Path):
+    """The proxy's public endpoint listing reads the backup copy shipped inside the package"""
+    matrix = json.loads(matrix_path.read_text())
+
+    assert matrix["providers"]["openrouter"]["endpoints"]["image_generations"] is True
