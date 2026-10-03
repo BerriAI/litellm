@@ -1,8 +1,8 @@
 use askama::Template;
 use serde::Serialize;
 
-use super::{AttributeCatalog, MetadataCatalog, TableSchema};
-use crate::{Error, NormalizedFieldDefinition};
+use super::{AttributeCatalog, Discovery, MetadataCatalog, TableSchema};
+use crate::{Error, NormalizedFieldDefinition, query_access::ReaderLimits};
 
 #[derive(Template)]
 #[template(path = "query_help.jinja", escape = "none", blocks = [
@@ -33,6 +33,7 @@ pub(super) struct QueryGuide<'a> {
     pub normalized_fields: &'a [NormalizedFieldDefinition],
     pub metadata: &'a MetadataCatalog,
     pub attributes: &'a [AttributeCatalog],
+    pub limits: &'a ReaderLimits,
 }
 
 #[derive(Serialize)]

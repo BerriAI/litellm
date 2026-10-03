@@ -1467,8 +1467,8 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         )
         .await?;
     }
-    let help: serde_json::Value = serde_json::from_str(
-        &litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
+    let help = serde_json::to_value(
+        litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
     )?;
     let keys: std::collections::BTreeSet<_> = help
         .as_object()
@@ -1654,8 +1654,8 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
     }))).collect::<Result<Vec<_>, _>>()?;
     insert_rows(&database, "otel_traces", spans).await?;
     let reader = Connection::configured(&database.url, "trace_test", "help_reader", "")?;
-    let help: serde_json::Value = serde_json::from_str(
-        &litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
+    let help = serde_json::to_value(
+        litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
     )?;
     assert_eq!(help["tables"].as_array().ok_or("tables")?.len(), 3);
     assert!(!help["examples"].as_array().ok_or("examples")?.is_empty());

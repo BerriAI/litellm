@@ -1,9 +1,12 @@
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 _RESPONSE_CONFIG: Final = ConfigDict(frozen=True, extra="allow")
+_HELP_CONFIG: Final = ConfigDict(frozen=True, extra="forbid")
+TraceTableName = Literal["otel_traces", "agent_traces_by_key", "spend_logs"]
+MetadataValueType = Literal["array", "boolean", "integer", "null", "number", "object", "string"]
 
 
 class TraceQueryColumn(BaseModel):
@@ -28,14 +31,14 @@ class TraceSQLResponse(BaseModel):
 
 
 class TraceQueryTable(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    name: str
+    model_config = _HELP_CONFIG
+    name: TraceTableName
     columns: tuple[TraceQueryColumn, ...]
 
 
 class TraceQueryNormalizedField(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    table: str
+    model_config = _HELP_CONFIG
+    table: TraceTableName
     name: str
     column: str
     type: str
@@ -43,15 +46,15 @@ class TraceQueryNormalizedField(BaseModel):
 
 
 class TraceQueryMetadataField(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = _HELP_CONFIG
     path: tuple[str | int, ...]
-    types: tuple[str, ...]
+    types: tuple[MetadataValueType, ...]
     expression: str
 
 
 class TraceQueryMetadata(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    table: str
+    model_config = _HELP_CONFIG
+    table: TraceTableName
     column: str
     fields: tuple[TraceQueryMetadataField, ...]
     sampled_rows: int
@@ -63,15 +66,15 @@ class TraceQueryMetadata(BaseModel):
 
 
 class TraceQueryAttributeField(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = _HELP_CONFIG
     key: str
-    type: str
+    type: Literal["String"]
     expression: str
 
 
 class TraceQueryAttributes(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    table: str
+    model_config = _HELP_CONFIG
+    table: TraceTableName
     column: str
     fields: tuple[TraceQueryAttributeField, ...]
     truncated: bool
@@ -81,7 +84,7 @@ class TraceQueryAttributes(BaseModel):
 
 
 class TraceQueryRelationship(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = _HELP_CONFIG
     left: str
     right: str
     additional_predicates: str
@@ -89,13 +92,13 @@ class TraceQueryRelationship(BaseModel):
 
 
 class TraceQueryExample(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = _HELP_CONFIG
     name: str
     sql: str
 
 
 class TraceQueryHelp(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = _HELP_CONFIG
     dialect: str
     access: str
     response: str

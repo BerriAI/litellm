@@ -46,10 +46,10 @@ fn named_requests_preserve_all_access_cases(#[case] teams: Vec<&str>, #[case] ke
 #[rstest]
 fn result_contracts_preserve_public_field_names() {
     round_trip::<ListTracesRow>(
-        json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "ok", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
+        json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "ok", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["framework"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
     );
     round_trip::<TraceSpansRow>(
-        json!({"span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "agent": "agent", "status": "error", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
+        json!({"span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "agent": "agent", "framework": "framework", "status": "error", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
     );
     round_trip::<SpanDetailRow>(
         json!({"span_id": "span", "input": "input", "output": "output", "attributes": {"count": "42"}}),

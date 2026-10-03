@@ -5,7 +5,18 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{Connection, Error};
 
-const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReadLimits {
+    pub result_rows: u64,
+    pub response_bytes: usize,
+    pub execution_seconds: u64,
+}
+
+pub const READ_LIMITS: ReadLimits = ReadLimits {
+    result_rows: 1000,
+    response_bytes: 4 * 1024 * 1024,
+    execution_seconds: 10,
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -78,9 +89,12 @@ pub async fn execute_read(
         .clear()
         .extend_pairs(existing_pairs)
         .append_pair("readonly", "1")
-        .append_pair("max_result_rows", "1000")
+        .append_pair("max_result_rows", &READ_LIMITS.result_rows.to_string())
         .append_pair("result_overflow_mode", "throw")
-        .append_pair("max_execution_time", "10")
+        .append_pair(
+            "max_execution_time",
+            &READ_LIMITS.execution_seconds.to_string(),
+        )
         .append_pair("wait_end_of_query", "1")
         .append_pair("default_format", "JSON");
 
@@ -101,7 +115,7 @@ pub async fn execute_read(
 
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
-        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+        if body.len() + chunk.len() > READ_LIMITS.response_bytes {
             return Err(Error::ResponseTooLarge);
         }
         body.extend_from_slice(&chunk);

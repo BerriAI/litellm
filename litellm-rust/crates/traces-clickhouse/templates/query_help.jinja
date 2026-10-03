@@ -11,18 +11,18 @@ Normalized span fields
 {% endfor %}
 Observed LLM call metadata
 {{ metadata.scope }}
-Sampled rows: {{ metadata.sampled_rows }}; invalid JSON rows: {{ metadata.invalid_json_rows }}; truncated: {{ metadata.truncated }}
-{% if let Some(error) = metadata.error %}Metadata discovery unavailable: {{ error }}
-{% else if metadata.fields.is_empty() %}No metadata paths found in the sampled rows
-{% else %}{% for field in metadata.fields %}{{ field.expression }}: {% for kind in field.types %}{{ kind }} {% endfor %}
-{% endfor %}{% endif %}
+{% match metadata.discovery %}{% when Discovery::Unavailable(error) %}Metadata discovery unavailable: {{ error }}
+{% when Discovery::Observed(sample) %}Sampled rows: {{ sample.sampled_rows }}; invalid JSON rows: {{ sample.invalid_json_rows }}; truncated: {{ sample.truncated }}
+{% if sample.fields.is_empty() %}No metadata paths found in the sampled rows
+{% else %}{% for field in sample.fields %}{{ field.expression }}: {% for kind in field.types %}{{ kind }} {% endfor %}
+{% endfor %}{% endif %}{% endmatch %}
 Observed span and resource attributes
 {% for catalog in attributes %}{{ catalog.table }}.{{ catalog.column }}
 {{ catalog.scope }}
-{% if let Some(error) = catalog.error %}Attribute discovery unavailable: {{ error }}
-{% else if catalog.fields.is_empty() %}No attribute keys found in the sampled spans
-{% else %}{% for field in catalog.fields %}{{ field.expression }}: {{ field.kind }}
-{% endfor %}{% endif %}{% endfor %}
+{% match catalog.discovery %}{% when Discovery::Unavailable(error) %}Attribute discovery unavailable: {{ error }}
+{% when Discovery::Observed(sample) %}{% if sample.fields.is_empty() %}No attribute keys found in the sampled spans
+{% else %}{% for field in sample.fields %}{{ field.expression }}: {{ field.kind }}
+{% endfor %}{% endif %}{% endmatch %}{% endfor %}
 Examples
 
 {% block recent_spans_name %}Recent normalized LLM spans{% endblock %}
@@ -44,7 +44,7 @@ Gotchas
 
 {% block time_window %}Always bound Timestamp or start_time and use LIMIT; add TeamId/ApiKeyHash or team_id/api_key filters when investigating one tenant{% endblock %}
 
-{% block reader_limits %}The reader enforces 1000 result rows, 4 MiB response bytes, 256 MiB memory and a 10 second query limit; exceeding limits fails instead of returning partial results{% endblock %}
+{% block reader_limits %}The reader enforces {{ limits.result_rows }} result rows, {{ limits.result_mib() }} MiB response bytes, {{ limits.memory_mib() }} MiB memory and a {{ limits.execution_seconds }} second query limit; exceeding limits fails instead of returning partial results{% endblock %}
 
 {% block reader_profile %}LiteLLM provisions SELECT-only readers from the configured ClickHouse connection and enforces request-log visibility through row policies. Callers see their own user rows and permitted teams, or their own key rows when no user identity is available. Provisioning requires CREATE USER, ALTER USER, CREATE ROW POLICY, and GRANT SELECT permissions{% endblock %}
 
