@@ -1,0 +1,381 @@
+use litellm_traces::{
+    AgentNode, SpanStatus, iso_time, listed_summary,
+    query::named::{ListTracesRow, SpendByResponseIdsRow, TraceSpansRow},
+    resolve_trace,
+};
+use rstest::rstest;
+
+const T0: i64 = 1_790_742_989_000_000_000;
+const MS: i64 = 1_000_000;
+
+fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> TraceSpansRow {
+    TraceSpansRow {
+        trace_id: String::new(),
+        span_id: span_id.into(),
+        parent_span_id: parent.into(),
+        name: name.into(),
+        kind: kind.into(),
+        wrapper_candidate: 0,
+        agent: agent.into(),
+        framework: String::new(),
+        status: "STATUS_CODE_OK".into(),
+        status_message: String::new(),
+        error_truncated: 0,
+        start_ns: T0,
+        duration_ns: 10 * MS as u64,
+        service: "agent-demo".into(),
+        input_preview: format!("input of {name}"),
+        model: String::new(),
+        input_tokens: 0,
+        output_tokens: 0,
+        litellm_request_id: String::new(),
+        call_keys: Vec::new(),
+        call_evidence: String::new(),
+        tool_call_id: String::new(),
+        team_id: String::new(),
+        api_key_hash: String::new(),
+        user_id: String::new(),
+    }
+}
+
+fn at(mut span: TraceSpansRow, start_ms: i64, duration_ms: u64) -> TraceSpansRow {
+    span.start_ns = T0 + start_ms * MS;
+    span.duration_ns = duration_ms * MS as u64;
+    span
+}
+
+fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpansRow {
+    TraceSpansRow {
+        model: "claude-sonnet-4-5".into(),
+        input_tokens: 100,
+        output_tokens: 20,
+        litellm_request_id: response_id.into(),
+        ..at(row(span_id, parent, "ChatOpenAI", "llm", agent), 1, 100)
+    }
+}
+
+fn owned(mut span: TraceSpansRow, team: &str, user: &str, key: &str) -> TraceSpansRow {
+    span.team_id = team.into();
+    span.user_id = user.into();
+    span.api_key_hash = key.into();
+    span
+}
+
+fn spend(request_id: &str, response_id: &str, team: &str, user: &str, key: &str, cost: f64) -> SpendByResponseIdsRow {
+    SpendByResponseIdsRow {
+        request_id: request_id.into(),
+        response_id: response_id.into(),
+        upstream_response_id: String::new(),
+        trace_id: String::new(),
+        span_id: String::new(),
+        team_id: team.into(),
+        api_key: key.into(),
+        user: user.into(),
+        spend: cost,
+        start_ms: T0 / MS,
+    }
+}
+
+/// root agent -> llm, task tool -> researcher subagent (N times) -> llm + search tool + middleware.
+fn deep_agent(researchers: usize) -> Vec<TraceSpansRow> {
+    let mut rows = vec![
+        at(row("root", "", "deep_research_agent", "agent", "deep_research_agent"), 0, 1000),
+        llm("llm-root", "root", "deep_research_agent", "chatcmpl-root"),
+        at(row("task", "root", "task", "tool", "deep_research_agent"), 200, 700),
+    ];
+    for index in 0..researchers {
+        let researcher = format!("res-{index}");
+        rows.extend([
+            at(row(&researcher, "task", "researcher", "agent", "researcher"), 201, 5),
+            at(llm(&format!("res-llm-{index}"), &researcher, "researcher", &format!("chatcmpl-res-{index}")), 202, 100),
+            at(row(&format!("res-tool-{index}"), &researcher, "search_docs", "tool", "researcher"), 203, 1),
+            row(&format!("res-mw-{index}"), &researcher, "FilesystemMiddleware.wrap_model_call", "framework", "researcher"),
+        ]);
+    }
+    rows
+}
+
+fn agents(rows: &[TraceSpansRow]) -> Vec<AgentNode> {
+    resolve_trace("t", "", rows, &[]).map(|trace| trace.agents).unwrap_or_default()
+}
+
+#[rstest]
+fn no_rows_is_no_trace() {
+    assert_eq!(resolve_trace("t", "", &[], &[]), None);
+}
+
+#[rstest]
+fn summary_counts_model_calls_tools_and_agents() {
+    let mut rows = deep_agent(1);
+    rows[2].status = "STATUS_CODE_ERROR".into();
+    let summary = resolve_trace("t1", "ref", &rows, &[]).unwrap().summary;
+    assert_eq!(summary.trace_id, "t1");
+    assert_eq!(summary.trace_ref, "ref");
+    assert_eq!(summary.name, "deep_research_agent");
+    assert_eq!(summary.input_preview, "input of deep_research_agent");
+    assert_eq!(summary.status, SpanStatus::Ok);
+    assert_eq!(summary.error_count, 1);
+    assert_eq!((summary.span_count, summary.agent_count, summary.llm_calls, summary.tool_calls), (7, 2, 2, 2));
+    assert_eq!((summary.input_tokens, summary.output_tokens), (200, 40));
+    assert_eq!(summary.models, ["claude-sonnet-4-5"]);
+    assert_eq!(summary.duration_ms, 1000.0);
+    assert_eq!(summary.start_time, "2026-09-30T04:36:29+00:00");
+    assert_eq!(summary.spend, None);
+}
+
+#[rstest]
+fn spans_are_offset_from_the_trace_start() {
+    let trace = resolve_trace("t1", "", &deep_agent(1), &[]).unwrap();
+    let span = |id: &str| trace.spans.iter().find(|span| span.span_id == id).unwrap();
+    assert_eq!((span("root").start_offset_ms, span("root").parent_span_id.clone()), (0.0, None));
+    assert_eq!((span("task").start_offset_ms, span("task").duration_ms), (200.0, 700.0));
+    assert_eq!(span("task").parent_span_id.as_deref(), Some("root"));
+    assert_eq!(span("llm-root").litellm_request_id.as_deref(), Some("chatcmpl-root"));
+    assert_eq!(span("task").litellm_request_id, None);
+}
+
+#[rstest]
+fn repeated_subagent_invocations_aggregate_into_one_node() {
+    let trace = resolve_trace("t1", "", &deep_agent(200), &[]).unwrap();
+    assert_eq!(
+        trace.agents[0],
+        AgentNode {
+            name: "deep_research_agent".into(),
+            parent_agent: None,
+            invocations: 1,
+            llm_calls: 1,
+            tool_calls: 1,
+            duration_ms: 1000.0,
+            spend: None,
+        }
+    );
+    let researcher = &trace.agents[1];
+    assert_eq!(researcher.parent_agent.as_deref(), Some("deep_research_agent"));
+    assert_eq!((researcher.invocations, researcher.llm_calls, researcher.tool_calls), (200, 200, 200));
+    assert!((researcher.duration_ms - 1000.0).abs() < 1e-6);
+    assert_eq!(trace.summary.span_count, 3 + 4 * 200);
+}
+
+#[rstest]
+fn parent_agent_skips_same_name_ancestors_and_stops_at_cycles() {
+    let recursive = agents(&[
+        row("root", "", "lead", "agent", "lead"),
+        row("r1", "root", "researcher", "agent", "researcher"),
+        row("r2", "r1", "researcher", "agent", "researcher"),
+    ]);
+    assert_eq!(recursive[1].parent_agent.as_deref(), Some("lead"));
+    assert_eq!(recursive[1].invocations, 2);
+    let cyclic = agents(&[
+        row("self", "self", "researcher", "agent", "researcher"),
+        row("first", "second", "researcher", "agent", "researcher"),
+        row("second", "first", "researcher", "agent", "researcher"),
+    ]);
+    assert_eq!(cyclic[0].parent_agent, None);
+}
+
+#[rstest]
+fn unnamed_calls_belong_to_the_nearest_agent_and_wrappers_are_not_agents() {
+    let crew = TraceSpansRow { wrapper_candidate: 1, ..row("crew", "", "crew.kickoff", "agent", "") };
+    let nodes = agents(&[
+        crew,
+        row("a", "crew", "researcher._execute_core", "agent", "researcher"),
+        row("chain", "a", "step", "chain", ""),
+        llm("llm", "chain", "", "req-1"),
+        row("tool", "a", "search", "tool", ""),
+        llm("orphan", "missing", "", "req-2"),
+    ]);
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].name, "researcher");
+    assert_eq!((nodes[0].llm_calls, nodes[0].tool_calls), (1, 1));
+    assert_eq!(nodes[0].parent_agent, None);
+}
+
+#[rstest]
+fn named_wrapper_inside_the_same_agent_is_a_chain() {
+    let wrapper = TraceSpansRow { wrapper_candidate: 1, ..row("w", "a", "researcher.run", "agent", "researcher") };
+    let trace = resolve_trace("t", "", &[row("a", "", "researcher", "agent", "researcher"), wrapper], &[]).unwrap();
+    assert_eq!(trace.spans[1].kind, "chain");
+    assert_eq!(trace.agents[0].invocations, 1);
+}
+
+#[rstest]
+fn agents_named_only_by_their_tools_are_agents() {
+    let nodes = agents(&[row("t", "", "tool", "tool", "ghost")]);
+    assert_eq!((nodes[0].name.as_str(), nodes[0].invocations, nodes[0].tool_calls), ("ghost", 1, 1));
+}
+
+#[rstest]
+fn overlapping_tool_spans_count_one_call() {
+    let tool = |span_id: &str| TraceSpansRow { tool_call_id: "call-1".into(), ..row(span_id, "a", "search", "tool", "") };
+    let trace = resolve_trace("t", "", &[row("a", "", "agent", "agent", "agent"), tool("x"), tool("y")], &[]).unwrap();
+    assert_eq!(trace.summary.tool_calls, 1);
+    assert_eq!(trace.agents[0].tool_calls, 1);
+}
+
+#[rstest]
+fn names_and_frameworks_are_sorted_and_distinct() {
+    let framed = |span: TraceSpansRow, framework: &str| TraceSpansRow { framework: framework.into(), ..span };
+    let trace = resolve_trace(
+        "t1",
+        "",
+        &[
+            framed(row("root", "", "invoke_agent research_agent", "agent", "research_agent"), "claude-code"),
+            framed(row("r1", "root", "researcher._execute_core", "agent", "researcher"), "claude-agent-sdk"),
+            framed(row("r2", "r1", "invoke_agent researcher", "agent", "researcher"), ""),
+            row("llm", "r2", "chat", "llm", "researcher"),
+        ],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(trace.summary.agent_names, ["research_agent", "researcher"]);
+    assert_eq!(trace.summary.frameworks, ["claude-agent-sdk", "claude-code"]);
+    assert_eq!(trace.summary.name, "invoke_agent research_agent");
+    assert_eq!(trace.agents[1].invocations, 2);
+    assert_eq!(trace.agents[1].llm_calls, 1);
+}
+
+#[rstest]
+fn repeated_response_counts_once_and_other_owners_are_ignored() {
+    let rows = [
+        owned(row("root", "", "agent", "agent", "agent"), "team-a", "", "key-a"),
+        owned(llm("llm-1", "root", "agent", "response-1"), "team-a", "", "key-a"),
+        owned(llm("llm-2", "root", "agent", "response-1"), "team-a", "", "key-a"),
+    ];
+    let spend = [
+        spend("request-other", "response-1", "team-b", "", "key-b", 99.0),
+        spend("request-1", "response-1", "team-a", "", "key-a", 0.25),
+        spend("request-other-key", "unrelated-response", "team-a", "", "key-c", 50.0),
+    ];
+    let trace = resolve_trace("trace-1", "ref", &rows, &spend).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.25));
+    assert_eq!(trace.agents[0].spend, Some(0.25));
+    assert_eq!(
+        trace.spans.iter().map(|span| span.spend).collect::<Vec<_>>(),
+        [None, Some(0.25), Some(0.25)]
+    );
+}
+
+#[rstest]
+fn ambiguous_response_id_keeps_cost_unknown() {
+    let rows = [owned(llm("llm-1", "", "agent", "response-1"), "", "user", "key-a")];
+    let spend = [
+        spend("response-1", "response-1", "", "user", "key-a", 0.25),
+        spend("response-1_cache_hit123", "response-1", "", "user", "key-a", 0.0),
+    ];
+    let trace = resolve_trace("trace-1", "ref", &rows, &spend).unwrap();
+    assert_eq!((trace.summary.spend, trace.spans[0].spend), (None, None));
+}
+
+#[rstest]
+#[case::key_differs("team", "", "export", "team", "", "request", false)]
+#[case::shared_key("team", "", "export", "team", "", "export", true)]
+#[case::shared_user("", "user", "export", "", "user", "request", true)]
+#[case::teamless_key("", "", "key", "", "", "key", true)]
+#[case::other_team("team", "user", "key", "other-team", "user", "key", false)]
+#[case::other_user("", "user", "export", "", "other-user", "request", false)]
+#[case::no_shared_identity("", "", "export", "", "", "request", false)]
+#[case::no_identity("", "", "", "", "", "", false)]
+#[case::master_key_without_spend_key("", "", "master", "", "", "", false)]
+fn cost_requires_shared_ownership(
+    #[case] trace_team: &str,
+    #[case] trace_user: &str,
+    #[case] trace_key: &str,
+    #[case] spend_team: &str,
+    #[case] spend_user: &str,
+    #[case] spend_key: &str,
+    #[case] known: bool,
+) {
+    let rows = [
+        owned(row("agent", "", "agent", "agent", "agent"), trace_team, trace_user, trace_key),
+        owned(llm("llm", "agent", "agent", "response"), trace_team, trace_user, trace_key),
+    ];
+    let spend = [spend("request", "response", spend_team, spend_user, spend_key, 0.25)];
+    let trace = resolve_trace("trace", "visible-reference", &rows, &spend).unwrap();
+    let expected = known.then_some(0.25);
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+    assert_eq!(trace.spans[1].spend, expected);
+}
+
+#[rstest]
+#[case::missing_id("missing_id")]
+#[case::missing_spend("missing_spend")]
+#[case::duplicate_spend("duplicate_spend")]
+fn incomplete_call_cost_never_becomes_a_partial_total(#[case] failure: &str) {
+    let second_id = if failure == "missing_id" { "" } else { "second" };
+    let rows = [
+        owned(row("agent", "", "agent", "agent", "agent"), "team", "", "export"),
+        owned(llm("first", "agent", "agent", "first"), "team", "", "export"),
+        owned(llm("second", "agent", "agent", second_id), "team", "", "export"),
+    ];
+    let first = spend("first", "first", "team", "", "export", 0.25);
+    let second = spend("second", "second", "team", "", "export", 0.25);
+    let duplicate = spend("duplicate", "second", "team", "", "export", 0.25);
+    let spend = if failure == "duplicate_spend" { vec![first, second, duplicate] } else { vec![first] };
+    let trace = resolve_trace("trace", "ref", &rows, &spend).unwrap();
+    assert_eq!(trace.spans[1].spend, Some(0.25));
+    assert_eq!(trace.spans[2].spend, None);
+    assert_eq!(trace.summary.spend, None);
+    assert_eq!(trace.agents[0].spend, None);
+}
+
+#[rstest]
+fn transport_spans_complete_a_call_without_its_own_id() {
+    let mut transport = row("http", "llm", "POST", "framework", "");
+    transport.trace_id = "trace".into();
+    transport.call_keys = vec!["transport:".into()];
+    transport.call_evidence = "complete".into();
+    let mut call = llm("llm", "agent", "agent", "");
+    call.trace_id = "trace".into();
+    let rows = [
+        owned(row("agent", "", "agent", "agent", "agent"), "team", "", "key"),
+        owned(call, "team", "", "key"),
+        owned(transport, "team", "", "key"),
+    ];
+    let mut logged = spend("request", "", "team", "", "key", 0.5);
+    logged.trace_id = "trace".into();
+    logged.span_id = "http".into();
+    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.5));
+}
+
+#[rstest]
+fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
+    let summary = listed_summary(&ListTracesRow {
+        trace_id: "t1".into(),
+        trace_ref: "ref".into(),
+        team_id: "team".into(),
+        api_key_hash: "key".into(),
+        user_id: "owner".into(),
+        name: "deep_research_agent".into(),
+        service: "agent-demo".into(),
+        input_preview: "hi".into(),
+        status: "STATUS_CODE_OK".into(),
+        start_ms: 1_790_742_989_377,
+        duration_ms: 51_385,
+        span_count: 126,
+        agent_count: 2,
+        agent_invocations: 0,
+        agent_names: vec!["deep_research_agent".into()],
+        frameworks: vec!["claude-agent-sdk".into()],
+        llm_calls: 7,
+        tool_calls: 26,
+        input_tokens: 30_175,
+        output_tokens: 2_620,
+        models: vec!["claude-sonnet-4-5".into()],
+        error_count: 1,
+        request_ids: Vec::new(),
+    });
+    assert_eq!(summary.spend, None);
+    assert_eq!(summary.status, SpanStatus::Ok);
+    assert_eq!((summary.span_count, summary.error_count, summary.agent_invocations), (126, 1, 2));
+    assert_eq!(summary.start_time, "2026-09-30T04:36:29.377000+00:00");
+}
+
+#[rstest]
+#[case::whole_second(1_790_742_989_000, "2026-09-30T04:36:29+00:00")]
+#[case::milliseconds(1_790_742_989_007, "2026-09-30T04:36:29.007000+00:00")]
+#[case::before_epoch(-500, "1969-12-31T23:59:59.500000+00:00")]
+fn iso_time_matches_python_isoformat(#[case] ms: i64, #[case] expected: &str) {
+    assert_eq!(iso_time(ms), expected);
+}

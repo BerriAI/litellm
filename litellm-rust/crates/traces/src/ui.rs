@@ -86,8 +86,11 @@ fn known_role(role: &str) -> Option<&'static str> {
 }
 
 impl RawMessage {
-    fn unwrapped(self) -> Self {
-        self.kwargs.map_or(self, |kwargs| *kwargs)
+    fn unwrapped(mut self) -> Self {
+        match self.kwargs.take() {
+            Some(kwargs) => *kwargs,
+            None => self,
+        }
     }
 
     fn is_message(&self) -> bool {

@@ -4,7 +4,7 @@ use opentelemetry_proto::tonic::trace::v1::Span;
 use rstest::rstest;
 
 const FIXTURE: &[u8] = include_bytes!(
-    "../../../../tests/test_litellm/tracing/fixtures/langsmith_deep_agent_export.json"
+    "fixtures/langsmith_deep_agent_export.json"
 );
 
 #[rstest]
@@ -972,9 +972,9 @@ fn langsmith_tool_output_unwraps_supported_shapes(
 }
 
 const CLAUDE_AGENT_SDK_FIXTURE: &[u8] =
-    include_bytes!("../../../../tests/test_litellm/tracing/fixtures/claude_agent_sdk_export.json");
+    include_bytes!("fixtures/claude_agent_sdk_export.json");
 const CLAUDE_AGENT_SDK_DETAILED_FIXTURE: &[u8] = include_bytes!(
-    "../../../../tests/test_litellm/tracing/fixtures/claude_agent_sdk_detailed_export.json"
+    "fixtures/claude_agent_sdk_detailed_export.json"
 );
 
 fn raw_spans(fixture: &[u8]) -> Vec<serde_json::Value> {

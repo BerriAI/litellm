@@ -4463,6 +4463,7 @@ dependencies = [
  "serde_json",
  "strum",
  "thiserror 2.0.19",
+ "time",
 ]
 
 [[package]]
@@ -4470,6 +4471,7 @@ name = "litellm-traces-clickhouse"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "base64 0.22.1",
  "flate2",
  "futures-util",
  "hmac 0.12.1",
@@ -4487,6 +4489,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "tracing",
  "url",
  "wiremock",
 ]

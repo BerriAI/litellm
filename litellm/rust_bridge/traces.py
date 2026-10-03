@@ -1,10 +1,11 @@
 from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Final, Literal, Protocol, TypedDict, TypeVar, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
+from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.trace_queries import (
     LENS_AGENTS,
@@ -25,85 +26,33 @@ from litellm.rust_bridge.trace_queries import (
     ReadQuery,
     ReadQueryName,
     RowT,
-    SpanType,
 )
-from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
+from litellm.rust_bridge.trace_query_responses import (
+    SpanDetail,
+    SpanErrorPage,
+    Trace,
+    TracePage,
+    TraceQueryHelp,
+    TraceSQLResponse,
+)
 
 
-class DecodedEvent(TypedDict):
-    name: ReadOnly[str]
-    attributes: ReadOnly[dict[str, str]]
+class TraceScope(TypedDict):
+    """Authenticated request-log visibility."""
+
+    all_teams: ReadOnly[Literal[0, 1]]
+    user_id: ReadOnly[str]
+    team_ids: ReadOnly[tuple[str, ...]]
 
 
-class AgentMetadata(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+@dataclass(frozen=True, slots=True)
+class Tenant:
+    """Who sent the spans. Always taken from auth, never from span attributes."""
 
-    lc_agent_name: str | None = None
-    ls_integration: str | None = None
-    ls_agent_type: Literal["root", "subagent", "middleware", "compaction"] | None = None
-    ls_agent_purpose: str | None = None
-    ls_agent_runtime: str | None = None
-    ls_agent_version: str | None = None
-    ls_trace_schema_version: str | None = None
-    thread_id: str | None = None
-    ls_subagent_id: str | None = None
-    ls_subagent_type: str | None = None
-    ls_tool_name: str | None = None
-    ls_model_name: str | None = None
-    ls_provider: str | None = None
-    git_branch: str | None = None
-    git_commit_sha: str | None = None
-    git_repo_url: str | None = None
-    working_directory: str | None = None
-
-
-class NormalizedSpan(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    observation_type: SpanType
-    wrapper_candidate: bool
-    agent_name: str
-    framework: str
-    agent_metadata: AgentMetadata
-    litellm_request_id: str
-    call_keys: tuple[str, ...] = Field(strict=False)  # the bridge returns a list
-    call_evidence: Literal["complete", "partial", "unknown"]
-    model: str
-    input_tokens: int = Field(ge=0, le=2**32 - 1)
-    output_tokens: int = Field(ge=0, le=2**32 - 1)
-    input: str
-    input_preview: str
-    output: str
-    tool_call_id: str
-
-
-class NormalizedFieldDefinition(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-    name: str
-    clickhouse_column: str
-    clickhouse_type: str
-    meaning: str
-
-
-class DecodedSpan(TypedDict):
-    trace_id: ReadOnly[str]
-    span_id: ReadOnly[str]
-    parent_span_id: ReadOnly[str]
-    trace_state: ReadOnly[str]
-    name: ReadOnly[str]
-    kind: ReadOnly[str]
-    resource_attributes: ReadOnly[dict[str, str]]
-    scope_name: ReadOnly[str]
-    scope_version: ReadOnly[str]
-    attributes: ReadOnly[dict[str, str]]
-    start_ns: ReadOnly[int]
-    end_ns: ReadOnly[int]
-    status_code: ReadOnly[str]
-    status_message: ReadOnly[str]
-    events: ReadOnly[list[DecodedEvent]]
-    normalized: ReadOnly[NormalizedSpan]
-    consumed_attributes: ReadOnly[tuple[str, ...]]
+    team_id: str
+    api_key_hash: str
+    org_id: str = ""
+    user_id: str = ""
 
 
 class AllQueryScope(TypedDict):
@@ -126,6 +75,20 @@ class NativeStore(Protocol):
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
+    def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str]) -> Awaitable[int]: ...
+
+    def list_traces(
+        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
+    ) -> Awaitable[JsonValue]: ...
+
+    def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
+
+    def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
+
+    def get_span_error(
+        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
+    ) -> Awaitable[JsonValue]: ...
+
     def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
 
     def query_help(self, scope: QueryScope, secret: str) -> Awaitable[JsonValue]: ...
@@ -140,21 +103,20 @@ class NativeTraces(Protocol):
     NativeTraceConfig: type["NativeConfig"]
     NativeTraceStorage: type[NativeStore]
 
-    def trace_decode_otlp(
-        self,
-        body: bytes,
-        content_type: str | None,
-    ) -> list[DecodedSpan]: ...
-
     def trace_encode_error(self, message: str) -> bytes: ...
 
-    def trace_normalized_field_definitions(self) -> list[dict[str, str]]: ...
+    def trace_span_rows(
+        self, body: bytes, content_type: str | None, tenant: Mapping[str, str], max_attribute_value_bytes: int
+    ) -> list[dict[str, JsonValue]]: ...
 
 
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | float | list[str]])
-_FIELD_DEFINITIONS_ADAPTER: Final = TypeAdapter(tuple[NormalizedFieldDefinition, ...])
 _SQL_RESPONSE: Final = TypeAdapter(TraceSQLResponse)
 _HELP_RESPONSE: Final = TypeAdapter(TraceQueryHelp)
+_TRACE_PAGE: Final = TypeAdapter(TracePage)
+_TRACE: Final = TypeAdapter(Trace | None)
+_SPAN_DETAIL: Final = TypeAdapter(SpanDetail | None)
+_SPAN_ERROR_PAGE: Final = TypeAdapter(SpanErrorPage | None)
 _ResponseT: Final = TypeVar("_ResponseT")
 _NATIVE_ADAPTER: Final[TypeAdapter[NativeTraces]] = TypeAdapter(
     NativeTraces, config=ConfigDict(arbitrary_types_allowed=True)
@@ -162,7 +124,7 @@ _NATIVE_ADAPTER: Final[TypeAdapter[NativeTraces]] = TypeAdapter(
 
 
 class NativeConfig(Protocol):
-    def __init__(self, database: str, url: str, retention_days: int) -> None: ...
+    def __init__(self, database: str, url: str, retention_days: int, max_attribute_value_bytes: int) -> None: ...
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -170,6 +132,7 @@ class TraceStorageConfig:
     url: str
     database: str = "litellm"
     retention_days: int = 14
+    max_attribute_value_bytes: int = OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 
 
 def _native() -> NativeTraces:
@@ -179,18 +142,14 @@ def _native() -> NativeTraces:
     return _NATIVE_ADAPTER.validate_python(native)
 
 
-def decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]:
-    return [
-        {**span, "normalized": NormalizedSpan.model_validate(span["normalized"])}
-        for span in _native().trace_decode_otlp(body, content_type)
-    ]
-
-
-def normalized_field_definitions() -> tuple[NormalizedFieldDefinition, ...]:
-    fields: Final = _FIELD_DEFINITIONS_ADAPTER.validate_python(_native().trace_normalized_field_definitions())
-    if frozenset(field.name for field in fields) != frozenset(NormalizedSpan.model_fields):
-        raise ValueError("Rust and Python normalized trace fields disagree")
-    return fields
+def span_rows(
+    body: bytes,
+    content_type: str | None,
+    tenant: Tenant = Tenant("", ""),
+    max_attribute_value_bytes: int = OTLP_MAX_ATTRIBUTE_VALUE_BYTES,
+) -> list[dict[str, JsonValue]]:
+    """The `otel_traces` rows an OTLP export would be stored as, without writing them."""
+    return _native().trace_span_rows(body, content_type, asdict(tenant), max_attribute_value_bytes)
 
 
 def encode_error(message: str) -> bytes:
@@ -220,6 +179,7 @@ class ClickHouseStorage:
             config.database,
             config.url,
             config.retention_days,
+            config.max_attribute_value_bytes,
         )
         self._native: Final = native.NativeTraceStorage(validated)
 
@@ -228,6 +188,34 @@ class ClickHouseStorage:
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)
+
+    async def ingest(self, payload: bytes, content_type: str | None, tenant: Tenant) -> int:
+        return await self._native.ingest(payload, content_type, asdict(tenant))
+
+    async def list_traces(
+        self,
+        scope: TraceScope,
+        start_ms: int,
+        end_ms: int,
+        cursor: str | None = None,
+        limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
+    ) -> TracePage:
+        result: Final = await self._native.list_traces(scope, start_ms, end_ms, cursor, limit)
+        return _validate_query_response(_TRACE_PAGE, result)
+
+    async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
+        result: Final = await self._native.get_trace(trace_id, scope, trace_ref)
+        return _validate_query_response(_TRACE, result)
+
+    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
+        result: Final = await self._native.get_span(trace_id, span_id, scope, trace_ref)
+        return _validate_query_response(_SPAN_DETAIL, result)
+
+    async def get_span_error(
+        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
+    ) -> SpanErrorPage | None:
+        result: Final = await self._native.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
+        return _validate_query_response(_SPAN_ERROR_PAGE, result)
 
     async def query(self, query: ReadQuery[ParamsT, RowT], parameters: ParamsT) -> tuple[RowT, ...]:
         validated: Final = query.parameters.model_validate(parameters)

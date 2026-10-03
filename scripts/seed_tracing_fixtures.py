@@ -20,7 +20,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.rust_bridge.traces import AllQueryScope, ClickHouseStorage
 from litellm.tracing.config import trace_storage_config
-from litellm.tracing.types import SpendLogRecord, Trace
+from litellm.rust_bridge.trace_query_responses import Trace
+from litellm.tracing.types import SpendLogRecord
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 TRACE_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces/tests/fixtures"
