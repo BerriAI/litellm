@@ -906,6 +906,15 @@ def bedrock_model_is_openai_gpt(model: str) -> bool:
     return _openai_gpt_version(model) is not None
 
 
+def bedrock_model_is_openai_gpt_oss(model: str) -> bool:
+    """A gpt-oss id: the only family on bedrock-runtime's Chat Completions that writes its reasoning inline.
+
+    gpt-oss opens its answer with a ``<reasoning>...</reasoning>`` block instead of a ``reasoning_content``
+    field, so litellm splits that block out for it and keeps every other model's text as sent.
+    """
+    return "openai.gpt-oss" in split_bedrock_region_path(model)[1]
+
+
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
     (
         "guardrailConfig",
