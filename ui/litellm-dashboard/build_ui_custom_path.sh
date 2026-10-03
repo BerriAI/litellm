@@ -58,8 +58,8 @@ if [ $? -eq 0 ]; then
     destination_dir="../../litellm-proxy-extras/litellm_proxy_extras/ui"
 
     # Remove existing files in the destination directory
+    rm -rf "$destination_dir"
     mkdir -p "$destination_dir"
-    rm -rf "$destination_dir"/*
 
     # Copy the contents of the output directory to the specified destination
     cp -r ./out/. "$destination_dir"
