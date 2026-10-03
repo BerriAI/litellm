@@ -36,6 +36,7 @@ TOKEN: Final = "synthetic-bedrock-bearer"
 _CONFIG_MODEL: Final = "bedrock-gpt-chat-completions-chaos"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
+_STARTUP_COMPLETE: Final = "Application startup complete."
 _ENDPOINTS: Final[tuple["Endpoint", ...]] = ("chat", "messages", "responses")
 
 Endpoint = Literal["chat", "messages", "responses"]
@@ -377,6 +378,17 @@ def _open_upstream_connections(pid: int, upstream: str) -> int:
     )
 
 
+def _worker_pids(log: Path) -> tuple[int, ...]:
+    return tuple(int(pid) for pid in _STARTED_WORKER.findall(log.read_text()))
+
+
+def _wait_for_replacement_worker(log: Path, original: tuple[int, ...]) -> None:
+    def replacement_is_serving(pids: tuple[int, ...]) -> bool:
+        return len(pids) > len(original) and log.read_text().count(_STARTUP_COMPLETE) > len(original)
+
+    eventually(lambda: _worker_pids(log), replacement_is_serving, seconds=150)
+
+
 def _landed_once(ids: tuple[str, ...]) -> list[dict[str, JsonValue]]:
     return eventually(
         lambda: read_rows(
@@ -388,7 +400,7 @@ def _landed_once(ids: tuple[str, ...]) -> list[dict[str, JsonValue]]:
     )
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving(gateway: Gateway, tmp_path: Path) -> None:
     calls: Final = _calls(20, ("chat",), lambda _: False)
     release: Final = threading.Event()
@@ -404,11 +416,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving(gateway: Gate
         overrides: Final = {"DATABASE_URL": _pooled_database_url()}
         with owned_proxy_process(gateway, tmp_path, overrides, config=path, workers=2) as owned:
             candidate: Final = owned.gateway
-            workers: Final = eventually(
-                lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
-                lambda pids: len(pids) == 2,
-                seconds=30,
-            )
+            workers: Final = eventually(lambda: _worker_pids(owned.log), lambda pids: len(pids) == 2, seconds=30)
             burst: Final = asyncio.create_task(
                 _burst(
                     str(candidate.client.base_url), candidate.key, _CONFIG_MODEL, calls, tolerate_transport_errors=True
@@ -439,3 +447,4 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving(gateway: Gate
             rows: Final = _landed_once(ids)
             assert _rows_by_status(rows, "success") == list(ids), rows
             assert len(rows) == len(ids), rows
+            _wait_for_replacement_worker(owned.log, workers)
