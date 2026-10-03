@@ -27,6 +27,7 @@ from litellm.harness.types import (
     ToolResult,
 )
 from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
+from litellm.llms.base_llm.harness.utils import gateway_headers
 
 if TYPE_CHECKING:
     from litellm.harness.context import SessionContext
@@ -68,18 +69,6 @@ WRITE_TOOLS: Final = frozenset({"write_file", "edit_file", "delete"})
 EXECUTE_TOOLS: Final = frozenset({"execute"})
 APPROVAL_TOOLS: Final = WRITE_TOOLS | EXECUTE_TOOLS
 _APPROVAL_DECISIONS: Final = ("approve", "reject")
-
-
-def gateway_headers(
-    ctx: SessionContext,
-) -> dict[str, str]:  # mutable-ok: ChatLiteLLM.extra_headers is a pydantic dict field
-    """Same attribution headers the session endpoint adds for CLI harnesses."""
-    metadata = ctx.metadata
-    metadata_json = json.dumps(dict(metadata), default=str) if metadata else None  # mutable-ok: for json.dumps
-    metadata_header = (("x-litellm-spend-logs-metadata", metadata_json),) if metadata_json is not None else ()
-    return dict(  # mutable-ok: ChatLiteLLM.extra_headers is a pydantic dict field
-        (("x-litellm-tags", f"harness,{ctx.harness.value}"), *metadata_header)
-    )
 
 
 def chat_model_kwargs(

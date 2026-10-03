@@ -9909,7 +9909,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_harness_config(harness: Harness) -> BaseHarnessConfig | None:
         """
-        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents).
+        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents, Tool Loop).
         """
         from litellm.harness.types import Harness as _Harness
 
@@ -9935,6 +9935,10 @@ class ProviderConfigManager:
             )
 
             return DeepAgentsHarnessConfig()
+        if harness == _Harness.TOOL_LOOP:
+            from litellm.llms.tool_loop.harness.transformation import ToolLoopHarnessConfig
+
+            return ToolLoopHarnessConfig()
         return None
 
     @staticmethod

@@ -27,6 +27,7 @@ class Harness(Enum):
     CODEX = "codex"
     OPENCODE = "opencode"
     DEEPAGENTS = "deepagents"
+    TOOL_LOOP = "tool_loop"
 
 
 def require_harness(harness: object) -> Harness:

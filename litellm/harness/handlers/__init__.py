@@ -1,4 +1,4 @@
-"""Handlers run a harness config: CLI runtimes as subprocesses, Deep Agents in-process."""
+"""Handlers run a harness config: CLI runtimes and in-process harnesses."""
 
 from __future__ import annotations
 
@@ -29,6 +29,10 @@ def get_harness_handler(config: BaseHarnessConfig) -> BaseHarnessHandler:
         from litellm.harness.handlers.deepagents_handler import DeepAgentsHandler
 
         return DeepAgentsHandler(config)
+    if config.harness is Harness.TOOL_LOOP:
+        from litellm.harness.handlers.tool_loop_handler import ToolLoopHandler
+
+        return ToolLoopHandler(config)
     raise HarnessError(f"No handler for Harness.{config.harness.name}")
 
 
