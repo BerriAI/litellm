@@ -187,7 +187,7 @@ def test_cost_per_token_openai():
 def test_cost_per_token_anthropic():
     """Benchmark cost-per-token calculation for Anthropic models."""
     litellm.cost_per_token(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5-20250929",
         prompt_tokens=1000,
         completion_tokens=500,
     )

@@ -1996,7 +1996,7 @@ def _ocr_row(pages_processed, annotation_pages=None, model="mistral-ocr-latest")
 def test_ocr_rows_are_priced_per_page_at_batch_rate(monkeypatch):
     monkeypatch.setattr(
         litellm,
-        "get_model_info",
+        "get_priced_model_info",
         lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.004, "ocr_cost_per_page_batches": 0.002},
     )
     result = bu._aggregate_batch_cost_usage_models(
@@ -2013,7 +2013,7 @@ def test_ocr_rows_are_priced_per_page_at_batch_rate(monkeypatch):
 
 
 def test_ocr_rows_fall_back_to_sync_page_rate_without_batch_price(monkeypatch):
-    monkeypatch.setattr(litellm, "get_model_info", lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.004})
+    monkeypatch.setattr(litellm, "get_priced_model_info", lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.004})
     result = bu._aggregate_batch_cost_usage_models(entries=[_ocr_row(2)], custom_llm_provider="mistral")
     assert result.cost == pytest.approx(2 * 0.004)
 
@@ -2021,7 +2021,7 @@ def test_ocr_rows_fall_back_to_sync_page_rate_without_batch_price(monkeypatch):
 def test_ocr_rows_bill_annotation_pages_separately(monkeypatch):
     monkeypatch.setattr(
         litellm,
-        "get_model_info",
+        "get_priced_model_info",
         lambda model, custom_llm_provider=None: {
             "ocr_cost_per_page_batches": 0.002,
             "annotation_cost_per_page_batches": 0.0025,
@@ -2035,7 +2035,7 @@ def test_ocr_rows_bill_annotation_pages_separately(monkeypatch):
 
 def test_ocr_rows_use_deployment_model_info_pricing_over_cost_map(monkeypatch):
     monkeypatch.setattr(
-        litellm, "get_model_info", lambda model, custom_llm_provider=None: pytest.fail("cost map must not be consulted")
+        litellm, "get_priced_model_info", lambda model, custom_llm_provider=None: pytest.fail("cost map must not be consulted")
     )
     result = bu._aggregate_batch_cost_usage_models(
         entries=[_ocr_row(10)],
@@ -2048,7 +2048,7 @@ def test_ocr_rows_use_deployment_model_info_pricing_over_cost_map(monkeypatch):
 def test_ocr_rows_keep_the_published_page_rate_when_the_deployment_prices_only_annotations(monkeypatch):
     monkeypatch.setattr(
         litellm,
-        "get_model_info",
+        "get_priced_model_info",
         lambda model, custom_llm_provider=None: {
             "ocr_cost_per_page_batches": 0.002,
             "annotation_cost_per_page_batches": 0.0025,
@@ -2066,7 +2066,7 @@ def test_ocr_rows_keep_the_deployment_page_rate_when_the_unmapped_model_has_no_a
     def _unmapped(model, custom_llm_provider=None):
         raise Exception(f"This model isn't mapped yet: {model}")
 
-    monkeypatch.setattr(litellm, "get_model_info", _unmapped)
+    monkeypatch.setattr(litellm, "get_priced_model_info", _unmapped)
     result = bu._aggregate_batch_cost_usage_models(
         entries=[_ocr_row(4, annotation_pages=4, model="my-private-ocr-model")],
         custom_llm_provider="mistral",
@@ -2077,7 +2077,7 @@ def test_ocr_rows_keep_the_deployment_page_rate_when_the_unmapped_model_has_no_a
 
 def test_ocr_rows_bill_the_deployment_sync_page_rate_over_the_published_batch_rate(monkeypatch):
     monkeypatch.setattr(
-        litellm, "get_model_info", lambda model, custom_llm_provider=None: pytest.fail("cost map must not be consulted")
+        litellm, "get_priced_model_info", lambda model, custom_llm_provider=None: pytest.fail("cost map must not be consulted")
     )
     result = bu._aggregate_batch_cost_usage_models(
         entries=[_ocr_row(3)],
@@ -2088,7 +2088,7 @@ def test_ocr_rows_bill_the_deployment_sync_page_rate_over_the_published_batch_ra
 
 
 def test_ocr_rows_without_pricing_bill_zero_but_count_as_successful(monkeypatch):
-    monkeypatch.setattr(litellm, "get_model_info", lambda model, custom_llm_provider=None: {"mode": "ocr"})
+    monkeypatch.setattr(litellm, "get_priced_model_info", lambda model, custom_llm_provider=None: {"mode": "ocr"})
     result = bu._aggregate_batch_cost_usage_models(entries=[_ocr_row(3)], custom_llm_provider="mistral")
     assert result.cost == 0.0
     assert (result.successful_requests, result.failed_requests) == (1, 0)
@@ -2097,7 +2097,7 @@ def test_ocr_rows_without_pricing_bill_zero_but_count_as_successful(monkeypatch)
 def test_chat_rows_from_mistral_still_use_token_pricing(monkeypatch):
     monkeypatch.setattr(
         litellm,
-        "get_model_info",
+        "get_priced_model_info",
         lambda model, custom_llm_provider=None: {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
     )
     result = bu._aggregate_batch_cost_usage_models(

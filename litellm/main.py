@@ -164,7 +164,6 @@ from litellm.utils import (
     get_optional_params_embeddings,
     get_optional_params_image_gen,
     get_optional_params_transcription,
-    get_priced_model_info,
     get_requester_metadata,
     get_secret,
     get_standard_openai_params,
