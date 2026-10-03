@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import json
 import uuid
 from collections import Counter
 from collections.abc import Iterator
@@ -24,6 +25,7 @@ from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, SLOTS, Dec
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
 from integration._support.wire import Reply, Request, wire_server
 from tests.integration._support.database import read_rows, write_rows
+from tests.integration._support.redis_process import owned_redis
 from tests.integration._support.tls import server_context, write_self_signed_cert
 from tests.integration._support.workers import worker_services
 from integration.security._sweeps import (
@@ -245,3 +247,29 @@ def test_route_sweep_rejects_an_untrusted_https_peer(tmp_path: Path) -> None:
         assert report.called
         assert len(report.unreachable) == len(report.called)
         assert peer.drain() == ()
+
+
+def test_route_sweep_preserves_truncated_response_errors_separately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    monkeypatch.setenv("INTEGRATION_RESULTS_DIR", str(tmp_path))
+    with (
+        owned_redis(tmp_path) as cache,
+        wire_server(lambda _: Reply(chunks=(b"first", b"missing"), abort_after=1)) as peer,
+    ):
+        monkeypatch.setenv("REDIS_HOST", cache.host)
+        monkeypatch.setenv("REDIS_PORT", str(cache.port))
+        with (
+            httpx.Client(base_url=peer.url, trust_env=False) as client,
+            pytest.raises(AssertionError, match="GET routes returned no response"),
+        ):
+            sweep_all(Gateway(client, "sk-sweep-admin", peer.url), (), responses=(), sinks={}, ids={})
+        received: Final = peer.drain()
+
+    saved: Final = json.loads((tmp_path / "security-route-sweep-failures.jsonl").read_text())
+    assert received
+    assert request.node.nodeid in saved["node"]
+    assert saved["called"] == len(received)
+    assert len(saved["unreachable"]) == len(received)
+    assert all(error.partition("RemoteProtocolError: ")[2] for error in saved["unreachable"])
+    assert not (tmp_path / "security-route-sweep.jsonl").exists()

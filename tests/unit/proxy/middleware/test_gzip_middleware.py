@@ -208,6 +208,14 @@ def test_proxy_app_gzips_large_responses_for_clients_that_accept_it():
     compressed = client.get("/openapi.json", headers={"accept-encoding": "gzip"})
     identity = client.get("/openapi.json", headers={"accept-encoding": "identity"})
 
+    assert compressed.status_code == identity.status_code == 200, (
+        f"gzip={compressed.status_code} {compressed.text[:MINIMUM_SIZE_BYTES]}, "
+        f"identity={identity.status_code} {identity.text[:MINIMUM_SIZE_BYTES]}"
+    )
+    assert "content-encoding" in compressed.headers, (
+        f"status={compressed.status_code}, headers={dict(compressed.headers)}, "
+        f"body_bytes={len(compressed.content)}, body={compressed.text[:MINIMUM_SIZE_BYTES]}"
+    )
     assert compressed.headers["content-encoding"] == "gzip"
     assert int(compressed.headers["content-length"]) < int(identity.headers["content-length"])
     assert compressed.json() == identity.json()
