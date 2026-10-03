@@ -103,6 +103,12 @@ class TestServerKeyTrustedBase:
         assert self._chat_key(self._restricted("tb_explicit_default"), "https://api.example.com/v1/") == "sk-server"
 
     @pytest.mark.parametrize(
+        "caller_base", ["https://API.example.com/v1", "https://api.example.com:443/v1", " https://api.example.com/v1 "]
+    )
+    def test_equivalent_spellings_of_the_default_origin_get_the_server_key(self, caller_base):
+        assert self._chat_key(self._restricted("tb_equivalent"), caller_base) == "sk-server"
+
+    @pytest.mark.parametrize(
         "caller_base",
         [
             "https://attacker.example/v1",

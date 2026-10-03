@@ -3,6 +3,7 @@ Dynamic configuration class generator for JSON-based providers.
 """
 
 from collections.abc import Coroutine
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, overload
 from urllib.parse import urlparse
 
@@ -21,11 +22,15 @@ if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
 
+_DEFAULT_PORTS: Final = MappingProxyType({"http": 80, "https": 443})
+
+
 def _origin(url: str) -> tuple[str, str, int | None] | None:
     parsed: Final = urlparse(url.strip())
     if not parsed.scheme or not parsed.hostname:
         return None
-    return parsed.scheme.lower(), parsed.hostname.lower(), parsed.port
+    scheme: Final = parsed.scheme.lower()
+    return scheme, parsed.hostname.lower(), parsed.port or _DEFAULT_PORTS.get(scheme)
 
 
 def resolve_server_api_key(provider: SimpleProviderConfig, caller_api_base: str | None) -> str | None:
