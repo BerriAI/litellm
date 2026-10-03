@@ -1793,19 +1793,24 @@ async def test_new_tag_with_unknown_team_is_rejected():
 
 
 @pytest.mark.asyncio
-async def test_update_tag_with_unknown_team_is_rejected():
-    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
-    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a", description="original")
+@pytest.mark.parametrize(
+    ("owner_team_id", "team_id"),
+    [("team-a", "team-b"), ("team-a", None), (None, "team-a")],
+    ids=["transfer", "release", "claim"],
+)
+async def test_update_tag_cannot_change_team_ownership(owner_team_id, team_id):
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a", "team-b"})
+    fake_db.tag_rows["tag-x"] = _new_tag_row(tag_name="tag-x", team_id=owner_team_id, description="original")
+    before = dict(fake_db.tag_rows["tag-x"])
     with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
         response = client.post(
             "/tag/update",
-            json={"name": "owned-tag", "team_id": "team-ghost", "description": "changed"},
+            json={"name": "tag-x", "team_id": team_id},
             headers=_ADMIN_HEADERS,
         )
-        assert response.status_code == 400, response.text
-        row = _persisted_tag_row(fake_db, "owned-tag")
-        assert row["team_id"] == "team-a"
-        assert row["description"] == "original"
+        assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "Tag ownership is set at /tag/new and cannot be changed"
+        assert _persisted_tag_row(fake_db, "tag-x") == before
 
 
 @pytest.mark.asyncio
@@ -1830,36 +1835,6 @@ async def test_update_tag_omitting_team_id_preserves_owner(update_body, expected
         assert response.json()["tag"]["description"] == expected_description
 
 
-@pytest.mark.asyncio
-async def test_update_tag_explicit_null_releases_ownership():
-    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
-    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
-    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
-        response = client.post(
-            "/tag/update",
-            json={"name": "owned-tag", "team_id": None},
-            headers=_ADMIN_HEADERS,
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["tag"]["team_id"] is None
-        assert _tag_info("owned-tag")["team_id"] is None
-        assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] is None
-
-
-@pytest.mark.asyncio
-async def test_update_tag_changes_team_owner():
-    fake_db = FakeTagOwnershipDb(team_ids={"team-a", "team-b"})
-    fake_db.tag_rows["owned-tag"] = _new_tag_row(tag_name="owned-tag", team_id="team-a")
-    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
-        response = client.post(
-            "/tag/update",
-            json={"name": "owned-tag", "team_id": "team-b"},
-            headers=_ADMIN_HEADERS,
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["tag"]["team_id"] == "team-b"
-        assert _tag_info("owned-tag")["team_id"] == "team-b"
-        assert _persisted_tag_row(fake_db, "owned-tag")["team_id"] == "team-b"
 
 
 @pytest.mark.asyncio
@@ -2041,11 +2016,15 @@ async def test_team_admin_noop_team_id_update_is_allowed():
         assert response.json()["tag"]["team_id"] == "team-a"
 
 
-@pytest.mark.parametrize("team_id", ["team-b", None], ids=["transfer", "release"])
+@pytest.mark.parametrize(
+    ("owner_team_id", "team_id"),
+    [("team-a", "team-b"), ("team-a", None), (None, "team-a")],
+    ids=["transfer", "release", "claim"],
+)
 @pytest.mark.asyncio
-async def test_team_admin_cannot_move_tag_off_own_team(team_id):
+async def test_team_admin_cannot_change_tag_ownership(team_id, owner_team_id):
     fake_db = _team_a_db()
-    fake_db.tag_rows["team-tag"] = _new_tag_row(tag_name="team-tag", team_id="team-a")
+    fake_db.tag_rows["team-tag"] = _new_tag_row(tag_name="team-tag", team_id=owner_team_id)
     before = dict(fake_db.tag_rows["team-tag"])
     with _tag_ownership_gateway(fake_db, _team_admin_auth()):
         response = client.post(
@@ -2054,6 +2033,7 @@ async def test_team_admin_cannot_move_tag_off_own_team(team_id):
             headers=_ADMIN_HEADERS,
         )
         assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "Tag ownership is set at /tag/new and cannot be changed"
         assert fake_db.tag_rows["team-tag"] == before
 
 
@@ -2261,7 +2241,8 @@ async def test_created_tag_is_visible_to_warmed_tag_registry():
 
 
 @pytest.mark.asyncio
-async def test_tag_ownership_transfer_reaches_warmed_cache():
+@pytest.mark.parametrize("team_id", ["team-b", None], ids=["transfer", "release"])
+async def test_forbidden_team_id_change_leaves_warmed_cache_owner_unchanged(team_id):
     fake_db = FakeTagOwnershipDb(team_ids={"team-a", "team-b"})
     fake_db.tag_rows["tag-x"] = _new_tag_row(tag_name="tag-x", team_id="team-a")
     with _tag_ownership_gateway_with_real_cache(fake_db, _proxy_admin_auth()) as (
@@ -2273,35 +2254,14 @@ async def test_tag_ownership_transfer_reaches_warmed_cache():
         assert warmed is not None and warmed.team_id == "team-a"
         response = client.post(
             "/tag/update",
-            json={"name": "tag-x", "team_id": "team-b"},
+            json={"name": "tag-x", "team_id": team_id},
             headers=_ADMIN_HEADERS,
         )
-        assert response.status_code == 200, response.text
+        assert response.status_code == 403, response.text
         found = await _lookup_tag(mock_prisma, fresh_cache, "tag-x")
         assert found is not None
-        assert found.team_id == "team-b"
-
-
-@pytest.mark.asyncio
-async def test_tag_ownership_release_reaches_warmed_cache():
-    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
-    fake_db.tag_rows["tag-x"] = _new_tag_row(tag_name="tag-x", team_id="team-a")
-    with _tag_ownership_gateway_with_real_cache(fake_db, _proxy_admin_auth()) as (
-        fresh_cache,
-        published,
-        mock_prisma,
-    ):
-        warmed = await _lookup_tag(mock_prisma, fresh_cache, "tag-x")
-        assert warmed is not None and warmed.team_id == "team-a"
-        response = client.post(
-            "/tag/update",
-            json={"name": "tag-x", "team_id": None},
-            headers=_ADMIN_HEADERS,
-        )
-        assert response.status_code == 200, response.text
-        found = await _lookup_tag(mock_prisma, fresh_cache, "tag-x")
-        assert found is not None
-        assert found.team_id is None
+        assert found.team_id == "team-a"
+        assert _persisted_tag_row(fake_db, "tag-x")["team_id"] == "team-a"
 
 
 @pytest.mark.asyncio

@@ -228,9 +228,12 @@ async def _require_tag_update_permission(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: "PrismaClient",
 ) -> None:
+    if "team_id" in tag.model_fields_set and tag.team_id != existing_tag.team_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Tag ownership is set at /tag/new and cannot be changed",
+        )
     if is_proxy_admin(user_api_key_dict):
-        if "team_id" in tag.model_fields_set:
-            await _require_existing_team(prisma_client, tag.team_id)
         return
     if existing_tag.team_id is None:
         raise HTTPException(status_code=403, detail="Tag is not owned by a team")
@@ -243,8 +246,6 @@ async def _require_tag_update_permission(
         )
     if tag.budget_id is not None and tag.budget_id != existing_tag.budget_id:
         raise HTTPException(status_code=403, detail="Only proxy admins can attach an existing budget to a tag")
-    if "team_id" in tag.model_fields_set and tag.team_id != existing_tag.team_id:
-        raise HTTPException(status_code=403, detail="Team admins cannot change tag team ownership")
 
 
 async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
@@ -618,7 +619,6 @@ async def update_tag(
             "description": tag.description,
             **({"models": tag.models or [], "model_info": json.dumps(model_info)} if models_updated else {}),
             **({"budget_id": budget_id} if budget_id != existing_tag.budget_id else {}),
-            **({"team_id": tag.team_id} if "team_id" in tag.model_fields_set else {}),
         }
 
         # Update tag in database

@@ -430,28 +430,31 @@ def test_tag_ownership_transitions_take_effect_with_warm_cache(gateway: Gateway,
         )
         assert warm_peer.status_code == 200, warm_peer.text
 
-        gateway.post("/tag/update", {"name": tag, "team_id": team_b})
-        denied_a: Final = _chat_with_tag(gateway, model, f"{marker}-transfer-a", key=key_a, metadata_tags=[tag])
-        _assert_tag_ownership_denied(denied_a, tag, team_b)
-        allowed_b: Final = _chat_with_tag(gateway, model, f"{marker}-transfer-b", key=key_b, metadata_tags=[tag])
-        assert allowed_b.status_code == 200, allowed_b.text
+        transfer: Final = gateway.request("POST", "/tag/update", {"name": tag, "team_id": team_b})
+        assert transfer.status_code == 403, transfer.text
+        still_allowed_a: Final = _chat_with_tag(gateway, model, f"{marker}-transfer-a", key=key_a, metadata_tags=[tag])
+        assert still_allowed_a.status_code == 200, still_allowed_a.text
+        denied_b: Final = _chat_with_tag(gateway, model, f"{marker}-transfer-b", key=key_b, metadata_tags=[tag])
+        _assert_tag_ownership_denied(denied_b, tag, team_a)
 
         converged: Final = eventually(
             lambda: _chat_with_tag(
-                gateway, model, f"{marker}-peer-converge", key=key_a, metadata_tags=[tag], base=peer
+                gateway, model, f"{marker}-peer-converge", key=key_b, metadata_tags=[tag], base=peer
             ).status_code,
             lambda status: status == 403,
             seconds=15,
         )
         assert converged == 403
 
-        gateway.post("/tag/update", {"name": tag, "team_id": None})
-        released_a: Final = _chat_with_tag(gateway, model, f"{marker}-release-a", key=key_a, metadata_tags=[tag])
-        assert released_a.status_code == 200, released_a.text
-        released_b: Final = _chat_with_tag(gateway, model, f"{marker}-release-b", key=key_b, metadata_tags=[tag])
-        assert released_b.status_code == 200, released_b.text
+        release: Final = gateway.request("POST", "/tag/update", {"name": tag, "team_id": None})
+        assert release.status_code == 403, release.text
+        still_allowed_a2: Final = _chat_with_tag(gateway, model, f"{marker}-release-a", key=key_a, metadata_tags=[tag])
+        assert still_allowed_a2.status_code == 200, still_allowed_a2.text
+        still_denied_b: Final = _chat_with_tag(gateway, model, f"{marker}-release-b", key=key_b, metadata_tags=[tag])
+        _assert_tag_ownership_denied(still_denied_b, tag, team_a)
 
-        gateway.post("/tag/update", {"name": tag, "team_id": team_a})
+        resend: Final = gateway.request("POST", "/tag/update", {"name": tag, "team_id": team_a})
+        assert resend.status_code == 200, resend.text
         gateway.post("/team/delete", {"team_ids": [team_a]})
         assert _tag_rows(tag) == [{"tag_name": tag, "team_id": None}]
         assert _tag_info(gateway, tag)["team_id"] is None
@@ -461,9 +464,8 @@ def test_tag_ownership_transitions_take_effect_with_warm_cache(gateway: Gateway,
         allowed_markers: Final = {
             f"{marker}-warm",
             f"{marker}-warm-peer",
-            f"{marker}-transfer-b",
+            f"{marker}-transfer-a",
             f"{marker}-release-a",
-            f"{marker}-release-b",
             f"{marker}-after-delete",
         }
         seen: Final = {content[0] for content in _upstream_marker_chats(upstream, marker) if content}
