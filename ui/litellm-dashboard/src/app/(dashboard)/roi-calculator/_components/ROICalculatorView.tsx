@@ -72,8 +72,9 @@ export default function ROICalculatorView({
   const [selectedPull, setSelectedPull] = React.useState<ROIPull | null>(null);
   const [matchingPerson, setMatchingPerson] = React.useState<PersonMatchSelection | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [loadingInitialData, setLoadingInitialData] = React.useState(true);
   const statusRef = React.useRef<ROISyncStatus>(IDLE_STATUS);
-  const settingsLoaded = settings !== null;
+  const settingsLoaded = settings !== null && !loadingInitialData;
   const [query, setQuery] = React.useState("");
 
   const loadReport = React.useCallback(async () => {
@@ -86,25 +87,43 @@ export default function ROICalculatorView({
     if (!accessToken) return;
     let cancelled = false;
     const demoRequested = new URLSearchParams(window.location.search).get("demo") === "1";
-    Promise.all([
-      apiClient.get<ROISettings>("/roi-calculator/settings", { accessToken }),
+    const settingsRequest = apiClient.get<ROISettings>("/roi-calculator/settings", { accessToken });
+    const liveData = Promise.all([
       apiClient.get<ROIReportResponse>("/roi-calculator/report", { accessToken }),
       apiClient.get<ROISyncStatus>("/roi-calculator/sync", { accessToken }),
-      demoRequested
-        ? apiClient.get<ROIReportResponse>("/roi-calculator/report", { accessToken, query: { mode: "demo" } })
-        : Promise.resolve(null),
     ])
-      .then(([nextSettings, reportResponse, syncStatus, sampleResponse]) => {
-        if (cancelled) return;
-        setSettings(nextSettings);
+      .then(([reportResponse, syncStatus]) => {
+        if (cancelled) return null;
         setSummary(reportResponse.report);
-        setSampleSummary(sampleResponse?.report ?? null);
         setStatus(syncStatus);
         statusRef.current = syncStatus;
-        setError(null);
+        return null;
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(extractErrorMessage(reason));
+        return null;
+      });
+    Promise.all([
+      settingsRequest,
+      demoRequested
+        ? apiClient
+            .get<ROIReportResponse>("/roi-calculator/report", { accessToken, query: { mode: "demo" } })
+            .catch((reason: unknown) => {
+              if (!cancelled) setError(`Could not load demo data: ${extractErrorMessage(reason)}`);
+              return liveData;
+            })
+        : liveData,
+    ])
+      .then(([nextSettings, sampleResponse]) => {
+        if (cancelled) return;
+        setSettings(nextSettings);
+        setSampleSummary(sampleResponse?.report ?? null);
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) setError(extractErrorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingInitialData(false);
       });
     return () => {
       cancelled = true;
@@ -187,7 +206,7 @@ export default function ROICalculatorView({
 
   const filteredPulls = React.useMemo(() => (summary ? filterPulls(summary.pulls, query) : []), [query, summary]);
 
-  if (error && !settings) {
+  if (error && !settings && !loadingInitialData) {
     return (
       <div className="p-8">
         <Alert variant="destructive">
@@ -198,7 +217,7 @@ export default function ROICalculatorView({
     );
   }
 
-  if (!settings) {
+  if (!settings || loadingInitialData) {
     return (
       <div className="space-y-6 p-8">
         <Skeleton className="h-16 w-96" />
@@ -221,13 +240,15 @@ export default function ROICalculatorView({
       setError(extractErrorMessage(reason));
     }
   };
-  const resetView = (updated: ROISettings) => {
+  const resetView = (updated: ROISettings, resetSyncStatus = true) => {
     setSettings(updated);
     setSummary(null);
     setSettingsOpen(false);
     setView("overview");
-    setStatus(IDLE_STATUS);
-    statusRef.current = IDLE_STATUS;
+    if (resetSyncStatus) {
+      setStatus(IDLE_STATUS);
+      statusRef.current = IDLE_STATUS;
+    }
   };
   const showLiveStatus = !sampleSummary && !status.running;
   const progress = status.total > 0 ? Math.min(100, (status.done / status.total) * 100) : 0;
@@ -403,7 +424,7 @@ export default function ROICalculatorView({
                 updated.github_api_url !== settings.github_api_url ||
                 updated.gitlab_api_url !== settings.gitlab_api_url
               ) {
-                resetView(updated);
+                resetView(updated, false);
                 return;
               }
               setSettings(updated);

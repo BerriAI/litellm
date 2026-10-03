@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 from typing import Final
 
@@ -9,6 +10,63 @@ from litellm.proxy.roi_calculator.estimator import metadata_evidence
 from litellm.proxy.roi_calculator.github import GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.gitlab import GitLab
 from litellm.types.roi_calculator import ROISettings
+
+
+@pytest.mark.asyncio
+async def test_fork_lookups_overlap_with_a_bounded_number_of_requests() -> None:
+    started: Final[asyncio.Queue[int]] = asyncio.Queue()
+    release: Final = tuple(asyncio.Event() for _ in range(9))
+    source_ids: Final = (*range(2, 11), 3)
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/projects/group/repo"):
+            return httpx.Response(200, json={"id": 1, "path_with_namespace": "group/repo"})
+        if request.url.path.endswith("/merge_requests"):
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "iid": index,
+                        "title": "Fix parser",
+                        "web_url": f"https://gitlab.com/group/repo/-/merge_requests/{index}",
+                        "author": {"username": "dev"},
+                        "merged_at": "2026-09-30T12:00:00Z",
+                        "updated_at": "2026-09-30T12:00:00Z",
+                        "source_branch": f"fix/{index}",
+                        "source_project_id": source_id,
+                    }
+                    for index, source_id in enumerate(source_ids)
+                ],
+            )
+        project_id: Final = int(request.url.path.rsplit("/", 1)[1])
+        started.put_nowait(project_id)
+        await release[project_id - 2].wait()
+        if project_id == 3:
+            return httpx.Response(404)
+        return httpx.Response(200, json={"id": project_id, "path_with_namespace": f"fork-{project_id}/repo"})
+
+    source: Final = GitLab(ROISettings(source_provider="gitlab"), httpx.MockTransport(respond))
+    pending: Final = asyncio.create_task(source.pulls("group/repo", date(2026, 9, 1), date(2026, 9, 30)))
+    try:
+        first_wave: Final = tuple([await asyncio.wait_for(started.get(), timeout=1) for _ in range(8)])
+        assert len(set(first_wave)) == 8
+        assert started.empty()
+        release[first_wave[0] - 2].set()
+        next_id: Final = await asyncio.wait_for(started.get(), timeout=1)
+        assert next_id not in first_wave
+        for event in release:
+            event.set()
+        pulls: Final = await asyncio.wait_for(pending, timeout=1)
+        assert tuple(pull.head.repo.full_name if pull.head and pull.head.repo else None for pull in pulls) == tuple(
+            None if source_id == 3 else f"fork-{source_id}/repo" for source_id in source_ids
+        )
+        assert started.empty()
+    finally:
+        for event in release:
+            event.set()
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await source.close()
 
 
 @pytest.mark.asyncio

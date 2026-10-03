@@ -106,6 +106,7 @@ class GitLab:
         self.close_client: Final = transport is not None
         self.profiles: Mapping[str, str] = MappingProxyType({})
         self.projects: Mapping[int, _Project] = MappingProxyType({})
+        self.source_project_slots: Final = asyncio.Semaphore(8)
 
     async def close(self) -> None:
         if self.close_client:
@@ -199,10 +200,9 @@ class GitLab:
         merged: Final = tuple(
             item for item in items if item.merged_at and start.isoformat() <= item.merged_at[:10] <= end.isoformat()
         )
-        sources: Final = {
-            source_id: await self._source_project(source_id)
-            for source_id in frozenset(item.source_project_id for item in merged)
-        }
+        source_ids: Final = tuple(frozenset(item.source_project_id for item in merged))
+        projects: Final = await asyncio.gather(*(self._source_project(source_id) for source_id in source_ids))
+        sources: Final = MappingProxyType(dict(zip(source_ids, projects, strict=True)))
         return tuple(item.pull(sources[item.source_project_id]) for item in merged)
 
     async def profile_email(self, login: str, *, fallback: str = "") -> str:
@@ -261,6 +261,7 @@ class GitLab:
         if project_id is None:
             return None
         try:
-            return await self._project(project_id)
+            async with self.source_project_slots:
+                return await self._project(project_id)
         except SourceError:
             return None
