@@ -153,7 +153,9 @@ export function InvestigationsView({
     setEditing(null);
     refresh();
   };
-  const editFromTable = (id: string) => {
+  const openFromTable = (id: string) => {
+    const running = lenses.find((l) => l.id === id)?.jobs.some((j) => j.status === "queued" || j.status === "running");
+    if (running) return selectLens(id);
     setPeek(true);
     selectLens(id);
     setEditing("edit");
@@ -260,7 +262,7 @@ export function InvestigationsView({
               lenses={lenses}
               connected={connected}
               readOnly={readOnly}
-              onEdit={editFromTable}
+              onEdit={openFromTable}
               onRunNow={(id) => setRunNowId(id)}
             />
           )}
@@ -310,8 +312,9 @@ export function InvestigationsView({
           busy={busy}
           onClose={() => setRunNowId(null)}
           onRun={async (request) => {
-            await update((api) => api.startRun(runNowId, request));
+            const started = await update((api) => api.startRun(runNowId, request));
             setRunNowId(null);
+            if (started) selectLens(runNowId);
           }}
         />
       )}

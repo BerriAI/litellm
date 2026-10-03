@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
-import { InvestigationProgress } from "../InvestigationProgress";
-import { StepFeed } from "../StepFeed";
+import { LiveRun } from "../live/LiveRun";
+import { previewJob } from "../../__fixtures__/reviews";
 import { RunNowDialog } from "./RunNowDialog";
 import { useState } from "react";
 import { InvestigationSummary } from "./InvestigationSummary";
@@ -72,6 +72,8 @@ export function InvestigationDetail({
     historyOffset,
     setHistoryOffset,
   } = results;
+  // TODO: drop the previewJob fallback together with __fixtures__/reviews.ts once real reviews flow everywhere
+  const shown = active ?? lens.jobs.find((j) => j.reviews.length > 0) ?? previewJob(lens);
   return (
     <div>
       <section className="min-w-0 space-y-5">
@@ -96,20 +98,11 @@ export function InvestigationDetail({
           )}
         </div>
         <InvestigationSummary lens={lens} connected={connected} />
-        {active && (
-          <InvestigationProgress
-            key={active.id}
-            job={active}
-            onCancel={
-              readOnly
-                ? undefined
-                : () => {
-                    void update((api) => api.cancelRun(lens.id));
-                  }
-            }
-          />
-        )}
-        {active && <StepFeed job={active} />}
+        <LiveRun
+          key={shown.id}
+          job={shown}
+          onCancel={readOnly || !active ? undefined : () => void update((api) => api.cancelRun(lens.id))}
+        />
         {runNow && (
           <RunNowDialog
             lens={lens}
