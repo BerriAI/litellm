@@ -647,6 +647,97 @@ describe("KeyActivityPanel", () => {
     expect(screen.queryByText(/Could not search keys\./)).not.toBeInTheDocument();
   });
 
+  it("filters wildcard search results from the server against the full pattern", async () => {
+    vi.useFakeTimers();
+    const fetchKeyPage = vi
+      .fn()
+      .mockResolvedValue(pageResponse([pageRow("session-1"), pageRow("session-2"), pageRow("other")], 3));
+    const searchKeys = vi.fn().mockResolvedValue({
+      api_keys: [searchRow("key-session-remote", "session-remote"), searchRow("key-xsession-9", "xsession-9")],
+    });
+    render(
+      <KeyActivityPanel
+        summary={summary}
+        fetchKeyPage={fetchKeyPage}
+        fetchKeyDetail={vi.fn().mockResolvedValue(detail("unused"))}
+        searchKeys={searchKeys}
+        teams={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "session-*" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    vi.useRealTimers();
+
+    expect(searchKeys).toHaveBeenCalledWith("session-");
+    expect(await screen.findByRole("button", { name: /session-remote/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /session-1/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /session-2/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /other/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /xsession-9/ })).not.toBeInTheDocument();
+  });
+
+  it("filters loaded pages locally for regular expression queries without server search", async () => {
+    vi.useFakeTimers();
+    const fetchKeyPage = vi
+      .fn()
+      .mockResolvedValue(pageResponse([pageRow("session-1"), pageRow("session-2"), pageRow("other")], 3));
+    const searchKeys = vi.fn().mockResolvedValue({ api_keys: [] });
+    render(
+      <KeyActivityPanel
+        summary={summary}
+        fetchKeyPage={fetchKeyPage}
+        fetchKeyDetail={vi.fn().mockResolvedValue(detail("unused"))}
+        searchKeys={searchKeys}
+        teams={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "/^session-\\d$/" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    vi.useRealTimers();
+
+    expect(searchKeys).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /session-1/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /session-2/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /other/ })).not.toBeInTheDocument();
+  });
+
+  it("shows only the invalid regular expression message without searching", async () => {
+    vi.useFakeTimers();
+    const fetchKeyPage = vi
+      .fn()
+      .mockResolvedValue(pageResponse([pageRow("session-1"), pageRow("session-2"), pageRow("other")], 3));
+    const searchKeys = vi.fn().mockResolvedValue({ api_keys: [] });
+    render(
+      <KeyActivityPanel
+        summary={summary}
+        fetchKeyPage={fetchKeyPage}
+        fetchKeyDetail={vi.fn().mockResolvedValue(detail("unused"))}
+        searchKeys={searchKeys}
+        teams={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "/[/" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    vi.useRealTimers();
+
+    expect(screen.getByText("Invalid regular expression: /[/")).toBeInTheDocument();
+    expect(screen.queryByText(/matching keys/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /session-1/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /session-2/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /other/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Could not search all keys/)).not.toBeInTheDocument();
+    expect(searchKeys).not.toHaveBeenCalled();
+  });
+
   it("discards stale pages and clears loaded keys when the scope changes", async () => {
     let resolveOldPage: (response: DailyActivityKeyPageResponse) => void = () => {};
     const oldPage = new Promise<DailyActivityKeyPageResponse>((resolve) => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { filterKeyActivity, keyActivityMatches } from "./keyActivityFilter";
+import { filterKeyActivity, keyActivityMatches, parseKeyQuery, remoteSearchTerm } from "./keyActivityFilter";
 import type { KeyMetadata, ModelActivityData } from "./types";
 
 function activity(label: string, key_metadata?: KeyMetadata): ModelActivityData {
@@ -74,6 +74,93 @@ describe("keyActivityMatches", () => {
   });
 });
 
+describe("parseKeyQuery and keyActivityMatches", () => {
+  it("matches anchored, case-insensitive globs", () => {
+    expect(keyActivityMatches("hash-alice", alice, "alice-*")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "batch-*")).toBe(false);
+    expect(keyActivityMatches("hash-alice", activity("production batch-key", aliceMeta), "batch-*")).toBe(false);
+    expect(keyActivityMatches("hash-alice", alice, "*-batch")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "ALICE-*")).toBe(true);
+  });
+
+  it("treats regex punctuation literally in globs", () => {
+    expect(keyActivityMatches("hash-alice", alice, "alice.batch*")).toBe(false);
+  });
+
+  it("matches the key hash with a glob", () => {
+    expect(keyActivityMatches("deadbeef", orphan, "dead*")).toBe(true);
+  });
+
+  it("uses the longest literal glob segment as its remote search hint", () => {
+    expect(parseKeyQuery(" cli-session-* ")).toMatchObject({ kind: "pattern", searchHint: "cli-session-" });
+    expect(parseKeyQuery("*-batch")).toMatchObject({ kind: "pattern", searchHint: "-batch" });
+    expect(parseKeyQuery("a*bc*d")).toMatchObject({ kind: "pattern", searchHint: "bc" });
+    expect(parseKeyQuery("*")).toMatchObject({ kind: "pattern", searchHint: null });
+    expect(parseKeyQuery("/^session-\\d+$/")).toMatchObject({ kind: "pattern", searchHint: null });
+  });
+
+  it("uses a safe remote search term for each query kind", () => {
+    expect(remoteSearchTerm(parseKeyQuery("  "), "  ")).toBeNull();
+    expect(remoteSearchTerm(parseKeyQuery("/[/"), "/[/")).toBeNull();
+    expect(remoteSearchTerm(parseKeyQuery("  Alice@Example.com  "), "  Alice@Example.com  ")).toBe("Alice@Example.com");
+    expect(remoteSearchTerm(parseKeyQuery("cli-session-*"), "cli-session-*")).toBe("cli-session-");
+    expect(remoteSearchTerm(parseKeyQuery("/^session/"), "/^session/")).toBeNull();
+  });
+
+  it("matches regular expressions with standard case sensitivity", () => {
+    expect(keyActivityMatches("hash-bob", bob, "/^user-bob-\\d+$/")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "/^user-bob-\\d+$/")).toBe(false);
+    expect(keyActivityMatches("hash-alice", alice, "/^ALICE/")).toBe(false);
+    expect(keyActivityMatches("hash-alice", alice, "/^ALICE/i")).toBe(true);
+  });
+
+  it("marks malformed regular expressions invalid and matches nothing", () => {
+    expect(parseKeyQuery("/[/")).toEqual({ kind: "invalid", source: "/[/" });
+    expect(keyActivityMatches("hash-alice", alice, "/[/")).toBe(false);
+  });
+
+  it("preserves global flags and matches repeatedly and when filtering", () => {
+    const query = parseKeyQuery("/^alice/g");
+    expect(query.kind).toBe("pattern");
+    if (query.kind !== "pattern") return;
+
+    expect(query.regex.flags).toContain("g");
+    expect(keyActivityMatches("hash-alice", alice, "/^alice/g")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "/^alice/g")).toBe(true);
+    expect(
+      Object.keys(
+        filterKeyActivity(
+          { "alice-hash": activity("secondary key"), "alice-hash-2": activity("another key") },
+          "/^alice/g",
+        ),
+      ),
+    ).toEqual(["alice-hash", "alice-hash-2"]);
+  });
+
+  it("keeps sticky expressions anchored at the start of a field", () => {
+    const bobPrefix = activity("member key", { key_alias: "bob-service", team_id: "team-research" });
+    const userBob = activity("member key", { key_alias: "user-bob-1", team_id: "team-research" });
+
+    expect(keyActivityMatches("hash-bob-prefix", bobPrefix, "/bob/y")).toBe(true);
+    expect(keyActivityMatches("hash-user-bob", userBob, "/bob/y")).toBe(false);
+  });
+
+  it("treats slashes with invalid regular expression flags as substring text", () => {
+    const slashActivity = activity("team/prod/dev-key", {
+      key_alias: "team/prod/dev-key",
+      team_id: "team-research",
+    });
+
+    expect(parseKeyQuery("/prod/dev")).toEqual({ kind: "substring", needle: "/prod/dev" });
+    expect(keyActivityMatches("hash-prod-dev", slashActivity, "/prod/dev")).toBe(true);
+  });
+
+  it("keeps a lone slash and a slash within text as substring queries", () => {
+    expect(parseKeyQuery("/")).toEqual({ kind: "substring", needle: "/" });
+    expect(parseKeyQuery("a/b")).toEqual({ kind: "substring", needle: "a/b" });
+  });
+});
+
 describe("filterKeyActivity", () => {
   it("returns the same object when the query is blank", () => {
     expect(filterKeyActivity(keyMetrics, "")).toBe(keyMetrics);
@@ -86,5 +173,9 @@ describe("filterKeyActivity", () => {
 
   it("returns an empty record when nothing matches", () => {
     expect(filterKeyActivity(keyMetrics, "nobody")).toEqual({});
+  });
+
+  it("keeps the hashes matching a glob", () => {
+    expect(filterKeyActivity(keyMetrics, "user-bob-*")).toEqual({ "hash-bob": bob });
   });
 });

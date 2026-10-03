@@ -12,7 +12,7 @@ import type {
   KeyActivityRow,
   KeySpendActivityRow,
 } from "../dailyActivityApi";
-import { filterKeyActivity } from "../keyActivityFilter";
+import { filterKeyActivity, parseKeyQuery, remoteSearchTerm } from "../keyActivityFilter";
 import { keyActivityRowsToMetrics } from "./keySearch";
 import { mergeKeyActivityPages } from "../keyActivityData";
 import type { ModelActivityData } from "../types";
@@ -97,6 +97,7 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
 }) => {
   const [queryState, setQueryState] = useState<{ scope: FetchKeyPage; value: string } | null>(null);
   const query = queryState?.scope === fetchKeyPage ? queryState.value : "";
+  const parsed = useMemo(() => parseKeyQuery(query), [query]);
   const updateQuery = useCallback((value: string) => setQueryState({ scope: fetchKeyPage, value }), [fetchKeyPage]);
   const [pageState, setPageState] = useState<KeyPageState | null>(null);
   const [detailState, setDetailState] = useState<{
@@ -220,7 +221,8 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
   }, [currentPageState, hasMore, loadMore, loading, loadingMore, query]);
 
   const trimmedQuery = query.trim();
-  const searchTerm = trimmedQuery.length >= MIN_SEARCH_LENGTH ? trimmedQuery : null;
+  const remote = remoteSearchTerm(parsed, query);
+  const searchTerm = remote !== null && remote.length >= MIN_SEARCH_LENGTH ? remote : null;
   useEffect(() => {
     if (searchTerm === null) return;
     const searchId = ++searchIdRef.current;
@@ -251,7 +253,10 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
   const searching = searchTerm !== null && currentSearch === null;
   const searchFailed = currentSearch?.failed ?? false;
   const searchRows = currentSearch?.rows;
-  const searchMetrics = useMemo(() => keyActivityRowsToMetrics(searchRows ?? [], teams), [searchRows, teams]);
+  const searchMetrics = useMemo(() => {
+    const metrics = keyActivityRowsToMetrics(searchRows ?? [], teams);
+    return parsed.kind === "pattern" ? filterKeyActivity(metrics, query) : metrics;
+  }, [parsed.kind, query, searchRows, teams]);
   const localFiltered = useMemo(() => filterKeyActivity(pageMetrics, query), [pageMetrics, query]);
   const filteredMetrics = useMemo(() => ({ ...searchMetrics, ...localFiltered }), [searchMetrics, localFiltered]);
   const shownKeys = Object.keys(filteredMetrics).length;
@@ -400,7 +405,7 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
           </InputGroupAddon>
           <InputGroupInput
             aria-label="Search keys"
-            placeholder="Search by key alias, key hash, user ID, or email"
+            placeholder="Search by key alias, hash, user ID, or email. Supports * and /regex/"
             value={query}
             onChange={(event) => updateQuery(event.target.value)}
           />
@@ -412,26 +417,34 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
             </InputGroupAddon>
           )}
         </InputGroup>
-        {!pageUnavailable && (
+        {!pageUnavailable && parsed.kind !== "invalid" && (
           <span className="text-sm text-muted-foreground" aria-live="polite">
             {keyCountLabel}
           </span>
         )}
       </div>
-      {noMatches ? emptyFilterBody : <div className="rounded-lg border">{listBody}</div>}
-      {showSearchErrorNote && (
-        <p className="text-sm text-muted-foreground">Could not search all keys. {searchRetryButton}</p>
-      )}
-      {loadingMore && <p className="text-sm text-muted-foreground">Loading more keys...</p>}
-      {showNextPageRetry && (
-        <p className="text-sm text-muted-foreground">
-          Could not load more keys.{" "}
-          <button type="button" className="font-medium text-foreground underline" onClick={retryNextPage}>
-            Retry
-          </button>
+      {parsed.kind === "invalid" ? (
+        <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+          Invalid regular expression: {parsed.source}
         </p>
+      ) : (
+        <>
+          {noMatches ? emptyFilterBody : <div className="rounded-lg border">{listBody}</div>}
+          {showSearchErrorNote && (
+            <p className="text-sm text-muted-foreground">Could not search all keys. {searchRetryButton}</p>
+          )}
+          {loadingMore && <p className="text-sm text-muted-foreground">Loading more keys...</p>}
+          {showNextPageRetry && (
+            <p className="text-sm text-muted-foreground">
+              Could not load more keys.{" "}
+              <button type="button" className="font-medium text-foreground underline" onClick={retryNextPage}>
+                Retry
+              </button>
+            </p>
+          )}
+          {!isFiltering && <div ref={sentinelRef} aria-hidden="true" className="h-1" />}
+        </>
       )}
-      {!isFiltering && <div ref={sentinelRef} aria-hidden="true" className="h-1" />}
     </div>
   );
 };

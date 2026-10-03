@@ -1,20 +1,90 @@
 import type { ModelActivityData } from "./types";
 
-export function keyActivityMatches(apiKey: string, data: ModelActivityData, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (needle === "") return true;
+export type KeyQuery =
+  | { readonly kind: "all" }
+  | { readonly kind: "substring"; readonly needle: string }
+  | { readonly kind: "pattern"; readonly regex: RegExp; readonly searchHint: string | null }
+  | { readonly kind: "invalid"; readonly source: string };
+
+export function parseKeyQuery(query: string): KeyQuery {
+  const trimmedQuery = query.trim();
+  if (trimmedQuery === "") return { kind: "all" };
+
+  const regexLiteral = new RegExp("^/(.+)/([dgimsuvy]*)$", "s").exec(trimmedQuery);
+  if (regexLiteral !== null) {
+    const [, body, flags] = regexLiteral;
+    try {
+      return { kind: "pattern", regex: new RegExp(body, flags), searchHint: null };
+    } catch {
+      return { kind: "invalid", source: trimmedQuery };
+    }
+  }
+
+  if (trimmedQuery.includes("*")) {
+    const escapedGlob = trimmedQuery.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    const searchHint = trimmedQuery
+      .split("*")
+      .reduce((longest, segment) => (segment.length > longest.length ? segment : longest), "");
+    return {
+      kind: "pattern",
+      regex: new RegExp(`^${escapedGlob.replace(/\*/g, ".*")}$`, "i"),
+      searchHint: searchHint === "" ? null : searchHint,
+    };
+  }
+
+  return { kind: "substring", needle: trimmedQuery.toLowerCase() };
+}
+
+export function remoteSearchTerm(query: KeyQuery, rawQuery: string): string | null {
+  switch (query.kind) {
+    case "all":
+    case "invalid":
+      return null;
+    case "substring":
+      return rawQuery.trim();
+    case "pattern":
+      return query.searchHint;
+    default: {
+      const unreachableQuery: never = query;
+      return unreachableQuery;
+    }
+  }
+}
+
+function keyActivityFields(apiKey: string, data: ModelActivityData): readonly (string | null | undefined)[] {
   const meta = data.key_metadata;
-  return [apiKey, data.label, meta?.key_alias, meta?.user_id, meta?.user_email].some(
-    (field) => field?.toLowerCase().includes(needle) ?? false,
-  );
+  return [apiKey, data.label, meta?.key_alias, meta?.user_id, meta?.user_email];
+}
+
+function matchesQuery(fields: readonly (string | null | undefined)[], query: KeyQuery): boolean {
+  switch (query.kind) {
+    case "all":
+      return true;
+    case "substring":
+      return fields.some((field) => field?.toLowerCase().includes(query.needle) ?? false);
+    case "pattern":
+      return fields.some((field) => typeof field === "string" && field.search(query.regex) !== -1);
+    case "invalid":
+      return false;
+    default: {
+      const unreachableQuery: never = query;
+      return unreachableQuery;
+    }
+  }
+}
+
+export function keyActivityMatches(apiKey: string, data: ModelActivityData, query: string): boolean {
+  return matchesQuery(keyActivityFields(apiKey, data), parseKeyQuery(query));
 }
 
 export function filterKeyActivity(
   keyMetrics: Record<string, ModelActivityData>,
   query: string,
 ): Record<string, ModelActivityData> {
-  if (query.trim() === "") return keyMetrics;
+  const parsedQuery = parseKeyQuery(query);
+  if (parsedQuery.kind === "all") return keyMetrics;
+
   return Object.fromEntries(
-    Object.entries(keyMetrics).filter(([apiKey, data]) => keyActivityMatches(apiKey, data, query)),
+    Object.entries(keyMetrics).filter(([apiKey, data]) => matchesQuery(keyActivityFields(apiKey, data), parsedQuery)),
   );
 }
