@@ -1,7 +1,7 @@
 //! Keyset-paged reads that shrink their page when ClickHouse rejects a response as too large and
 //! stop accumulating once a graph exceeds the interactive budget.
 
-use std::marker::PhantomData;
+use std::{future::Future, marker::PhantomData};
 
 use litellm_http::Client;
 use litellm_storage_clickhouse::{Query, fetch};
@@ -41,8 +41,8 @@ impl ReadBudget {
 
 /// One keyset position in a paged query: the SQL reads the cursor fields of `Self` plus the
 /// `page_size` that [`Batch`] adds.
-trait Keyset: Serialize + Sized {
-    type Row: Serialize + DeserializeOwned;
+trait Keyset: Serialize + Sized + Send + Sync {
+    type Row: Serialize + DeserializeOwned + Send;
     const SQL: &'static str;
 
     /// The position just after `last`.
@@ -56,6 +56,13 @@ struct Batch<K> {
     page_size: u32,
 }
 
+trait PageSource<K: Keyset> {
+    fn page(
+        &self,
+        batch: &Batch<K>,
+    ) -> impl Future<Output = Result<Vec<K::Row>, litellm_storage_clickhouse::Error>> + Send;
+}
+
 struct Paged<K>(PhantomData<K>);
 
 impl<K: Keyset> Query for Paged<K> {
@@ -67,8 +74,8 @@ impl<K: Keyset> Query for Paged<K> {
 /// Reads every row after `keyset`. A page ClickHouse rejects as too large is retried at half the
 /// size, and the smaller page is kept for the rest of the read because row sizes within one graph
 /// rarely shrink again. Halving a one-row page means a single row exceeds the response limit.
-async fn read_all<K: Keyset>(
-    run: impl AsyncFn(&Batch<K>) -> Result<Vec<K::Row>, litellm_storage_clickhouse::Error>,
+async fn read_all<K: Keyset, S: PageSource<K>>(
+    source: &S,
     keyset: K,
 ) -> Result<Vec<K::Row>, Error> {
     let mut batch = Batch {
@@ -78,7 +85,7 @@ async fn read_all<K: Keyset>(
     let mut rows = Vec::new();
     let mut budget = ReadBudget::default();
     loop {
-        let page = match run(&batch).await {
+        let page = match source.page(&batch).await {
             Err(litellm_storage_clickhouse::Error::ResponseTooLarge) if batch.page_size > 1 => {
                 batch.page_size /= 2;
                 continue;
@@ -102,16 +109,27 @@ async fn read_all<K: Keyset>(
     }
 }
 
+struct ClickHouse<'a> {
+    client: &'a Client,
+    connection: &'a Connection,
+}
+
+impl<K: Keyset> PageSource<K> for ClickHouse<'_> {
+    fn page(
+        &self,
+        batch: &Batch<K>,
+    ) -> impl Future<Output = Result<Vec<K::Row>, litellm_storage_clickhouse::Error>> + Send {
+        fetch::<Paged<K>>(self.client, self.connection, batch)
+    }
+}
+
 async fn read_paged<K: Keyset>(
     client: &Client,
     connection: &Connection,
     keyset: K,
 ) -> Result<Vec<K::Row>, Error> {
-    read_all(
-        async |batch: &Batch<K>| fetch::<Paged<K>>(client, connection, batch).await,
-        keyset,
-    )
-    .await
+    let source = ClickHouse { client, connection };
+    read_all(&source, keyset).await
 }
 
 fn by_start(mut rows: Vec<contracts::TraceSpansRow>) -> Vec<contracts::TraceSpansRow> {
@@ -241,7 +259,7 @@ pub(crate) async fn read_spend(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
     use rstest::rstest;
 
@@ -281,15 +299,15 @@ mod tests {
     struct Table {
         total: u32,
         largest_page: u32,
-        requests: RefCell<Vec<u32>>,
+        requests: Mutex<Vec<u32>>,
     }
 
-    impl Table {
-        async fn run(
+    impl PageSource<Numbers> for Table {
+        async fn page(
             &self,
             batch: &Batch<Numbers>,
         ) -> Result<Vec<u32>, litellm_storage_clickhouse::Error> {
-            self.requests.borrow_mut().push(batch.page_size);
+            self.requests.lock().unwrap().push(batch.page_size);
             if batch.page_size > self.largest_page {
                 return Err(litellm_storage_clickhouse::Error::ResponseTooLarge);
             }
@@ -310,13 +328,11 @@ mod tests {
         let table = Table {
             total,
             largest_page,
-            requests: RefCell::new(Vec::new()),
+            requests: Mutex::new(Vec::new()),
         };
-        let rows = read_all(async |batch| table.run(batch).await, Numbers { after: 0 })
-            .await
-            .unwrap();
+        let rows = read_all(&table, Numbers { after: 0 }).await.unwrap();
         assert_eq!(rows, (1..=total).collect::<Vec<_>>());
-        assert_eq!(table.requests.borrow().as_slice(), requests);
+        assert_eq!(table.requests.lock().unwrap().as_slice(), requests);
     }
 
     #[rstest]
@@ -325,12 +341,12 @@ mod tests {
         let table = Table {
             total: 10,
             largest_page: 0,
-            requests: RefCell::new(Vec::new()),
+            requests: Mutex::new(Vec::new()),
         };
-        let result = read_all(async |batch| table.run(batch).await, Numbers { after: 0 }).await;
+        let result = read_all(&table, Numbers { after: 0 }).await;
         assert!(matches!(result, Err(Error::ReadTooLarge)), "{result:?}");
         assert_eq!(
-            table.requests.borrow().as_slice(),
+            table.requests.lock().unwrap().as_slice(),
             &[256, 128, 64, 32, 16, 8, 4, 2, 1]
         );
     }
