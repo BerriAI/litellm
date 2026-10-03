@@ -8835,12 +8835,34 @@ class Router:
         backend_entry: Final = litellm.model_cost.get(backend_info.get("key") or "")
         if not isinstance(backend_entry, dict):
             return
+        configured_fields: Final = frozenset(str(field) for field, value in model_info.items() if value is not None)
         for field, backend_value in backend_entry.items():
-            if not field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES):
+            if not isinstance(field, str) or not field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES):
                 continue
-            if model_info.get(field) is not None or backend_value is None:
+            if field in configured_fields or backend_value is None:
                 continue
-            model_info[field] = copy.deepcopy(backend_value)
+            model_info[field] = (
+                copy.deepcopy(backend_value)
+                if (
+                    deployment_rate_field := Router._deployment_rate_field_for_tier_threshold_rate(
+                        field, configured_fields
+                    )
+                )
+                is None
+                else model_info[deployment_rate_field]
+            )
+
+    @staticmethod
+    def _deployment_rate_field_for_tier_threshold_rate(field: str, configured_fields: frozenset[str]) -> str | None:
+        tier_suffix: Final = next(suffix for suffix in SERVICE_TIER_COST_KEY_SUFFIXES if field.endswith(suffix))
+        untiered_field: Final = field.removesuffix(tier_suffix)
+        rate, separator, threshold = untiered_field.rpartition("_above_")
+        if not separator or not threshold.endswith("_tokens"):
+            return None
+        return next(
+            (rate_field for rate_field in (untiered_field, f"{rate}{tier_suffix}") if rate_field in configured_fields),
+            None,
+        )
 
     @staticmethod
     def _inherit_builtin_base_rates_for_off_peak(
@@ -8984,17 +9006,17 @@ class Router:
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+            Router._inherit_builtin_service_tier_pricing(
+                model_info=_model_info,
+                backend_model=Router._cost_map_backend_model(deployment),
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
             if _model_info.get("input_cost_per_token") is not None:
                 Router._inherit_builtin_cache_pricing(
                     model_info=_model_info,
                     backend_model=deployment.litellm_params.model,
                     custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 )
-            Router._inherit_builtin_service_tier_pricing(
-                model_info=_model_info,
-                backend_model=Router._cost_map_backend_model(deployment),
-                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-            )
             Router._inherit_builtin_tiered_output_rate(
                 model_info=_model_info,
                 backend_model=deployment.litellm_params.model,
@@ -10029,17 +10051,17 @@ class Router:
             backend_model=deployment.litellm_params.model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info,
+            backend_model=Router._cost_map_backend_model(deployment),
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
-        Router._inherit_builtin_service_tier_pricing(
-            model_info=model_info,
-            backend_model=Router._cost_map_backend_model(deployment),
-            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
-        )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
             backend_model=deployment.litellm_params.model,
