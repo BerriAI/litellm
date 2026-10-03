@@ -9,6 +9,8 @@
 
 
 import asyncio
+import hashlib
+import hmac
 import json
 import re
 import threading
@@ -29,6 +31,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -169,6 +172,29 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
         yield chunk
 
 
+def _resolved_token_salt(value: str | None) -> str:
+    """Resolve the salt from an ``os.environ/<VAR>`` reference, the way guardrail
+    api_key and api_base are already resolved.
+
+    A literal is refused rather than used. The salt is the HMAC key, so it has to
+    survive as a secret for the tokens to mean anything, and a literal does not:
+    guardrail_registry logs the whole params mapping at debug before
+    initialization, so a literal reaches the proxy log in full and anyone with
+    the log can test candidate values against the tokens they can see."""
+    if value is None:
+        return ""
+    if not value.startswith("os.environ/"):
+        raise ValueError(
+            "presidio_token_salt must be an os.environ/<VAR> reference, not a literal. "
+            "The salt is the HMAC key behind every stable token, and guardrail params "
+            "are logged in full at debug level."
+        )
+    resolved: Final = get_secret_str(value)
+    if resolved is None or not resolved.strip():
+        raise ValueError(f"presidio_token_salt: {value!r} resolves to an unset or blank environment variable")
+    return resolved
+
+
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
@@ -201,6 +227,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_entities_deny_list: list[PiiEntityType | str] | None = None,
         presidio_analyze_chunk_size_bytes: int | None = None,
         _callback_role: Literal["scan", "restore"] | None = None,
+        presidio_stable_tokens: bool | None = None,
+        presidio_token_salt: str | None = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -231,6 +259,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.presidio_entities_deny_list: list[PiiEntityType | str] = presidio_entities_deny_list or []
         self.presidio_language = presidio_language or "en"
         self.presidio_analyze_chunk_size_bytes: int = self._coerce_analyze_chunk_size(presidio_analyze_chunk_size_bytes)
+        self.presidio_stable_tokens: bool = bool(presidio_stable_tokens)
+        self.presidio_token_salt: str = _resolved_token_salt(presidio_token_salt)
+        if self.presidio_stable_tokens and not self.presidio_token_salt:
+            raise ValueError(
+                "presidio_stable_tokens requires presidio_token_salt. An unkeyed digest lets the "
+                "model provider recover a masked value by hashing candidates and comparing the prefix."
+            )
         # Shared HTTP session to prevent memory leaks (issue #14540)
         self._http_session: aiohttp.ClientSession | None = None
         # Lock to prevent race conditions when creating session under concurrent load
@@ -786,6 +821,16 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
+    _STABLE_TOKEN_HEX_CHARS: Final[int] = 8
+
+    def _stable_token_suffix(self, entity_type: str, value: str) -> str:
+        # The guardrail name namespaces the digest, so two guardrails with
+        # different salts cannot produce the same token for the same value.
+        namespace: Final = self.guardrail_name or ""
+        message: Final = f"{namespace}\x00{entity_type}\x00{value}".encode()
+        digest: Final = hmac.new(self.presidio_token_salt.encode(), message, hashlib.sha256).hexdigest()
+        return digest[: self._STABLE_TOKEN_HEX_CHARS]
+
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -814,7 +859,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
         sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
-        seq_map: Final = {}
+        seq_map: Final[dict[tuple[int, int], int]] = {}
         for idx, ar in enumerate(sorted_forward, start=1):
             seq_map[(ar["start"], ar["end"])] = idx
 
@@ -824,14 +869,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for ar in reversed(sorted_forward):
             start = ar["start"]
             end = ar["end"]
-            entity_type = ar["entity_type"]
-            replacement = f"<{entity_type}>"
-            seq = seq_map[(start, end)]
-            if replacement.endswith(">"):
-                replacement = f"{replacement[:-1]}_{seq}>"
-            else:
-                replacement = f"{replacement}_{seq}"
-            pii_tokens[replacement] = text[start:end]
+            # Annotated because the analyzer result is an untyped mapping: both now
+            # reach _stable_token_suffix as call arguments, where an Any counts.
+            entity_type: str = ar["entity_type"]
+            value: str = text[start:end]
+            suffix = (
+                self._stable_token_suffix(entity_type, value)
+                if self.presidio_stable_tokens
+                else str(seq_map[(start, end)])
+            )
+            replacement = f"<{entity_type}_{suffix}>"
+            pii_tokens[replacement] = value
             new_text = new_text[:start] + replacement + new_text[end:]
             masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return new_text
