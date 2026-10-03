@@ -27,7 +27,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
+from litellm.types.utils import CallTypes, LLMResponseTypes, ModelResponse, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     VectorStoreSearchFailure,
@@ -46,6 +46,7 @@ else:
 SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
 _FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
+_OBJECT_ADAPTER: Final = TypeAdapter(object)
 _STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_KEYS_THE_PROXY_MERGES_INTO_METADATA: Final = frozenset(
     {"guardrails", "guardrail_config", "policies", "include_guardrail_response"}
@@ -269,7 +270,9 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("No query found in messages for vector store search")
             return None
 
-        request_litellm_params: Final = litellm_logging_obj.model_call_details.get("litellm_params", {})
+        request_litellm_params: Final = _OBJECT_ADAPTER.validate_python(
+            litellm_logging_obj.model_call_details.get("litellm_params", {})
+        )
         request_metadata: Final = (
             request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
         )
@@ -415,9 +418,9 @@ class VectorStorePreCallHook(CustomLogger):
     async def async_post_call_success_deployment_hook(
         self,
         request_data: dict,
-        response: Any,
+        response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> Any | None:
+    ) -> LLMResponseTypes | None:
         """
         Add search results to the response after successful LLM call.
 
@@ -451,7 +454,7 @@ class VectorStorePreCallHook(CustomLogger):
                 return response
 
             # Add search results to response object
-            if hasattr(response, "choices") and response.choices:
+            if isinstance(response, ModelResponse) and response.choices:
                 for choice in response.choices:
                     if hasattr(choice, "message") and choice.message:
                         provider_fields = getattr(choice.message, "provider_specific_fields", None) or {}

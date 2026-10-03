@@ -9441,7 +9441,7 @@ def _format_fallback_metadata_sse_event(
 
 def _restamp_streaming_chunk_model(
     *,
-    chunk: Any,
+    chunk: object,
     requested_model_from_client: str,
     request_data: dict,
     model_mismatch_logged: bool,

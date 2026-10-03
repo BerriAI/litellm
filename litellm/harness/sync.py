@@ -186,7 +186,7 @@ class Session:
 
     def history(
         self,
-    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
+    ) -> list[dict[str, object]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         return run_sync(self._inner.history(), "history")
 
     @property
