@@ -140,9 +140,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         import litellm
 
         cost_map: Final[dict[str, object]] = getattr(litellm, "model_cost", {})
-        raw_info: Final = (
-            cost_map.get(model) or cost_map.get(f"openai_like/{model}") or cost_map.get(f"openai/{model}")
-        )
+        raw_info: Final = cost_map.get(model) or cost_map.get(f"openai_like/{model}") or cost_map.get(f"openai/{model}")
         if (
             isinstance(raw_info, dict)
             and raw_info.get("supports_reasoning") is True
