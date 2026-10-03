@@ -24,6 +24,10 @@ const repositoriesSchema = z.object({
 });
 const defaultUrl = { github: "https://api.github.com", gitlab: "https://gitlab.com/api/v4" };
 
+function preferredConnectionMethod(selected: "app" | "token" | null, configured: boolean | undefined) {
+  return selected ?? (configured ? "app" : "token");
+}
+
 function TokenFields({
   label,
   provider,
@@ -224,25 +228,30 @@ export default function ObservedConnections({
   settings,
   onClose,
   onSaved,
+  initialError = "",
 }: {
   accessToken: string;
   settings: ObservedSettings;
   onClose: () => void;
   onSaved: () => void;
+  initialError?: string;
 }) {
   const [connected, setConnected] = useState(settings);
   const [provider, setProvider] = useState(settings.source_provider);
   const [apiUrl, setApiUrl] = useState(settings.api_url);
-  const [method, setMethod] = useState<"app" | "token">(settings.has_token ? settings.connection_type : "app");
+  const [selectedMethod, setMethod] = useState<"app" | "token" | null>(
+    settings.has_token ? settings.connection_type : null,
+  );
   const [step, setStep] = useState<"connect" | "repos">(settings.has_token || settings.ready ? "repos" : "connect");
   const [token, setToken] = useState("");
   const [repos, setRepos] = useState(settings.repos.join(", "));
   const [apps, setApps] = useState<z.infer<typeof appsSchema> | null>(null);
+  const method = preferredConnectionMethod(selectedMethod, apps?.[provider].configured);
   const [available, setAvailable] = useState<z.infer<typeof repositoriesSchema> | null>(null);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
   const label = provider === "github" ? "GitHub" : "GitLab";
   const manageApp =
     connected.connection_type === "app" && connected.source_provider === "github" && apps?.github.can_install;

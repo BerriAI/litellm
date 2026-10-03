@@ -336,6 +336,16 @@ async def test_app_callback_round_trip_and_admin_authorization(
             f"/roi-calculator/observed/oauth/{provider}/callback", params={"state": state, "code": "test-code"}
         )
         assert replay.status_code == 400
+        restart: Final = await client.post(f"/roi-calculator/observed/oauth/{provider}/start")
+        denied_state: Final = parse_qs(urlsplit(restart.json()["url"]).query)["state"][0]
+        denied: Final = await client.get(
+            f"/roi-calculator/observed/oauth/{provider}/callback",
+            params={"state": denied_state, "error": "access_denied"},
+        )
+        assert denied.status_code == 303
+        assert denied.headers["location"] == config.proxy_url + "/ui/roi-calculator/?connection_cancelled=1"
+        unchanged: Final = await client.get("/roi-calculator/observed/settings")
+        assert unchanged.json() == saved.json()
 
 
 @pytest.mark.asyncio

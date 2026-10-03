@@ -14309,6 +14309,129 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/roi-calculator/observed/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Observed Apps */
+        get: operations["observed_apps_roi_calculator_observed_apps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Identities */
+        get: operations["get_observed_identities_roi_calculator_observed_identities_get"];
+        /** Save Observed Identities */
+        put: operations["save_observed_identities_roi_calculator_observed_identities_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/oauth/{provider}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Observed Authorization */
+        post: operations["start_observed_authorization_roi_calculator_observed_oauth__provider__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Report */
+        get: operations["get_observed_report_roi_calculator_observed_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Observed Repositories */
+        get: operations["observed_repositories_roi_calculator_observed_repositories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Settings */
+        get: operations["get_observed_settings_roi_calculator_observed_settings_get"];
+        /** Save Observed Settings */
+        put: operations["save_observed_settings_roi_calculator_observed_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Sync */
+        get: operations["get_observed_sync_roi_calculator_observed_sync_get"];
+        put?: never;
+        /** Start Observed Sync */
+        post: operations["start_observed_sync_roi_calculator_observed_sync_post"];
+        /** Cancel Observed Sync */
+        delete: operations["cancel_observed_sync_roi_calculator_observed_sync_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/roi-calculator/report": {
         parameters: {
             query?: never;
@@ -39197,6 +39320,270 @@ export interface components {
             password?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** ObservedApp */
+        ObservedApp: {
+            /** Api Url */
+            api_url?: string | null;
+            /** Callback Url */
+            callback_url?: string | null;
+            /**
+             * Can Install
+             * @default false
+             */
+            can_install: boolean;
+            /** Configured */
+            configured: boolean;
+        };
+        /** ObservedApps */
+        ObservedApps: {
+            github: components["schemas"]["ObservedApp"];
+            gitlab: components["schemas"]["ObservedApp"];
+        };
+        /** ObservedAuthorization */
+        ObservedAuthorization: {
+            /** Url */
+            url: string;
+        };
+        /** ObservedHumanSummary */
+        ObservedHumanSummary: {
+            /** Median Merge Hours */
+            median_merge_hours: number | null;
+        };
+        /** ObservedIdentities */
+        ObservedIdentities: {
+            /** Gateway Emails */
+            gateway_emails: string[];
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            /** Unmatched Logins */
+            unmatched_logins: string[];
+        };
+        /** ObservedIdentityUpdate */
+        ObservedIdentityUpdate: {
+            /** Email */
+            email: string;
+            /** Logins */
+            logins: string[];
+        };
+        /** ObservedPeriod */
+        ObservedPeriod: {
+            /** Agent Authored */
+            agent_authored: number;
+            /** Agents Without Requester */
+            agents_without_requester: number;
+            /** Explicitly Titled Revert Prs */
+            explicitly_titled_revert_prs: number;
+            /** Human Authored */
+            human_authored: number;
+            human_summary: components["schemas"]["ObservedHumanSummary"];
+            /** Matched Internal Prs */
+            matched_internal_prs: number;
+            /** Matched Users Recorded Spend */
+            matched_users_recorded_spend: number;
+            /** Median Merge Hours */
+            median_merge_hours: number | null;
+            /** Merged Prs */
+            merged_prs: number;
+            /** Missing Author */
+            missing_author: number;
+            /** New Bug Labeled Issues */
+            new_bug_labeled_issues: number | null;
+            /** New Regression Labeled Issues */
+            new_regression_labeled_issues: number | null;
+            /**
+             * Spend Observation
+             * @enum {string}
+             */
+            spend_observation: "records_present" | "no_records";
+            window: components["schemas"]["ObservedWindow"];
+        };
+        /** ObservedPeriods */
+        ObservedPeriods: {
+            current: components["schemas"]["ObservedPeriod"];
+            last_year: components["schemas"]["ObservedPeriod"];
+            previous: components["schemas"]["ObservedPeriod"];
+        };
+        /** ObservedPerson */
+        ObservedPerson: {
+            /** Email */
+            email: string;
+            /** Logins */
+            logins: string[];
+            /** Name */
+            name: string;
+            periods: components["schemas"]["ObservedPersonPeriods"];
+        };
+        /** ObservedPersonPeriod */
+        ObservedPersonPeriod: {
+            /** Declared Agent Owned */
+            declared_agent_owned: number;
+            /** Direct Authored */
+            direct_authored: number;
+            /** Gateway Recorded Spend */
+            gateway_recorded_spend: number;
+            /** Median Merge Hours */
+            median_merge_hours: number | null;
+            /** Merged Prs */
+            merged_prs: number;
+            /** Pr Urls */
+            pr_urls: string[];
+            /** Prs Per Week */
+            prs_per_week: number;
+            /** Recorded Spend Per Attributed Pr */
+            recorded_spend_per_attributed_pr: number | null;
+            /**
+             * Spend Observation
+             * @enum {string}
+             */
+            spend_observation: "records_present" | "no_records";
+        };
+        /** ObservedPersonPeriods */
+        ObservedPersonPeriods: {
+            current: components["schemas"]["ObservedPersonPeriod"];
+            last_year: components["schemas"]["ObservedPersonPeriod"];
+            previous: components["schemas"]["ObservedPersonPeriod"];
+        };
+        /** ObservedPullPeriods */
+        ObservedPullPeriods: {
+            /** Current */
+            current: components["schemas"]["ObservedPullResponse"][];
+            /** Last Year */
+            last_year: components["schemas"]["ObservedPullResponse"][];
+            /** Previous */
+            previous: components["schemas"]["ObservedPullResponse"][];
+        };
+        /** ObservedPullResponse */
+        ObservedPullResponse: {
+            /**
+             * Agent
+             * @default false
+             */
+            agent: boolean;
+            /** Author */
+            author: string;
+            branch_cost: components["schemas"]["ROIBranchAttribution"];
+            /** Created At */
+            created_at?: string | null;
+            /** Merge Hours */
+            merge_hours: number | null;
+            /**
+             * Merged At
+             * Format: date-time
+             */
+            merged_at: string;
+            /** Number */
+            number: number;
+            /**
+             * Profile Email
+             * @default
+             */
+            profile_email: string;
+            /** Repo */
+            repo: string;
+            /**
+             * Requester
+             * @default
+             */
+            requester: string;
+            /**
+             * Source Branch
+             * @default
+             */
+            source_branch: string;
+            /**
+             * Source Repo
+             * @default
+             */
+            source_repo: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        };
+        /** ObservedReport */
+        ObservedReport: {
+            /**
+             * Captured At
+             * Format: date-time
+             */
+            captured_at: string;
+            /** People */
+            people: components["schemas"]["ObservedPerson"][];
+            periods: components["schemas"]["ObservedPeriods"];
+            pulls: components["schemas"]["ObservedPullPeriods"];
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Unlinked Branches */
+            unlinked_branches: components["schemas"]["ROIBranchSpend"][];
+            /** Unmatched Logins */
+            unmatched_logins: string[];
+        };
+        /** ObservedReportResponse */
+        ObservedReportResponse: {
+            report: components["schemas"]["ObservedReport"] | null;
+        };
+        /** ObservedSettings */
+        ObservedSettings: {
+            /** Api Url */
+            api_url: string;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "token" | "app";
+            /** Has Token */
+            has_token: boolean;
+            /** Ready */
+            ready: boolean;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
+        };
+        /** ObservedSettingsUpdate */
+        ObservedSettingsUpdate: {
+            /** Api Url */
+            api_url: string;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Token */
+            token?: string | null;
+            /**
+             * Update Interval Minutes
+             * @default 1440
+             */
+            update_interval_minutes: number;
+        };
+        /** ObservedWindow */
+        ObservedWindow: {
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
         };
         /**
          * OpenIdConnectSecurityScheme
@@ -69324,6 +69711,277 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    observed_apps_roi_calculator_observed_apps_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedApps"];
+                };
+            };
+        };
+    };
+    get_observed_identities_roi_calculator_observed_identities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedIdentities"];
+                };
+            };
+        };
+    };
+    save_observed_identities_roi_calculator_observed_identities_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObservedIdentityUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_observed_authorization_roi_calculator_observed_oauth__provider__start_post: {
+        parameters: {
+            query?: {
+                install?: boolean;
+            };
+            header?: never;
+            path: {
+                provider: "github" | "gitlab";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedAuthorization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observed_report_roi_calculator_observed_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedReportResponse"];
+                };
+            };
+        };
+    };
+    observed_repositories_roi_calculator_observed_repositories_get: {
+        parameters: {
+            query?: {
+                query?: string;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observed_settings_roi_calculator_observed_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedSettings"];
+                };
+            };
+        };
+    };
+    save_observed_settings_roi_calculator_observed_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObservedSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observed_sync_roi_calculator_observed_sync_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
+    start_observed_sync_roi_calculator_observed_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
+    cancel_observed_sync_roi_calculator_observed_sync_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
                 };
             };
         };

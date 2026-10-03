@@ -169,7 +169,9 @@ function PeopleTable({
           />
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-muted-foreground">{people.length} people</span>
+          <span className="text-xs text-muted-foreground">
+            {people.length} {people.length === 1 ? "engineer" : "engineers"}
+          </span>
           <Select
             value={sort}
             onValueChange={(value) => {
@@ -654,20 +656,26 @@ export default function ObservedROIView({
   isViewOnly?: boolean;
 }) {
   const { data, error, refresh } = useObservedReport(accessToken);
+  const [returned] = useState(() => new URLSearchParams(typeof window === "undefined" ? "" : window.location.search));
   const [connections, setConnections] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      ["github", "gitlab"].includes(new URLSearchParams(window.location.search).get("connected") ?? ""),
+    ["github", "gitlab"].includes(returned.get("connected") ?? "") || returned.has("connection_cancelled"),
+  );
+  const [connectionError, setConnectionError] = useState(
+    returned.has("connection_cancelled") ? "Connection cancelled. Choose an app or token to try again" : "",
   );
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (!isViewOnly && ["github", "gitlab"].includes(url.searchParams.get("connected") ?? "")) {
-      url.searchParams.delete("connected");
-      window.history.replaceState(window.history.state, "", url);
-    }
-  }, [isViewOnly]);
+    url.searchParams.delete("connected");
+    url.searchParams.delete("connection_cancelled");
+    window.history.replaceState(window.history.state, "", url);
+  }, []);
+  function closeConnections() {
+    setConnections(false);
+    setConnectionError("");
+    refresh();
+  }
   async function sync(cancel: boolean) {
     setBusy(true);
     setActionError("");
@@ -681,6 +689,10 @@ export default function ObservedROIView({
       setBusy(false);
     }
   }
+  function retry() {
+    if (error || isViewOnly || !data?.settings.ready) refresh();
+    else void sync(data.status.running);
+  }
   const actions = (
     <SyncActions
       data={data}
@@ -688,7 +700,7 @@ export default function ObservedROIView({
       busy={busy}
       readOnly={isViewOnly}
       onSync={sync}
-      onRetry={refresh}
+      onRetry={retry}
     />
   );
   const content = data?.report ? (
@@ -724,10 +736,8 @@ export default function ObservedROIView({
         <ObservedConnections
           accessToken={accessToken}
           settings={data.settings}
-          onClose={() => {
-            setConnections(false);
-            refresh();
-          }}
+          initialError={connectionError}
+          onClose={closeConnections}
           onSaved={refresh}
         />
       )}

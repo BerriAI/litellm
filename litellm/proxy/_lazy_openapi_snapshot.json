@@ -49014,6 +49014,724 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "ObservedApp": {
+          "properties": {
+            "api_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api Url"
+            },
+            "callback_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Callback Url"
+            },
+            "can_install": {
+              "default": false,
+              "title": "Can Install",
+              "type": "boolean"
+            },
+            "configured": {
+              "title": "Configured",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "configured"
+          ],
+          "title": "ObservedApp",
+          "type": "object"
+        },
+        "ObservedApps": {
+          "properties": {
+            "github": {
+              "$ref": "#/components/schemas/ObservedApp"
+            },
+            "gitlab": {
+              "$ref": "#/components/schemas/ObservedApp"
+            }
+          },
+          "required": [
+            "github",
+            "gitlab"
+          ],
+          "title": "ObservedApps",
+          "type": "object"
+        },
+        "ObservedAuthorization": {
+          "properties": {
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ],
+          "title": "ObservedAuthorization",
+          "type": "object"
+        },
+        "ObservedHumanSummary": {
+          "properties": {
+            "median_merge_hours": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Median Merge Hours"
+            }
+          },
+          "required": [
+            "median_merge_hours"
+          ],
+          "title": "ObservedHumanSummary",
+          "type": "object"
+        },
+        "ObservedIdentities": {
+          "properties": {
+            "gateway_emails": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Gateway Emails",
+              "type": "array"
+            },
+            "identity_map": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Identity Map",
+              "type": "object"
+            },
+            "unmatched_logins": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Unmatched Logins",
+              "type": "array"
+            }
+          },
+          "required": [
+            "gateway_emails",
+            "identity_map",
+            "unmatched_logins"
+          ],
+          "title": "ObservedIdentities",
+          "type": "object"
+        },
+        "ObservedIdentityUpdate": {
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "title": "Email",
+              "type": "string"
+            },
+            "logins": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "Logins",
+              "type": "array"
+            }
+          },
+          "required": [
+            "email",
+            "logins"
+          ],
+          "title": "ObservedIdentityUpdate",
+          "type": "object"
+        },
+        "ObservedPeriod": {
+          "properties": {
+            "agent_authored": {
+              "title": "Agent Authored",
+              "type": "integer"
+            },
+            "agents_without_requester": {
+              "title": "Agents Without Requester",
+              "type": "integer"
+            },
+            "explicitly_titled_revert_prs": {
+              "title": "Explicitly Titled Revert Prs",
+              "type": "integer"
+            },
+            "human_authored": {
+              "title": "Human Authored",
+              "type": "integer"
+            },
+            "human_summary": {
+              "$ref": "#/components/schemas/ObservedHumanSummary"
+            },
+            "matched_internal_prs": {
+              "title": "Matched Internal Prs",
+              "type": "integer"
+            },
+            "matched_users_recorded_spend": {
+              "title": "Matched Users Recorded Spend",
+              "type": "number"
+            },
+            "median_merge_hours": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Median Merge Hours"
+            },
+            "merged_prs": {
+              "title": "Merged Prs",
+              "type": "integer"
+            },
+            "missing_author": {
+              "title": "Missing Author",
+              "type": "integer"
+            },
+            "new_bug_labeled_issues": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "New Bug Labeled Issues"
+            },
+            "new_regression_labeled_issues": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "New Regression Labeled Issues"
+            },
+            "spend_observation": {
+              "enum": [
+                "records_present",
+                "no_records"
+              ],
+              "title": "Spend Observation",
+              "type": "string"
+            },
+            "window": {
+              "$ref": "#/components/schemas/ObservedWindow"
+            }
+          },
+          "required": [
+            "window",
+            "merged_prs",
+            "median_merge_hours",
+            "human_authored",
+            "agent_authored",
+            "missing_author",
+            "agents_without_requester",
+            "matched_internal_prs",
+            "new_bug_labeled_issues",
+            "new_regression_labeled_issues",
+            "explicitly_titled_revert_prs",
+            "matched_users_recorded_spend",
+            "spend_observation",
+            "human_summary"
+          ],
+          "title": "ObservedPeriod",
+          "type": "object"
+        },
+        "ObservedPeriods": {
+          "properties": {
+            "current": {
+              "$ref": "#/components/schemas/ObservedPeriod"
+            },
+            "last_year": {
+              "$ref": "#/components/schemas/ObservedPeriod"
+            },
+            "previous": {
+              "$ref": "#/components/schemas/ObservedPeriod"
+            }
+          },
+          "required": [
+            "current",
+            "previous",
+            "last_year"
+          ],
+          "title": "ObservedPeriods",
+          "type": "object"
+        },
+        "ObservedPerson": {
+          "properties": {
+            "email": {
+              "title": "Email",
+              "type": "string"
+            },
+            "logins": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Logins",
+              "type": "array"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "periods": {
+              "$ref": "#/components/schemas/ObservedPersonPeriods"
+            }
+          },
+          "required": [
+            "name",
+            "email",
+            "logins",
+            "periods"
+          ],
+          "title": "ObservedPerson",
+          "type": "object"
+        },
+        "ObservedPersonPeriod": {
+          "properties": {
+            "declared_agent_owned": {
+              "title": "Declared Agent Owned",
+              "type": "integer"
+            },
+            "direct_authored": {
+              "title": "Direct Authored",
+              "type": "integer"
+            },
+            "gateway_recorded_spend": {
+              "title": "Gateway Recorded Spend",
+              "type": "number"
+            },
+            "median_merge_hours": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Median Merge Hours"
+            },
+            "merged_prs": {
+              "title": "Merged Prs",
+              "type": "integer"
+            },
+            "pr_urls": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Pr Urls",
+              "type": "array"
+            },
+            "prs_per_week": {
+              "title": "Prs Per Week",
+              "type": "number"
+            },
+            "recorded_spend_per_attributed_pr": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Recorded Spend Per Attributed Pr"
+            },
+            "spend_observation": {
+              "enum": [
+                "records_present",
+                "no_records"
+              ],
+              "title": "Spend Observation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "merged_prs",
+            "prs_per_week",
+            "median_merge_hours",
+            "direct_authored",
+            "declared_agent_owned",
+            "gateway_recorded_spend",
+            "recorded_spend_per_attributed_pr",
+            "spend_observation",
+            "pr_urls"
+          ],
+          "title": "ObservedPersonPeriod",
+          "type": "object"
+        },
+        "ObservedPersonPeriods": {
+          "properties": {
+            "current": {
+              "$ref": "#/components/schemas/ObservedPersonPeriod"
+            },
+            "last_year": {
+              "$ref": "#/components/schemas/ObservedPersonPeriod"
+            },
+            "previous": {
+              "$ref": "#/components/schemas/ObservedPersonPeriod"
+            }
+          },
+          "required": [
+            "current",
+            "previous",
+            "last_year"
+          ],
+          "title": "ObservedPersonPeriods",
+          "type": "object"
+        },
+        "ObservedPullPeriods": {
+          "properties": {
+            "current": {
+              "items": {
+                "$ref": "#/components/schemas/ObservedPullResponse"
+              },
+              "title": "Current",
+              "type": "array"
+            },
+            "last_year": {
+              "items": {
+                "$ref": "#/components/schemas/ObservedPullResponse"
+              },
+              "title": "Last Year",
+              "type": "array"
+            },
+            "previous": {
+              "items": {
+                "$ref": "#/components/schemas/ObservedPullResponse"
+              },
+              "title": "Previous",
+              "type": "array"
+            }
+          },
+          "required": [
+            "current",
+            "previous",
+            "last_year"
+          ],
+          "title": "ObservedPullPeriods",
+          "type": "object"
+        },
+        "ObservedPullResponse": {
+          "properties": {
+            "agent": {
+              "default": false,
+              "title": "Agent",
+              "type": "boolean"
+            },
+            "author": {
+              "title": "Author",
+              "type": "string"
+            },
+            "branch_cost": {
+              "$ref": "#/components/schemas/ROIBranchAttribution"
+            },
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "merge_hours": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Merge Hours"
+            },
+            "merged_at": {
+              "format": "date-time",
+              "title": "Merged At",
+              "type": "string"
+            },
+            "number": {
+              "title": "Number",
+              "type": "integer"
+            },
+            "profile_email": {
+              "default": "",
+              "title": "Profile Email",
+              "type": "string"
+            },
+            "repo": {
+              "title": "Repo",
+              "type": "string"
+            },
+            "requester": {
+              "default": "",
+              "title": "Requester",
+              "type": "string"
+            },
+            "source_branch": {
+              "default": "",
+              "title": "Source Branch",
+              "type": "string"
+            },
+            "source_repo": {
+              "default": "",
+              "title": "Source Repo",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repo",
+            "number",
+            "title",
+            "url",
+            "author",
+            "merged_at",
+            "merge_hours",
+            "branch_cost"
+          ],
+          "title": "ObservedPullResponse",
+          "type": "object"
+        },
+        "ObservedReport": {
+          "properties": {
+            "captured_at": {
+              "format": "date-time",
+              "title": "Captured At",
+              "type": "string"
+            },
+            "people": {
+              "items": {
+                "$ref": "#/components/schemas/ObservedPerson"
+              },
+              "title": "People",
+              "type": "array"
+            },
+            "periods": {
+              "$ref": "#/components/schemas/ObservedPeriods"
+            },
+            "pulls": {
+              "$ref": "#/components/schemas/ObservedPullPeriods"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "source_provider": {
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
+            },
+            "unlinked_branches": {
+              "items": {
+                "$ref": "#/components/schemas/ROIBranchSpend"
+              },
+              "title": "Unlinked Branches",
+              "type": "array"
+            },
+            "unmatched_logins": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Unmatched Logins",
+              "type": "array"
+            }
+          },
+          "required": [
+            "source_provider",
+            "repos",
+            "captured_at",
+            "periods",
+            "people",
+            "pulls",
+            "unlinked_branches",
+            "unmatched_logins"
+          ],
+          "title": "ObservedReport",
+          "type": "object"
+        },
+        "ObservedReportResponse": {
+          "properties": {
+            "report": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ObservedReport"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "report"
+          ],
+          "title": "ObservedReportResponse",
+          "type": "object"
+        },
+        "ObservedSettings": {
+          "properties": {
+            "api_url": {
+              "title": "Api Url",
+              "type": "string"
+            },
+            "connection_type": {
+              "enum": [
+                "token",
+                "app"
+              ],
+              "title": "Connection Type",
+              "type": "string"
+            },
+            "has_token": {
+              "title": "Has Token",
+              "type": "boolean"
+            },
+            "ready": {
+              "title": "Ready",
+              "type": "boolean"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "source_provider": {
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
+            },
+            "update_interval_minutes": {
+              "title": "Update Interval Minutes",
+              "type": "number"
+            }
+          },
+          "required": [
+            "source_provider",
+            "api_url",
+            "repos",
+            "has_token",
+            "update_interval_minutes",
+            "ready",
+            "connection_type"
+          ],
+          "title": "ObservedSettings",
+          "type": "object"
+        },
+        "ObservedSettingsUpdate": {
+          "additionalProperties": false,
+          "properties": {
+            "api_url": {
+              "title": "Api Url",
+              "type": "string"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "source_provider": {
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
+            },
+            "token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            },
+            "update_interval_minutes": {
+              "default": 1440,
+              "maximum": 43200.0,
+              "minimum": 0.0,
+              "title": "Update Interval Minutes",
+              "type": "number"
+            }
+          },
+          "required": [
+            "source_provider",
+            "api_url",
+            "repos"
+          ],
+          "title": "ObservedSettingsUpdate",
+          "type": "object"
+        },
+        "ObservedWindow": {
+          "properties": {
+            "end": {
+              "format": "date",
+              "title": "End",
+              "type": "string"
+            },
+            "start": {
+              "format": "date",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ],
+          "title": "ObservedWindow",
+          "type": "object"
+        },
         "ROIBranchAttribution": {
           "properties": {
             "branch": {
@@ -50262,6 +50980,394 @@
             }
           ],
           "summary": "Update Roi Calculator Identity Map",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/observed/apps": {
+        "get": {
+          "operationId": "observed_apps_roi_calculator_observed_apps_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ObservedApps"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Observed Apps",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/observed/identities": {
+        "get": {
+          "operationId": "get_observed_identities_roi_calculator_observed_identities_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ObservedIdentities"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Observed Identities",
+          "tags": [
+            "roi_calculator"
+          ]
+        },
+        "put": {
+          "operationId": "save_observed_identities_roi_calculator_observed_identities_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservedIdentityUpdate"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ObservedReportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Save Observed Identities",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/observed/oauth/{provider}/start": {
+        "post": {
+          "operationId": "start_observed_authorization_roi_calculator_observed_oauth__provider__start_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "provider",
+              "required": true,
+              "schema": {
+                "enum": [
+                  "github",
+                  "gitlab"
+                ],
+                "title": "Provider",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "install",
+              "required": false,
+              "schema": {
+                "default": false,
+                "title": "Install",
+                "type": "boolean"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ObservedAuthorization"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Start Observed Authorization",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/observed/report": {
+        "get": {
+          "operationId": "get_observed_report_roi_calculator_observed_report_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ObservedReportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Observed Report",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/observed/repositories": {
+        "get": {
+          "operationId": "observed_repositories_roi_calculator_observed_repositories_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "default": "",
+                "maxLength": 200,
+                "title": "Query",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "page",
+              "required": false,
+              "schema": {
+                "default": 1,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROIRepositoriesResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Observed Repositories",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/observed/settings": {
+        "get": {
+          "operationId": "get_observed_settings_roi_calculator_observed_settings_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ObservedSettings"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Observed Settings",
+          "tags": [
+            "roi_calculator"
+          ]
+        },
+        "put": {
+          "operationId": "save_observed_settings_roi_calculator_observed_settings_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservedSettingsUpdate"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ObservedSettings"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Save Observed Settings",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/observed/sync": {
+        "delete": {
+          "operationId": "cancel_observed_sync_roi_calculator_observed_sync_delete",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISyncStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cancel Observed Sync",
+          "tags": [
+            "roi_calculator"
+          ]
+        },
+        "get": {
+          "operationId": "get_observed_sync_roi_calculator_observed_sync_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISyncStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Observed Sync",
+          "tags": [
+            "roi_calculator"
+          ]
+        },
+        "post": {
+          "operationId": "start_observed_sync_roi_calculator_observed_sync_post",
+          "responses": {
+            "202": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISyncStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Start Observed Sync",
           "tags": [
             "roi_calculator"
           ]

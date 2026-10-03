@@ -13,6 +13,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helpe
 from litellm.proxy.roi_calculator.analytics import normalize_email
 from litellm.proxy.roi_calculator.github import SourceError
 from litellm.proxy.roi_calculator.oauth import (
+    OAuthConfig,
     Provider,
     begin_authorization,
     connected_settings,
@@ -404,6 +405,14 @@ def get_oauth_repository() -> ConfigRepository:
     return ConfigRepository(prisma_client, use_writer=True)
 
 
+def _authorization_redirect(config: OAuthConfig, query: str) -> RedirectResponse:
+    response: Final = RedirectResponse(config.proxy_url + "/ui/roi-calculator/?" + query, status_code=303)
+    response.delete_cookie("litellm_roi_oauth", path=config.cookie_path)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 @router.get("/oauth/{provider}/callback", include_in_schema=False)
 async def observed_authorization_callback(
     provider: Provider,
@@ -419,7 +428,7 @@ async def observed_authorization_callback(
         raise HTTPException(409, "The provider app is not configured.")
     verified: Final = await consume_state(repository, state, request.cookies.get("litellm_roi_oauth", ""), config)
     if error or not code:
-        raise HTTPException(400, "Authorization was cancelled. Return to Connections to try again.")
+        return _authorization_redirect(config, "connection_cancelled=1")
     if (status := await SyncStore(repository.prisma_client, "roi_observed").status()) and status.running:
         raise HTTPException(409, "Cancel the running sync before changing the connection.")
     grant: Final = await exchange_code(config, verified, code, transport)
@@ -439,11 +448,7 @@ async def observed_authorization_callback(
     finally:
         await source.close()
     await save_grant(repository, config, grant, revision=verified.settings_revision)
-    response: Final = RedirectResponse(config.proxy_url + "/ui/roi-calculator/?connected=" + provider, status_code=303)
-    response.delete_cookie("litellm_roi_oauth", path=config.cookie_path)
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["Referrer-Policy"] = "no-referrer"
-    return response
+    return _authorization_redirect(config, "connected=" + provider)
 
 
 @router.get("/oauth/github/installed", include_in_schema=False)

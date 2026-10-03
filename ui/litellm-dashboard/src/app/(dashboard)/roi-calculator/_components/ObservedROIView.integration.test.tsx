@@ -56,8 +56,8 @@ afterEach(() => {
 });
 
 describe("observed ROI dashboard", () => {
-  it("keeps the report during cancellation and replaces it when a later sync finishes", async () => {
-    let status = idle;
+  it("retries failures, keeps the report during cancellation, and refreshes after completion", async () => {
+    let status: ObservedStatus = { ...idle, phase: "error", error: "Provider temporarily unavailable" };
     let completeOnPoll = false;
     let currentReport = report;
     vi.stubGlobal(
@@ -82,7 +82,8 @@ describe("observed ROI dashboard", () => {
     render(<ObservedROIView accessToken="test-only-gateway-token" />);
     expect(await screen.findByRole("columnheader", { name: "Merged MRs" })).toBeInTheDocument();
     expect(screen.getByText("<1m")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Provider temporarily unavailable");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
     await user.click(await screen.findByRole("button", { name: "Cancel sync" }));
     expect(await screen.findByRole("button", { name: "Sync now" })).toBeEnabled();
     expect(screen.getByText("org/service")).toBeInTheDocument();
@@ -93,8 +94,11 @@ describe("observed ROI dashboard", () => {
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
   });
 
-  it("resumes repository selection after app authorization and refreshes saved changes after closing", async () => {
-    window.history.replaceState(null, "", "/roi-calculator/?connected=gitlab");
+  it.each([
+    { query: "connected=gitlab", alerts: [] },
+    { query: "connection_cancelled=1", alerts: ["Connection cancelled. Choose an app or token to try again"] },
+  ])("resumes setup after $query and refreshes saved changes after closing", async ({ query, alerts }) => {
+    window.history.replaceState(null, "", `/roi-calculator/?${query}`);
     let currentSettings = settings;
     vi.stubGlobal(
       "fetch",
@@ -117,6 +121,11 @@ describe("observed ROI dashboard", () => {
     const user = userEvent.setup();
     render(<ObservedROIView accessToken="test-only-gateway-token" />);
     const dialog = await screen.findByRole("dialog", { name: "Choose repositories" });
+    expect(
+      within(dialog)
+        .queryAllByRole("alert")
+        .map((alert) => alert.textContent),
+    ).toEqual(alerts);
     expect(window.location.search).toBe("");
     fireEvent.change(within(dialog).getByLabelText("Repositories"), { target: { value: "org/changed" } });
     await user.click(within(dialog).getByRole("button", { name: "Save and sync" }));
