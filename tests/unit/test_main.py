@@ -4041,6 +4041,53 @@ def test_stream_chunk_builder_stamps_streaming_usage_cost_by_default(monkeypatch
     assert response._hidden_params["response_cost"] == pytest.approx(usage_cost)
 
 
+def test_stream_chunk_builder_stamps_zero_cost_for_free_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "lit9097-free"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    )
+    chunks: Final = [
+        _stream_builder_text_chunk(model, "Hello "),
+        _stream_builder_text_chunk(model, "world.", finish_reason="stop"),
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks,
+        messages=[{"role": "user", "content": "hi"}],
+        logging_obj=_stream_builder_logging_obj(model=model),
+    )
+
+    assert response is not None
+    assert response.usage.cost == 0.0
+
+
+def test_stream_chunk_builder_does_not_stamp_zero_cost_for_priced_model() -> None:
+    logging_obj: Final = _stream_builder_logging_obj()
+    usage_chunk: Final = _stream_builder_text_chunk("gpt-4o", "")
+    usage_chunk.usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+    chunks: Final = [
+        _stream_builder_text_chunk("gpt-4o", "Hello "),
+        _stream_builder_text_chunk("gpt-4o", "world.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks,
+        messages=[{"role": "user", "content": "hi"}],
+        logging_obj=logging_obj,
+    )
+
+    assert response is not None
+    assert getattr(response.usage, "cost", None) is None
+
+
 def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
     import time as time_module
 

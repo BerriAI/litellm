@@ -46,6 +46,7 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    _raw_cost_map_entry,
     _select_model_name_for_cost_calc,
     get_usage_object,
     pricing_entry_for_cost_calc,
@@ -94,6 +95,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 )
 from litellm.litellm_core_utils.llm_cost_calc.zero_cost_diagnostic import (
     diagnose_zero_cost,
+    is_free_usage,
     zero_cost_warning,
 )
 from litellm.litellm_core_utils.logging_utils import (
@@ -113,6 +115,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     overlay_served_output_texts,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.base_llm.base_utils import DynamicModelInfoProvider
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -152,6 +155,8 @@ from litellm.types.utils import (
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
+    LlmProviders,
+    LlmProvidersSet,
     ModelInfo,
     ModelResponse,
     ModelResponseStream,
@@ -176,7 +181,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _get_base_model_from_metadata, print_verbose
+from litellm.utils import ProviderConfigManager, _get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -2008,18 +2013,10 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
         model: Final = litellm_model_name or self.model
         custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
-        pricing: Final = pricing_entry_for_cost_calc(
-            model=model,
-            completion_response=result,
-            custom_llm_provider=custom_llm_provider,
-            custom_pricing=self._custom_pricing_for(result),
-            base_model=_get_base_model_from_metadata(model_call_details=self.model_call_details),
-            router_model_id=router_model_id or self.get_router_model_id(),
-            region_name=_resolve_mantle_region_for_cost(
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=self.model_call_details.get("litellm_params"),
-            ),
-            litellm_logging_obj=self,
+        pricing: Final = self._pricing_for_cost_calc(
+            result,
+            litellm_model_name=litellm_model_name,
+            router_model_id=router_model_id,
         )
         if pricing is None:
             return None
@@ -2036,6 +2033,66 @@ class Logging(LiteLLMLoggingBaseClass):
             custom_llm_provider=custom_llm_provider,
             usage=usage,
         )
+
+    def _pricing_for_cost_calc(
+        self,
+        result: object,
+        *,
+        litellm_model_name: str | None,
+        router_model_id: str | None,
+    ) -> tuple[str, Mapping[str, object]] | None:
+        model: Final = litellm_model_name or self.model
+        custom_llm_provider: Final = self.model_call_details.get("custom_llm_provider")
+        return pricing_entry_for_cost_calc(
+            model=model,
+            completion_response=result,
+            custom_llm_provider=custom_llm_provider,
+            custom_pricing=self._custom_pricing_for(result),
+            base_model=_get_base_model_from_metadata(model_call_details=self.model_call_details),
+            router_model_id=router_model_id or self.get_router_model_id(),
+            region_name=_resolve_mantle_region_for_cost(
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=self.model_call_details.get("litellm_params"),
+            ),
+            litellm_logging_obj=self,
+        )
+
+    def prices_usage_as_free(self, result: object) -> bool:
+        usage: Final = get_usage_object(completion_response=result)
+        if usage is None:
+            return False
+        result_hidden_params: Final[object] = getattr(result, "_hidden_params", None)
+        model_id: Final[object] = (
+            result_hidden_params.get("model_id") if isinstance(result_hidden_params, Mapping) else None
+        )
+        router_model_id: Final[str | None] = model_id if isinstance(model_id, str) else None
+        try:
+            pricing: Final = self._pricing_for_cost_calc(
+                result,
+                litellm_model_name=None,
+                router_model_id=router_model_id,
+            )
+            if pricing is None:
+                return False
+            custom_pricing: Final = self._custom_pricing_for(result)
+            raw_entry: Final = None if custom_pricing else _raw_cost_map_entry(pricing[0])
+            dynamic_pricing_entry: Final = (
+                not custom_pricing and raw_entry is None and self._provider_has_dynamic_model_info()
+            )
+            explicit_entry: Final = pricing[1] if custom_pricing or dynamic_pricing_entry else raw_entry
+        except Exception:  # noqa: BLE001  # pricing helpers raise plain Exception
+            return False
+        return explicit_entry is not None and is_free_usage(usage, explicit_entry)
+
+    def _provider_has_dynamic_model_info(self) -> bool:
+        custom_llm_provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        if not isinstance(custom_llm_provider, str) or custom_llm_provider not in LlmProvidersSet:
+            return False
+        provider_config: Final = ProviderConfigManager.get_provider_model_info(
+            model=self.model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+        return isinstance(provider_config, DynamicModelInfoProvider)
 
     def _custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)

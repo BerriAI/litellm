@@ -787,6 +787,77 @@ def test_stamp_responses_usage_cost_stamps_computed_cost():
     logging_obj._response_cost_calculator.assert_called_once_with(result=response)
 
 
+def test_stamp_responses_usage_cost_stamps_zero_cost_for_free_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    model: Final = "lit9097-responses-free"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    response: Final = _responses_api_response_with_usage()
+    response.model = model
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="lit9097-responses-test",
+        function_id="lit9097-responses-test",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user=None,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai"},
+        custom_llm_provider="openai",
+    )
+    try:
+        _stamp_responses_usage_cost(response, logging_obj)
+        assert response.usage.cost == 0.0
+    finally:
+        litellm.get_model_info.cache_clear()
+
+
+def test_stamp_responses_usage_cost_skips_zero_cost_for_non_free_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    model: Final = "lit9097-responses-unpriced"
+    monkeypatch.setitem(litellm.model_cost, model, {})
+    litellm.get_model_info.cache_clear()
+    response: Final = _responses_api_response_with_usage()
+    response.model = model
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="lit9097-responses-test",
+        function_id="lit9097-responses-test",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        user=None,
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai"},
+        custom_llm_provider="openai",
+    )
+    try:
+        _stamp_responses_usage_cost(response, logging_obj)
+        assert getattr(response.usage, "cost", None) is None
+    finally:
+        litellm.get_model_info.cache_clear()
+
+
 def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
 

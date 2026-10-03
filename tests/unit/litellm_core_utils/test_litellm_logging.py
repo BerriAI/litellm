@@ -590,6 +590,93 @@ class TestZeroCostDiagnostic:
         assert f"model_group={self.MODEL_GROUP}" in warnings[0]
         assert f"pricing entry '{self.DEPLOYMENT_ID}' has no input_cost_per_token, output_cost_per_token" in warnings[0]
 
+    def test_prices_usage_as_free_for_free_custom_deployment(self) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(self.FREE_PRICING)
+        response: Final = self._response(usage)
+
+        assert logging_obj.prices_usage_as_free(response) is True
+
+    def test_prices_usage_as_free_for_explicit_zero_cost_map_rates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        model: Final = "openai/lit9097-zero-cost-map-model"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {"key": model, "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        )
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj({}, model=model, deployment_id=None)
+        response: Final = self._response(usage, model=model)
+
+        assert logging_obj.prices_usage_as_free(response) is True
+
+    def test_prices_usage_as_free_is_false_for_unpriced_shared_backend_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        model: Final = "openai/Qwen/Qwen3-8B"
+        monkeypatch.setitem(litellm.model_cost, model, {})
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj({}, model=model, deployment_id=None)
+        response: Final = self._response(usage, model=model)
+
+        assert logging_obj.prices_usage_as_free(response) is False
+
+    def test_prices_usage_as_free_for_unmapped_ollama_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        model: Final = "ollama_chat/litellm-unmapped-9097"
+
+        def post_model_info(url: str, **kwargs: object) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"template": "{{ .System }} tools {{ .Prompt }}", "model_info": {"llama.context_length": 32768}},
+            )
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr(litellm.module_level_client, "post", post_model_info)
+        try:
+            usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+            logging_obj: Final = self._logging_obj(
+                {},
+                model=model,
+                deployment_id=None,
+                custom_llm_provider="ollama_chat",
+            )
+            response: Final = self._response(usage, model=model, custom_llm_provider="ollama_chat")
+
+            assert logging_obj.prices_usage_as_free(response) is True
+        finally:
+            litellm.get_model_info.cache_clear()
+
+    def test_prices_usage_as_free_is_false_for_priced_gpt4o(self) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = LitellmLogging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="lit9097-gpt4o",
+            function_id="fn",
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-4o",
+            user="",
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai"},
+            custom_llm_provider="openai",
+        )
+        response: Final = self._response(usage, model="gpt-4o")
+
+        assert logging_obj.prices_usage_as_free(response) is False
+
+    def test_prices_usage_as_free_is_false_when_pricing_lookup_raises(self) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj({})
+        logging_obj.litellm_params["input_cost_per_token"] = 0.0
+        logging_obj.litellm_params["metadata"] = "malformed"
+        response: Final = self._response(usage)
+
+        assert logging_obj.prices_usage_as_free(response) is False
+
     def test_zero_cost_with_a_missing_rate_warns_once_and_is_recorded(
         self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
     ) -> None:

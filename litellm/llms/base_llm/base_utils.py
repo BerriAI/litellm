@@ -5,7 +5,8 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Any, Final, Protocol, runtime_checkable
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
@@ -13,6 +14,16 @@ from pydantic import BaseModel
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+
+
+@runtime_checkable
+class DynamicModelInfoProvider(Protocol):
+    def get_model_info(
+        self,
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
+    ) -> Mapping[str, object] | None: ...
 
 
 class BaseTokenCounter(ABC):
