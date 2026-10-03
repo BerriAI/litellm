@@ -149,6 +149,51 @@ class TestDashScopeImageGenerationConfig:
         )
         assert req["parameters"] == {}
 
+    def test_transform_request_hoists_extra_body_into_parameters(self):
+        """Provider-specific params (watermark, negative_prompt, ...) arrive wrapped in
+        `extra_body`; DashScope reads them at the top level of `parameters`."""
+        req = self.cfg.transform_image_generation_request(
+            model="qwen-image-2.0-pro",
+            prompt="sunset over the ocean",
+            optional_params={
+                "size": "1024*1024",
+                "n": 1,
+                "extra_body": {
+                    "watermark": False,
+                    "negative_prompt": "text, logo",
+                    "prompt_extend": False,
+                    "seed": 42,
+                },
+            },
+            litellm_params={},
+            headers={},
+        )
+        assert req["parameters"] == {
+            "size": "1024*1024",
+            "n": 1,
+            "watermark": False,
+            "negative_prompt": "text, logo",
+            "prompt_extend": False,
+            "seed": 42,
+        }
+
+    def test_transform_request_extra_body_does_not_clobber_mapped_params(self):
+        optional_params = {
+            "size": "1024*1024",
+            "n": 2,
+            "extra_body": {"size": "512*512", "n": 4, "watermark": True},
+        }
+        req = self.cfg.transform_image_generation_request(
+            model="qwen-image-2.0-pro",
+            prompt="sunset over the ocean",
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert req["parameters"] == {"size": "1024*1024", "n": 2, "watermark": True}
+        # the caller's optional_params are left untouched
+        assert "extra_body" in optional_params
+
     # ---------------------------------------------------------------------------
     # 4. Response transformation
     # ---------------------------------------------------------------------------
@@ -455,3 +500,47 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             assert "input" in body
             assert "messages" in body["input"]
             assert body["parameters"]["size"] == "1024*1024"
+
+
+def test_litellm_image_generation_dashscope_provider_params_reach_parameters():
+    """Non-OpenAI params passed to litellm.image_generation must land at the top
+    level of DashScope's `parameters`, not nested under `parameters.extra_body`."""
+    mock_response_body = {
+        "output": {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"image": "https://example.com/test.png"}],
+                    },
+                }
+            ]
+        },
+        "usage": {"width": 1024, "height": 1024, "image_count": 1},
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+    ) as mock_post:
+        mock_http_response = MagicMock()
+        mock_http_response.json.return_value = mock_response_body
+        mock_http_response.status_code = 200
+        mock_http_response.headers = {}
+        mock_post.return_value = mock_http_response
+
+        litellm.image_generation(
+            model="dashscope/qwen-image-2.0-pro",
+            prompt="a puppy playing on green grass",
+            api_key="sk-test-key",
+            size="1024x1024",
+            watermark=False,
+            negative_prompt="text, logo",
+        )
+
+        body = mock_post.call_args.kwargs["json"]
+        assert body["parameters"] == {
+            "size": "1024*1024",
+            "watermark": False,
+            "negative_prompt": "text, logo",
+        }

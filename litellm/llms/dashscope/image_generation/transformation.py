@@ -138,9 +138,15 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         """
         Transform OpenAI-style image generation request to DashScope multimodal-generation format.
         """
-        parameters: Final[dict] = {}
-        for k, v in optional_params.items():
-            parameters[k] = v
+        parameters: Final[dict] = {k: v for k, v in optional_params.items() if k != "extra_body"}
+        # DashScope is in `openai_compatible_providers`, so non-OpenAI params
+        # (watermark, negative_prompt, prompt_extend, seed, ...) arrive wrapped in
+        # `extra_body`. DashScope reads them at the top level of `parameters`, so
+        # hoist them there; mapped OpenAI params (n, size) take precedence.
+        extra_body: Final = optional_params.get("extra_body")
+        if isinstance(extra_body, dict):
+            for k, v in extra_body.items():
+                parameters.setdefault(k, v)
 
         return {
             "model": model,
