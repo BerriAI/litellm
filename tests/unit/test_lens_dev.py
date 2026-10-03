@@ -123,6 +123,20 @@ def test_proxy_env_permits_the_weak_key_only_when_chosen(tmp_path):
     assert "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true" in proc.stdout
 
 
+def test_external_database_url_never_starts_compose_postgres(tmp_path):
+    # Nothing listens anywhere and postgres_ok succeeds: only ClickHouse may be started.
+    docker = tmp_path / "bin" / "docker"
+    proc = _run(
+        tmp_path,
+        f"listening() {{ return 1; }}; postgres_ok() {{ return 0; }}\n"
+        f"printf '#!/bin/sh\\necho \"$@\" > {tmp_path}/docker.log\\n' > {docker}; chmod +x {docker}\n"
+        "ensure_services",
+        LENS_DEV_DATABASE_URL="postgresql://elsewhere/db",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "docker.log").read_text().split()[-2:] == ["--wait", "clickhouse"]
+
+
 def test_cleanup_kills_child_process_trees(tmp_path):
     proc = _run(
         tmp_path,
