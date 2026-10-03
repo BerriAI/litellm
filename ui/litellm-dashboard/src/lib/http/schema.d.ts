@@ -25694,10 +25694,7 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
-        /**
-         * AgentNode
-         * @description One distinct agent in a trace. 200 invocations of `researcher` = one node.
-         */
+        /** AgentNode */
         AgentNode: {
             /** Duration Ms */
             duration_ms: number;
@@ -41316,6 +41313,67 @@ export interface components {
                 };
             } | null;
         };
+        /** ROIBranchAttribution */
+        ROIBranchAttribution: {
+            /** Branch */
+            branch: string;
+            /** Repo */
+            repo: string;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+            /** Spend */
+            spend?: number | null;
+            /**
+             * Status
+             * @default unattributed
+             * @enum {string}
+             */
+            status: "matched" | "unattributed" | "ambiguous" | "unavailable";
+        };
+        /** ROIBranchMetrics */
+        ROIBranchMetrics: {
+            /** Cost Per Hour */
+            cost_per_hour?: number | null;
+            /**
+             * Hours
+             * @default 0
+             */
+            hours: number;
+            /**
+             * Matched Pulls
+             * @default 0
+             */
+            matched_pulls: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Total Tagged Spend
+             * @default 0
+             */
+            total_tagged_spend: number;
+            /**
+             * Unlinked Spend
+             * @default 0
+             */
+            unlinked_spend: number;
+        };
+        /** ROIBranchSpend */
+        ROIBranchSpend: {
+            /** Branch */
+            branch: string;
+            /** Repo */
+            repo: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+        };
         /** ROIEstimateResponse */
         ROIEstimateResponse: {
             /**
@@ -41338,6 +41396,13 @@ export interface components {
              * @enum {string}
              */
             status: "estimated" | "needs_review" | "error";
+        };
+        /** ROIEstimatorModel */
+        ROIEstimatorModel: {
+            /** Model Name */
+            model_name: string;
+            /** Provider Models */
+            provider_models: string[];
         };
         /** ROIIdentityMapResponse */
         ROIIdentityMapResponse: {
@@ -41412,6 +41477,7 @@ export interface components {
         ROIPullResponse: {
             /** Additions */
             additions: number;
+            branch_cost?: components["schemas"]["ROIBranchAttribution"];
             /** Cache Key */
             cache_key?: string | null;
             /** Changed Files */
@@ -41443,6 +41509,16 @@ export interface components {
             profile_email: string;
             /** Repo */
             repo: string;
+            /**
+             * Source Branch
+             * @default
+             */
+            source_branch: string;
+            /**
+             * Source Repo
+             * @default
+             */
+            source_repo: string;
             /** Title */
             title: string;
             /** Url */
@@ -41480,14 +41556,29 @@ export interface components {
             default_prompt: string;
             /** Estimator Model */
             estimator_model: string;
+            /**
+             * Estimator Models
+             * @default []
+             */
+            estimator_models: components["schemas"]["ROIEstimatorModel"][];
             /** Estimator Prompt */
             estimator_prompt: string;
             /** Github Api Url */
             github_api_url: string;
+            /**
+             * Gitlab Api Url
+             * @default https://gitlab.com/api/v4
+             */
+            gitlab_api_url: string;
             /** Has Estimator Key */
             has_estimator_key: boolean;
             /** Has Github Token */
             has_github_token: boolean;
+            /**
+             * Has Gitlab Token
+             * @default false
+             */
+            has_gitlab_token: boolean;
             /** Identity Map */
             identity_map: {
                 [key: string]: string;
@@ -41496,6 +41587,12 @@ export interface components {
             ready: boolean;
             /** Repos */
             repos: string[];
+            /**
+             * Source Provider
+             * @default github
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
             /** Update Interval Minutes */
             update_interval_minutes: number;
         };
@@ -41513,13 +41610,20 @@ export interface components {
             github_api_url?: string | null;
             /** Github Token */
             github_token?: string | null;
+            /** Gitlab Api Url */
+            gitlab_api_url?: string | null;
+            /** Gitlab Token */
+            gitlab_token?: string | null;
             /** Repos */
             repos?: string[] | null;
+            /** Source Provider */
+            source_provider?: ("github" | "gitlab") | null;
             /** Update Interval Minutes */
             update_interval_minutes?: number | null;
         };
         /** ROISummaryResponse */
         ROISummaryResponse: {
+            branch_metrics?: components["schemas"]["ROIBranchMetrics"];
             /** Effort Basis */
             effort_basis: string | null;
             /** End */
@@ -41539,12 +41643,23 @@ export interface components {
             pulls: components["schemas"]["ROIPullResponse"][];
             /** Repos */
             repos: string[];
+            /**
+             * Source Provider
+             * @default github
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
             /** Start */
             start: string;
             /** Synced At */
             synced_at: string;
             /** Trend */
             trend: components["schemas"]["ROITrendResponse"][];
+            /**
+             * Unlinked Branches
+             * @default []
+             */
+            unlinked_branches: components["schemas"]["ROIBranchSpend"][];
             /** Warnings */
             warnings: string[];
         };
@@ -45129,7 +45244,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "agent" | "llm" | "tool" | "chain" | "framework";
+            type: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
         };
         /** SpanDetail */
         SpanDetail: {
@@ -47312,7 +47427,7 @@ export interface components {
             /** Content */
             content: string;
             /** Name */
-            name?: string;
+            name?: string | null;
             /**
              * Role
              * @enum {string}

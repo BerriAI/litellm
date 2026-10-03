@@ -210,6 +210,27 @@ export function buildTreeRows(spans: readonly Span[], state: SpanTreeState): Tre
   return ctx.rows;
 }
 
+export function findTraceSteps(
+  spans: readonly Span[],
+  query: string,
+  errorsOnly: boolean,
+  hideFramework: boolean,
+): Span[] {
+  const search = query.trim().toLowerCase();
+  return spans
+    .filter((span) => {
+      const visible = !hideFramework || !isFrameworkSpan(span);
+      const matchesStatus = !errorsOnly || span.status === "error";
+      const matchesQuery =
+        !search ||
+        [span.name, span.agent, span.model, span.input_preview, span.span_id].some((value) =>
+          value?.toLowerCase().includes(search),
+        );
+      return visible && matchesStatus && matchesQuery;
+    })
+    .sort(byStart);
+}
+
 /** Tree state with every visible ancestor of `spanId` expanded and any group holding it paged far enough. */
 export function revealSpanInState(spans: readonly Span[], state: SpanTreeState, spanId: string): SpanTreeState {
   const { children } = buildVisibleTree(spans, !state.hideFramework);

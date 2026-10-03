@@ -55,6 +55,7 @@ import litellm.litellm_core_utils.json_validation_rule
 from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_default_encoding,
+    _get_messages_reach_token_count,
     _get_modified_max_tokens,
     _get_token_counter_new,
 )
@@ -1207,7 +1208,7 @@ def function_setup(
         elif call_type == CallTypes.moderation.value or call_type == CallTypes.amoderation.value:
             messages = args[1] if len(args) > 1 else kwargs["input"]
         elif call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value:
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            messages = args[0] if len(args) > 0 else kwargs.get("prompt")
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
             messages = kwargs.get("query")
         elif call_type in (CallTypes.search.value, CallTypes.asearch.value):
@@ -8861,7 +8862,6 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
         elif provider in (litellm.LlmProviders.JINA_AI, litellm.LlmProviders.SCALEWAY):
-            # Scaleway's rerank API matches Jina's, so its config extends Jina's.
             return (
                 litellm.ScalewayRerankConfig()
                 if provider == litellm.LlmProviders.SCALEWAY
@@ -9908,7 +9908,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_harness_config(harness: Harness) -> BaseHarnessConfig | None:
         """
-        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents).
+        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents, Tool Loop).
         """
         from litellm.harness.types import Harness as _Harness
 
@@ -9934,6 +9934,10 @@ class ProviderConfigManager:
             )
 
             return DeepAgentsHarnessConfig()
+        if harness == _Harness.TOOL_LOOP:
+            from litellm.llms.tool_loop.harness.transformation import ToolLoopHarnessConfig
+
+            return ToolLoopHarnessConfig()
         return None
 
     @staticmethod
@@ -10119,19 +10123,19 @@ def is_prompt_caching_valid_prompt(
     OpenAI's minimum is a flat 1024 across models, which the default already covers.
     """
     try:
-        if messages is None and tools is None:
+        if messages is None:
             return False
         if custom_llm_provider is not None and not model.startswith(custom_llm_provider):
             model = custom_llm_provider + "/" + model
-        token_count: Final = token_counter(
-            messages=messages,
-            tools=tools,
-            model=model,
-            use_default_image_token_count=True,
-        )
         if min_token_count is None:
             min_token_count = get_prompt_cache_min_tokens(model=model)
-        return token_count >= min_token_count
+        return _get_messages_reach_token_count()(
+            model=model,
+            messages=messages,
+            threshold=min_token_count,
+            tools=tools,
+            use_default_image_token_count=True,
+        )
     except Exception as e:
         verbose_logger.error("Error in is_prompt_caching_valid_prompt: %s", e)
         return False

@@ -165,6 +165,7 @@ jobs:
               tests/unit/proxy/response_api_endpoints
               tests/unit/proxy/image_endpoints
               tests/unit/proxy/ocr_endpoints
+              tests/unit/proxy/search_endpoints
               tests/unit/proxy/vector_store_endpoints
               tests/unit/proxy/agent_endpoints
               tests/unit/proxy/a2a

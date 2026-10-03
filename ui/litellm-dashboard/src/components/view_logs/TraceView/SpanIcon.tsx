@@ -1,6 +1,18 @@
 "use client";
 
-import { Bot, BrainCircuit, Link2, Network, Wrench } from "lucide-react";
+import {
+  ArrowDownUp,
+  ClipboardCheck,
+  FileText,
+  Layers,
+  Link2,
+  MessageSquareText,
+  Network,
+  Search,
+  ShieldCheck,
+  Split,
+  Wrench,
+} from "lucide-react";
 
 import { Logo } from "@/components/molecules/logo/Logo";
 import { cn } from "@/lib/cva.config";
@@ -15,7 +27,7 @@ const SIZE = {
   lg: "size-5 rounded-full",
 } as const;
 const GLYPH = { sm: "size-3", card: "size-3", md: "size-3", lg: "size-3" } as const;
-const LOGO_TILE = "bg-white ring-1 ring-trace-line ring-inset dark:bg-white";
+const LOGO_TILE = "bg-white dark:bg-white";
 
 export type IconSize = keyof typeof SIZE;
 
@@ -26,30 +38,30 @@ interface SpanIconProps {
   size?: IconSize;
 }
 
-const TYPE_GLYPH: Record<SpanType, typeof Bot> = {
-  agent: Bot,
-  llm: BrainCircuit,
+const TYPE_GLYPH: Record<SpanType, typeof Network> = {
+  agent: Network,
+  llm: MessageSquareText,
   tool: Wrench,
   chain: Link2,
   framework: Network,
+  retriever: Search,
+  embedding: Layers,
+  reranker: ArrowDownUp,
+  guardrail: ShieldCheck,
+  evaluator: ClipboardCheck,
+  prompt: FileText,
+  decision: Split,
 };
 
-const tileTone = (type: SpanType, error: boolean): string => {
-  if (error) return "bg-destructive text-white";
-  if (type === "tool") return "bg-trace-tool text-trace-glyph";
-  if (type === "llm") return "bg-trace-llm text-trace-glyph";
-  if (type === "framework") return "bg-trace-key text-trace-glyph";
-  return "bg-trace-chain text-trace-glyph";
-};
+const tileTone = (error: boolean): string => (error ? "text-destructive" : "text-muted-foreground");
 
-/** Solid square type tile; LLM spans show their provider's logo, knocked out to the tile glyph color. */
 export function SpanIcon({ type, model = null, error = false, size = "md" }: SpanIconProps) {
   const provider = useSpanProvider(type === "llm" ? model : null);
   const Glyph = TYPE_GLYPH[type];
   const showLogo = provider !== null && !error;
   return (
     <span
-      className={cn("grid shrink-0 place-items-center", SIZE[size], showLogo ? LOGO_TILE : tileTone(type, error))}
+      className={cn("grid shrink-0 place-items-center", SIZE[size], showLogo ? LOGO_TILE : tileTone(error))}
       data-testid="span-icon"
       data-provider={provider ?? undefined}
     >

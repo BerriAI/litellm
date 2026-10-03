@@ -31,8 +31,10 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
+    GUARDRAIL_SESSIONS_TARGET,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -310,6 +312,7 @@ class LassoGuardrail(CustomGuardrail):
 
         return response
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     def _get_or_generate_conversation_id(self, data: dict, cache: DualCache) -> str:
         """
         Get or generate a conversation_id for this request.
