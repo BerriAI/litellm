@@ -153,9 +153,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
         cost_map: Final[dict[str, Any]] = getattr(litellm, "model_cost", {})
         model_info: Final = (
-            cost_map.get(model)
-            or cost_map.get(f"openai_like/{model}")
-            or cost_map.get(f"openai/{model}")
+            cost_map.get(model) or cost_map.get(f"openai_like/{model}") or cost_map.get(f"openai/{model}")
         )
         if (
             isinstance(model_info, dict)
