@@ -122,7 +122,6 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
                         {"text": instruction}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": inference_config,
             }),
         })
@@ -236,7 +235,6 @@ mod tests {
                         {"text": "Transcribe the audio. Respond with only the transcript. The audio language is en. Additional context: Speaker names"}
                     ]
                 }],
-                "system": [{"text": "You are a transcription assistant."}],
                 "inferenceConfig": {"maxTokens": 4096, "temperature": 0}
             })
         );
