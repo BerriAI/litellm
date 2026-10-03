@@ -134,6 +134,11 @@ class ROISettingsUpdate(BaseModel):
     update_interval_minutes: float | None = Field(default=None, ge=0, le=43200, allow_inf_nan=False)
 
 
+class ROIEstimatorModel(BaseModel):
+    model_name: str
+    provider_models: tuple[str, ...]
+
+
 class ROISettingsResponse(BaseModel):
     source_provider: Literal["github", "gitlab"] = "github"
     gitlab_api_url: str = "https://gitlab.com/api/v4"
@@ -149,6 +154,7 @@ class ROISettingsResponse(BaseModel):
     has_github_token: bool
     default_prompt: str
     available_models: tuple[str, ...]
+    estimator_models: tuple[ROIEstimatorModel, ...] = ()
     ready: bool
 
 

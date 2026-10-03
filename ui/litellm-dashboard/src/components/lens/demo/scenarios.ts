@@ -56,8 +56,8 @@ export const scenarios: Scenario[] = [
     agent: "release_agent",
     question: "Review the search release",
     tool: "read_test_results",
-    result: "Search: 86 passed, 1 failed. Unicode query regression remains open.",
-    answer: "Hold the release. The Unicode query regression is still failing.",
+    result: "Search: 117 passed, 3 failed. Cases 17, 63 and 104 returned empty results.",
+    answer: "Hold the release. Three of 120 cases returned empty results. Review cases 17, 63 and 104 before shipping.",
   },
   {
     agent: "support_agent",

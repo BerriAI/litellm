@@ -2,6 +2,7 @@ import { createApiClient } from "@/lib/http/client";
 import type { LensDemo } from "../LensDemoContext";
 import type { Trace, Span, SpanDetail } from "@/components/view_logs/TraceView/traceTypes";
 import type { Lens, Finding, Job, Settings } from "../model/types";
+import { withReleaseCases } from "./lensDemoLongTrace";
 
 import { scenarios, type Scenario } from "./scenarios";
 
@@ -109,7 +110,10 @@ function makeTrace(scene: Scenario, index: number, now: number) {
 }
 
 export function createLensDemoData(now = Date.now()) {
-  const runs = scenarios.map((scene, index) => makeTrace(scene, index, now));
+  const runs = scenarios.map((scene, index) => {
+    const run = makeTrace(scene, index, now);
+    return index === 6 ? withReleaseCases(run) : run;
+  });
   const finding = ({
     id,
     check,

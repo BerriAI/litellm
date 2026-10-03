@@ -49148,6 +49148,27 @@
           "title": "ROIEstimateResponse",
           "type": "object"
         },
+        "ROIEstimatorModel": {
+          "properties": {
+            "model_name": {
+              "title": "Model Name",
+              "type": "string"
+            },
+            "provider_models": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Provider Models",
+              "type": "array"
+            }
+          },
+          "required": [
+            "model_name",
+            "provider_models"
+          ],
+          "title": "ROIEstimatorModel",
+          "type": "object"
+        },
         "ROIIdentityMapResponse": {
           "properties": {
             "identity_map": {
@@ -49582,6 +49603,14 @@
             "estimator_model": {
               "title": "Estimator Model",
               "type": "string"
+            },
+            "estimator_models": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ROIEstimatorModel"
+              },
+              "title": "Estimator Models",
+              "type": "array"
             },
             "estimator_prompt": {
               "title": "Estimator Prompt",
