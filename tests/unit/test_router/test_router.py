@@ -18630,3 +18630,11 @@ def test_serialized_fallbacks_keep_explicit_wildcard_override():
     router.update_settings(fallbacks=saved, default_fallbacks=["new-model"])
     assert router.fallbacks == configured
     assert configured == [{"audio-a": []}, {"*": ["explicit-model"]}]
+
+
+def test_set_fallbacks_appends_default_wildcard_without_mutating_input():
+    configured = [{"audio-a": []}]
+    router = Router(model_list=[], default_fallbacks=["default-model"])
+    router._set_fallbacks(configured)
+    assert router.fallbacks == [{"audio-a": []}, {"*": ["default-model"]}]
+    assert configured == [{"audio-a": []}]
