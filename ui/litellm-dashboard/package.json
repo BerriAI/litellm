@@ -44,7 +44,7 @@
     "next": "16.3.6",
     "next-themes": "^0.4.6",
     "nuqs": "^2.9.4",
-    "openai": "4.104.0",
+    "openai": "6.49.0",
     "openapi-fetch": "^0.17.0",
     "openapi-react-query": "^0.5.4",
     "papaparse": "5.5.3",
@@ -60,7 +60,7 @@
     "sonner": "2.0.8",
     "tailwind-merge": "3.4.0",
     "uuid": "14.0.0",
-    "zod": "3.25.76"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "9.39.2",
