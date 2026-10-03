@@ -25,10 +25,12 @@ import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
 import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
+import { ProblemsTable } from "./ProblemsTable";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
 import { InvestigationsWelcome } from "./InvestigationsWelcome";
 import { workerConnected, readiness } from "../model/status";
 import { type Finding, type Settings } from "../model/types";
+import type { Problem } from "../model/problems";
 
 export function InvestigationsView({
   accessToken,
@@ -82,6 +84,16 @@ export function InvestigationsView({
   const selectLens = (id: string | null) => {
     void setSelected(id);
     resetResults();
+  };
+  const openProblem = (problem: Problem) => {
+    selectLens(problem.lensId);
+    results.setBatchId(problem.jobId);
+    setFindingId(problem.findingId);
+  };
+  const openRun = (lensId: string, executionId: string) => {
+    selectLens(lensId);
+    setRequestOffset(0);
+    setEvidence({ id: executionId, span: "" });
   };
   useEffect(() => {
     const restoreLocation = () => {
@@ -174,6 +186,9 @@ export function InvestigationsView({
         />
       )}
       {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} />}
+      {!selected && lenses.length > 0 && (
+        <ProblemsTable lenses={lenses} onOpenProblem={openProblem} onOpenRun={openRun} />
+      )}
       {!selected && lenses.length > 0 && (
         <InvestigationList lenses={lenses} connected={connected} onSelect={selectLens} />
       )}
