@@ -207,11 +207,18 @@ locals {
 
   proxy_config_fetch_cmd = "python -c \"import os, boto3; boto3.client('s3', region_name=os.environ['AWS_REGION']).download_file(os.environ['LITELLM_PROXY_CONFIG_S3_BUCKET'], os.environ['LITELLM_PROXY_CONFIG_S3_KEY'], os.environ['CONFIG_FILE_PATH'])\""
 
-  # Gateway always needs --workers wired in (no NUM_WORKERS env var support
-  # in the image entrypoint). When proxy_config is enabled we also have to
-  # pull the config from S3 first, so the command goes through `sh -c`;
-  # otherwise we keep the image's ENTRYPOINT and only override `command`.
-  gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
+  image_entrypoint = "/app/docker-entrypoint.sh"
+  component_args = {
+    gateway   = ["gateway", "--workers", tostring(var.gateway_num_workers)]
+    backend   = ["backend"]
+    collector = ["collector"]
+  }
+  component_overrides = {
+    for component, args in local.component_args : component => local.proxy_config_enabled ? {
+      entryPoint = ["sh", "-c"]
+      command    = ["${local.proxy_config_fetch_cmd} && exec ${local.image_entrypoint} ${join(" ", args)}"]
+    } : { command = args }
+  }
 
   gateway_pool_env = var.gateway_connection_pool_enabled ? [
     { name = "LITELLM_PGBOUNCER_ENABLED", value = "true" },
@@ -228,11 +235,10 @@ locals {
 
   gateway_metrics_container = local.metrics_enabled ? [
     {
-      name       = "metrics"
-      image      = var.gateway_image
-      essential  = false
-      entryPoint = ["python", "-m", "litellm.proxy.prometheus_metrics_server"]
-      command    = ["--port", tostring(var.gateway_metrics_port)]
+      name      = "metrics"
+      image     = var.image
+      essential = false
+      command   = ["metrics", "--port", tostring(var.gateway_metrics_port)]
 
       portMappings = [{ containerPort = var.gateway_metrics_port, protocol = "tcp" }]
       environment  = local.metrics_env
@@ -257,28 +263,6 @@ locals {
     }
   ] : []
 
-  backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
-
-  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run python -m gateway.launch ${local.gateway_uvicorn_args};; *) exec python -m gateway.launch ${local.gateway_uvicorn_args};; esac"
-  backend_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args};; *) exec uvicorn backend.main:app ${local.backend_uvicorn_args};; esac"
-
-  gateway_proxy_overrides = local.proxy_config_enabled ? {
-    entryPoint = ["sh", "-c"]
-    command = [
-      "${local.proxy_config_fetch_cmd} && ${local.gateway_launch_cmd}"
-    ]
-    } : {
-    entryPoint = ["sh", "-c"]
-    command    = [local.gateway_launch_cmd]
-  }
-
-  backend_proxy_overrides = local.proxy_config_enabled ? {
-    entryPoint = ["sh", "-c"]
-    command = [
-      "${local.proxy_config_fetch_cmd} && ${local.backend_launch_cmd}"
-    ]
-  } : {}
-
   collector_address = "tcp://127.0.0.1:${var.collector_port}"
   collector_env = var.collector_enabled ? [
     { name = "LITELLM_COLLECTOR_ENABLED", value = "true" },
@@ -299,22 +283,15 @@ locals {
     local.collector_env,
   )
 
-  collector_launch_cmd = "exec python -m litellm.proxy.collector"
-  collector_command = [
-    local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.collector_launch_cmd}" : local.collector_launch_cmd
-  ]
-
-  collector_container = var.collector_enabled ? [{
+  collector_container = var.collector_enabled ? [merge({
     name      = "collector"
-    image     = var.gateway_image
+    image     = var.image
     essential = false
     cpu       = var.collector_cpu
     memory    = var.collector_memory
 
     restartPolicy = { enabled = true }
 
-    entryPoint = ["sh", "-c"]
-    command    = local.collector_command
     environment = concat(
       local.shared_env,
       local.gateway_extra_env_list,
@@ -333,7 +310,7 @@ locals {
         awslogs-stream-prefix = "collector"
       }
     }
-  }] : []
+  }, local.component_overrides.collector)] : []
 }
 
 # ---------- Gateway ----------
@@ -389,7 +366,7 @@ resource "aws_ecs_task_definition" "gateway" {
     merge(
       {
         name      = "gateway"
-        image     = var.gateway_image
+        image     = var.image
         essential = true
 
         portMappings = [{ containerPort = 4000, protocol = "tcp" }]
@@ -410,7 +387,7 @@ resource "aws_ecs_task_definition" "gateway" {
           }
         }
       },
-      local.gateway_proxy_overrides,
+      local.component_overrides.gateway,
     )
   ], local.gateway_metrics_container, local.collector_container))
 
@@ -499,7 +476,7 @@ resource "aws_ecs_task_definition" "backend" {
     merge(
       {
         name      = "backend"
-        image     = var.backend_image
+        image     = var.image
         essential = true
 
         portMappings = [{ containerPort = 4001, protocol = "tcp" }]
@@ -522,7 +499,7 @@ resource "aws_ecs_task_definition" "backend" {
           }
         }
       },
-      local.backend_proxy_overrides,
+      local.component_overrides.backend,
     )
   ])
 
@@ -591,8 +568,9 @@ resource "aws_ecs_task_definition" "ui" {
   container_definitions = jsonencode([
     {
       name         = "ui"
-      image        = var.ui_image
+      image        = var.image
       essential    = true
+      command      = ["ui"]
       portMappings = [{ containerPort = 3000, protocol = "tcp" }]
 
       logConfiguration = {

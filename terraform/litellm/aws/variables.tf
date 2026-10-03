@@ -135,38 +135,17 @@ variable "azs" {
 
 # ---------- Component images ----------
 #
-# Defaults pin the four componentized images at the same release tag on
-# GHCR. Override on a per-component basis in tfvars when bumping; bump them
-# together when bumping the LiteLLM release.
-
-variable "gateway_image" {
-  description = "Container image for the gateway (data plane, port 4000). Tag must match a tag actually published to GHCR — the split images use the `v`-prefixed semver convention."
-  type        = string
-  default     = "ghcr.io/berriai/litellm-gateway:v1.86.0-dev"
-}
-
-variable "backend_image" {
-  description = "Container image for the backend (management API, port 4001)."
-  type        = string
-  default     = "ghcr.io/berriai/litellm-backend:v1.86.0-dev"
-}
-
-variable "ui_image" {
-  description = "Container image for the UI (nginx static export, port 3000)."
-  type        = string
-  default     = "ghcr.io/berriai/litellm-ui:v1.86.0-dev"
-}
-
-variable "migrations_image" {
+variable "image" {
   description = <<-EOT
-    Container image for the one-off prisma migration task. Built from
-    `migrations/Dockerfile` — slim image whose ENTRYPOINT runs
-    `python3 /app/run.py` (assembles DATABASE_URL from DATABASE_* env vars
-    via DatabaseURLSettings, then runs `prisma migrate deploy`). Should track
-    the same release tag as gateway/backend/ui.
+    The one LiteLLM image every task runs. Its entrypoint picks the process
+    from the first argument (`gateway`, `backend`, `ui`, `migrations`,
+    `metrics`, `collector`), so the gateway, backend, UI and migration task
+    definitions and the sidecars all pull this URI. The component entrypoint
+    ships from v1.104.0; older tags only run the monolithic proxy. Tag must
+    match a tag actually published to GHCR (`v<semver>` for releases).
   EOT
   type        = string
-  default     = "ghcr.io/berriai/litellm-migrations:v1.86.0-dev"
+  default     = "ghcr.io/berriai/litellm:v1.104.0"
 }
 
 # ---------- Service sizing ----------
@@ -634,13 +613,11 @@ variable "gateway_metrics_port" {
   description = <<-EOT
     Serve Prometheus /metrics from a `metrics` sidecar container in the
     gateway task on this port (1-65535, not 4000), so a scrape never runs on
-    an inference worker. The sidecar runs the gateway image with
-    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
-    workers' PROMETHEUS_MULTIPROC_DIR samples over a task volume. Null (the
-    default) leaves /metrics on the gateway port only. The sidecar port has
-    no virtual-key auth and is not routed through the ALB; open it to your
-    scrapers with gateway_metrics_scrape_cidrs. Needs gateway_image v1.101.0
-    or newer.
+    an inference worker. The sidecar runs the `metrics` component of `image`
+    and aggregates the workers' PROMETHEUS_MULTIPROC_DIR samples over a task
+    volume. Null (the default) leaves /metrics on the gateway port only. The
+    sidecar port has no virtual-key auth and is not routed through the ALB;
+    open it to your scrapers with gateway_metrics_scrape_cidrs.
   EOT
   type        = number
   default     = null
@@ -812,7 +789,7 @@ variable "billing_metrics_ca_cert_pem" {
 # ---------- Collector sidecar ----------
 #
 # Opt-in offload of spend tracking from the gateway's uvicorn workers to a
-# `python -m litellm.proxy.collector` sidecar in the same Fargate task (helm's
+# `collector` component sidecar in the same Fargate task (helm's
 # `gateway.collector`). Fargate awsvpc tasks share one network namespace,
 # so the sidecar listens on loopback TCP. Disabled (the default) adds nothing
 # to the task definition.
