@@ -77,7 +77,12 @@ export interface ConversationItem {
   toolResult?: string;
 }
 
-function toolItem(span: Span, detail: SpanDetail, pending: TraceToolCall[]): ConversationItem {
+function toolItem(
+  span: Span,
+  detail: SpanDetail,
+  pending: TraceToolCall[],
+  items: ConversationItem[],
+): ConversationItem {
   const args =
     detail.input_ui?.kind === "fields"
       ? Object.fromEntries(detail.input_ui.fields.map((field) => [field.key, field.value]))
@@ -88,9 +93,16 @@ function toolItem(span: Span, detail: SpanDetail, pending: TraceToolCall[]): Con
       candidate.name === call.name &&
       JSON.stringify(stableValue(candidate.args)) === JSON.stringify(stableValue(call.args)),
   );
-  if (match >= 0) pending.splice(match, 1);
+  if (match >= 0) {
+    const [matched] = pending.splice(match, 1);
+    for (const item of items)
+      for (const message of item.messages) {
+        if (message.tool_calls?.includes(matched))
+          message.tool_calls = message.tool_calls.filter((call) => call !== matched);
+      }
+  }
   const result = contentText(detail.output, detail.output_ui);
-  return { id: span.span_id, span, messages: [], toolCall: match < 0 ? call : undefined, toolResult: result };
+  return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result };
 }
 
 export function buildConversation(
@@ -119,7 +131,7 @@ export function buildConversation(
     const key = branch(span);
     const history = histories.get(key) ?? [];
     if (span.type === "tool") {
-      const item = toolItem(span, detail, pendingCalls.get(key) ?? []);
+      const item = toolItem(span, detail, pendingCalls.get(key) ?? [], items);
       items.push(item);
       histories.set(key, [...history, { role: "tool", name: span.name, content: item.toolResult ?? "" }]);
       continue;
@@ -140,7 +152,15 @@ export function buildConversation(
       key,
       output.flatMap((message) => message.tool_calls ?? []),
     );
-    if (combined.length || span.status === "error") items.push({ id: span.span_id, span, messages: combined });
+    if (combined.length || span.status === "error")
+      items.push({
+        id: span.span_id,
+        span,
+        messages: combined.map((message) => ({
+          ...message,
+          tool_calls: message.tool_calls ? [...message.tool_calls] : undefined,
+        })),
+      });
   }
   if (complete) {
     for (const { span, output } of roots) {
@@ -149,5 +169,10 @@ export function buildConversation(
       if (fresh.length) items.push({ id: `${span.span_id}-output`, span, messages: fresh });
     }
   }
-  return items;
+  return items
+    .map((item) => ({
+      ...item,
+      messages: item.messages.filter((message) => Boolean(message.content) || Boolean(message.tool_calls?.length)),
+    }))
+    .filter((item) => item.messages.length || item.toolResult !== undefined || item.span.status === "error");
 }

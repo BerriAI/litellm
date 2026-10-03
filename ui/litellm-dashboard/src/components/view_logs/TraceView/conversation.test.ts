@@ -38,9 +38,9 @@ describe("trace conversation", () => {
       ["last", detail("last", [user, call, result], [answer])],
     ]);
     const items = buildConversation([root, first, tool, last], details, true);
-    expect(items.flatMap((item) => item.messages)).toEqual([user, call, answer]);
+    expect(items.flatMap((item) => item.messages)).toEqual([user, { ...call, tool_calls: [] }, answer]);
     expect(items.find((item) => item.span.span_id === "tool")).toMatchObject({
-      toolCall: undefined,
+      toolCall: { name: "lookup", args: { order: 42 } },
       toolResult: "Shipped",
     });
   });

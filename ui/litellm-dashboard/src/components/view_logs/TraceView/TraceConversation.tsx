@@ -10,8 +10,8 @@ import { Button } from "@/components/ui/button";
 import { agentTraceSpanCall } from "../../networking";
 import { buildConversation, conversationSteps, CONVERSATION_PAGE_SIZE, type ConversationItem } from "./conversation";
 import { ErrorBlock } from "./DetailContent";
-import { MessageCard, ToolCallBlock } from "./MessageCard";
-import type { SpanDetail, Trace } from "./traceTypes";
+import { Markdown, ToolCallBlock } from "./MessageCard";
+import type { SpanDetail, Trace, TraceMessage } from "./traceTypes";
 import { fmtMs } from "./traceUtils";
 
 export function TraceConversation({
@@ -52,27 +52,27 @@ export function TraceConversation({
   return (
     <section aria-label="Trace conversation" className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-3xl space-y-6 px-6 py-5">
-        {items.map((item, itemIndex) => (
-          <section key={item.id} className="space-y-2" aria-label={`Conversation step ${item.span.name}`}>
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              {(itemIndex === 0 || items[itemIndex - 1].span.agent !== item.span.agent) && (
-                <span className="min-w-0 truncate">{item.span.agent || item.span.name}</span>
-              )}
-              <span className="shrink-0 tabular-nums">{fmtMs(item.span.start_offset_ms)}</span>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="ml-auto shrink-0 text-muted-foreground"
-                onClick={() => onOpenStep(item.span.span_id)}
-              >
-                View step
-              </Button>
-            </div>
+        {items.map((item) => (
+          <section
+            key={item.id}
+            className="group/conversation relative space-y-3"
+            aria-label={`Conversation step ${item.span.name}`}
+          >
             {item.span.status === "error" && item.span.type !== "tool" && <ErrorBlock span={item.span} />}
             {item.messages.map((message, index) => (
-              <MessageCard key={index} message={message} model={item.span.model} conversation />
+              <ConversationMessage key={index} message={message} />
             ))}
             {item.toolResult !== undefined && <ConversationTool item={item} />}
+            <Button
+              variant="ghost"
+              size="xs"
+              title={`${item.span.agent || item.span.name} · ${fmtMs(item.span.start_offset_ms)}`}
+              aria-label={`Inspect step ${item.span.name}`}
+              className="absolute right-0 -bottom-5 z-raised bg-background text-muted-foreground opacity-0 group-hover/conversation:opacity-100 focus-visible:opacity-100"
+              onClick={() => onOpenStep(item.span.span_id)}
+            >
+              Inspect step
+            </Button>
           </section>
         ))}
         {queries.map(
@@ -96,7 +96,9 @@ export function TraceConversation({
         )}
         <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
           <span>
-            {visible.length} of {steps.length} steps
+            {visible.length === steps.length
+              ? "End of conversation"
+              : `${visible.length} of ${steps.length} steps loaded`}
           </span>
           {visible.length < steps.length && (
             <Button
@@ -150,6 +152,42 @@ function ConversationTool({ item }: { item: ConversationItem }) {
           </pre>
         </div>
       )}
+    </div>
+  );
+}
+
+function ConversationMessage({ message }: { message: TraceMessage }) {
+  if (message.role === "system")
+    return (
+      <details className="text-sm text-muted-foreground">
+        <summary className="cursor-pointer">System instructions</summary>
+        <div className="pt-3">
+          <Markdown text={message.content} />
+        </div>
+      </details>
+    );
+  if (message.role === "tool")
+    return (
+      <details className="rounded-md border p-3 text-sm">
+        <summary className="cursor-pointer">{message.name || "Tool result"}</summary>
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap pt-3 text-xs">{message.content}</pre>
+      </details>
+    );
+  return (
+    <div className={message.role === "user" ? "flex justify-end" : "space-y-3"}>
+      {message.content && (
+        <div className={message.role === "user" ? "max-w-[85%] rounded-xl bg-muted px-4 py-3" : "px-1 py-1"}>
+          <Markdown text={message.content} />
+        </div>
+      )}
+      {message.tool_calls?.map((call, index) => (
+        <details key={index} className="rounded-md border p-3 text-sm">
+          <summary className="cursor-pointer">{call.name}</summary>
+          <div className="pt-3">
+            <ToolCallBlock call={call} />
+          </div>
+        </details>
+      ))}
     </div>
   );
 }

@@ -50,7 +50,7 @@ describe("TraceConversation", () => {
     expect(await within(conversation).findByText("All checks passed")).toBeVisible();
     expect(await within(conversation).findByText("The release is ready")).toBeVisible();
     const toolStep = within(conversation).getByRole("region", { name: "Conversation step read_file" });
-    await user.click(within(toolStep).getByRole("button", { name: "View step" }));
+    await user.click(within(toolStep).getByRole("button", { name: "Inspect step read_file" }));
     expect(screen.getByRole("tab", { name: "Steps" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "tool");
     expect(screen.getByRole("heading", { name: "read_file" })).toBeVisible();
