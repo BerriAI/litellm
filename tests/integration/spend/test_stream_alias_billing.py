@@ -96,6 +96,12 @@ def _streamed_spend(gateway: Gateway, scenario: Scenario, model: str, content: s
         key=key,
     )
     assert response.status_code == 200, response.text
+    chunks: Final = tuple(
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    )
+    assert chunks and {chunk["model"] for chunk in chunks} == {model}, response.text
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
