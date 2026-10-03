@@ -55,6 +55,7 @@ from litellm.caching.caching import (
     RedisCache,
     RedisClusterCache,
 )
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
@@ -262,7 +263,12 @@ from litellm.router_utils.routing_groups import (
     parse_routing_groups,
     validate_routing_strategy,
 )
-from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
+from litellm.router_utils.routing_read_batch import (
+    ROUTER_USAGE_TARGET,
+    RoutingPrefetch,
+    RoutingReadBatch,
+    SessionBindingPrefetch,
+)
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
@@ -1758,6 +1764,7 @@ class Router:
         `async_get_available_deployment` will make for `model` on the request's Redis batch, so admission's
         flush carries it. A miss (alias, no batch) costs nothing: routing then reads as it always has."""
         try:
+            self._arm_claude_code_session_router_binding_prefetch(request_kwargs)
             strategy, selector = self._get_routing_context(model, request_kwargs)
             usage_selector: Final = (
                 selector
@@ -13786,13 +13793,46 @@ class Router:
                 e,
             )
 
+    def _claude_code_session_router_binding_key(self, request_kwargs: Mapping[str, object]) -> str | None:
+        """The binding key of a request the session router applies to: a routed model group exists, the
+        request carries a session and a caller scope, and it is the first attempt, not a fallback."""
+        if not any((self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)):
+            return None
+        cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
+        if cache_key is None or not isinstance(request_kwargs, dict):
+            return None
+        if request_kwargs.get("fallback_depth") not in (None, 0):
+            return None
+        return cache_key
+
+    def _arm_claude_code_session_router_binding_prefetch(self, request_kwargs: Mapping[str, object] | None) -> None:
+        """Declare the binding read `_resolve_claude_code_session_router` will make on the request's Redis
+        batch, so it shares a round trip with the routing read instead of being a GET of its own at route time."""
+        redis_cache: Final = self._claude_code_session_router_cache.redis_cache
+        if redis_cache is None or request_kwargs is None:
+            return
+        if self._request_header(request_kwargs, "x-claude-code-agent-id") is None:
+            return
+        cache_key: Final = self._claude_code_session_router_binding_key(request_kwargs)
+        if cache_key is None:
+            return
+        with service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET):
+            SessionBindingPrefetch.arm(redis_cache, cache_key)
+
     @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
     async def _get_claude_code_session_router_binding(self, cache_key: str) -> object:
         session_cache: Final = self._claude_code_session_router_cache
         try:
-            if session_cache.redis_cache is None:
+            redis_cache: Final = session_cache.redis_cache
+            if redis_cache is None:
                 return await session_cache.async_get_cache(key=cache_key)
-            return await session_cache.redis_cache.async_get_cache(key=cache_key)
+            prefetched: Final = SessionBindingPrefetch.take(cache_key)
+            if prefetched is not None:
+                return (await prefetched)[cache_key]
+            batch: Final = active_request_redis_batch(redis_cache)
+            if batch is not None:
+                return (await batch.mget((cache_key,)))[cache_key]
+            return await redis_cache.async_get_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # an optional binding must not make routing depend on Redis
             log_redis_failure(
                 verbose_router_logger,
@@ -13811,12 +13851,8 @@ class Router:
     ) -> str:
         if is_native_compaction_call():
             return registered_model_name
-        if not any((self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)):
-            return registered_model_name
-        cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
+        cache_key: Final = self._claude_code_session_router_binding_key(request_kwargs)
         if cache_key is None or not isinstance(request_kwargs, dict):
-            return registered_model_name
-        if request_kwargs.get("fallback_depth") not in (None, 0):
             return registered_model_name
 
         agent_id: Final = self._request_header(request_kwargs, "x-claude-code-agent-id")

@@ -5,6 +5,7 @@ Before `RoutingReadBatch`, `async_get_available_deployment` issued one MGET for 
 (`CooldownCache`) and a second one for the tpm/rpm counters (`LowestTPMLoggingHandler_v2`).
 """
 
+import json
 import time
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -13,8 +14,10 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_utils.routing_read_batch import SessionBindingPrefetch
 
 _MODEL_GROUP = "claude"
 _MESSAGES = [{"role": "user", "content": "ping"}]
@@ -218,3 +221,34 @@ async def test_a_failed_batched_read_leaves_simple_shuffle_routing():
     )
 
     assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+
+
+@pytest.mark.asyncio
+async def test_a_session_binding_is_declared_once_per_request_and_taken_once():
+    from tests.unit.caching.test_redis_batch import FakeClient, FakeRedisCache
+
+    client = FakeClient(lambda command: [json.dumps("bound") for _ in command[1:]])
+    redis_cache = FakeRedisCache(client)
+
+    with request_redis_batch_scope():
+        SessionBindingPrefetch.arm(redis_cache, "binding:a")
+        SessionBindingPrefetch.arm(redis_cache, "binding:b")
+        first = SessionBindingPrefetch.take("binding:a")
+        assert first is not None
+        assert (await first)["binding:a"] == "bound"
+        assert SessionBindingPrefetch.take("binding:a") is None
+
+    assert [command[1:] for pipe in client.pipelines for command in pipe.commands] == [("binding:a",)]
+
+
+@pytest.mark.asyncio
+async def test_a_session_binding_armed_for_another_key_or_outside_a_request_is_not_served():
+    from tests.unit.caching.test_redis_batch import FakeClient, FakeRedisCache
+
+    redis_cache = FakeRedisCache(FakeClient(lambda command: [None for _ in command[1:]]))
+
+    assert SessionBindingPrefetch.take("binding:a") is None
+    with request_redis_batch_scope():
+        SessionBindingPrefetch.arm(redis_cache, "binding:a")
+        assert SessionBindingPrefetch.take("binding:b") is None
+        assert SessionBindingPrefetch.take("binding:a") is None

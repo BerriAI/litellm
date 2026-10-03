@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING, Any, Final
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import log_redis_failure
+from litellm.caching.redis_batch import active_request_redis_batch
+from litellm.caching.redis_cache import RedisCache, log_redis_failure
 from litellm.integrations.custom_guardrail import get_session_id_from_request_data
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -80,14 +81,23 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         ]
         return "|".join(principal) if principal else "default"
 
+    @staticmethod
+    async def _read_pin_from_redis(redis_cache: RedisCache, cache_key: str) -> object:
+        """On the request's Redis pipeline when one is open, so the pin shares the routing read's round trip."""
+        batch: Final = active_request_redis_batch(redis_cache)
+        if batch is None:
+            return await redis_cache.async_get_cache(key=cache_key)
+        return (await batch.mget((cache_key,)))[cache_key]
+
     @with_service_target("sensitive_route_pins")
     async def _get_routed_model(self, session_id: str, user_api_key_dict: UserAPIKeyAuth | None) -> str | None:
         """Get the model this session should be routed to, if any."""
         cache_key: Final = self._make_cache_key(session_id, self._resolve_tenant(user_api_key_dict))
 
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        if redis_cache is not None:
             try:
-                result = await self.internal_usage_cache.dual_cache.redis_cache.async_get_cache(key=cache_key)
+                result = await self._read_pin_from_redis(redis_cache, cache_key)
                 if result is not None:
                     routed_model: Final = str(result)
                     remaining_ttl = await self.internal_usage_cache.dual_cache.redis_cache.async_get_ttl(key=cache_key)
