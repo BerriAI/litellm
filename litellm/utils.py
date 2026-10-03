@@ -3208,18 +3208,30 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     return None
 
 
+def _model_cost_entry_has_pricing(entry: Mapping[str, object] | None) -> bool:
+    """Whether a raw ``litellm.model_cost`` row carries a non-zero rate under any cost field."""
+    if entry is None:
+        return False
+    return any(bool(price) and not isinstance(price, str) for name, price in entry.items() if "cost" in name)
+
+
 def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     """Whether ``model_info`` came from a fallback-generalization capability rule.
 
-    Detected as the resolved key missing ``litellm.model_cost`` while matching a
-    capability rule. A rule-derived entry carries no pricing and only a conservative
+    Detected as the resolved key matching a capability rule without its own pricing:
+    either the key is missing from ``litellm.model_cost``, or the row under it only
+    repeats rule-derived data with zero or absent rates (a router-registered stub).
+    A rule-derived entry carries no pricing and only a conservative
     family-baseline context window, so callers holding a second candidate name should
     prefer an exact cost-map entry from that name over this one.
     """
     key: Final = cast("Mapping[str, object]", model_info).get("key")  # cast-ok: partial dicts may omit "key"
     if not isinstance(key, str):
         return False
-    return key not in litellm.model_cost and match_capability_generalizations(key) is not None
+    if match_capability_generalizations(key) is None:
+        return False
+    raw_entry: Final = cast("Mapping[str, object] | None", litellm.model_cost.get(key))
+    return not _model_cost_entry_has_pricing(raw_entry)
 
 
 def get_priced_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo:

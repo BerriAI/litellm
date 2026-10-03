@@ -1,3 +1,4 @@
+import copy
 import datetime
 import time
 from pathlib import Path
@@ -5738,3 +5739,65 @@ def test_cost_per_token_raises_for_capability_rule_only_alias(_local_model_cost_
             prompt_tokens=30,
             completion_tokens=40,
         )
+
+
+def test_completion_cost_bills_rule_only_base_model_at_the_deployment_model(_local_model_cost_map: None) -> None:
+    """A deployment whose base_model only matches a capability rule is billed at the
+    deployment's own price, the same as the same call with no base_model."""
+    response: Final = ModelResponse(
+        id="chatcmpl_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="haiku-base-rule-1",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+    row: Final = litellm.model_cost["claude-haiku-4-5"]
+    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
+    assert expected > 0
+
+    with_base_model: Final = completion_cost(
+        completion_response=response,
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        base_model="claude-opus-9",
+    )
+    response2: Final = ModelResponse(
+        id="chatcmpl_y",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-haiku-4-5",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+    without_base_model: Final = completion_cost(
+        completion_response=response2,
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+    )
+
+    assert with_base_model == pytest.approx(expected)
+    assert with_base_model == pytest.approx(without_base_model)
+
+
+def test_completion_cost_skips_a_registered_rule_only_base_model_entry(_local_model_cost_map: None) -> None:
+    """Router registration persists base_model info into litellm.model_cost. When that
+    info is capability-rule-derived it carries no pricing, and cost lookup must treat it
+    as unmapped and fall through to the deployment model."""
+    rule_info: Final = litellm.get_model_info(model="anthropic/claude-opus-9", custom_llm_provider="anthropic")
+    litellm.model_cost["anthropic/claude-opus-9"] = copy.deepcopy(rule_info)
+
+    response: Final = ModelResponse(
+        id="chatcmpl_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="haiku-base-rule-1",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+    row: Final = litellm.model_cost["claude-haiku-4-5"]
+    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        base_model="claude-opus-9",
+    )
+
+    assert cost == pytest.approx(expected)
+    assert cost > 0
