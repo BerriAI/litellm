@@ -2191,7 +2191,6 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
   const alwaysSent = {
     team_id: "123",
     team_alias: "Test Team",
-    models: ["gpt-4"],
     tpm_limit: 1000,
     rpm_limit: 1000,
     tpd_limit: null,
