@@ -140,10 +140,12 @@ async def _can_view_team_projects(
 
 
 def _visible_projects_where(team_ids: list[str], admin_org_ids: frozenset[str]) -> dict[str, object]:
+    # bounded-ok: one caller's team memberships
     member_scope: Final[dict[str, object]] = {"team_id": {"in": team_ids}}
     if not admin_org_ids:
         return member_scope
     org_scope: Final[dict[str, object]] = {
+        # bounded-ok: orgs one caller administers
         "litellm_team_table": {"is": {"organization_id": {"in": sorted(admin_org_ids)}}}
     }
     return {"OR": [member_scope, org_scope]}
