@@ -1910,7 +1910,7 @@ def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
         ),
     ]
 
-    processor = ChunkProcessor()
+    processor = ChunkProcessor(chunks=chunks)
     tool_calls = processor.get_combined_tool_content(chunks)
     assert len(tool_calls) == 1
     assert tool_calls[0].id == "call_9f2c"
@@ -1955,7 +1955,8 @@ def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
             ]
         },
     ]
-    dict_tool_calls = processor.get_combined_tool_content(dict_chunks)
+    dict_processor = ChunkProcessor(chunks=dict_chunks)
+    dict_tool_calls = dict_processor.get_combined_tool_content(dict_chunks)
     assert len(dict_tool_calls) == 1
     assert dict_tool_calls[0].id == "call_abc1"
     assert dict_tool_calls[0].function.name == "get_data"
@@ -1999,7 +2000,8 @@ def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
             ]
         },
     ]
-    obj_func_tool_calls = processor.get_combined_tool_content(dict_with_object_func_chunks)
+    obj_func_processor = ChunkProcessor(chunks=dict_with_object_func_chunks)
+    obj_func_tool_calls = obj_func_processor.get_combined_tool_content(dict_with_object_func_chunks)
     assert len(obj_func_tool_calls) == 1
     assert obj_func_tool_calls[0].id == "call_web1"
     assert obj_func_tool_calls[0].function.name == "search_docs"
@@ -2041,7 +2043,8 @@ def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
             ]
         },
     ]
-    custom_dict_calls = processor.get_combined_tool_content(dict_custom_chunks)
+    custom_dict_processor = ChunkProcessor(chunks=dict_custom_chunks)
+    custom_dict_calls = custom_dict_processor.get_combined_tool_content(dict_custom_chunks)
     assert len(custom_dict_calls) == 1
     assert custom_dict_calls[0].id == "custom_call_1_part2"
     assert custom_dict_calls[0].custom.name == "custom_action"
@@ -2102,7 +2105,8 @@ def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
             ],
         ),
     ]
-    object_custom_calls = processor.get_combined_tool_content(object_custom_chunks)
+    object_custom_processor = ChunkProcessor(chunks=object_custom_chunks)
+    object_custom_calls = object_custom_processor.get_combined_tool_content(object_custom_chunks)
     assert len(object_custom_calls) == 1
     assert object_custom_calls[0].id == "call_c_99"
     assert object_custom_calls[0].custom.name == "mcp_runner"
