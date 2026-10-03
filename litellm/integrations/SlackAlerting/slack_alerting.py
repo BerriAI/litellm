@@ -7,6 +7,7 @@ import random
 import time
 from collections.abc import Callable
 from datetime import timedelta
+from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from openai import APIError
@@ -118,7 +119,7 @@ class SlackAlerting(CustomBatchLogger):
         )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
-        self.alerting_args = SlackAlertingArgs(**alerting_args)
+        self.alerting_args = SlackAlertingArgs.model_validate(alerting_args)
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
@@ -158,7 +159,7 @@ class SlackAlerting(CustomBatchLogger):
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
-            self.alerting_args = SlackAlertingArgs(**alerting_args)
+            self.alerting_args = SlackAlertingArgs.model_validate(alerting_args)
             self._ensure_periodic_flush_task()
         if alert_type_config is not None:
             for key, val in alert_type_config.items():
@@ -591,7 +592,14 @@ class SlackAlerting(CustomBatchLogger):
         if event is not None and user_info.event_group is not None:
             _cache_key: Final = f"budget_alerts:{event}:{_id}"
             result: Final = await _cache.async_get_cache(key=_cache_key)
-            if result is None:
+            slack_cache_key: Final = f"budget_alerts:slack:{event}:{_id}"
+            slack_due: Final[bool] = (
+                "slack" in self.alerting
+                and self._slack_budget_alert_allowed(user_info)
+                and result != "SENT"
+                and await _cache.async_get_cache(key=slack_cache_key) is None
+            )
+            if result is None or slack_due:
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
@@ -612,18 +620,27 @@ class SlackAlerting(CustomBatchLogger):
                     alert_emails=user_info.alert_emails,
                     max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
-                await self.send_alert(
+                slack_accepted: Final = await self.send_alert(
                     message=event_message + "\n\n" + user_info_str,
                     level="High",
                     alert_type=AlertType.budget_alerts,
                     user_info=webhook_event,
                     alerting_metadata={},
+                    budget_alert_destination=("slack" if result is not None else "all") if slack_due else "non_slack",
                 )
-                await _cache.async_set_cache(
-                    key=_cache_key,
-                    value="SENT",
-                    ttl=self.alerting_args.budget_alert_ttl,
-                )
+                if slack_accepted:
+                    await _cache.async_set_cache(
+                        key=slack_cache_key,
+                        value="SENT",
+                        ttl=self.alerting_args.budget_alert_ttl,
+                    )
+                if result is None:
+                    # Legacy SENT includes Slack; new markers use the independent Slack window.
+                    await _cache.async_set_cache(
+                        key=_cache_key,
+                        value="SENT_WITH_SLACK_DEDUP",
+                        ttl=self.alerting_args.budget_alert_ttl,
+                    )
 
             return
         return
@@ -1431,17 +1448,28 @@ Model Info:
 
         return False
 
+    def _slack_budget_alert_allowed(self, user_info: CallInfo | WebhookEvent | None) -> bool:
+        patterns: Final = self.alerting_args.slack_budget_alert_key_aliases
+        return patterns is None or (
+            user_info is not None
+            and user_info.event_group == Litellm_EntityType.KEY
+            and user_info.key_alias is not None
+            and user_info.key_alias != ""
+            and any(fnmatchcase(user_info.key_alias, pattern) for pattern in patterns)
+        )
+
     async def send_alert(
         self,
         message: str,
         level: Literal["Low", "Medium", "High"],
         alert_type: AlertType,
-        alerting_metadata: dict,
+        alerting_metadata: dict[str, object],
         user_info: WebhookEvent | None = None,
         request_model: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ):
+        budget_alert_destination: Literal["all", "slack", "non_slack"] = "all",
+        **kwargs: object,
+    ) -> bool:
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
 
@@ -1459,25 +1487,35 @@ Model Info:
             api_base: Optional[str] - api base for digest grouping
         """
         if self.alerting is None:
-            return
+            return False
 
         # Start periodic flush if not already started
         if self.alerting is not None and len(self.alerting) > 0:
             self._ensure_periodic_flush_task()
 
-        if "webhook" in self.alerting and alert_type == "budget_alerts" and user_info is not None:
+        if (
+            budget_alert_destination != "slack"
+            and "webhook" in self.alerting
+            and alert_type == "budget_alerts"
+            and user_info is not None
+        ):
             await self.send_webhook_alert(webhook_event=user_info)
 
-        if "email" in self.alerting and alert_type == "budget_alerts" and user_info is not None:
+        if (
+            budget_alert_destination != "slack"
+            and "email" in self.alerting
+            and alert_type == "budget_alerts"
+            and user_info is not None
+        ):
             # only send budget alerts over Email
             await self.send_email_alert_using_smtp(webhook_event=user_info, alert_type=alert_type)
 
-        send_to_slack: Final = "slack" in self.alerting
-        send_to_ms_teams: Final = MS_TEAMS_ALERTING_DESTINATION in self.alerting
+        send_to_slack: Final = "slack" in self.alerting and budget_alert_destination != "non_slack"
+        send_to_ms_teams: Final = MS_TEAMS_ALERTING_DESTINATION in self.alerting and budget_alert_destination != "slack"
         if not send_to_slack and not send_to_ms_teams:
-            return
+            return False
         if alert_type not in self.alert_types:
-            return
+            return False
 
         from datetime import datetime
 
@@ -1504,10 +1542,12 @@ Model Info:
         if send_to_ms_teams:
             self._enqueue_ms_teams_alert(formatted_message=formatted_message, alert_type=alert_type)
 
-        if not send_to_slack:
+        if not send_to_slack or (
+            alert_type == AlertType.budget_alerts and not self._slack_budget_alert_allowed(user_info)
+        ):
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
-            return
+            return False
 
         # Check if digest mode is enabled for this alert type
         alert_type_name_str: Final = getattr(alert_type, "value", str(alert_type))
@@ -1522,6 +1562,8 @@ Model Info:
                 _digest_webhook = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
             if _digest_webhook is None:
                 raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
+            if _digest_webhook == []:
+                return False
 
             digest_key: Final = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
 
@@ -1542,7 +1584,7 @@ Model Info:
                         last_time=now,
                         webhook_url=_digest_webhook,
                     )
-            return  # Suppress immediate alert; will be emitted by _flush_digest_buckets
+            return True
 
         # check if we find the slack webhook url in self.alert_to_webhook_url
         if self.alert_to_webhook_url is not None and alert_type in self.alert_to_webhook_url:
@@ -1554,6 +1596,8 @@ Model Info:
 
         if slack_webhook_url is None:
             raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
+        if slack_webhook_url == []:
+            return False
         payload: Final = {"text": formatted_message}
         headers: Final = {"Content-type": "application/json"}
 
@@ -1579,6 +1623,7 @@ Model Info:
 
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
+        return True
 
     def _enqueue_ms_teams_alert(self, formatted_message: str, alert_type: AlertType) -> None:
         ms_teams_webhook_url: Final = get_ms_teams_webhook_url()
