@@ -20,10 +20,12 @@ import {
   SidebarMenuSub,
   SidebarSeparator,
   sidebarMenuButtonVariants,
-} from "@/components/ui/sidebar";
+} from "@/components/shared/Sidebar";
 import {
   Activity,
+  Aperture,
   BarChart3,
+  Calculator,
   Bell,
   Blocks,
   Bot,
@@ -55,6 +57,7 @@ import {
   ShieldCheck,
   Tags,
   Terminal,
+  Trophy,
   User,
   Users,
   Wallet,
@@ -62,6 +65,7 @@ import {
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
@@ -74,18 +78,21 @@ import {
   rolesWithWriteAccess,
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
-import NewBadge from "./common_components/NewBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
-import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 
 const ICON = { strokeWidth: 1.75 } as const;
 
-const LOGO_CLASS_NAME = "h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7";
+const LOGO_CLASS_NAME =
+  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-7 group-data-[collapsed=true]/sidebar:w-7";
+
+function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
+  const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
+  return `${baseUrl}/get_image${query ? `?${query}` : ""}`;
+}
 
 interface SidebarProps {
-  setPage: (page: string) => void;
-  defaultSelectedKey: string;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   enabledPagesInternalUsers?: string[] | null;
@@ -99,6 +106,7 @@ interface SidebarProps {
 interface MenuItem {
   key: string;
   page: string;
+  route?: string;
   label: string | React.ReactNode;
   roles?: string[];
   children?: MenuItem[];
@@ -123,6 +131,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "llm-playground",
         page: "llm-playground",
+        route: "playground",
         label: "Playground",
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
@@ -130,6 +139,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "models",
         page: "models",
+        route: "models-and-endpoints",
         label: "Models + Endpoints",
         icon: <Network {...ICON} />,
         roles: rolesAllowedToViewWriteScopedPages,
@@ -198,22 +208,51 @@ const menuGroups: MenuGroup[] = [
       {
         key: "new_usage",
         page: "new_usage",
+        route: "usage",
         icon: <BarChart3 {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "Usage",
+      },
+      {
+        key: "model-insights",
+        page: "model-insights",
+        icon: <Trophy {...ICON} />,
+        roles: all_admin_roles,
+        label: (
+          <span className="flex items-center gap-2">
+            Model Leaderboard <BetaBadge />
+          </span>
+        ),
+      },
+      {
+        key: "roi-calculator",
+        page: "roi-calculator",
+        icon: <Calculator {...ICON} />,
+        roles: all_admin_roles,
+        label: (
+          <span className="flex items-center gap-2">
+            ROI Calculator <BetaBadge />
+          </span>
+        ),
       },
       {
         key: "cost-optimization",
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: (
-          <span className="flex items-center gap-2">
-            Cost Optimization <BetaBadge />
-          </span>
-        ),
+        label: "Cost Optimization",
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
+      {
+        key: "lens",
+        page: "lens",
+        label: (
+          <span className="flex items-center gap-2">
+            Lens <BetaBadge />
+          </span>
+        ),
+        icon: <Aperture {...ICON} />,
+      },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
@@ -259,7 +298,7 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "DEVELOPER TOOLS",
     items: [
-      { key: "api_ref", page: "api_ref", label: "API Reference", icon: <Code2 {...ICON} /> },
+      { key: "api_ref", page: "api_ref", route: "api-reference", label: "API Reference", icon: <Code2 {...ICON} /> },
       { key: "model-hub-table", page: "model-hub-table", label: "AI Hub", icon: <LayoutGrid {...ICON} /> },
       {
         key: "learning-resources",
@@ -305,6 +344,7 @@ const menuGroups: MenuGroup[] = [
           {
             key: "4",
             page: "usage",
+            route: "old-usage",
             label: "Old Usage",
             icon: <BarChart3 {...ICON} />,
             roles: rolesWithCapability("viewGlobalSpend"),
@@ -320,11 +360,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: (
-          <span className="flex items-center gap-2">
-            Settings <NewBadge />
-          </span>
-        ),
+        label: "Settings",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
@@ -345,14 +381,7 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: (
-              <span className="flex items-center gap-2">
-                Admin Settings{" "}
-                <NewBadge dot>
-                  <span />
-                </NewBadge>
-              </span>
-            ),
+            label: "Admin Settings",
             icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },
@@ -370,24 +399,30 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const findParentKey = (page: string): string | null => {
+const HOME_ROUTE = "api-keys";
+
+const routeOf = (item: MenuItem): string => item.route ?? item.page;
+
+const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
+
+const findParentKey = (route: string): string | null => {
   for (const group of menuGroups) {
     for (const item of group.items) {
-      if (item.children?.some((c) => c.page === page || c.key === page)) return item.key;
+      if (item.children?.some((c) => routeOf(c) === route)) return item.key;
     }
   }
   return null;
 };
 
-const findMenuItemKey = (page: string): string => {
+const findMenuItemKey = (route: string): string => {
   for (const group of menuGroups) {
     for (const item of group.items) {
-      if (item.page === page) return item.key;
-      const child = item.children?.find((c) => c.page === page);
+      if (routeOf(item) === route) return item.key;
+      const child = item.children?.find((c) => routeOf(c) === route);
       if (child) return child.key;
     }
   }
-  return "api-keys";
+  return HOME_ROUTE;
 };
 
 const SECTION_DISPLAY: Record<string, string> = {
@@ -407,22 +442,20 @@ const prettify = (key: string): string =>
 const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
 
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
-export const getBreadcrumb = (page: string): { section: string | null; title: string } => {
+export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
+  const route = routeForPathname(pathname);
   for (const group of menuGroups) {
     for (const item of group.items) {
       const section = SECTION_DISPLAY[group.groupLabel] ?? group.groupLabel;
-      if (item.page === page)
-        return { section, title: typeof item.label === "string" ? item.label : prettify(item.key) };
-      const child = item.children?.find((c) => c.page === page);
-      if (child) return { section, title: typeof child.label === "string" ? child.label : prettify(child.key) };
+      if (routeOf(item) === route) return { section, title: labelText(item) };
+      const child = item.children?.find((c) => routeOf(c) === route);
+      if (child) return { section, title: labelText(child) };
     }
   }
-  return { section: null, title: prettify(page) };
+  return { section: null, title: prettify(route) };
 };
 
 const Sidebar_: React.FC<SidebarProps> = ({
-  setPage,
-  defaultSelectedKey,
   collapsed = false,
   onToggleCollapsed,
   enabledPagesInternalUsers,
@@ -442,20 +475,21 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   const baseUrl = getProxyBaseUrl();
   const version = healthData?.litellm_version;
-  const selectedKey = findMenuItemKey(defaultSelectedKey);
+  const currentRoute = routeForPathname(usePathname());
+  const selectedKey = findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const parent = findParentKey(defaultSelectedKey);
+    const parent = findParentKey(currentRoute);
     return new Set(parent ? [parent] : []);
   });
 
   // Keep the active page's parent group expanded as the user navigates, using the
   // "adjust state during render" pattern rather than an effect (avoids a
   // setState-in-effect render cascade).
-  const [prevSelectedKey, setPrevSelectedKey] = useState(defaultSelectedKey);
-  if (defaultSelectedKey !== prevSelectedKey) {
-    setPrevSelectedKey(defaultSelectedKey);
-    const parent = findParentKey(defaultSelectedKey);
+  const [prevRoute, setPrevRoute] = useState(currentRoute);
+  if (currentRoute !== prevRoute) {
+    setPrevRoute(currentRoute);
+    const parent = findParentKey(currentRoute);
     if (parent && !openGroups.has(parent)) {
       setOpenGroups((prev) => new Set(prev).add(parent));
     }
@@ -524,13 +558,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
     });
   };
 
-  const handleLeafClick = (e: React.MouseEvent, item: MenuItem) => {
-    if (item.external_url) return;
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
-    e.preventDefault();
-    setPage(item.page);
-  };
-
   const renderLeaf = (item: MenuItem, isChild: boolean) => {
     const active = selectedKey === item.key;
     const size = isChild ? "sub" : "default";
@@ -554,19 +581,17 @@ const Sidebar_: React.FC<SidebarProps> = ({
       );
     }
 
-    const href = MIGRATED_PAGES[item.page] ? migratedHref(MIGRATED_PAGES[item.page]) : legacyPageHref(item.page);
     return (
-      <a
+      <Link
         key={item.key}
-        href={href}
-        onClick={(e) => handleLeafClick(e, item)}
+        href={uiHref(routeOf(item))}
         title={collapsed ? labelText(item) : undefined}
         data-active={active || undefined}
         className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
       >
         {item.icon}
         {label}
-      </a>
+      </Link>
     );
   };
 
@@ -582,6 +607,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <SidebarMenuItem key={item.key}>
         <SidebarMenuButton
           isActive={active}
+          aria-expanded={open}
           onClick={() => toggleGroup(item.key)}
           title={collapsed ? labelText(item) : undefined}
         >
@@ -605,16 +631,16 @@ const Sidebar_: React.FC<SidebarProps> = ({
     );
   };
 
-  const logoSrc = logoUrl || `${baseUrl}/get_image`;
+  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed });
   const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
-  const darkLogoSrc = reachableDarkLogo || logoUrl || `${baseUrl}/get_image?theme=dark`;
+  const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
 
   return (
     <Sidebar collapsed={collapsed}>
       <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <Link href={migratedHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+            <Link href={uiHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
               <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
               <img
                 src={darkLogoSrc}

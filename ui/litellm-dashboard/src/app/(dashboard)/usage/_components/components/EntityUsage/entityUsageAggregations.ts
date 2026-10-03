@@ -1,3 +1,5 @@
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
+import type { TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { BreakdownMetrics, DailyData, KeyMetricWithMetadata, TagUsage } from "@/components/UsagePage/types";
 
 export type ExtendedDailyData = DailyData & {
@@ -84,7 +86,59 @@ export const getTopAgents = (results: ExtendedDailyData[], topAgentsLimit: numbe
     .slice(0, topAgentsLimit);
 };
 
-export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number) => {
+export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): TopKeyItem[] => {
+  const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
+  results.forEach((day) => {
+    Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
+      if (!keySpend[key]) {
+        keySpend[key] = {
+          metrics: {
+            spend: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            api_requests: 0,
+            successful_requests: 0,
+            failed_requests: 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          metadata: {
+            key_alias: metrics.metadata.key_alias,
+            team_id: null,
+            user_id: metrics.metadata.user_id,
+            user_email: metrics.metadata.user_email,
+            key_exists: metrics.metadata.key_exists,
+            tags: metrics.metadata.tags || [],
+          },
+        };
+      }
+      keySpend[key].metrics.spend += metrics.metrics.spend;
+      keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
+      keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
+      keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
+      keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
+      keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
+      keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
+      keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
+      keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+    });
+  });
+
+  return Object.entries(keySpend)
+    .map(([api_key, metrics]) => ({
+      api_key,
+      key_alias: keyActivityLabel(metrics.metadata),
+      user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
+      key_exists: metrics.metadata.key_exists,
+      tags: metrics.metadata.tags || [],
+      spend: metrics.metrics.spend,
+    }))
+    .sort((a, b) => b.spend - a.spend)
+    .slice(0, topKeysLimit);
+};
+
+export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number): TopKeyItem[] => {
   const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
   results.forEach((day) => {
     const { breakdown } = day;
@@ -118,6 +172,9 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
           metadata: {
             key_alias: metrics.metadata.key_alias,
             team_id: metrics.metadata.team_id || null,
+            user_id: metrics.metadata.user_id,
+            user_email: metrics.metadata.user_email,
+            key_exists: metrics.metadata.key_exists,
             tags: tagDictionary[key] || [],
           },
         };
@@ -137,8 +194,10 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
   return Object.entries(keySpend)
     .map(([api_key, metrics]) => ({
       api_key,
-      key_alias: metrics.metadata.key_alias || "-", // Using truncated key as alias
-      tags: metrics.metadata.tags || "-",
+      key_alias: keyActivityLabel(metrics.metadata),
+      user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
+      key_exists: metrics.metadata.key_exists,
+      tags: metrics.metadata.tags || [],
       spend: metrics.metrics.spend,
     }))
     .sort((a, b) => b.spend - a.spend)

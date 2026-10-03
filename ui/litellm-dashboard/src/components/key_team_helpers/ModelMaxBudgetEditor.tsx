@@ -1,5 +1,5 @@
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -144,6 +144,7 @@ export function ModelMaxBudgetEditor({
               onClick={() => removeEntry(entry.id)}
               disabled={!premiumUser}
               title={hintWhenLocked}
+              aria-label="Remove model budget"
               className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors p-1"
             >
               <X className="w-4 h-4" />
@@ -153,8 +154,8 @@ export function ModelMaxBudgetEditor({
               <label className="block text-xs font-medium text-muted-foreground mb-1">Model</label>
               <SearchSelect
                 options={modelOptions.map((model) => ({ label: model, value: model }))}
-                value={entry.model ?? ""}
-                onValueChange={(model) => updateEntry(entry.id, { model: model === "" ? null : model })}
+                value={entry.model}
+                onValueChange={(model) => updateEntry(entry.id, { model })}
                 placeholder="Select model"
                 emptyText="No models found"
                 disabled={!premiumUser}

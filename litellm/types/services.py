@@ -40,6 +40,8 @@ class ServiceTypes(str, enum.Enum):
     # spend update queue - current spend of key, user, team
     IN_MEMORY_SPEND_UPDATE_QUEUE = "in_memory_spend_update_queue"
     REDIS_SPEND_UPDATE_QUEUE = "redis_spend_update_queue"
+    # budget window spend queue - per-window spend of key, team
+    REDIS_WINDOW_SPEND_UPDATE_QUEUE = "redis_window_spend_update_queue"
 
 
 class ServiceConfig(TypedDict):
@@ -98,6 +100,7 @@ class ServiceLoggerPayload(BaseModel):
     service: ServiceTypes = Field(description="who is this for? - postgres/redis")
     duration: float = Field(description="How long did the request take?")
     call_type: str = Field(description="The call of the service, being made")
+    caller: str | None = Field(None, description="The litellm call chain that made the service call, innermost first")
     event_metadata: dict | None = Field(description="The metadata logged during service success/failure")
 
     def to_json(self, **kwargs):

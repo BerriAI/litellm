@@ -19,10 +19,21 @@ headers must never touch disk. An unmatched replay call returns HTTP
 ``REPLAY_MISS_STATUS`` naming the closest recorded interaction, which the
 proxy relays as a provider error the failing test surfaces.
 
+A response the provider streamed (one whose content type names
+``text/event-stream``) is relayed and stored chunk by chunk instead of buffered
+(LIT-5742): the edge reads one piece per upstream transfer chunk, writes each
+one downstream in chunked framing as it arrives, and records the sequence, so
+replay hands the proxy the same number of chunks split in the same places. A
+provider that hangs up mid-stream is recorded as the chunks it did deliver plus
+a truncation, and replays as those chunks followed by a connection close with no
+terminator, which is the same incomplete chunked read the live failure produced
+rather than a clean 502 that erases it. Everything else keeps the buffered
+shape, byte for byte, framed with a content-length as before.
+
 v1 limits: only the mounts in ``EDGE_MOUNTS`` (SigV4 providers like Bedrock
-sign the Host header, so a forwarding edge breaks their signatures), streaming
-fidelity is LIT-5742, and CI wiring is LIT-5748. Suites that do not wire the
-edge keep hitting providers live in every mode.
+sign the Host header, so a forwarding edge breaks their signatures), and CI
+wiring is LIT-5748. Suites that do not wire the edge keep hitting providers
+live in every mode.
 """
 
 from __future__ import annotations
@@ -31,11 +42,14 @@ import base64
 import difflib
 import functools
 import hashlib
+import os
 import re
 import threading
+import time
 from collections import deque
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import closing, contextmanager
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import islice
 from pathlib import Path
@@ -43,15 +57,23 @@ from types import MappingProxyType
 from typing import Final, Literal, assert_never
 from urllib.parse import parse_qsl, urlsplit
 
-from pydantic import JsonValue, TypeAdapter
-
-from e2e_http import NetworkError, RawResponse, forward
+from botocore.eventstream import EventStreamBuffer
+from e2e_http import (
+    NetworkError,
+    StreamChunk,
+    StreamHead,
+    StreamStep,
+    StreamTruncation,
+    forward_stream,
+)
 from fixture_bundle import (
     BundleRecorder,
     Interaction,
     LoadedBundle,
     RecordedHttpResponse,
     RecordedRequest,
+    RecordedResponse,
+    RecordedStreamedResponse,
     UnreadableBundle,
     UnsafeBundleDir,
     interaction_filename,
@@ -68,18 +90,57 @@ from fixture_canonical import (
 )
 from fixture_mode import (
     FIXTURE_MODES,
+    SESSION_TEST_KEY,
     InvalidFixtureMode,
     ReplayMiss,
     current_test_key,
     parse_fixture_mode,
 )
+from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
+from provider_cache import (
+    JSON_VALUE,
+    SIGNATURE_HEADERS,
+    CacheEdge,
+    MountPolicy,
+    RequestSigner,
+    invoke_chunk_value,
+    is_bedrock,
+    scoped_edge_base,
+    split_test_segment,
+)
+from provider_cache_routing import LIVE_PROVIDER_REQUIRED
+from pydantic import JsonValue, TypeAdapter, ValidationError
+
+BEDROCK_REGIONS: Final[tuple[str, ...]] = ("us-east-1",)
 
 EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "openai": "https://api.openai.com",
         "anthropic": "https://api.anthropic.com",
+        **{
+            f"bedrock/{region}": f"https://bedrock-runtime.{region}.amazonaws.com"
+            for region in BEDROCK_REGIONS
+        },
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedMount:
+    mount: str
+    upstream_base: str
+    upstream_path: str
+
+
+def resolve_mount(path: str, mounts: Mapping[str, str]) -> ResolvedMount | None:
+    """Longest mount prefix wins, so a region-qualified mount such as
+    ``bedrock/us-east-1`` resolves whole instead of leaving the region as the
+    first segment of the upstream path."""
+    trimmed: Final = path.lstrip("/")
+    for mount in sorted(mounts, key=len, reverse=True):
+        if trimmed == mount or trimmed.startswith(f"{mount}/"):
+            return ResolvedMount(mount, mounts[mount], trimmed[len(mount):].lstrip("/"))
+    return None
 
 REPLAY_MISS_STATUS: Final = 599
 
@@ -384,6 +445,12 @@ def _miss_message(test_key: str, slug: str, canonical: CanonicalRequest, bundle:
             f"under {slug}; re-record with E2E_FIXTURE_MODE=record"
         )
     closest, closest_file = _closest_recorded(canonical, recorded)
+    if bundle.manifest.match_profile == "stateless_v1":
+        expected: Final = _JSON.validate_json(closest.content)
+        actual: Final = _JSON.validate_json(canonical.content)
+        assert isinstance(expected, dict) and isinstance(actual, dict)
+        changed: Final = ", ".join(key for key in expected if expected[key] != actual.get(key))
+        return f"stateless_v1 replay mismatch: {changed or 'method/path'}; re-record with E2E_FIXTURE_MODE=record"
     diff: Final = "\n".join(
         islice(
             difflib.unified_diff(
@@ -474,14 +541,77 @@ class ReplayEdge:
     source: ReplaySource
 
 
-type EdgeBackend = RecordEdge | ReplayEdge
+@dataclass(frozen=True, slots=True)
+class StreamCut:
+    """Where a live edge hangs up on a streamed upstream body: before its first byte, or with
+    ``after_content`` set, right after the first transfer chunk carrying assistant output (a
+    ``content_block_delta``). That frame is what commits the proxy's mid-stream fallback
+    wrapper to the client: it holds the lifecycle frames before it back and drops them when
+    the transport fails first, so a cut after a fixed number of chunks landed on either side
+    of that commit depending on how the provider batched its frames. With ``mid_chunk`` set
+    the hang-up comes part way through the next ``data:`` line the provider sends after that,
+    so the client is left inside an SSE frame the way a dropped transport leaves it.
+
+    Whatever was relayed sits on the wire for ``_CUT_SETTLE_SECONDS`` before the hang-up, so
+    the client has read it by then instead of receiving the data and the close in one burst,
+    where its reader can surface the close before what it buffered."""
+
+    after_content: bool
+    mid_chunk: bool = False
+
+
+_CUT_SETTLE_SECONDS: Final = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class LiveEdge:
+    observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None
+    sign: RequestSigner | None = None
+    cut: StreamCut | None = None
+
+
+type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge | CacheEdge
+
+
+@dataclass(slots=True)
+class ProviderRequestObservation:
+    marker: str
+    _count: int = field(default=0, init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+
+    def observe(self, body: bytes | None) -> None:
+        if body is not None and self.marker.encode() in body:
+            with self._lock:
+                self._count += 1
+
+    @property
+    def count(self) -> int:
+        with self._lock:
+            return self._count
 
 
 @dataclass(frozen=True, slots=True)
 class EdgeReply:
+    """A whole response the edge already holds: written with a content-length."""
+
     status_code: int
     headers: dict[str, str]
     body: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class EdgeStream:
+    """A response the edge relays chunk by chunk: written in chunked framing, one
+    transfer chunk per step, so the split points reach the proxy intact. Record and
+    replay both produce one of these, driven by different step sources, which is
+    what makes their framing identical by construction rather than by inspection."""
+
+    status_code: int
+    headers: dict[str, str]
+    steps: Generator[StreamStep, None, None]
+
+
+type EdgeOutcome = EdgeReply | EdgeStream
 
 
 def _text_reply(status_code: int, message: str) -> EdgeReply:
@@ -492,39 +622,161 @@ def _text_reply(status_code: int, message: str) -> EdgeReply:
     )
 
 
-def _reply_from_recorded(response: RecordedHttpResponse) -> EdgeReply:
-    return EdgeReply(
-        status_code=response.status_code,
-        headers=dict(response.headers),
-        body=base64.b64decode(response.body_b64),
+def _recorded_steps(
+    chunks_b64: Sequence[str], truncated: str | None
+) -> Generator[StreamStep, None, None]:
+    """Replay's step source: the recorded chunks in recorded order, as fast as the
+    socket takes them (inter-chunk delays are deliberately not reproduced), then the
+    recorded truncation if the stream ended without a terminator."""
+    for chunk in chunks_b64:
+        yield StreamChunk(data=base64.b64decode(chunk))
+    if truncated is not None:
+        yield StreamTruncation(reason=truncated)
+
+
+def _recorded_outcome(response: RecordedResponse) -> EdgeOutcome:
+    match response:
+        case RecordedHttpResponse(status_code=status_code, headers=headers, body_b64=body_b64):
+            return EdgeReply(
+                status_code=status_code,
+                headers=dict(headers),
+                body=base64.b64decode(body_b64),
+            )
+        case RecordedStreamedResponse(
+            status_code=status_code, headers=headers, chunks_b64=chunks_b64, truncated=truncated
+        ):
+            return EdgeStream(
+                status_code=status_code,
+                headers=dict(headers),
+                steps=_recorded_steps(chunks_b64, truncated),
+            )
+        case _:
+            assert_never(response)
+
+
+def _filtered_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """What the edge stores and serves: the provider's headers minus hop-by-hop and
+    volatile entries. Framing headers are in that set, so a stored header can never
+    contradict the framing the edge chooses when it serves the response."""
+    return {
+        name: value for name, value in headers.items() if name not in _RESPONSE_DROPPED_HEADERS
+    }
+
+
+def _network_error_response(message: str) -> RecordedHttpResponse:
+    return RecordedHttpResponse(
+        status_code=502,
+        headers={"content-type": "text/plain; charset=utf-8"},
+        body_b64=base64.b64encode(
+            f"provider edge could not reach the provider: {message}".encode()
+        ).decode("ascii"),
     )
 
 
-def _recorded_response(outcome: RawResponse | NetworkError) -> RecordedHttpResponse:
-    match outcome:
-        case RawResponse(status_code=status_code, headers=headers, body=body):
-            return RecordedHttpResponse(
-                status_code=status_code,
-                headers={
-                    name: value
-                    for name, value in headers.items()
-                    if name not in _RESPONSE_DROPPED_HEADERS
-                },
-                body_b64=base64.b64encode(body).decode("ascii"),
-            )
-        case NetworkError(message=message):
-            return RecordedHttpResponse(
-                status_code=502,
-                headers={"content-type": "text/plain; charset=utf-8"},
-                body_b64=base64.b64encode(
-                    f"provider edge could not reach the provider: {message}".encode()
-                ).decode("ascii"),
-            )
+def _buffered_response(
+    status_code: int, headers: Mapping[str, str], body: bytes
+) -> RecordedHttpResponse:
+    return RecordedHttpResponse(
+        status_code=status_code,
+        headers=_filtered_response_headers(headers),
+        body_b64=base64.b64encode(body).decode("ascii"),
+    )
+
+
+def _streamed_response(
+    status_code: int, headers: Mapping[str, str], chunks: Sequence[bytes], truncated: str | None
+) -> RecordedStreamedResponse:
+    return RecordedStreamedResponse(
+        status_code=status_code,
+        headers=_filtered_response_headers(headers),
+        chunks_b64=[base64.b64encode(chunk).decode("ascii") for chunk in chunks],
+        truncated=truncated,
+    )
+
+
+def _is_streamed(headers: Mapping[str, str]) -> bool:
+    """Whether a response is one to relay incrementally, decided by content type.
+
+    ``transfer-encoding: chunked`` would be the wrong signal: chunking is a
+    transport choice providers make freely for ordinary JSON, so keying off it would
+    move nearly every recording to the streamed shape for no gain. The content type
+    is the header that says "consume this as it arrives", and it is already how the
+    harness defines streaming everywhere else."""
+    return "text/event-stream" in _header_value(headers, "content-type").lower()
 
 
 def _upstream_url(upstream_base: str, upstream_path: str, query: str) -> str:
     url: Final = f"{upstream_base}/{upstream_path}"
     return f"{url}?{query}" if query else url
+
+
+def _persist(
+    backend: RecordEdge, test_key: str, request: RecordedRequest, response: RecordedResponse
+) -> None:
+    with backend.lock:
+        backend.recorder.record(test_key=test_key, request=request, response=response)
+
+
+def _recording_steps(
+    backend: RecordEdge, test_key: str, request: RecordedRequest, head: StreamHead
+) -> Generator[StreamStep, None, None]:
+    """Record mode's step source: hand each upstream chunk downstream and record it
+    only once that write has returned, then persist the whole sequence once, under
+    the lock. Relaying incrementally keeps record exercising the proxy's incremental
+    parser the way a live run does.
+
+    A chunk is appended after its ``yield`` returns, so a downstream that hangs up
+    mid-relay records exactly the chunks it took and never the one whose write
+    raised. The ``except`` covers that downstream close and the proxy hanging up
+    mid-stream; either way the ``finally`` persists what arrived, marked truncated,
+    because recording a cut-short stream as a clean one would let a later replay
+    serve a well-terminated fraction of the response and pass a test that should
+    have gone red."""
+    collected: list[bytes] = []
+    truncated: str | None = None
+    try:
+        with closing(head.steps) as steps:
+            for step in steps:
+                match step:
+                    case StreamChunk():
+                        pass
+                    case StreamTruncation(reason=reason):
+                        truncated = f"upstream: {reason}"
+                    case _:
+                        assert_never(step)
+                yield step
+                if isinstance(step, StreamChunk):
+                    collected.append(step.data)
+    except GeneratorExit:
+        if truncated is None:
+            truncated = f"downstream: relay closed after {len(collected)} chunks"
+        raise
+    finally:
+        _persist(
+            backend,
+            test_key,
+            request,
+            _streamed_response(head.status_code, head.headers, collected, truncated),
+        )
+
+
+def _drain_to_response(head: StreamHead) -> RecordedHttpResponse:
+    """A response the detection rule did not call streamed: drain the same step
+    iterator, join the pieces, and store today's buffered shape byte for byte. A
+    truncation part way through degrades to the synthetic 502 exactly as the eager
+    read did, because storing half a JSON body under a content-length as though it
+    were whole would be a worse lie than failing."""
+    pieces: list[bytes] = []
+    with closing(head.steps) as steps:
+        for step in steps:
+            match step:
+                case StreamChunk(data=data):
+                    pieces.append(data)
+                case StreamTruncation(reason=reason):
+                    return _network_error_response(reason)
+                case _:
+                    assert_never(step)
+    return _buffered_response(head.status_code, head.headers, b"".join(pieces))
 
 
 def _handle_record(
@@ -536,23 +788,183 @@ def _handle_record(
     headers: Mapping[str, str],
     body: bytes | None,
     timeout: float,
-) -> EdgeReply:
+) -> EdgeOutcome:
+    test_key: Final = current_test_key()
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
     }
-    outcome: Final = forward(method, url, headers=forwarded, body=body, timeout=timeout)
-    response: Final = _recorded_response(outcome)
-    with backend.lock:
-        backend.recorder.record(test_key=current_test_key(), request=request, response=response)
-    return _reply_from_recorded(response)
+    head: Final = forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
+    match head:
+        case NetworkError(message=message):
+            unreachable: Final = _network_error_response(message)
+            _persist(backend, test_key, request, unreachable)
+            return _recorded_outcome(unreachable)
+        case StreamHead() if _is_streamed(head.headers):
+            return EdgeStream(
+                status_code=head.status_code,
+                headers=_filtered_response_headers(head.headers),
+                steps=_recording_steps(backend, test_key, request, head),
+            )
+        case StreamHead():
+            buffered: Final = _drain_to_response(head)
+            _persist(backend, test_key, request, buffered)
+            return _recorded_outcome(buffered)
+        case _:
+            assert_never(head)
 
 
-def _handle_replay(source: ReplaySource, request: RecordedRequest) -> EdgeReply:
+def _data_line_start(data: bytes) -> int:
+    if data.startswith(b"data:"):
+        return 0
+    at_line_start: Final = data.find(b"\ndata:")
+    return -1 if at_line_start < 0 else at_line_start + 1
+
+
+def _torn_prefix(data: bytes) -> bytes:
+    start: Final = _data_line_start(data)
+    line_end: Final = data.find(b"\n", start)
+    end: Final = len(data) if line_end < 0 else line_end
+    return data[: start + (end - start) // 2]
+
+
+class _DataLineTearer:
+    __slots__ = ("_unfinished_line",)
+
+    _unfinished_line: bytes
+
+    def __init__(self) -> None:
+        self._unfinished_line = b""
+
+    def observe(self, data: bytes) -> None:
+        self._unfinished_line = (self._unfinished_line + data).rsplit(b"\n", 1)[-1]
+
+    def tear(self, data: bytes) -> bytes | None:
+        buffered: Final = self._unfinished_line + data
+        if _data_line_start(buffered) < 0:
+            self.observe(data)
+            return None
+        return _torn_prefix(buffered)[len(self._unfinished_line):]
+
+
+def _is_content_delta(value: JsonValue | None) -> bool:
+    return isinstance(value, dict) and value.get("type") == "content_block_delta"
+
+
+def _sse_data_carries_content(line: bytes) -> bool:
+    if not line.startswith(b"data:"):
+        return False
+    try:
+        return _is_content_delta(JSON_VALUE.validate_json(line[len(b"data:"):].strip()))
+    except ValidationError:
+        return False
+
+
+class _AnthropicContentDetector:
+    __slots__ = ("_unfinished_line",)
+
+    _unfinished_line: bytes
+
+    def __init__(self) -> None:
+        self._unfinished_line = b""
+
+    def __call__(self, data: bytes) -> bool:
+        lines: Final = (self._unfinished_line + data).split(b"\n")
+        self._unfinished_line = lines[-1]
+        return any(_sse_data_carries_content(line.rstrip(b"\r")) for line in lines[:-1])
+
+
+def _invoke_frame_carries_content(payload: bytes) -> bool:
+    try:
+        return _is_content_delta(invoke_chunk_value(JSON_VALUE.validate_json(payload)))
+    except ValidationError:
+        return False
+
+
+def _bedrock_content_detector() -> Callable[[bytes], bool]:
+    """Bedrock's invoke stream wraps each Anthropic event in an eventstream frame that a
+    transfer chunk can split, so the frames are reassembled across chunks before being read."""
+    frames: Final = EventStreamBuffer()
+
+    def carries_content(data: bytes) -> bool:
+        frames.add_data(data)
+        return any(_invoke_frame_carries_content(frame.payload) for frame in frames)
+
+    return carries_content
+
+
+def _content_detector(mount: str) -> Callable[[bytes], bool]:
+    return _bedrock_content_detector() if is_bedrock(mount) else _AnthropicContentDetector()
+
+
+def _cut_steps(
+    steps: Generator[StreamStep, None, None], cut: StreamCut, carries_content: Callable[[bytes], bool]
+) -> Generator[StreamStep, None, None]:
+    with closing(steps) as source:
+        tearer: Final = _DataLineTearer()
+        if cut.after_content:
+            for step in source:
+                yield step
+                if isinstance(step, StreamTruncation):
+                    return
+                tearer.observe(step.data)
+                if carries_content(step.data):
+                    break
+            else:
+                return
+        if cut.mid_chunk:
+            for step in source:
+                if isinstance(step, StreamTruncation):
+                    yield step
+                    return
+                if (torn := tearer.tear(step.data)) is None:
+                    yield step
+                    continue
+                if torn:
+                    yield StreamChunk(data=torn)
+                break
+            else:
+                return
+        if cut.after_content or cut.mid_chunk:
+            time.sleep(_CUT_SETTLE_SECONDS)
+        yield StreamTruncation(reason=f"edge cut the upstream stream: {cut!r}")
+
+
+def _handle_live(
+    method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
+    cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
+    observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None,
+    sign: RequestSigner | None = None,
+    cut: StreamCut | None = None,
+) -> EdgeOutcome:
+    forwarded: Final = {
+        name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
+    }
+    if observe_request is not None:
+        observe_request(url, forwarded, body)
+    outbound: Final = forwarded if sign is None else sign(method, url, forwarded, body)
+    head: Final = (
+        forward_stream(method, url, headers=outbound, body=body, timeout=timeout)
+        if cache is None else cache.forward(mount, method, url, forwarded, body, timeout, test_key=test_key)
+    )
+    match head:
+        case NetworkError(message=message):
+            return _recorded_outcome(_network_error_response(message))
+        case StreamHead() if cut is not None:
+            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), _cut_steps(head.steps, cut, _content_detector(mount)))
+        case StreamHead() if _is_streamed(head.headers):
+            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), head.steps)
+        case StreamHead():
+            return _recorded_outcome(_drain_to_response(head))
+        case _:
+            assert_never(head)
+
+
+def _handle_replay(source: ReplaySource, request: RecordedRequest) -> EdgeOutcome:
     try:
         interaction: Final = source.next_interaction(request)
     except ReplayMiss as miss:
         return _text_reply(REPLAY_MISS_STATUS, str(miss))
-    return _reply_from_recorded(interaction.response)
+    return _recorded_outcome(interaction.response)
 
 
 def handle_edge_request(
@@ -564,21 +976,56 @@ def handle_edge_request(
     body: bytes | None,
     *,
     timeout: float,
-) -> EdgeReply:
+) -> EdgeOutcome:
     """The edge's pure core, one HTTP exchange in and out: resolve the mount
     prefix, then record (forward + persist) or replay (serve from the bundle).
     Socket-free so unit tests exercise every branch without a server."""
     split: Final = urlsplit(raw_path)
-    mount, _, upstream_path = split.path.lstrip("/").partition("/")
-    upstream_base: Final = mounts.get(mount)
-    if upstream_base is None:
-        return _text_reply(
-            404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}"
+    resolved: Final = resolve_mount(split.path, mounts)
+    if resolved is None:
+        unknown: Final = split.path.lstrip("/").partition("/")[0]
+        return _text_reply(404, f"unknown provider mount {unknown!r}; known mounts: {', '.join(sorted(mounts))}")
+    mount: Final = resolved.mount
+    upstream_base: Final = resolved.upstream_base
+    test_key, upstream_path = split_test_segment(resolved.upstream_path)
+    profile: Final = (
+        backend.recorder.profile
+        if isinstance(backend, RecordEdge)
+        else backend.source.bundle.manifest.match_profile
+        if isinstance(backend, ReplayEdge)
+        else "legacy"
+    )
+    identity: Final = (
+        strict_identity(
+            method=method,
+            path=split.path,
+            query=split.query,
+            headers=headers,
+            body=body,
+            mount=mount,
+            upstream_base=upstream_base,
         )
-    request: Final = edge_request(
-        method, split.path, split.query, body, _header_value(headers, "content-type")
+        if profile == "stateless_v1"
+        else None
+    )
+    if isinstance(identity, IneligibleRequest):
+        return _text_reply(REPLAY_MISS_STATUS, f"stateless_v1 eligibility error: {identity.reason}")
+    request: Final = (
+        RecordedRequest(method=method.lower(), path=split.path, headers={}, strict_identity=identity)
+        if identity is not None
+        else edge_request(method, split.path, split.query, body, _header_value(headers, "content-type"))
     )
     match backend:
+        case CacheEdge():
+            return _handle_live(
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
+                backend, mount, test_key,
+            )
+        case LiveEdge(observe_request=observe_request, sign=sign, cut=cut):
+            return _handle_live(
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
+                mount=mount, observe_request=observe_request, sign=sign, cut=cut,
+            )
         case RecordEdge():
             return _handle_record(
                 backend,
@@ -618,8 +1065,26 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         assert isinstance(edge_server, _EdgeHTTPServer)
         length: Final = int(self.headers.get("content-length") or "0")
         body: Final = self.rfile.read(length) if length else None
-        reply: Final = handle_edge_request(
-            edge_server.backend,
+        if edge_server.observation is not None:
+            edge_server.observation.observe(body)
+        strict: Final = (
+            isinstance(edge_server.backend, RecordEdge) and edge_server.backend.recorder.profile == "stateless_v1"
+            or isinstance(edge_server.backend, ReplayEdge)
+            and edge_server.backend.source.bundle.manifest.match_profile == "stateless_v1"
+        )
+        if strict and len({name.lower() for name in self.headers}) != len(self.headers):
+            self._write_reply(_text_reply(REPLAY_MISS_STATUS, "stateless_v1 eligibility error: duplicate headers"))
+            return
+        duplicate_headers: Final = len({name.lower() for name in self.headers}) != len(self.headers)
+        selected_backend: Final = (
+            LiveEdge() if isinstance(edge_server.backend, CacheEdge) and duplicate_headers else edge_server.backend
+        )
+        if isinstance(edge_server.backend, CacheEdge) and duplicate_headers:
+            edge_server.backend.counters.increment("duplicate_header_bypass")
+            if resolve_mount(urlsplit(self.path).path, edge_server.mounts) is not None:
+                edge_server.backend.counters.increment("upstream_attempts")
+        outcome: Final = handle_edge_request(
+            selected_backend,
             edge_server.mounts,
             self.command,
             self.path,
@@ -627,12 +1092,47 @@ class _EdgeHandler(BaseHTTPRequestHandler):
             body,
             timeout=edge_server.forward_timeout,
         )
+        match outcome:
+            case EdgeReply():
+                self._write_reply(outcome)
+            case EdgeStream():
+                self._write_stream(outcome)
+            case _:
+                assert_never(outcome)
+
+    def _write_reply(self, reply: EdgeReply) -> None:
         self.send_response(reply.status_code)
         for name, value in reply.headers.items():
             self.send_header(name, value)
         self.send_header("content-length", str(len(reply.body)))
         self.end_headers()
         self.wfile.write(reply.body)
+
+    def _write_stream(self, stream: EdgeStream) -> None:
+        """Write a streamed outcome in chunked framing, one transfer chunk per step.
+
+        ``wbufsize`` is 0 on BaseHTTPRequestHandler, so ``wfile`` sends each write
+        straight down the socket and no flush is needed. A truncation step ends the
+        message without its terminator and closes the connection, which the stdlib
+        shuts down write-side first: the proxy sees a graceful close mid-message,
+        which is the incomplete chunked read a provider hanging up produces, and not
+        the reset that could discard the chunks already in flight."""
+        with closing(stream.steps) as steps:
+            self.send_response(stream.status_code)
+            for name, value in stream.headers.items():
+                self.send_header(name, value)
+            self.send_header("transfer-encoding", "chunked")
+            self.end_headers()
+            for step in steps:
+                match step:
+                    case StreamChunk(data=data):
+                        self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
+                    case StreamTruncation():
+                        self.close_connection = True
+                        return
+                    case _:
+                        assert_never(step)
+            self.wfile.write(b"0\r\n\r\n")
 
     def log_message(self, format: str, *args: object) -> None:
         """Silence the per-request stderr line BaseHTTPRequestHandler emits."""
@@ -648,11 +1148,13 @@ class _EdgeHTTPServer(ThreadingHTTPServer):
         backend: EdgeBackend,
         mounts: Mapping[str, str],
         forward_timeout: float,
+        observation: ProviderRequestObservation | None,
     ) -> None:
         super().__init__(bind, _EdgeHandler)
         self.backend: Final = backend
         self.mounts: Final = mounts
         self.forward_timeout: Final = forward_timeout
+        self.observation: Final = observation
 
 
 @dataclass(frozen=True, slots=True)
@@ -681,13 +1183,14 @@ def start_provider_edge(
     bind_host: str = "127.0.0.1",
     advertise_host: str | None = None,
     forward_timeout: float = 60.0,
+    observation: ProviderRequestObservation | None = None,
 ) -> RunningEdge:
     """Boot an edge server on an OS-assigned port in a daemon thread.
     ``advertise_host`` is what api_base URLs name (it differs from the bind
     host when the proxy runs in a container and reaches the host machine via
     a gateway address like host.docker.internal)."""
     server: Final = _EdgeHTTPServer(
-        (bind_host, 0), backend=backend, mounts=mounts, forward_timeout=forward_timeout
+        (bind_host, 0), backend=backend, mounts=mounts, forward_timeout=forward_timeout, observation=observation
     )
     thread: Final = threading.Thread(target=server.serve_forever, name="e2e-provider-edge", daemon=True)
     thread.start()
@@ -698,16 +1201,16 @@ def start_provider_edge(
 
 
 @functools.lru_cache(maxsize=8)
-def _shared_recorder(root: Path) -> BundleRecorder:
-    prepared = prepare_bundle(root)
+def _shared_recorder(root: Path, profile: MatchProfile = "legacy") -> BundleRecorder:
+    prepared = prepare_bundle(root, profile=profile)
     if isinstance(prepared, UnsafeBundleDir):
         raise ValueError(f"E2E_FIXTURE_DIR {prepared.path} {prepared.reason}")
     return prepared
 
 
 @functools.lru_cache(maxsize=8)
-def _shared_replay_source(root: Path) -> ReplaySource:
-    loaded = load_bundle(root)
+def _shared_replay_source(root: Path, profile: MatchProfile = "legacy") -> ReplaySource:
+    loaded = load_bundle(root, profile=profile)
     if isinstance(loaded, UnreadableBundle):
         raise ValueError(f"cannot replay from {root}: {loaded.reason}")
     return ReplaySource(bundle=loaded)
@@ -720,11 +1223,12 @@ def _shared_edge(
     bind_host: str,
     advertise_host: str,
     forward_timeout: float,
+    profile: MatchProfile,
 ) -> ProviderEdge:
     backend: Final[EdgeBackend] = (
-        RecordEdge(recorder=_shared_recorder(bundle_dir), lock=threading.Lock())
+        RecordEdge(recorder=_shared_recorder(bundle_dir, profile), lock=threading.Lock())
         if mode == "record"
-        else ReplayEdge(source=_shared_replay_source(bundle_dir))
+        else ReplayEdge(source=_shared_replay_source(bundle_dir, profile))
     )
     return start_provider_edge(
         backend,
@@ -741,7 +1245,7 @@ def replay_leftover_error(*, mode_raw: str, bundle_dir: Path, test_key: str) -> 
     recording it no longer matches. Inert in every other mode."""
     if parse_fixture_mode(mode_raw) != "replay":
         return None
-    return _shared_replay_source(bundle_dir).leftover_error(test_key)
+    return _shared_replay_source(bundle_dir, match_profile()).leftover_error(test_key)
 
 
 def provider_edge_api_base(
@@ -751,22 +1255,103 @@ def provider_edge_api_base(
     bundle_dir: Path,
     bind_host: str,
     advertise_host: str,
+    test_key: str,
     forward_timeout: float = 60.0,
 ) -> str | None:
     """The api_base a suite gives an edge-wired deployment: None in live mode
     (the deployment keeps its real provider api_base) and the process-wide edge
-    server's mount URL in record and replay, booting the server on first use."""
+    server's mount URL in record and replay, booting the server on first use.
+    With the shared cache configured, live mode answers with the cache edge's
+    mount URL scoped to ``test_key``, the node that owns the deployment, and
+    None for a deployment no node owns, since a call nobody can attribute is
+    never cached."""
     mode: Final = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode(value=value):
             raise ValueError(f"E2E_FIXTURE_MODE={value!r} is not one of {', '.join(FIXTURE_MODES)}")
         case "live":
-            return None
+            if configured_cache_backend() is None or test_key == SESSION_TEST_KEY:
+                return None
+            return scoped_edge_base(
+                _shared_cache_edge(bind_host, advertise_host, forward_timeout).api_base(mount), test_key
+            )
         case "record" | "replay":
+            if is_bedrock(mount):
+                return None
             if mount not in EDGE_MOUNTS:
-                raise ValueError(
-                    f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}"
-                )
-            return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout).api_base(mount)
+                raise ValueError(f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}")
+            return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout, match_profile()).api_base(
+                mount
+            )
         case _:
             assert_never(mode)
+
+
+def _observed_backend(mode_raw: str, bundle_dir: Path) -> EdgeBackend:
+    mode: Final = parse_fixture_mode(mode_raw)
+    match mode:
+        case InvalidFixtureMode(value=value):
+            raise ValueError(f"E2E_FIXTURE_MODE={value!r} is not one of {', '.join(FIXTURE_MODES)}")
+        case "live":
+            return configured_cache_backend() or LiveEdge()
+        case "record":
+            return RecordEdge(_shared_recorder(bundle_dir, match_profile()), threading.Lock())
+        case "replay":
+            return ReplayEdge(_shared_replay_source(bundle_dir, match_profile()))
+        case _:
+            assert_never(mode)
+
+
+def configured_cache_backend() -> CacheEdge | None:
+    if LIVE_PROVIDER_REQUIRED.get() or os.environ.get("E2E_PROVIDER_CACHE", "0") == "0":
+        return None
+    from provider_cache_redis import configured_cache
+
+    cache: Final = configured_cache()
+    return None if cache is None else replace(cache, policies=bedrock_policies())
+
+
+@functools.lru_cache(maxsize=1)
+def bedrock_policies() -> Mapping[str, MountPolicy]:
+    """One policy per mounted Bedrock region, built lazily so a run that never
+    mounts Bedrock neither imports botocore nor resolves an AWS identity."""
+    from provider_edge_bedrock import bedrock_signer
+
+    return MappingProxyType(
+        {
+            f"bedrock/{region}": MountPolicy(sign=bedrock_signer(region), unkeyed_headers=SIGNATURE_HEADERS)
+            for region in BEDROCK_REGIONS
+        }
+    )
+
+
+@functools.lru_cache(maxsize=8)
+def _shared_cache_edge(bind_host: str, advertise_host: str, forward_timeout: float) -> ProviderEdge:
+    backend: Final = configured_cache_backend()
+    assert backend is not None
+    return start_provider_edge(
+        backend, mounts=EDGE_MOUNTS, bind_host=bind_host,
+        advertise_host=advertise_host, forward_timeout=forward_timeout,
+    ).edge
+
+
+@contextmanager
+def observed_provider_edge(
+    observation: ProviderRequestObservation,
+    *,
+    mode_raw: str,
+    bundle_dir: Path,
+    bind_host: str,
+    advertise_host: str,
+    forward_timeout: float = 60.0,
+    mounts: Mapping[str, str] = EDGE_MOUNTS,
+) -> Generator[ProviderEdge, None, None]:
+    running: Final = start_provider_edge(
+        _observed_backend(mode_raw, bundle_dir), mounts=mounts,
+        bind_host=bind_host, advertise_host=advertise_host,
+        forward_timeout=forward_timeout, observation=observation,
+    )
+    try:
+        yield running.edge
+    finally:
+        running.shutdown()

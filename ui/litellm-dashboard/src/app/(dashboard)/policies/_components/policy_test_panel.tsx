@@ -4,7 +4,7 @@ import { CircleAlert, Inbox } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

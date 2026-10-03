@@ -11,49 +11,64 @@ computed and closest recorded canonical keys (LIT-5741; the pure canonicalizer
 is pinned in test_fixture_canonical.py). Requests are made through
 ``e2e_http.forward`` so the whole HTTP surface of the edge is exercised; the
 pure ``handle_edge_request`` core is pinned socket-free alongside.
+
+Streaming fidelity (LIT-5742) is pinned at the transfer layer, because that is
+the only layer where it is visible: a chunked provider sends a known list of
+transfer chunks, one of which deliberately splits an SSE event mid-token, and a
+raw-socket client reads the edge's own reply back as HTTP chunks. Counting SSE
+events at the client would prove nothing, since a coalesced body carries the
+same events as a chunk-per-event one.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import socket
 import threading
 from collections.abc import Generator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
-from pydantic import TypeAdapter
-
-from e2e_http import RawResponse, forward
-from fixture_canonical import canonicalize
+from e2e_http import RawResponse, StreamChunk, forward
 from fixture_bundle import (
     BundleRecorder,
     Interaction,
     LoadedBundle,
     RecordedHttpResponse,
     RecordedRequest,
+    RecordedStreamedResponse,
     load_bundle,
     prepare_bundle,
     slug_for_test,
 )
+from fixture_canonical import canonicalize
 from fixture_mode import current_test_key
 from provider_edge import (
     REPLAY_MISS_STATUS,
     EdgeBackend,
+    EdgeReply,
+    EdgeStream,
+    LiveEdge,
     ProviderEdge,
+    ProviderRequestObservation,
     RecordEdge,
     ReplayEdge,
     ReplaySource,
+    StreamCut,
     edge_request,
     handle_edge_request,
+    observed_provider_edge,
     provider_edge_api_base,
     replay_leftover_error,
     start_provider_edge,
 )
+from pydantic import TypeAdapter
 
 CHAT_PATH = "/openai/v1/chat/completions"
 UPLOAD_PATH = "/openai/v1/files"
@@ -69,9 +84,14 @@ def json_object(body: bytes) -> dict[str, object]:
 class _FakeProvider(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, bind: tuple[str, int]) -> None:
+    def __init__(self, bind: tuple[str, int], *, echo_request: bool = True) -> None:
         super().__init__(bind, _FakeProviderHandler)
         self.hits: list[str] = []
+        self.echo_request = echo_request
+        self.requests: tuple[tuple[Mapping[str, str], bytes], ...] = ()
+
+    def capture_request(self, headers: Mapping[str, str], body: bytes) -> None:
+        self.requests = (*self.requests, (MappingProxyType(dict(headers)), body))
 
 
 class _FakeProviderHandler(BaseHTTPRequestHandler):
@@ -89,8 +109,11 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length") or "0")
         body = self.rfile.read(length) if length else b""
         provider.hits.append(f"{self.command} {self.path}")
-        payload = json.dumps(
+        provider.capture_request(dict(self.headers.items()), body)
+        payload: Final = json.dumps(
             {"echo": body.decode("utf-8"), "path": self.path, "hit": len(provider.hits)}
+            if provider.echo_request
+            else {"ok": True}
         ).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
@@ -105,8 +128,8 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def fake_provider() -> Generator[_FakeProvider]:
-    server = _FakeProvider(("127.0.0.1", 0))
+def fake_provider(*, echo_request: bool = True) -> Generator[_FakeProvider]:
+    server = _FakeProvider(("127.0.0.1", 0), echo_request=echo_request)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -116,8 +139,173 @@ def fake_provider() -> Generator[_FakeProvider]:
         server.server_close()
 
 
-def provider_url(server: _FakeProvider) -> str:
+def provider_url(server: ThreadingHTTPServer) -> str:
     return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+STREAM_PATH = "/openai/v1/messages"
+STREAM_BODY = json.dumps({"model": "claude", "stream": True}).encode()
+MID_EVENT_HEAD = b'data: {"type":"content_bl'
+MID_EVENT_TAIL = b'ock_delta","delta":{"text":" two"}}\n\n'
+SSE_CHUNKS: tuple[bytes, ...] = (
+    b'data: {"type":"content_block_delta","delta":{"text":"one"}}\n\n',
+    MID_EVENT_HEAD,
+    MID_EVENT_TAIL,
+    b'data: {"type":"message_delta","usage":{"output_tokens":7}}\n\n',
+    b"data: [DONE]\n\n",
+)
+JSON_CHUNKS: tuple[bytes, ...] = (b'{"echo":"one",', b'"chunked":true}')
+
+
+class _ChunkedProvider(ThreadingHTTPServer):
+    """A provider that frames its response as a known list of transfer chunks, each
+    flushed on its own, and optionally hangs up part way through without writing the
+    terminating chunk. The chunk list is what the recording has to reproduce."""
+
+    daemon_threads = True
+
+    def __init__(
+        self,
+        bind: tuple[str, int],
+        *,
+        chunks: tuple[bytes, ...],
+        content_type: str,
+        abort_after: int | None,
+    ) -> None:
+        super().__init__(bind, _ChunkedProviderHandler)
+        self.chunks = chunks
+        self.content_type = content_type
+        self.abort_after = abort_after
+        self.hits: list[str] = []
+
+
+class _ChunkedProviderHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self) -> None:
+        provider = self.server
+        assert isinstance(provider, _ChunkedProvider)
+        length = int(self.headers.get("content-length") or "0")
+        if length:
+            self.rfile.read(length)
+        provider.hits.append(f"{self.command} {self.path}")
+        self.send_response(200)
+        self.send_header("content-type", provider.content_type)
+        self.send_header("transfer-encoding", "chunked")
+        self.end_headers()
+        limit = len(provider.chunks) if provider.abort_after is None else provider.abort_after
+        for chunk in provider.chunks[:limit]:
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.flush()
+        if limit < len(provider.chunks):
+            self.close_connection = True
+            return
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Silence the per-request stderr line BaseHTTPRequestHandler emits."""
+
+
+@contextmanager
+def chunked_provider(
+    *,
+    chunks: tuple[bytes, ...] = SSE_CHUNKS,
+    content_type: str = "text/event-stream",
+    abort_after: int | None = None,
+) -> Generator[_ChunkedProvider]:
+    server = _ChunkedProvider(
+        ("127.0.0.1", 0), chunks=chunks, content_type=content_type, abort_after=abort_after
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def response_header(head: str, name: str) -> str | None:
+    wanted = f"{name.lower()}:"
+    for line in head.splitlines()[1:]:
+        if line.lower().startswith(wanted):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def _read_chunked(sock: socket.socket, buffered: bytes) -> tuple[list[bytes], str]:
+    """A chunked body read back one entry per HTTP chunk, plus how the message ended.
+
+    The framing is parsed rather than ``recv`` calls counted, because TCP is free to
+    coalesce two chunks into one segment or split one across two, so a read count
+    says nothing about how the sender framed the message."""
+    chunks: list[bytes] = []
+    try:
+        while True:
+            while b"\r\n" not in buffered:
+                piece = sock.recv(65536)
+                if not piece:
+                    return chunks, "truncated"
+                buffered += piece
+            line, _, buffered = buffered.partition(b"\r\n")
+            size = int(line.split(b";")[0], 16)
+            if size == 0:
+                return chunks, "terminated"
+            while len(buffered) < size + 2:
+                piece = sock.recv(65536)
+                if not piece:
+                    return chunks, "truncated"
+                buffered += piece
+            chunks.append(buffered[:size])
+            buffered = buffered[size + 2 :]
+    except ConnectionResetError:
+        return chunks, "reset"
+
+
+def _read_fixed(sock: socket.socket, buffered: bytes, length: int) -> tuple[list[bytes], str]:
+    while len(buffered) < length:
+        piece = sock.recv(65536)
+        if not piece:
+            return ([buffered] if buffered else []), "truncated"
+        buffered += piece
+    return ([buffered[:length]] if length else []), "terminated"
+
+
+def raw_stream_post(port: int, path: str, body: bytes) -> tuple[str, list[bytes], str]:
+    """POST over a raw socket and read the reply at the transfer layer: the response
+    head, one entry per HTTP chunk (or the whole body for a content-length reply),
+    and how the message ended, ``terminated`` when its terminator arrived,
+    ``truncated`` on a graceful close before it, ``reset`` on an abortive one.
+
+    ``call_edge`` goes through ``forward``, which buffers, so it cannot see any of
+    this; the streaming tests need the framing itself, so they read the socket."""
+    sock = socket.create_connection(("127.0.0.1", port), timeout=15)
+    try:
+        sock.sendall(
+            (
+                f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                f"content-type: application/json\r\ncontent-length: {len(body)}\r\n\r\n"
+            ).encode()
+            + body
+        )
+        buffered = b""
+        while b"\r\n\r\n" not in buffered:
+            piece = sock.recv(65536)
+            if not piece:
+                break
+            buffered += piece
+        head_bytes, _, rest = buffered.partition(b"\r\n\r\n")
+        head = head_bytes.decode("latin-1")
+        if (response_header(head, "transfer-encoding") or "").lower() == "chunked":
+            chunks, ending = _read_chunked(sock, rest)
+        else:
+            chunks, ending = _read_fixed(
+                sock, rest, int(response_header(head, "content-length") or 0)
+            )
+        return head, chunks, ending
+    finally:
+        sock.close()
 
 
 @contextmanager
@@ -787,6 +975,272 @@ class TestConcurrentReplay:
         assert source.leftover_error(current_test_key()) is None
 
 
+def record_stream(root: Path, *, abort_after: int | None = None) -> tuple[str, list[bytes], str]:
+    with chunked_provider(abort_after=abort_after) as provider:
+        with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+            return raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+
+
+def replay_stream(root: Path) -> tuple[str, list[bytes], str]:
+    with running_edge(ReplayEdge(source=replay_source(root)), REPLAY_MOUNTS) as edge:
+        return raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+
+
+def only_recorded_response(root: Path) -> RecordedHttpResponse | RecordedStreamedResponse:
+    files = this_tests_files(root)
+    assert len(files) == 1, [file.name for file in files]
+    return Interaction.model_validate_json(files[0].read_text(encoding="utf-8")).response
+
+
+def recorded_stream(root: Path) -> RecordedStreamedResponse:
+    response = only_recorded_response(root)
+    assert isinstance(response, RecordedStreamedResponse), response
+    return response
+
+
+def stream_chunks(response: RecordedStreamedResponse) -> list[bytes]:
+    return [base64.b64decode(chunk) for chunk in response.chunks_b64]
+
+
+SECOND_DATA_LINE: Final = b'data: {"type":"content_block_delta","delta":{"text":" two"}}'
+SPLIT_MARKER_CHUNKS: tuple[bytes, ...] = (
+    b'data: {"type":"content_block_delta","delta":{"text":"one"}}\n\nda',
+    b"ta" + SECOND_DATA_LINE[4:] + b"\n\nda",
+    b'ta: {"type":"message_delta","usage":{"output_tokens":7}}\n\nda',
+    b"ta: [DONE]\n\n",
+)
+
+
+class TestStreamCut:
+    def test_a_mid_frame_cut_tears_a_data_line_whose_marker_is_split_across_chunks(self) -> None:
+        """Every ``data:`` marker after the first content delta straddles a transfer
+        chunk boundary, so a tearer that inspects each chunk on its own never finds
+        one and lets the stream finish cleanly instead of cutting it."""
+        backend: Final = LiveEdge(cut=StreamCut(after_content=True, mid_chunk=True))
+        with chunked_provider(chunks=SPLIT_MARKER_CHUNKS) as provider:
+            with running_edge(backend, {"openai": provider_url(provider)}) as edge:
+                head, chunks, ending = raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+
+        assert head.startswith("HTTP/1.1 200 OK")
+        assert ending == "truncated"
+        relayed: Final = b"".join(chunks)
+        whole: Final = b"".join(SPLIT_MARKER_CHUNKS)
+        assert whole.startswith(relayed) and relayed != whole
+        assert relayed.startswith(SPLIT_MARKER_CHUNKS[0])
+        torn_line: Final = relayed.rsplit(b"\n", 1)[-1]
+        assert torn_line and SECOND_DATA_LINE.startswith(torn_line) and torn_line != SECOND_DATA_LINE
+        assert b"[DONE]" not in relayed
+
+
+class TestStreamingFidelity:
+    """LIT-5742: a streamed response records and replays as the chunk sequence the
+    provider actually sent, not as one coalesced body. The unit of fidelity is the
+    HTTP transfer chunk, so every assertion here is made at the transfer layer."""
+
+    def test_a_streamed_response_records_its_chunk_boundaries(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        record_stream(root)
+
+        recorded = recorded_stream(root)
+        assert recorded.status_code == 200
+        assert stream_chunks(recorded) == list(SSE_CHUNKS)
+        assert recorded.truncated is None
+
+    def test_replay_reproduces_the_recorded_split_points(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        record_stream(root)
+
+        head, chunks, ending = replay_stream(root)
+        assert head.startswith("HTTP/1.1 200 OK")
+        assert response_header(head, "transfer-encoding") == "chunked"
+        assert response_header(head, "content-type") == "text/event-stream"
+        assert len(chunks) > 1
+        assert chunks == list(SSE_CHUNKS)
+        assert ending == "terminated"
+
+    def test_record_mode_relays_the_stream_chunked_like_replay_will(self, tmp_path: Path) -> None:
+        """Record/replay parity at the framing level: what record serves the proxy
+        must be what replay serves it later, chunk for chunk."""
+        root = tmp_path / "bundle"
+        recorded_head, recorded_chunks, recorded_ending = record_stream(root)
+        replayed_head, replayed_chunks, replayed_ending = replay_stream(root)
+
+        assert response_header(recorded_head, "transfer-encoding") == "chunked"
+        assert recorded_chunks == list(SSE_CHUNKS)
+        assert recorded_chunks == replayed_chunks
+        assert recorded_ending == replayed_ending == "terminated"
+        assert response_header(recorded_head, "transfer-encoding") == response_header(
+            replayed_head, "transfer-encoding"
+        )
+
+    def test_a_chunk_split_inside_an_event_survives_replay(self, tmp_path: Path) -> None:
+        """The anti-tautology test. One provider chunk ends mid-token, so the two
+        halves of that SSE event must arrive as two chunks; an implementation that
+        joins the body and re-splits it on event boundaries cannot pass this."""
+        root = tmp_path / "bundle"
+        record_stream(root)
+
+        _, chunks, _ = replay_stream(root)
+        split_at = SSE_CHUNKS.index(MID_EVENT_HEAD)
+        assert chunks[split_at] == MID_EVENT_HEAD
+        assert chunks[split_at + 1] == MID_EVENT_TAIL
+        assert b"content_block_delta" not in chunks[split_at]
+        assert b"content_block_delta" in chunks[split_at] + chunks[split_at + 1]
+
+    def test_the_usage_chunk_replays_in_its_recorded_position(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        record_stream(root)
+        recorded = stream_chunks(recorded_stream(root))
+
+        _, replayed, _ = replay_stream(root)
+        usage_positions = [
+            index for index, chunk in enumerate(recorded) if b"output_tokens" in chunk
+        ]
+        assert usage_positions == [
+            index for index, chunk in enumerate(replayed) if b"output_tokens" in chunk
+        ]
+        assert usage_positions == [len(replayed) - 2]
+        assert replayed[-1] == SSE_CHUNKS[-1]
+
+    def test_a_mid_stream_upstream_failure_records_the_delivered_chunks_and_the_truncation(
+        self, tmp_path: Path
+    ) -> None:
+        """The provider delivers two chunks and hangs up. The deltas it did send are
+        the difference between a stream that died and a request that never streamed,
+        so they are recorded, and the recording says the stream never terminated."""
+        root = tmp_path / "bundle"
+        head, chunks, ending = record_stream(root, abort_after=2)
+
+        assert head.startswith("HTTP/1.1 200 OK")
+        assert chunks == list(SSE_CHUNKS[:2])
+        assert ending == "truncated"
+        recorded = recorded_stream(root)
+        assert recorded.status_code == 200
+        assert stream_chunks(recorded) == list(SSE_CHUNKS[:2])
+        assert recorded.truncated is not None
+        assert recorded.truncated.startswith("upstream: ")
+
+    def test_a_downstream_disconnect_mid_relay_records_only_the_delivered_chunks(
+        self, tmp_path: Path
+    ) -> None:
+        """The provider keeps sending, but the proxy the edge relays to hangs up after
+        two chunks. The chunk whose downstream write never landed must stay out of the
+        recording, or replay would hand back a byte the record run never delivered.
+
+        Driven through the pure ``handle_edge_request`` core because a socket client
+        cannot force these tiny chunks to block mid-write, so closing the relay
+        generator is the faithful stand-in for the downstream write raising: it lands
+        the generator on the same suspended yield a broken pipe would."""
+        root = tmp_path / "bundle"
+        with chunked_provider() as provider:
+            outcome = handle_edge_request(
+                record_backend(root),
+                {"openai": provider_url(provider)},
+                "POST",
+                STREAM_PATH,
+                {"content-type": "application/json"},
+                STREAM_BODY,
+                timeout=10.0,
+            )
+            assert isinstance(outcome, EdgeStream)
+            steps = outcome.steps
+            first = next(steps)
+            second = next(steps)
+            assert isinstance(first, StreamChunk) and isinstance(second, StreamChunk)
+            assert (first.data, second.data) == (SSE_CHUNKS[0], SSE_CHUNKS[1])
+            steps.close()
+
+        recorded = recorded_stream(root)
+        assert recorded.status_code == 200
+        assert stream_chunks(recorded) == [SSE_CHUNKS[0]]
+        assert recorded.truncated == "downstream: relay closed after 1 chunks"
+
+    def test_a_truncated_recording_replays_as_a_truncated_stream(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        record_stream(root, abort_after=2)
+
+        head, chunks, ending = replay_stream(root)
+        assert head.startswith("HTTP/1.1 200 OK")
+        assert response_header(head, "transfer-encoding") == "chunked"
+        assert chunks == list(SSE_CHUNKS[:2])
+        assert ending == "truncated"
+
+    def test_a_non_streamed_response_keeps_the_buffered_shape(self, tmp_path: Path) -> None:
+        """No-churn guard: an ordinary JSON response records and is framed exactly as
+        it was before streaming existed."""
+        root = tmp_path / "bundle"
+        with fake_provider() as provider:
+            with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+                head, chunks, ending = raw_stream_post(edge.port, CHAT_PATH, chat_body("hi"))
+
+        response = only_recorded_response(root)
+        assert isinstance(response, RecordedHttpResponse)
+        assert response_header(head, "transfer-encoding") is None
+        assert response_header(head, "content-length") is not None
+        assert ending == "terminated"
+        assert json_object(b"".join(chunks))["echo"] == chat_body("hi").decode()
+
+    def test_a_chunked_non_sse_response_stays_buffered(self, tmp_path: Path) -> None:
+        """Detection keys off the content type, not the transfer encoding: providers
+        chunk ordinary JSON freely, and treating that as streamed would move nearly
+        every recording to the chunk-list shape for no gain."""
+        root = tmp_path / "bundle"
+        with chunked_provider(chunks=JSON_CHUNKS, content_type="application/json") as provider:
+            with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+                head, chunks, _ = raw_stream_post(edge.port, CHAT_PATH, chat_body("hi"))
+
+        response = only_recorded_response(root)
+        assert isinstance(response, RecordedHttpResponse)
+        assert base64.b64decode(response.body_b64) == b"".join(JSON_CHUNKS)
+        assert response_header(head, "transfer-encoding") is None
+        assert b"".join(chunks) == b"".join(JSON_CHUNKS)
+
+    def test_replay_of_a_stream_makes_no_provider_connection(self, tmp_path: Path) -> None:
+        root = tmp_path / "bundle"
+        with chunked_provider() as provider:
+            with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+                raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+            hits_after_record = list(provider.hits)
+            with running_edge(
+                ReplayEdge(source=replay_source(root)), {"openai": provider_url(provider)}
+            ) as edge:
+                _, chunks, ending = raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+            assert provider.hits == hits_after_record == ["POST /v1/messages"]
+        assert chunks == list(SSE_CHUNKS)
+        assert ending == "terminated"
+
+    def test_concurrent_streams_each_record_their_own_chunks(self, tmp_path: Path) -> None:
+        """The edge relays streams on concurrent threads and each one takes the
+        recorder lock once, at the end, so neither recording loses or borrows a chunk
+        from the other."""
+        root = tmp_path / "bundle"
+        bodies = [
+            json.dumps({"model": "claude", "stream": True, "n": index}).encode()
+            for index in range(2)
+        ]
+        barrier = threading.Barrier(len(bodies))
+        with chunked_provider() as provider:
+            with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+
+                def consume(body: bytes) -> tuple[list[bytes], str]:
+                    barrier.wait()
+                    _, chunks, ending = raw_stream_post(edge.port, STREAM_PATH, body)
+                    return chunks, ending
+
+                with ThreadPoolExecutor(max_workers=len(bodies)) as executor:
+                    served = list(executor.map(consume, bodies))
+
+        assert served == [(list(SSE_CHUNKS), "terminated")] * len(bodies)
+        files = this_tests_files(root)
+        assert len(files) == len(bodies)
+        for file in files:
+            response = Interaction.model_validate_json(
+                file.read_text(encoding="utf-8")
+            ).response
+            assert isinstance(response, RecordedStreamedResponse), response
+            assert stream_chunks(response) == list(SSE_CHUNKS)
+
+
 class TestHandleEdgeRequestPure:
     def test_unknown_mount_404s_naming_the_known_mounts(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"
@@ -800,6 +1254,7 @@ class TestHandleEdgeRequestPure:
             b"{}",
             timeout=1.0,
         )
+        assert isinstance(reply, EdgeReply)
         assert reply.status_code == 404
         assert b"unknown provider mount 'bedrock'" in reply.body
         assert b"anthropic, openai" in reply.body
@@ -824,13 +1279,15 @@ class TestHandleEdgeRequestPure:
             json.dumps({"prompt": "x"}).encode(),
             timeout=1.0,
         )
+        assert isinstance(reply, EdgeReply)
         assert reply.status_code == 201
         assert reply.body == b"ok"
         assert reply.headers == {"x-upstream": "fake"}
 
 
 class TestApiBaseSeam:
-    def test_live_mode_returns_none(self, tmp_path: Path) -> None:
+    def test_live_mode_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("E2E_PROVIDER_CACHE", raising=False)
         for mode_raw in ("live", ""):
             assert (
                 provider_edge_api_base(
@@ -839,6 +1296,7 @@ class TestApiBaseSeam:
                     bundle_dir=tmp_path / "bundle",
                     bind_host="127.0.0.1",
                     advertise_host="127.0.0.1",
+                    test_key="tests/e2e/synthetic_suite.py::test_case",
                 )
                 is None
             )
@@ -851,28 +1309,107 @@ class TestApiBaseSeam:
                 bundle_dir=tmp_path / "bundle",
                 bind_host="127.0.0.1",
                 advertise_host="127.0.0.1",
+                test_key="tests/e2e/synthetic_suite.py::test_case",
             )
 
     def test_unknown_mount_raises_naming_the_known_mounts(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="unknown provider mount 'bedrock'"):
+        with pytest.raises(ValueError, match="unknown provider mount 'cohere'"):
             provider_edge_api_base(
-                "bedrock",
+                "cohere",
                 mode_raw="record",
                 bundle_dir=tmp_path / "bundle",
                 bind_host="127.0.0.1",
                 advertise_host="127.0.0.1",
+                test_key="tests/e2e/synthetic_suite.py::test_case",
             )
+
+    @pytest.mark.parametrize("mode_raw", ["record", "replay"])
+    def test_bedrock_never_wires_a_bundle_because_the_edge_cannot_sign_into_one(
+        self, tmp_path: Path, mode_raw: str,
+    ) -> None:
+        """Record and replay serve from a bundle without re-signing, so a Bedrock
+        deployment pointed at that edge would send the proxy's signature over a
+        rewritten Host. It keeps its direct route in both modes."""
+        assert provider_edge_api_base(
+            "bedrock/us-east-1",
+            mode_raw=mode_raw,
+            bundle_dir=tmp_path / "bundle",
+            bind_host="127.0.0.1",
+            advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
+        ) is None
 
     def test_record_mode_boots_one_shared_edge_and_prepares_the_bundle(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"
         first = provider_edge_api_base(
-            "openai", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1"
+            "openai", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         second = provider_edge_api_base(
-            "anthropic", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1"
+            "anthropic", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         assert first is not None and second is not None
         assert first.endswith("/openai")
         assert second.endswith("/anthropic")
         assert first.rsplit("/", 1)[0] == second.rsplit("/", 1)[0]
         assert (root / "manifest.json").is_file()
+
+
+class TestProviderRequestObservation:
+    def test_live_counts_repeated_marker_calls_without_recording(self, tmp_path: Path) -> None:
+        observation: Final = ProviderRequestObservation("observed-lantern")
+        with fake_provider() as provider:
+            with observed_provider_edge(
+                observation, mode_raw="live", bundle_dir=tmp_path / "unused",
+                bind_host="127.0.0.1", advertise_host="127.0.0.1",
+                mounts={"openai": provider_url(provider)},
+            ) as edge:
+                assert observation.count == 0
+                unrelated: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("other-lantern"))
+                assert unrelated.status_code == 200
+                assert observation.count == 0
+                first: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern"))
+                assert first.status_code == 200
+                assert json_object(first.body)["echo"] == chat_body("observed-lantern").decode()
+                assert observation.count == 1
+                second: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern"))
+                assert second.status_code == 200
+                assert observation.count == 2
+            assert len(provider.hits) == 3
+        assert not (tmp_path / "unused").exists()
+
+    def test_record_and_replay_count_each_matching_call(self, tmp_path: Path) -> None:
+        with fake_provider() as provider:
+            for mode, observation in (
+                ("record", ProviderRequestObservation("observed-lantern")),
+                ("replay", ProviderRequestObservation("observed-lantern")),
+            ):
+                with observed_provider_edge(
+                    observation, mode_raw=mode, bundle_dir=tmp_path / "bundle",
+                    bind_host="127.0.0.1", advertise_host="127.0.0.1",
+                    mounts={"openai": provider_url(provider)},
+                ) as edge:
+                    assert observation.count == 0
+                    for expected, response in (
+                        (index, call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern")))
+                        for index in (1, 2)
+                    ):
+                        assert response.status_code == 200
+                        assert json_object(response.body)["hit"] == expected
+                        assert observation.count == expected
+                assert len(provider.hits) == 2
+        assert replay_leftover_error(
+            mode_raw="replay", bundle_dir=tmp_path / "bundle", test_key=current_test_key()
+        ) is None
+
+    def test_failed_provider_attempt_is_counted(self, tmp_path: Path) -> None:
+        observation: Final = ProviderRequestObservation("observed-lantern")
+        with observed_provider_edge(
+            observation, mode_raw="live", bundle_dir=tmp_path / "unused",
+            bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            mounts={"openai": "http://127.0.0.1:9"},
+        ) as edge:
+            response: Final = call_edge(edge, "POST", CHAT_PATH, body=chat_body("observed-lantern"))
+            assert response.status_code == 502
+            assert observation.count == 1

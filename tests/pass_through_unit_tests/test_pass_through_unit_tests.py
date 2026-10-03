@@ -63,7 +63,8 @@ def mock_request():
             self.method = method
             self.request_body = request_body or {}
             # Add url attribute that the actual code expects
-            self.url = "http://localhost:8000/test"
+            self.url = httpx.URL("http://localhost:8000/test")
+            self.scope = {"type": "http", "method": method, "path": "/test"}
             # Add state attribute that FastAPI requests have
             self.state = type("State", (), {})()
 
@@ -411,6 +412,10 @@ async def test_pass_through_request_logging_failure_with_stream(
 PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
     "/comprehendmedical": {"POST"},
     "/comprehendmedical/{operation}": {"POST"},
+    "/transcribe": {"POST"},
+    "/transcribe/{operation}": {"POST"},
+    "/tinyfish/{endpoint:path}": {"GET", "POST"},
+    "/laya/v1/systemone": {"POST"},
 }
 
 
@@ -418,9 +423,7 @@ def test_pass_through_routes_support_all_methods():
     """
     A pass-through route fronts a whole provider API, so narrowing its method
     set turns a request the upstream would have accepted into a 405. The
-    exceptions are providers whose wire protocol admits only one method: Amazon
-    Comprehend Medical speaks AWS JSON 1.1, which is POST-only, so there is no
-    other method to forward.
+    exceptions are the POST-only protocol routes listed above.
     """
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,

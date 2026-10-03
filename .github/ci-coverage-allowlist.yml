@@ -5,24 +5,35 @@ description: >-
 
 test_paths:
   - reason: >-
-      The caching suite in tests/local_testing, which runs nowhere. Every job that globs that
-      directory either deselects it (local_testing_part1 and part2 carry `-k "... and not caching
-      and not cache"`) or keeps only another keyword (langfuse, router, assistants), and no job
-      names these files the way redis_caching_unit_tests names test_dual_cache.py. Measured
-      2026-08-20 by collecting the directory under each job's own selector: 118 tests across
-      these eight files are selected by none of them. Listed so the gap is a decision rather
-      than an accident, and so the --slices guard has a baseline to ratchet down from. Revisit
-      when tests/local_testing is ported off CircleCI, where the keyless part of this suite
-      belongs in a real job
+      litellm.agent() end-to-end suite. It drives the real claude, codex and opencode CLIs and
+      deepagents against a live LiteLLM AI Gateway, so it needs those binaries on PATH plus
+      LITELLM_PROXY_API_BASE / LITELLM_PROXY_API_KEY, and skips without them. Run manually
+      before changing litellm/harness; the mocked coverage runs in tests/unit/harness and
+      tests/unit/llms/*/harness
     paths:
-      - tests/local_testing/test_cache_preset_key.py
+      - tests/harness_e2e
+  - reason: >-
+      The Rust/Python parity harness is run manually through its local CLI. Recorded replay,
+      fixture generation, and harness checks are intentionally outside pull request CI
+    paths:
+      - tests/rust-python-harness
+  - reason: >-
+      Live-provider caching cases in tests/local_testing that remain outside CI. Jobs that
+      glob that directory either deselect them (local_testing_part1 and part2 carry `-k "... and
+      not caching and not cache"`) or keep only another keyword (langfuse, router, assistants).
+      Separately, test-redis-compat.yml selects two IAM cluster authentication tests in
+      test_caching.py by node ID. It does not run that file's other tests.
+      The gap was eight files and 118 tests when measured 2026-08-20; the five keyless files now
+      run in the caching-local shard, leaving live cases in these three. Measured 2026-08-21 with no provider
+      credentials and no Redis: test_caching.py needs both (37 of 65 fail without them),
+      test_disk_cache_unit_tests.py needs OPENAI_API_KEY for 2 of its 4, and
+      test_gcs_cache_unit_tests.py needs GCS credentials for all 4. They want the keyless/live
+      split that porting tests/local_testing off CircleCI will force, not a job that is red by
+      construction
+    paths:
       - tests/local_testing/test_caching.py
-      - tests/local_testing/test_caching_handler.py
       - tests/local_testing/test_disk_cache_unit_tests.py
       - tests/local_testing/test_gcs_cache_unit_tests.py
-      - tests/local_testing/test_prompt_caching.py
-      - tests/local_testing/test_responses_stream_cache_keys.py
-      - tests/local_testing/test_unit_test_caching.py
   - reason: >-
       The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
       from a pull request; it needs a live gateway and provider credentials no PR job holds
@@ -78,6 +89,11 @@ test_paths:
       - tests/load_tests/test_vertex_embeddings_load_test.py
       - tests/load_tests/test_vertex_load_tests.py
   - reason: >-
+      Env-gated saturation benchmark requires a live proxy and provider credentials, so it is run
+      locally rather than in pull-request jobs
+    paths:
+      - tests/load_tests/test_granian_admission_saturation.py
+  - reason: >-
       A local-only agent rig: test_a2a_completion_bridge.py needs a LangGraph server on
       localhost:2024 and test_a2a.py drives a live A2A endpoint, so neither can run in a
       pull request job. Until 2026-08-20 the CircleCI agent job hid them behind a grep -v
@@ -92,17 +108,6 @@ test_paths:
       - tests/integration/sandbox/test_e2b_sandbox.py
       - tests/integration/test_oci_integration.py
       - tests/integration/test_oci_proxy_integration.py
-  - reason: >-
-      A unit test for the proxy-extras package that no job invokes, while the package's other
-      tests live under tests/proxy_migration_tests. Measured 2026-08-20: 24 of its 28 tests pass
-      and the 4 in TestMigrationSQLIdempotency fail, because 13 migrations from 2026-03 onward use
-      bare CREATE TABLE, ADD COLUMN, CREATE INDEX and ADD CONSTRAINT rather than the guarded forms
-      this file requires. It also matches those keywords inside SQL comments, so two further
-      migrations are reported that are in fact fine. Wiring it up means deciding what to do about
-      the 13 first, and they cannot simply be edited: Prisma checksums an applied migration, so a
-      changed one breaks migrate deploy for existing installs
-    paths:
-      - tests/litellm-proxy-extras/test_litellm_proxy_extras_utils.py
 
 dockerfiles:
   - reason: >-
@@ -111,11 +116,13 @@ dockerfiles:
     paths:
       - ui/Dockerfile
   - reason: >-
-      The Rust gateway ships as its own chart and package with a separate release pipeline, so its
-      image is not part of this repo's Python image set
-    paths:
-      - litellm-rust/crates/ai-gateway/Dockerfile
-  - reason: >-
       An example image under cookbook/ that is documentation rather than a shipped artifact
     paths:
       - cookbook/litellm-ollama-docker-image/Dockerfile
+  - reason: >-
+      The Rust gateway image compiles the whole workspace in release mode, which is too slow for
+      a per-pull-request job while the gateway binary is still being assembled; the Rust lint,
+      clippy, and compile jobs already cover the code it packages. Revisit when the gateway is
+      published
+    paths:
+      - litellm-rust/crates/gateway/Dockerfile

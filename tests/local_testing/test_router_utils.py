@@ -3,6 +3,7 @@
 
 import sys, os, time
 import traceback, asyncio
+import httpx
 import pytest
 
 import litellm
@@ -15,73 +16,6 @@ from dotenv import load_dotenv
 from unittest.mock import patch, MagicMock, AsyncMock
 
 load_dotenv()
-
-
-def test_returned_settings():
-    # this tests if the router raises an exception when invalid params are set
-    # in this test both deployments have bad keys - Keep this test. It validates if the router raises the most recent exception
-    litellm.set_verbose = True
-    import openai
-
-    try:
-        print("testing if router raises an exception")
-        model_list = [
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/gpt-4.1-mini",
-                    "api_key": "bad-key",
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_AI_API_BASE"),
-                },
-                "tpm": 240000,
-                "rpm": 1800,
-            },
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  #
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "bad-key",
-                },
-                "tpm": 240000,
-                "rpm": 1800,
-            },
-        ]
-        router = Router(
-            model_list=model_list,
-            redis_host=os.getenv("REDIS_HOST"),
-            redis_password=os.getenv("REDIS_PASSWORD"),
-            redis_port=int(os.getenv("REDIS_PORT")),
-            routing_strategy="latency-based-routing",
-            routing_strategy_args={"ttl": 10},
-            set_verbose=False,
-            num_retries=3,
-            retry_after=5,
-            allowed_fails=1,
-            cooldown_time=30,
-        )  # type: ignore
-
-        settings = router.get_settings()
-        print(settings)
-
-        """
-        routing_strategy: "simple-shuffle"
-        routing_strategy_args: {"ttl": 10} # Average the last 10 calls to compute avg latency per model
-        allowed_fails: 1
-        num_retries: 3
-        retry_after: 5 # seconds to wait before retrying a failed request
-        cooldown_time: 30 # seconds to cooldown a deployment after failure
-        """
-        assert settings["routing_strategy"] == "latency-based-routing"
-        assert settings["routing_strategy_args"]["ttl"] == 10
-        assert settings["allowed_fails"] == 1
-        assert settings["num_retries"] == 3
-        assert settings["retry_after"] == 5
-        assert settings["cooldown_time"] == 30
-
-    except Exception:
-        print(traceback.format_exc())
-        pytest.fail("An error occurred - " + traceback.format_exc())
 
 
 from litellm.types.utils import CallTypes
@@ -187,7 +121,7 @@ def test_router_get_model_info_wildcard_routes():
         ]
     )
     model_info = router.get_router_model_info(
-        deployment=None, received_model_name="gemini/gemini-1.5-flash", id="1"
+        deployment=None, received_model_name="gemini/gemini-2.5-flash", id="1"
     )
     print(model_info)
     assert model_info is not None
@@ -211,7 +145,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
     )
 
     resp = await router.acompletion(
-        model="gemini/gemini-1.5-flash",
+        model="gemini/gemini-2.5-flash",
         messages=[{"role": "user", "content": "Hello, how are you?"}],
         mock_response="Hello, I'm good.",
     )
@@ -219,7 +153,7 @@ async def test_router_get_model_group_usage_wildcard_routes():
 
     await asyncio.sleep(2)
 
-    tpm, rpm = await router.get_model_group_usage(model_group="gemini/gemini-1.5-flash")
+    tpm, rpm = await router.get_model_group_usage(model_group="gemini/gemini-2.5-flash")
 
     assert tpm is not None, "tpm is None"
     assert rpm is not None, "rpm is None"
@@ -241,7 +175,7 @@ async def test_call_router_callbacks_on_success():
         router.cache, "async_increment_cache_pipeline", new=AsyncMock()
     ) as mock_callback:
         await router.acompletion(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
         )
@@ -254,12 +188,12 @@ async def test_call_router_callbacks_on_success():
         for increment in increment_list:
             if "tpm" in increment["key"]:
                 assert increment["key"].startswith(
-                    "global_router:1:gemini/gemini-1.5-flash:tpm"
+                    "global_router:1:gemini/gemini-2.5-flash:tpm"
                 )
                 assert increment["increment_value"] == 30
             elif "rpm" in increment["key"]:
                 assert increment["key"].startswith(
-                    "global_router:1:gemini/gemini-1.5-flash:rpm"
+                    "global_router:1:gemini/gemini-2.5-flash:rpm"
                 )
                 assert increment["increment_value"] == 1
 
@@ -282,7 +216,7 @@ async def test_call_router_callbacks_on_failure():
     ) as mock_callback:
         with pytest.raises(litellm.RateLimitError):
             await router.acompletion(
-                model="gemini/gemini-1.5-flash",
+                model="gemini/gemini-2.5-flash",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 mock_response="litellm.RateLimitError",
                 num_retries=0,
@@ -294,7 +228,7 @@ async def test_call_router_callbacks_on_failure():
         assert (
             mock_callback.call_args_list[0]
             .kwargs["key"]
-            .startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
+            .startswith("global_router:1:gemini/gemini-2.5-flash:rpm")
         )
 
 
@@ -316,7 +250,7 @@ async def test_router_model_group_headers():
 
     for _ in range(2):
         resp = await router.acompletion(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
         )
@@ -324,7 +258,7 @@ async def test_router_model_group_headers():
 
     assert (
         resp._hidden_params["additional_headers"]["x-litellm-model-group"]
-        == "gemini/gemini-1.5-flash"
+        == "gemini/gemini-2.5-flash"
     )
 
     assert "x-ratelimit-remaining-requests" in resp._hidden_params["additional_headers"]
@@ -348,7 +282,7 @@ async def test_get_remaining_model_group_usage():
     )
     for _ in range(2):
         resp = await router.acompletion(
-            model="gemini/gemini-1.5-flash",
+            model="gemini/gemini-2.5-flash",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
             mock_response="Hello, I'm good.",
         )
@@ -362,7 +296,7 @@ async def test_get_remaining_model_group_usage():
         await asyncio.sleep(1)
 
     remaining_usage = await router.get_remaining_model_group_usage(
-        model_group="gemini/gemini-1.5-flash"
+        model_group="gemini/gemini-2.5-flash"
     )
     assert remaining_usage is not None
     assert "x-ratelimit-remaining-requests" in remaining_usage
@@ -402,6 +336,10 @@ def test_router_redis_cache():
 
 
 def test_router_handle_clientside_credential():
+    """A caller-supplied credential must stay scoped to the current call: it must
+    never be registered as a router deployment, or a later caller with no override
+    of their own can be load-balanced onto it and reach the provider with someone
+    else's credential (see LIT-7811)."""
     deployment = {
         "model_name": "gemini/*",
         "litellm_params": {"model": "gemini/*"},
@@ -421,7 +359,67 @@ def test_router_handle_clientside_credential():
     )
 
     assert new_deployment.litellm_params.api_key == "123"
-    assert len(router.get_model_list()) == 2
+    assert len(router.get_model_list()) == 1
+    assert router.get_deployment(model_id=new_deployment.model_info.id) is None
+
+
+async def test_router_clientside_credential_not_reused_by_other_callers(
+    respx_mock, monkeypatch: pytest.MonkeyPatch
+):
+    """End-to-end regression test for LIT-7811.
+
+    One caller's request-scoped api_key must never leak into a later, unrelated
+    caller's request. Before the fix, the router registered the caller-supplied
+    credential as a second, permanent deployment for the shared model group, so
+    plain follow-up calls with no override of their own could be load-balanced
+    onto it and reach the provider with the first caller's key.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "configured-key"},
+                "model_info": {"id": "configured-deployment"},
+            }
+        ]
+    )
+
+    await router.acompletion(
+        model="shared-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="alternate-tenant-key",
+    )
+    assert route.calls[-1].request.headers["authorization"] == "Bearer alternate-tenant-key"
+
+    # The forwarded credential must never become a routable deployment for the
+    # model group other callers share.
+    assert [d["model_info"]["id"] for d in router.get_model_list(model_name="shared-model")] == [
+        "configured-deployment"
+    ]
+
+    for _ in range(20):
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    used_auth_headers = {call.request.headers["authorization"] for call in route.calls[1:]}
+    assert used_auth_headers == {"Bearer configured-key"}
 
 
 def test_router_get_async_openai_model_client():

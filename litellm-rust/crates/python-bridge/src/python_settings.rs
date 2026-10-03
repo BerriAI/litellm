@@ -1,0 +1,319 @@
+use pyo3::{exceptions::PyModuleNotFoundError, prelude::*};
+use strum::IntoStaticStr;
+
+use crate::coercion::{FieldSpec, ProjectionError};
+
+const MODULE: &str = "litellm.rust_bridge.settings";
+
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum PythonSettings {
+    #[strum(serialize = "http_settings")]
+    Http,
+    UrlPolicy,
+    ProviderDefaults,
+    SecretManager,
+    SecretManagerBinding,
+}
+
+pub(crate) struct Snapshot<'py> {
+    group: PythonSettings,
+    value: Bound<'py, PyAny>,
+}
+
+impl Snapshot<'_> {
+    pub(crate) fn read<T>(&self, spec: &FieldSpec<T>) -> Result<T, ProjectionError> {
+        spec.read(&self.value, self.group.name())
+    }
+}
+
+impl PythonSettings {
+    pub(crate) fn name(self) -> &'static str {
+        self.into()
+    }
+
+    pub(crate) fn read(self, py: Python<'_>) -> PyResult<Snapshot<'_>> {
+        let value = py.import(MODULE)?.getattr(self.name())?.call0()?;
+        Ok(Snapshot { group: self, value })
+    }
+
+    /// Reads the accessor, or `None` when the litellm package is not installed
+    /// (a bare extension module), meaning there are no configured values.
+    pub(crate) fn read_or_unset(self, py: Python<'_>) -> PyResult<Option<Snapshot<'_>>> {
+        match self.read(py) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(error) => {
+                if missing_module(py, &error, "litellm")? {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snapshot(self, value: Bound<'_, PyAny>) -> Snapshot<'_> {
+        Snapshot { group: self, value }
+    }
+}
+
+fn missing_module(py: Python<'_>, error: &PyErr, expected: &str) -> PyResult<bool> {
+    if !error.is_instance_of::<PyModuleNotFoundError>(py) {
+        return Ok(false);
+    }
+    Ok(error
+        .value(py)
+        .getattr("name")?
+        .extract::<Option<String>>()?
+        .is_some_and(|name| name == expected))
+}
+
+#[cfg(test)]
+mod tests {
+    use pyo3::{
+        exceptions::{PyImportError, PyModuleNotFoundError, PyRuntimeError},
+        prelude::*,
+        types::PyDict,
+    };
+
+    use super::PythonSettings;
+    use crate::coercion::FieldSpec;
+
+    #[test]
+    fn declarations_select_the_decoder_and_read_only_the_requested_field() {
+        const TRUTHY: FieldSpec<bool> = FieldSpec::new("flag", |field| field.truthy());
+        const EXACT: FieldSpec<bool> = FieldSpec::new("flag", |field| Ok(field.exact_true()));
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+reads = []
+class Settings:
+    value = 1
+    @property
+    def flag(self):
+        reads.append('flag')
+        return self.value
+    @property
+    def unrelated(self):
+        raise AssertionError('unrequested field')
+settings = Settings()
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let value = locals.get_item("settings").unwrap().unwrap();
+            let snapshot = PythonSettings::Http.snapshot(value.clone());
+            assert!(snapshot.read(&TRUTHY).unwrap());
+            assert!(!snapshot.read(&EXACT).unwrap());
+            value.setattr("value", true).unwrap();
+            assert!(snapshot.read(&EXACT).unwrap());
+            assert_eq!(
+                locals
+                    .get_item("reads")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<Vec<String>>()
+                    .unwrap(),
+                ["flag", "flag", "flag"]
+            );
+        });
+    }
+
+    #[test]
+    fn declared_reads_preserve_descriptor_and_decoder_failures_and_name_missing_fields() {
+        const FLAG: FieldSpec<bool> = FieldSpec::new("flag", |field| field.truthy());
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+from types import SimpleNamespace
+failure = AttributeError('read failed')
+class Descriptor:
+    @property
+    def flag(self): raise failure
+class Truth:
+    def __bool__(self): raise failure
+values = (Descriptor(), SimpleNamespace(flag=Truth()))
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let failure = locals.get_item("failure").unwrap().unwrap();
+            for value in locals
+                .get_item("values")
+                .unwrap()
+                .unwrap()
+                .try_iter()
+                .unwrap()
+            {
+                let snapshot = PythonSettings::Http.snapshot(value.unwrap());
+                let error = PyErr::from(snapshot.read(&FLAG).unwrap_err());
+                assert!(error.value(py).is(&failure));
+                assert!(error.traceback(py).is_some());
+            }
+            let missing = PythonSettings::Http.snapshot(py.eval(c"object()", None, None).unwrap());
+            let error = PyErr::from(missing.read(&FLAG).unwrap_err());
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
+            assert!(
+                error
+                    .to_string()
+                    .contains("http_settings.flag: missing snapshot field")
+            );
+        });
+    }
+
+    #[test]
+    fn read_or_unset_returns_none_when_litellm_is_missing() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+import sys
+class MissingLitellm:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'litellm':
+            raise ModuleNotFoundError('No module named litellm', name='litellm')
+finder = MissingLitellm()
+previous_litellm = sys.modules.get('litellm')
+had_litellm = 'litellm' in sys.modules
+sys.meta_path.insert(0, finder)
+sys.modules.pop('litellm', None)
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let result = PythonSettings::Http.read_or_unset(py);
+            assert!(result.unwrap().is_none());
+            py.run(
+                c"
+sys.meta_path.remove(finder)
+if had_litellm:
+    sys.modules['litellm'] = previous_litellm
+else:
+    sys.modules.pop('litellm', None)
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn read_or_unset_propagates_nested_module_not_found_errors() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+import sys
+import types
+previous_modules = {
+    name: sys.modules[name]
+    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.settings')
+    if name in sys.modules
+}
+litellm = types.ModuleType('litellm')
+litellm.__path__ = []
+rust_bridge = types.ModuleType('litellm.rust_bridge')
+rust_bridge.__path__ = []
+settings = types.ModuleType('litellm.rust_bridge.settings')
+def http_settings():
+    raise ModuleNotFoundError('No module named certifi', name='certifi')
+settings.http_settings = http_settings
+litellm.rust_bridge = rust_bridge
+rust_bridge.settings = settings
+sys.modules['litellm'] = litellm
+sys.modules['litellm.rust_bridge'] = rust_bridge
+sys.modules['litellm.rust_bridge.settings'] = settings
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let error = match PythonSettings::Http.read_or_unset(py) {
+                Ok(_) => panic!("nested module errors must propagate"),
+                Err(error) => error,
+            };
+            assert!(error.is_instance_of::<PyModuleNotFoundError>(py));
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("name")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "certifi"
+            );
+            py.run(
+                c"
+for name in ('litellm.rust_bridge.settings', 'litellm.rust_bridge', 'litellm'):
+    sys.modules.pop(name, None)
+sys.modules.update(previous_modules)
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn read_or_unset_propagates_import_errors() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            py.run(
+                c"
+import sys
+import types
+previous_modules = {
+    name: sys.modules[name]
+    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.settings')
+    if name in sys.modules
+}
+litellm = types.ModuleType('litellm')
+litellm.__path__ = []
+rust_bridge = types.ModuleType('litellm.rust_bridge')
+rust_bridge.__path__ = []
+settings = types.ModuleType('litellm.rust_bridge.settings')
+def http_settings():
+    raise ImportError('cannot import name setting')
+settings.http_settings = http_settings
+litellm.rust_bridge = rust_bridge
+rust_bridge.settings = settings
+sys.modules['litellm'] = litellm
+sys.modules['litellm.rust_bridge'] = rust_bridge
+sys.modules['litellm.rust_bridge.settings'] = settings
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let error = match PythonSettings::Http.read_or_unset(py) {
+                Ok(_) => panic!("import errors must propagate"),
+                Err(error) => error,
+            };
+            assert!(error.is_instance_of::<PyImportError>(py));
+            assert_eq!(error.to_string(), "ImportError: cannot import name setting");
+            py.run(
+                c"
+for name in ('litellm.rust_bridge.settings', 'litellm.rust_bridge', 'litellm'):
+    sys.modules.pop(name, None)
+sys.modules.update(previous_modules)
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+        });
+    }
+}

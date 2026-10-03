@@ -14,7 +14,7 @@ import {
   getProxyBaseUrl,
 } from "@/components/networking";
 import { MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -451,6 +451,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
 
       <DataTable
         data={toolsets}
+        paginationMode="client"
         columns={columns}
         getRowId={(toolset, index) => toolset.toolset_id || String(index)}
         sortingMode="client"
