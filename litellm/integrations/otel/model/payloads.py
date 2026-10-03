@@ -430,6 +430,8 @@ class LLMCallSpanData:
     trace: TraceControls = field(default_factory=TraceControls)
     session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
+    cache_hit: bool | None = None
+    saved_cache_cost: float | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -488,6 +490,8 @@ class LLMCallSpanData:
             trace=trace or TraceControls(),
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
+            cache_hit=as_bool(payload.get("cache_hit")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            saved_cache_cost=as_float(payload.get("saved_cache_cost")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         )
 
 

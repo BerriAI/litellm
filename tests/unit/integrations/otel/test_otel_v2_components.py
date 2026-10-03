@@ -355,6 +355,19 @@ def test_genai_mapper_cost_breakdown_absent():
     assert not any(k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total" for k in attrs)
 
 
+def test_genai_mapper_cache_hit_attrs():
+    from litellm.integrations.otel.model.semconv import LiteLLM
+
+    attrs = GenAIMapper().map(replace(_full_llm_call(), cache_hit=True, saved_cache_cost=0.002))
+    assert attrs[LiteLLM.CACHE_HIT] is True
+    assert attrs[LiteLLM.SAVED_CACHE_COST] == 0.002
+
+    # The default (None) keeps the span sparse: neither key present.
+    uncached = GenAIMapper().map(_full_llm_call())
+    assert LiteLLM.CACHE_HIT not in uncached
+    assert LiteLLM.SAVED_CACHE_COST not in uncached
+
+
 def test_llm_cost_from_breakdown_maps_costbreakdown_keys():
     cost = LLMCost.from_breakdown(
         {
