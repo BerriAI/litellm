@@ -131,7 +131,7 @@ def _guardrail_entry_without_prompt_carriers(entry: Mapping[str, object]) -> Map
     Built as an allow-list rather than a deny-list: a key neither set classifies is dropped, so a
     guardrail that records its own extra detail cannot put the caller's prompt on a redacted span.
     """
-    return {  # mutable-ok: a fresh record built per entry, handed straight to the span serializer
+    return {
         field: REDACTED_BY_LITELM_STRING if field in PROMPT_CARRYING_GUARDRAIL_FIELDS else value
         for field, value in entry.items()
         if field in _CLASSIFIED_GUARDRAIL_FIELDS

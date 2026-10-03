@@ -4,13 +4,28 @@ Lens reviews recorded activity and saves evidence-linked findings in the LiteLLM
 
 ## Start a worker
 
-Upgrade your existing LiteLLM proxy to a release that includes Lens with PostgreSQL, agent tracing (`general_settings.tracing: {store: clickhouse}`), and ClickHouse configured through `CLICKHOUSE_URL` and a separate SELECT-only `CLICKHOUSE_READER_URL`. Enable the ClickHouse callback and request/response logging to analyze LLM requests. Lens can only inspect content you actually retain
+Upgrade your existing LiteLLM proxy to a release that includes Lens with PostgreSQL and agent tracing. Configure one ClickHouse URL for trace writes, bounded reads, and Lens queries:
 
-In Lens, click **Set up analysis**, choose an existing virtual key or **Create worker key**, then **Generate setup command**. The LiteLLM address is filled in for you; change it only if the server running Docker needs a different network address. Copy the command and run it on your server. The dialog changes to **Analyzer connected** when the container checks in
+```yaml
+general_settings:
+  tracing:
+    store:
+      type: clickhouse
+      url: os.environ/CLICKHOUSE_URL
+      retention_days: 14
+```
+
+The URL, database, and retention settings can also come from `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, and `AGENT_TRACING_RETENTION_DAYS` when omitted from YAML. A YAML value wins when both are set. The database defaults to `litellm`. `retention_days` defaults to 14 and applies to both traces and spend logs
+
+Retention changes require a proxy restart. ClickHouse removes expired rows during background merges, not immediately at startup. Enable request/response logging to analyze LLM requests. Lens can only inspect content you actually retain
+
+In **Lens > Investigations**, click **Connect worker**, choose an analysis model and monthly limit, then **Get install command**. Use **Advanced options** to select an existing virtual key or change the proxy URL if the server running Docker needs a different network address. Copy the command and run it on your server. The dashboard shows **Worker connected** when the container checks in
 
 The command already contains the compatible worker image and one worker token. The selected virtual key stays on the proxy; its secret is never sent to the worker. No source checkout, environment file, or second LiteLLM deployment is needed. Keep the command private because it includes the token. The LiteLLM release provides the dashboard and APIs; the container only runs background analysis
 
-The dashboard and Compose file pin a verified worker image by digest. The image uses Linux amd64, and the generated command selects that platform. Worker image releases are independent of proxy releases: update the pinned image when changing their API contract. CI also publishes immutable commit tags for reproducible builds
+The dashboard and Compose file pin a verified worker image by digest. The image uses Linux amd64, and the generated command selects that platform. CI also publishes immutable `:sha-<commit>` tags for successful worker builds on `main`. Keep the worker image compatible with your gateway version
+
+After upgrading the gateway, update the worker image and redeploy it while keeping its proxy URL and token. Existing containers do not update automatically. If an investigation reports a worker compatibility error, update the image before retrying
 
 For deployments managed with Compose, download `compose.yaml` and provide `LITELLM_URL` and `LENS_WORKER_TOKEN` in an environment file. Its default image is already selected:
 
@@ -74,7 +89,7 @@ V1 requires ClickHouse for both sources. It does not reconstruct sessions from u
 The UI and API use the same scan lifecycle. Authenticate with a proxy administrator credential for writes, or a proxy-admin viewer credential for reads. Worker credentials are only for worker operations
 
 ```bash
-curl "$LITELLM_URL/engine" -H "Authorization: Bearer $LITELLM_API_KEY" \
+curl "$LITELLM_URL/lens" -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H 'Content-Type: application/json' -d '{
     "name": "Research quality", "model": "your-model-alias",
     "context": "Answer the requested question using cited, retrieved evidence.",
@@ -83,14 +98,14 @@ curl "$LITELLM_URL/engine" -H "Authorization: Bearer $LITELLM_API_KEY" \
     "enabled": true, "interval_minutes": 1440, "monthly_budget": 50
   }'
 
-curl "$LITELLM_URL/engine/$LENS_ID/runs" -X POST \
+curl "$LITELLM_URL/lens/$LENS_ID/runs" -X POST \
   -H "Authorization: Bearer $LITELLM_API_KEY" -H 'Content-Type: application/json' -d '{}'
 
-curl "$LITELLM_URL/engine/$LENS_ID/runs?offset=0" -H "Authorization: Bearer $LITELLM_API_KEY"
-curl "$LITELLM_URL/engine/$LENS_ID/runs/$BATCH_ID" -H "Authorization: Bearer $LITELLM_API_KEY"
+curl "$LITELLM_URL/lens/$LENS_ID/runs?offset=0" -H "Authorization: Bearer $LITELLM_API_KEY"
+curl "$LITELLM_URL/lens/$LENS_ID/runs/$BATCH_ID" -H "Authorization: Bearer $LITELLM_API_KEY"
 ```
 
-Creation queues the first batch. Posting to `/engine/{id}/runs` queues another, or returns the existing active batch. The run response contains its ID under `jobs[0].id`. Poll the batch URL for status, findings and assessments. List responses omit large result payloads; request a batch to retrieve them. Supply an optional complete `settings` object on the runs POST for a one-off override; the saved lens stays unchanged. Selection accepts `team_id`, exact `filters`, and opaque `execution_ids` returned by `/engine/preview/sample`. Preview accepts `offset` and `as_of` to keep the time window fixed while paging. Feedback uses `PATCH /engine/{id}/findings/{finding_id}` with `status` and `reason`
+Creation queues the first batch. Posting to `/lens/{id}/runs` queues another, or returns the existing active batch. The run response contains its ID under `jobs[0].id`. Poll the batch URL for status, findings and assessments. List responses omit large result payloads; request a batch to retrieve them. Supply an optional complete `settings` object on the runs POST for a one-off override; the saved lens stays unchanged. Selection accepts `team_id`, exact `filters`, and opaque `execution_ids` returned by `/lens/preview/sample`. Preview accepts `offset` and `as_of` to keep the time window fixed while paging. Feedback uses `PATCH /lens/{id}/findings/{finding_id}` with `status` and `reason`
 
 ## Quality evaluation
 
@@ -107,3 +122,11 @@ Set `LITELLM_API_KEY` privately. This makes paid model calls. Inspect missed and
 The worker uses temporary disk space for trace content while reviewing it, and removes those files after each review. The Docker command supplies a writable temporary mount while keeping the application filesystem read-only
 
 To check that accepted behavior stays accepted without hiding new problems, run the evaluator with `--dataset tests/proxy_behavior/lens/feedback_cases.json`. Reports include elapsed time, model call count, reported cost when the proxy provides it, missed checks, unexpected checks, and inconclusive candidates
+
+## Upgrading from the original Lens API
+
+The Lens API now uses `/lens` instead of `/engine`, list responses use `lenses`, and worker claims use `lens_id`. Upgrade the proxy and recreate every worker with the image shown by the upgraded dashboard before starting new scans. Update API clients to the new paths and response fields. Old worker images cannot poll the renamed API
+
+Stop workers and let active scans finish before upgrading. Deploy proxy instances together: older proxies cannot use the renamed database tables. The schema migration renames the three Lens tables and the run-history identifier column in place, preserving saved investigations, findings, history, worker credentials, and billing assignments. Existing migration files retain their original names and checksums
+
+Upgrades using `--use_prisma_db_push` stop before schema changes if any legacy Lens table exists, preventing Prisma from dropping saved data. Apply `litellm-proxy-extras/litellm_proxy_extras/migrations/20261001100000_rename_lens/migration.sql` to the configured database schema before retrying. Deployments already using migration history can instead start without `--use_prisma_db_push` to apply the shipped migration normally. Fresh databases and databases already using the renamed tables can continue using database push

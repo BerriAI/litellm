@@ -1502,7 +1502,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
     ) -> tuple[object, ...]:
-        rest_chunks: Final = [chunk async for chunk in rest]  # mutable-ok: tuple() cannot consume an async iterator
+        rest_chunks: Final = [chunk async for chunk in rest]
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
         if assembled is None:

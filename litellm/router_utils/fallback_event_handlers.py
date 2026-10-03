@@ -352,7 +352,7 @@ def mid_stream_fallback_hop_kwargs(
     copied_buckets: Final = MappingProxyType(
         {name: safe_deep_copy(kwargs[name]) for name in _ROUTER_METADATA_BUCKETS if isinstance(kwargs.get(name), dict)}
     )
-    return {  # mutable-ok: handed to the streaming iterator as its initial_kwargs, which it rewrites on re-entry
+    return {
         **kwargs,
         **copied_buckets,
         **hop_controls.overrides,

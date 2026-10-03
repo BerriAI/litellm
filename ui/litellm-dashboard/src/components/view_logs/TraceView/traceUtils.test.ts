@@ -10,15 +10,18 @@ import {
   buildVisibleTree,
   errorSource,
   firstErrorSpan,
+  findTraceSteps,
   fmtMs,
   GROUP_PAGE_SIZE,
   groupRowId,
   isFrameworkSpan,
   median,
+  messageText,
   parseMessages,
   previewText,
   revealSpanInState,
   ROOT_KEY,
+  treeGuides,
 } from "./traceUtils";
 
 const swarm = swarmTrace as Trace;
@@ -43,11 +46,14 @@ const span = (overrides: SpanOverrides): Span => ({
   duration_ms: 1,
   status: "ok",
   error: null,
+  error_truncated: false,
+  framework: "",
   input_preview: "",
   model: null,
   input_tokens: 0,
   output_tokens: 0,
   litellm_request_id: null,
+  spend: null,
   ...overrides,
 });
 
@@ -69,6 +75,13 @@ describe("formatting", () => {
       "Compare ingest thr",
     );
     expect(previewText("plain text")).toBe("plain text");
+  });
+
+  it("decodes JSON escapes in a truncated preview and treats an empty array as no preview", () => {
+    expect(previewText('[{"role": "user", "content": "Thanks\\u2014keep the \\u00a55,000 budget\\nplease \\u20')).toBe(
+      "Thanks—keep the ¥5,000 budget please ",
+    );
+    expect(previewText("[]")).toBe("");
   });
 
   it("pulls the user message out of an OpenInference LangChain input", () => {
@@ -265,5 +278,85 @@ describe("payload helpers", () => {
     expect(parseMessages('[{"role":"user","content":"hi"}]')).toEqual([{ role: "user", content: "hi" }]);
     expect(parseMessages('{"file_path":"/tmp/x"}')).toBeNull();
     expect(parseMessages("not json")).toBeNull();
+  });
+
+  it("shows block-list message content as its text and drops reasoning blocks", () => {
+    const reasoning = { type: "reasoning", summary: [], encrypted_content: "gAAAAB-opaque" };
+    const content = JSON.stringify([reasoning, { type: "text", text: "Part one" }, { type: "text", text: "Part two" }]);
+    const [message] = parseMessages(JSON.stringify({ role: "assistant", content })) ?? [];
+    expect(message.content).toBe("Part one\n\nPart two");
+    expect(messageText(JSON.stringify([reasoning]))).toBe("");
+    const image = JSON.stringify([{ type: "image_url", image_url: { url: "https://x.test/a.png" } }]);
+    expect(messageText(image)).toBe(image);
+    expect(messageText("[not json")).toBe("[not json");
+  });
+
+  it("reads GenAI message parts and native content arrays without crashing previews", () => {
+    const question = "What is an agent trace?";
+    const parts = [{ type: "text", content: question }];
+    const input = JSON.stringify([{ role: "user", parts }]);
+    expect(parseMessages(input)).toEqual([{ role: "user", parts, content: question }]);
+    expect(previewText(input)).toBe(question);
+    expect(
+      parseMessages(JSON.stringify({ role: "assistant", content: [{ type: "text", text: "An execution record" }] })),
+    ).toEqual([{ role: "assistant", content: "An execution record" }]);
+    expect(parseMessages('[{"role":"assistant","tool_calls":[]}]')).toBeNull();
+    expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
+  });
+});
+
+describe("treeGuides", () => {
+  it("draws a rail only for ancestors that still have later siblings", () => {
+    const guides = treeGuides([0, 1, 2, 2, 1, 2, 3]);
+    expect(guides.map((g) => g.last)).toEqual([true, false, false, true, true, true, true]);
+    expect(guides[2].rails).toEqual([true]);
+    expect(guides[5].rails).toEqual([false]);
+    expect(guides[6].rails).toEqual([false, false]);
+  });
+
+  it("treats a sibling after a deeper subtree as continuing the branch", () => {
+    const guides = treeGuides([0, 1, 2, 3, 1]);
+    expect(guides[1].last).toBe(false);
+    expect(guides[3].rails).toEqual([true, false]);
+  });
+
+  it("drops a stem from a row only when the next row is its child", () => {
+    const guides = treeGuides([0, 1, 2, 1, 1, 0]);
+    expect(guides.map((g) => g.stem)).toEqual([true, true, false, false, false, false]);
+  });
+});
+
+describe("findTraceSteps", () => {
+  it("searches names, agents, models, IDs and inputs in time order without changing the trace", () => {
+    const spans = [
+      span({ span_id: "late", name: "Check", start_offset_ms: 20 }),
+      span({ span_id: "early", model: "check-model", start_offset_ms: 1 }),
+      span({ span_id: "agent", agent: "check-agent", start_offset_ms: 2 }),
+      span({ span_id: "check-id", start_offset_ms: 3 }),
+      span({ span_id: "input", input_preview: "Check this case", start_offset_ms: 4 }),
+    ];
+    expect(findTraceSteps(spans, " CHECK ", false, true).map((item) => item.span_id)).toEqual([
+      "early",
+      "agent",
+      "check-id",
+      "input",
+      "late",
+    ]);
+    expect(spans[0].span_id).toBe("late");
+  });
+
+  it("combines search and errors while respecting the framework display setting", () => {
+    const tool: SpanOverrides = { span_id: "tool", name: "check", type: "tool", status: "error" };
+    const framework: SpanOverrides = {
+      span_id: "framework",
+      parent_span_id: "root",
+      name: "check",
+      type: "framework",
+      status: "error",
+    };
+    const spans = [span(tool), span({ span_id: "ok", name: "check", type: "tool" }), span(framework)];
+    expect(findTraceSteps(spans, "check", true, true).map((item) => item.span_id)).toEqual(["tool"]);
+    expect(findTraceSteps(spans, "check", true, false).map((item) => item.span_id)).toEqual(["tool", "framework"]);
+    expect(findTraceSteps(spans, "missing", false, false)).toEqual([]);
   });
 });

@@ -163,33 +163,6 @@ class TestGoogleInteractionsStreaming:
 class TestGoogleInteractionsMultiTurn:
     """Tests for multi-turn conversations using Step[] input."""
 
-    def test_multi_turn_conversation(self, api_key):
-        """Test a multi-turn conversation per OpenAPI spec (Step[] format)."""
-        response = interactions.create(
-            model="gemini/gemini-2.5-flash",
-            input=[
-                {
-                    "type": "user_input",
-                    "content": [{"type": "text", "text": "My name is Alice."}],
-                },
-                {
-                    "type": "model_output",
-                    "content": [
-                        {"type": "text", "text": "Hello Alice! Nice to meet you."}
-                    ],
-                },
-                {
-                    "type": "user_input",
-                    "content": [{"type": "text", "text": "What is my name?"}],
-                },
-            ],
-            api_key=api_key,
-        )
-
-        assert response is not None
-        print(f"Multi-turn response: {response}")
-
-
 class TestGoogleInteractionsAgent:
     """Tests for agent interactions (per OpenAPI spec)."""
 

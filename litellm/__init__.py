@@ -663,7 +663,7 @@ azure_anthropic_models: Set = set()
 azure_text_models: Set = set()
 anyscale_models: Set = set()
 cerebras_models: Set = set()
-nadir_models: Set = set()  # mutable-ok: provider registry, filled from model_cost at import like every sibling provider
+nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
@@ -697,7 +697,7 @@ recraft_models: Set = set()
 cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
-edenai_models: Set = set()  # mutable-ok: filled from the price map at import, like the sibling provider sets
+edenai_models: Set = set()
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
@@ -1647,6 +1647,9 @@ if TYPE_CHECKING:
     from .llms.jina_ai.rerank.transformation import (
         JinaAIRerankConfig as JinaAIRerankConfig,
     )
+    from .llms.scaleway.rerank.transformation import (
+        ScalewayRerankConfig as ScalewayRerankConfig,
+    )
     from .llms.deepinfra.rerank.transformation import (
         DeepinfraRerankConfig as DeepinfraRerankConfig,
     )
@@ -1779,6 +1782,9 @@ if TYPE_CHECKING:
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
         AmazonBedrockOpenAIConfig as AmazonBedrockOpenAIConfig,
+    )
+    from .llms.bedrock.chat.chat_completions.transformation import (
+        AmazonBedrockRuntimeChatCompletionsConfig as AmazonBedrockRuntimeChatCompletionsConfig,
     )
     from .llms.bedrock.image_generation.amazon_stability1_transformation import (
         AmazonStabilityConfig as AmazonStabilityConfig,
@@ -2282,6 +2288,23 @@ if TYPE_CHECKING:
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
 
+_AGENT_EXPORTS: Final = frozenset(
+    {
+        "agent",
+        "aagent",
+        "agent_session",
+        "aagent_session",
+        "agent_resume",
+        "aagent_resume",
+        "agent_capabilities",
+        "Harness",
+        "ClaudeCodeOptions",
+        "CodexOptions",
+        "OpenCodeOptions",
+        "DeepAgentsOptions",
+    }
+)
+
 # Eager loading for backwards compatibility with VCR and other HTTP recording tools
 # When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
 # For now, this only affects encoding (tiktoken) as it was the only reported issue
@@ -2314,6 +2337,12 @@ def __getattr__(name: str) -> Any:
     if name in registry:
         handler_func: Final = registry[name]
         return handler_func(name)
+
+    if name == "harness" or name in _AGENT_EXPORTS:
+        import importlib
+
+        harness_module = importlib.import_module("litellm.harness")
+        return harness_module if name == "harness" else getattr(harness_module, name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":

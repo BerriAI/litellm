@@ -2,7 +2,7 @@
 
 import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";

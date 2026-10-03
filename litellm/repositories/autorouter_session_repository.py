@@ -28,7 +28,7 @@ class AutoRouterSessionRepository(BaseRepository[LiteLLM_AutoRouterSession]):
         row under the caller's api_key, so a key can only ever see what it wrote itself.
         """
         record: Final = await self.table.find_first(
-            where={"api_key": api_key, "session_id": session_id},  # mutable-ok: Prisma where filter must be a dict
-            order={"last_turn_at": "desc"},  # mutable-ok: Prisma order clause must be a dict
+            where={"api_key": api_key, "session_id": session_id},
+            order={"last_turn_at": "desc"},
         )
         return self._to_model(record)
