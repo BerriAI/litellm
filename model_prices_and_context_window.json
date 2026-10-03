@@ -41677,6 +41677,10 @@
         "output_cost_per_token": 0.0
     },
     "openai.gpt-oss-120b-1:0": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -41691,6 +41695,10 @@
         "supports_tool_choice": true
     },
     "openai.gpt-oss-20b-1:0": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -47431,6 +47439,10 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3.6e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -47444,6 +47456,10 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -47453,6 +47469,11 @@
         "input_cost_per_token": 2.64e-06,
         "output_cost_per_token": 7.92e-06,
         "cache_read_input_token_cost": 6.6e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
@@ -58057,6 +58078,7 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-luna.html"
     },
     "us.openai.gpt-5.6-sol": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 4.4e-06,
         "input_cost_per_token_above_272k_tokens": 8.8e-06,
         "cache_creation_input_token_cost": 5.5e-06,
@@ -58087,10 +58109,12 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "global.openai.gpt-5.6-sol": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 4e-06,
         "input_cost_per_token_above_272k_tokens": 8e-06,
         "cache_creation_input_token_cost": 5e-06,
@@ -58121,10 +58145,12 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "us.openai.gpt-5.6-terra": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
         "cache_creation_input_token_cost": 2.75e-06,
@@ -58155,10 +58181,12 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "global.openai.gpt-5.6-terra": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -58189,10 +58217,12 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "us.openai.gpt-5.6-luna": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 2.2e-07,
         "input_cost_per_token_above_272k_tokens": 4.4e-07,
         "cache_creation_input_token_cost": 2.75e-07,
@@ -58223,6 +58253,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -58351,6 +58382,7 @@
         ]
     },
     "global.openai.gpt-5.6-luna": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 2e-07,
         "input_cost_per_token_above_272k_tokens": 4e-07,
         "cache_creation_input_token_cost": 2.5e-07,
@@ -58381,6 +58413,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -58499,6 +58532,7 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html"
     },
     "us.openai.gpt-6-astra": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 1.1e-05,
         "input_cost_per_token_above_272k_tokens": 2.2e-05,
         "cache_creation_input_token_cost": 1.375e-05,
@@ -58528,12 +58562,15 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "us.openai.gpt-6-sol": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 2.2e-06,
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
         "cache_creation_input_token_cost": 2.75e-06,
@@ -58563,12 +58600,15 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "us.openai.gpt-6-luna": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_above_272k_tokens": 2.2e-07,
         "cache_creation_input_token_cost": 1.375e-07,
@@ -58598,12 +58638,15 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "global.openai.gpt-6-astra": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 1e-05,
         "input_cost_per_token_above_272k_tokens": 2e-05,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -58633,8 +58676,10 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -58668,9 +58713,11 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-sol": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -58700,8 +58747,10 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -58735,9 +58784,11 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-luna": {
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_above_272k_tokens": 2e-07,
         "cache_creation_input_token_cost": 1.25e-07,
@@ -58767,8 +58818,10 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -59065,6 +59118,11 @@
         "input_cost_per_token": 2.2e-06,
         "output_cost_per_token": 6.6e-06,
         "cache_read_input_token_cost": 5.5e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
@@ -59081,6 +59139,11 @@
         "input_cost_per_token": 2e-06,
         "output_cost_per_token": 6e-06,
         "cache_read_input_token_cost": 5e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 500000,
         "max_output_tokens": 500000,
@@ -65067,6 +65130,10 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3.6e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -65080,6 +65147,10 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -65321,6 +65392,10 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3.6e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -65334,6 +65409,10 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 7.2e-07,
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -79457,6 +79536,7 @@
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -79466,6 +79546,7 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -79474,6 +79555,7 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "supports_xhigh_reasoning_effort": true
     },
     "openai.gpt-6.1-sol": {
@@ -79506,6 +79588,7 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock_mantle/openai.gpt-6.1-sol": {
@@ -79562,6 +79645,7 @@
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -79571,6 +79655,7 @@
         "supported_output_modalities": [
             "text"
         ],
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
@@ -79579,6 +79664,7 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "supports_xhigh_reasoning_effort": true
     },
     "vertex_ai/gemini-3.8-flash-tts": {
