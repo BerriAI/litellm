@@ -52,6 +52,49 @@ const baseProps = {
 };
 
 describe("ComplexityRouterConfig", () => {
+  it("edits and clears the heuristic-first conversation limit", () => {
+    const initialValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "heuristic_first",
+      heuristic_first_max_tier: "SIMPLE",
+      heuristic_first_max_context_tokens: 8000,
+    };
+    const onChange = vi.fn();
+    const StatefulConfig = () => {
+      const [value, setValue] = React.useState(initialValue);
+      return (
+        <ComplexityRouterConfig
+          {...baseProps}
+          value={value}
+          onChange={(nextValue) => {
+            onChange(nextValue);
+            setValue(nextValue);
+          }}
+        />
+      );
+    };
+    renderWithProviders(<StatefulConfig />);
+    openAutoRouterAdvanced("Classification Method");
+    const limit = screen.getByRole("textbox", { name: "Max conversation tokens before classifier" });
+    expect(limit).toHaveValue("8000");
+
+    fireEvent.change(limit, { target: { value: "12000" } });
+    fireEvent.blur(limit);
+    expect(limit).toHaveValue("12000");
+    expect(onChange).toHaveBeenLastCalledWith({ ...initialValue, heuristic_first_max_context_tokens: 12000 });
+
+    fireEvent.change(limit, { target: { value: "invalid" } });
+    fireEvent.blur(limit);
+    expect(limit).toHaveValue("");
+    expect(onChange).toHaveBeenLastCalledWith({ ...initialValue, heuristic_first_max_context_tokens: undefined });
+
+    fireEvent.change(limit, { target: { value: "8000" } });
+    fireEvent.change(limit, { target: { value: "" } });
+    fireEvent.blur(limit);
+    expect(limit).toHaveValue("");
+    expect(onChange).toHaveBeenLastCalledWith({ ...initialValue, heuristic_first_max_context_tokens: undefined });
+  });
+
   it("should render", async () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     expect(screen.getByText("Models by tier")).toBeInTheDocument();

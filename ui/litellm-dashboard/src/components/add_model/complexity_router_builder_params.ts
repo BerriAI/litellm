@@ -26,6 +26,7 @@ export const builderParamsFromValue = (
   classificationPrompt: value.classification_prompt,
   classificationExamples: value.classification_examples,
   heuristicFirstMaxTier: value.heuristic_first_max_tier,
+  heuristicFirstMaxContextTokens: value.heuristic_first_max_context_tokens,
   hybridBoundaryMargin: value.hybrid_boundary_margin,
   classificationMode: value.classification_mode,
   tierLabels: value.tier_labels,
