@@ -1579,10 +1579,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_disabled.get("includeThoughts") is False
-        assert (
-            "thinkingLevel" not in result_disabled
-            or result_disabled.get("thinkingLevel") is None
-        )
+        assert result_disabled.get("thinkingLevel") == "low"
 
         # Test 3: Budget tokens = 0 for Gemini 3
         thinking_param_zero: AnthropicThinkingParam = {
@@ -1596,10 +1593,7 @@ def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
         )
 
         assert result_zero["includeThoughts"] is False
-        assert (
-            "thinkingLevel" not in result_zero
-            or result_zero.get("thinkingLevel") is None
-        )
+        assert result_zero["thinkingLevel"] == "minimal"
 
         # Test 4: Gemini 3 flash-preview should also follow provider defaults by default
         result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
