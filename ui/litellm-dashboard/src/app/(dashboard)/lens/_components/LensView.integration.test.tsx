@@ -173,6 +173,45 @@ describe("Lens findings and runs", () => {
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
   });
 
+  const brief = {
+    problem: "The workspace was not a Git repository, so the agent could not commit.",
+    user_goal: "Open a pull request fixing a typo",
+    what_happened: 'Git returned "fatal: not a git repository"',
+    test_cases: [{ input: "Fix the typo and open a PR", expected: "A PR URL is returned" }],
+  };
+
+  async function openIssue(finding: Finding) {
+    testQueryClient.clear();
+    const jobs = lens.jobs.map((job) => ({ ...job, findings: [finding] }));
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === "/lens")
+        return { lenses: [{ ...lens, findings: [finding], jobs }], workers: [], tracing_enabled: true };
+      if (path === "/lens/lens/runs") return jobs;
+      return { data: [] };
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<LensView accessToken="test" readOnly />);
+    await user.click(await screen.findByRole("button", { name: new RegExp(finding.title) }));
+    return within(screen.getByRole("dialog", { name: finding.title }));
+  }
+
+  it("explains an issue with its problem, user goal, outcome and test cases", async () => {
+    const detail = await openIssue({ ...issue, suggestion: "Check repository access", brief });
+    expect(detail.getByText(brief.problem)).toBeVisible();
+    expect(detail.getByText(brief.user_goal)).toBeVisible();
+    expect(detail.getByText(brief.what_happened)).toBeVisible();
+    expect(detail.getByText(brief.test_cases[0].input)).toBeVisible();
+    expect(detail.getByText(brief.test_cases[0].expected)).toBeVisible();
+    expect(detail.queryByText("Check repository access")).not.toBeInTheDocument();
+  });
+
+  it("keeps the summary and suggestion for findings recorded before briefs existed", async () => {
+    const detail = await openIssue({ ...issue, suggestion: "Check repository access" });
+    expect(detail.getByText(issue.description)).toBeVisible();
+    expect(detail.getByText("Check repository access")).toBeVisible();
+    expect(detail.queryByText("Test cases")).not.toBeInTheDocument();
+  });
+
   it("shows the actual frozen run selection in the Runs tab", async () => {
     const user = userEvent.setup();
     renderWithProviders(<LensView accessToken="test" readOnly />);
