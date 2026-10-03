@@ -41,7 +41,7 @@ describe("Lens interactive demo", () => {
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by status" }), "Failed");
     expect(within(screen.getByRole("table", { name: "Agent runs" })).getAllByRole("row")).toHaveLength(4);
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
-    expect(await screen.findByRole("button", { name: /Support quality/ })).toBeVisible();
+    expect(await screen.findByRole("row", { name: /Support quality/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "New investigation" })).not.toBeInTheDocument();
     expect(network).not.toHaveBeenCalled();
     expect(onUrlUpdate).not.toHaveBeenCalled();
@@ -60,9 +60,9 @@ describe("Lens interactive demo", () => {
     });
     await screen.findByRole("button", { name: "Preview sample" });
     await user.click(screen.getByRole("button", { name: "Preview sample" }));
-    await user.click(await screen.findByRole("button", { name: /Support quality/ }));
+    await user.click(await screen.findByRole("tab", { name: "Findings" }));
     network.mockClear();
-    await user.click(screen.getByRole("button", { name: /Repeated lookups leave customers without an answer/ }));
+    await user.click(await screen.findByRole("row", { name: /Repeated lookups leave customers without an answer/ }));
     const finding = screen.getByRole("dialog");
     expect(within(finding).getByText(/The support agent retries/)).toBeVisible();
     const summaries = within(finding).getAllByText("support_agent", { exact: true });
@@ -80,9 +80,7 @@ describe("Lens interactive demo", () => {
       within(screen.getByRole("dialog", { name: "Original run" })).getByRole("button", { name: "Close" }),
     );
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
-    await user.click(screen.getByRole("tab", { name: "History" }));
-    await user.click(screen.getAllByRole("button", { name: /runs reviewed/ })[1]);
-    expect(await screen.findByText(/1 linked run · high priority/)).toBeVisible();
+    expect(await screen.findByRole("table", { name: "Findings" })).toBeVisible();
     expect(network).not.toHaveBeenCalled();
     expect(onUrlUpdate).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Exit demo" }));
@@ -127,7 +125,7 @@ describe("Lens interactive demo", () => {
     expect(await screen.findByRole("button", { name: "Preview sample" })).toBeVisible();
     const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
     await user.click(tabs.getByRole("tab", { name: "Investigations" }));
-    expect(await screen.findByRole("button", { name: new RegExp(saved.settings.name) })).toBeVisible();
+    expect(await screen.findByRole("row", { name: new RegExp(saved.settings.name) })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     await user.click(tabs.getByRole("tab", { name: "Traces" }));
     await user.click(await screen.findByRole("button", { name: "Preview sample" }));

@@ -190,6 +190,20 @@ class RunAssessment(Record):
     cannot_assess: bool = False
 
 
+MAX_STEPS = 200
+
+
+class Step(Record):
+    at: datetime
+    kind: Literal["stage", "model", "error"]
+    label: str = Field(max_length=200)
+    model: str = Field(default="", max_length=200)
+    purpose: str = Field(default="", max_length=40)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float = 0
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
@@ -209,6 +223,8 @@ class Job(Record):
     cost: float = 0
     findings: tuple[Finding, ...] | None = None
     assessments: tuple[RunAssessment, ...] = ()
+    steps: tuple[Step, ...] = ()
+    trigger: Literal["schedule", "manual"] = "schedule"
 
 
 class Lens(Record):
@@ -249,6 +265,28 @@ class LensList(Record):
 class RunRequest(Record):
     settings: LensSettings | None = None
     lookback_hours: LookbackHours | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+    agent_name: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def ordered_window(self) -> "RunRequest":
+        if (self.start is None) != (self.end is None):
+            raise ValueError("Choose both a start and an end time")
+        if self.start is not None and self.end is not None and self.start >= self.end:
+            raise ValueError("Start time must be before end time")
+        return self
+
+
+class WatchSkipped(Record):
+    id: str
+    name: str
+    reason: str
+
+
+class WatchAllResult(Record):
+    watching: tuple[str, ...]
+    skipped: tuple[WatchSkipped, ...] = ()
 
 
 class FindingUpdate(Record):
