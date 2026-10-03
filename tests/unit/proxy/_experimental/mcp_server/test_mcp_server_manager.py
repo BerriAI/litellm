@@ -34,6 +34,8 @@ from mcp.types import (
     CallToolResult,
     GetPromptResult,
     Prompt,
+    PromptMessage,
+    TextContent,
     ResourceTemplate,
     TextResourceContents,
 )
@@ -1378,7 +1380,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match='oauth2_flow: client_credentials') as exc_info,
         ):
             await manager.load_servers_from_config(self._oauth2_config())
 
@@ -1391,7 +1393,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match="got 'm2m'") as exc_info,
         ):
             await manager.load_servers_from_config(self._oauth2_config(oauth2_flow="m2m"))
 
@@ -1658,7 +1660,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError, match="per_server_oauth_discovery.*must be a boolean"),
+            pytest.raises(ValueError, match=r"per_server_oauth_discovery.*must be a boolean"),
         ):
             await manager.load_servers_from_config(
                 self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery="yes")
@@ -1670,7 +1672,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match='dcr_bridge is only supported') as exc_info,
         ):
             await manager.load_servers_from_config(
                 self._oauth2_config(oauth2_flow="authorization_code", dcr_bridge=True)
@@ -1684,7 +1686,7 @@ class TestMCPServerManager:
 
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
-            pytest.raises(ValueError) as exc_info,
+            pytest.raises(ValueError, match='must be a boolean') as exc_info,
         ):
             await manager.load_servers_from_config(
                 self._client_forwarded_config(MCPAuth.true_passthrough, dcr_bridge="yes")
@@ -6162,7 +6164,7 @@ class TestMCPServerManager:
     def test_resolve_mcp_server_for_tool_call_raises_when_not_found(self):
         """ValueError is raised when no resolution path finds the tool."""
         manager = MCPServerManager()
-        with pytest.raises(ValueError, match="Tool .* not found"):
+        with pytest.raises(ValueError, match=r"Tool .* not found"):
             manager._resolve_mcp_server_for_tool_call("nonexistent", "ghost_tool")
 
     def test_resolve_mcp_server_for_tool_call_unscoped_cached_tool_still_fails(self):
@@ -6404,8 +6406,8 @@ class TestMCPServerManager:
         for verdict in (True, False):
 
             class _Provider:
-                async def has_user_token(self, subject, spec):
-                    return verdict
+                async def has_user_token(self, subject, spec, expected: bool = verdict):
+                    return expected
 
             manager = MCPServerManager(cred_provider=_Provider())
             server = MCPServer(
@@ -14020,7 +14022,6 @@ class _DiscoveryClock:
         return self.now
 
 
-from pydantic import TypeAdapter
 from mcp.types import JSONRPCMessage
 
 _JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
@@ -14095,6 +14096,8 @@ class _DiscoveryUpstream:
                 "resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]
             },
             "tools/list": {"tools": []},
+            "prompts/get": {"messages": [{"role": "user", "content": {"type": "text", "text": "prompt text"}}]},
+            "resources/read": {"contents": [{"uri": "test://example", "text": "resource text"}]},
         }[payload.method]
         continuation: Final = (
             {"nextCursor": "last-page"}
@@ -14492,8 +14495,17 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
 
 
 @pytest.mark.asyncio
-async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None:
-    import respx
+@pytest.mark.parametrize(
+    "operation, rpc_method",
+    (
+        ("prompts", "prompts/list"),
+        ("resources", "resources/list"),
+        ("templates", "resources/templates/list"),
+        ("get_prompt", "prompts/get"),
+        ("read_resource", "resources/read"),
+    ),
+)
+async def test_prompt_and_resource_operations_resolve_each_users_stored_oauth(operation: str, rpc_method: str) -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 
     class TokenStore:
@@ -14502,7 +14514,7 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
 
         async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
             self.calls = (*self.calls, (user_id, server_id))
-            return OAuthToken(access_token="stored-token")
+            return OAuthToken(access_token=f"stored-{user_id}")
 
         async def invalidate(self, user_id: str, server_id: str) -> None:
             return None
@@ -14520,14 +14532,36 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
         authorization_url="https://discovery.example/authorize",
         token_url="https://discovery.example/token",
     )
-    user: Final = UserAPIKeyAuth(user_id="requesting-user")
     upstream: Final = _DiscoveryUpstream()
     with _mcp_upstream(upstream.respond):
-        assert len(await manager.get_prompts_from_server(server, user)) == 1
-        assert len(await manager.get_prompts_from_server(server, user)) == 1
-    assert store.calls == (("requesting-user", "discovery"), ("requesting-user", "discovery"))
-    assert upstream.initializes == 1
-    assert ("prompts/list", "Bearer stored-token") in upstream.requests
+        for user_id in ("first-user", "second-user"):
+            user: Final = UserAPIKeyAuth(user_id=user_id)
+            match operation:
+                case "prompts":
+                    assert [item.name for item in await manager.get_prompts_from_server(server, user)] == [
+                        "discovery-example"
+                    ]
+                case "resources":
+                    assert [item.name for item in await manager.get_resources_from_server(server, user)] == [
+                        "discovery-example"
+                    ]
+                case "templates":
+                    assert [item.name for item in await manager.get_resource_templates_from_server(server, user)] == [
+                        "discovery-example"
+                    ]
+                case "get_prompt":
+                    prompt: Final = await manager.get_prompt_from_server(server, user, "example")
+                    assert prompt.messages == [
+                        PromptMessage(role="user", content=TextContent(type="text", text="prompt text"))
+                    ]
+                case "read_resource":
+                    resource: Final = await manager.read_resource_from_server(server, user, AnyUrl("test://example"))
+                    assert resource.contents == [TextResourceContents(uri="test://example", text="resource text")]
+    assert set(store.calls) == {("first-user", "discovery"), ("second-user", "discovery")}
+    assert tuple(auth for method, auth in upstream.requests if method == rpc_method) == (
+        "Bearer stored-first-user",
+        "Bearer stored-second-user",
+    )
 
 
 @pytest.mark.asyncio
