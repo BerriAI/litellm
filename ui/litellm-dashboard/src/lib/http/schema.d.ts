@@ -33351,6 +33351,16 @@ export interface components {
             id: string;
             /** Lease Until */
             lease_until?: string | null;
+            /**
+             * Reviewed
+             * @default 0
+             */
+            reviewed: number;
+            /**
+             * Reviews
+             * @default []
+             */
+            reviews: components["schemas"]["Review"][];
             /** Revision */
             revision: number;
             sample?: components["schemas"]["Sample"] | null;
@@ -40899,6 +40909,7 @@ export interface components {
              *     }
              */
             coverage: components["schemas"]["Coverage"];
+            review?: components["schemas"]["Review"] | null;
             /** Stage */
             stage: string;
         };
@@ -44059,6 +44070,74 @@ export interface components {
             ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
+        };
+        /** Review */
+        Review: {
+            /** Agent */
+            agent: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Execution Id */
+            execution_id: string;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /**
+             * Spans
+             * @default []
+             */
+            spans: components["schemas"]["ReviewSpan"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Verdicts
+             * @default []
+             */
+            verdicts: components["schemas"]["ReviewVerdict"][];
+        };
+        /** ReviewSpan */
+        ReviewSpan: {
+            /**
+             * Cited
+             * @default false
+             */
+            cited: boolean;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Preview */
+            preview: string;
+            /** Span Id */
+            span_id: string;
+        };
+        /** ReviewVerdict */
+        ReviewVerdict: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /** Summary */
+            summary: string;
         };
         /**
          * RoleMappings
