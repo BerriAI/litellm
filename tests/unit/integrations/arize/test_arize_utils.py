@@ -1513,3 +1513,32 @@ def test_arize_mcp_emitter_is_inert_without_a_standard_logging_object():
 
     written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
     assert SpanAttributes.TOOL_NAME not in written
+
+
+def test_arize_session_and_user_attrs_still_emit_from_key_metadata_by_default():
+    from unittest.mock import MagicMock
+
+    span = MagicMock()
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+        "standard_logging_object": {
+            "call_type": "acompletion",
+            "model_parameters": {},
+            "metadata": {
+                "user_api_key_end_user_id": "end-1",
+                "user_api_key_user_id": "internal-1",
+                "user_api_key_team_id": "team-1",
+            },
+            "trace_id": "trace-1",
+        },
+        "optional_params": {},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+
+    ArizeLogger.set_arize_attributes(span, kwargs, {"id": "chatcmpl-1", "choices": [], "usage": {}})
+
+    span.set_attribute.assert_any_call(SpanAttributes.SESSION_ID, "end-1")
+    span.set_attribute.assert_any_call(SpanAttributes.USER_ID, "internal-1")
+    span.set_attribute.assert_any_call("litellm.trace_id", "trace-1")
+    span.set_attribute.assert_any_call("litellm.team_id", "team-1")

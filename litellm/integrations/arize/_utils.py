@@ -9,6 +9,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.integrations.otel.model.utils import as_str_mapping
 from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
@@ -410,7 +411,14 @@ def _set_tool_attributes(span: "Span", optional_tools: list | None, metadata_too
                 )
 
 
-def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMObsOTELAttributes]):
+def set_attributes(
+    span: "Span",
+    kwargs,
+    response_obj,
+    attributes: type[BaseLLMObsOTELAttributes],
+    *,
+    emit_session_and_user: bool = True,
+):
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
@@ -471,7 +479,9 @@ def set_attributes(span: "Span", kwargs, response_obj, attributes: type[BaseLLMO
     # blank the attributes set by the main try-block above. New attributes are
     # written under new keys; existing attributes are not overwritten.
     slp: Final = kwargs.get("standard_logging_object")
-    _safe_emit("session/user attrs", _set_session_and_user_attrs, span, kwargs, slp)
+    if emit_session_and_user:
+        _safe_emit("session/user attrs", _set_session_and_user_attrs, span, kwargs, slp)
+    _safe_emit("request context attrs", _set_request_context_attrs, span, slp)
     _safe_emit("response cost", _set_response_cost_attr, span, slp)
     _safe_emit(
         "passthrough normalization",
@@ -834,14 +844,12 @@ def _emit_input_message_extras(span: "Span", prefix: str, message: dict) -> None
 
 
 def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_payload) -> None:
-    """Emit `SESSION_ID` / `USER_ID` / team metadata when source data exists.
+    """Emit `SESSION_ID` / `USER_ID` when source data exists.
 
     `SESSION_ID` is emitted only when an explicit end-user identifier exists
     (`metadata.user_api_key_end_user_id`). We deliberately do NOT fall back
     to `trace_id`, because that would create a distinct "session" for every
-    single request and distort Arize's Session-grouping analytics. The
-    `trace_id` is still emitted under its own `litellm.trace_id` key so
-    spans remain filterable by trace.
+    single request and distort Arize's Session-grouping analytics.
 
     USER_ID is *only* emitted when no upstream path (model_params.user or
     optional_params.user) has already set it, to avoid overwriting an
@@ -857,10 +865,6 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
     if session_id:
         safe_set_attribute(span, SpanAttributes.SESSION_ID, str(session_id))
 
-    trace_id: Final = standard_logging_payload.get("trace_id")
-    if trace_id:
-        safe_set_attribute(span, "litellm.trace_id", str(trace_id))
-
     optional_params: Final = kwargs.get("optional_params") or {}
     model_params: Final = standard_logging_payload.get("model_parameters") or {}
     has_user_already: Final = bool(
@@ -872,6 +876,19 @@ def _set_session_and_user_attrs(span: "Span", kwargs: dict, standard_logging_pay
         if user_id:
             safe_set_attribute(span, SpanAttributes.USER_ID, str(user_id))
 
+
+def _set_request_context_attrs(span: "Span", standard_logging_payload: object) -> None:
+    payload: Final = as_str_mapping(standard_logging_payload)
+    if payload is None:
+        return
+
+    trace_id: Final = payload.get("trace_id")
+    if trace_id:
+        safe_set_attribute(span, "litellm.trace_id", str(trace_id))
+
+    metadata: Final = as_str_mapping(payload.get("metadata"))
+    if metadata is None:
+        return
     team_id: Final = metadata.get("user_api_key_team_id")
     if team_id:
         safe_set_attribute(span, "litellm.team_id", str(team_id))

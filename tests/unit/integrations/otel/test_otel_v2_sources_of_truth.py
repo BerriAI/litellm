@@ -46,7 +46,11 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
-from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
+from litellm.integrations.otel.model.trace_controls import (
+    TraceControls,
+    caller_trace_controls,
+    langfuse_trace_controls,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -1340,6 +1344,43 @@ def test_caller_trace_name_prefers_the_langfuse_header_over_body_metadata(reques
 def test_caller_trace_controls_carry_user_session_and_tags(request_data, expected):
     assert caller_trace_controls({"litellm_params": request_data}) == expected
     assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        ({"metadata": {"user_api_key_end_user_id": "end-1"}}, TraceControls(user_id="end-1")),
+        ({"litellm_metadata": {"user_api_key_end_user_id": "end-2"}}, TraceControls(user_id="end-2")),
+        (
+            {"metadata": {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}},
+            TraceControls(user_id="caller-1"),
+        ),
+        (
+            {
+                "proxy_server_request": {"headers": {"langfuse_trace_user_id": "header-1"}},
+                "metadata": {"user_api_key_end_user_id": "end-1"},
+            },
+            TraceControls(user_id="header-1"),
+        ),
+        (
+            {"metadata": {"user_api_key_end_user_id": "end-1", "session_id": "s-1"}},
+            TraceControls(user_id="end-1", session_id="s-1"),
+        ),
+        ({"metadata": {"user_api_key_user_id": "internal-1"}}, TraceControls()),
+        ({}, TraceControls()),
+    ],
+    ids=[
+        "body-end-user",
+        "anthropic-end-user",
+        "body-caller-wins",
+        "header-caller-wins",
+        "session-kept",
+        "internal-user-ignored",
+        "empty",
+    ],
+)
+def test_langfuse_trace_controls_fall_back_to_the_proxy_end_user(request_data, expected):
+    assert langfuse_trace_controls({"litellm_params": request_data}) == expected
 
 
 def test_llm_span_data_carries_the_caller_trace_controls():
