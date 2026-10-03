@@ -1,11 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { analysisElapsed, analysisProgress, nextCheckStatus, type Lens, type Job } from "./lensData";
+import {
+  analysisElapsed,
+  analysisFraction,
+  analysisPace,
+  analysisProgress,
+  nextCheckStatus,
+  remainingLabel,
+  stageWeights,
+  type Lens,
+  type Job,
+  type ProgressSample,
+} from "./lensData";
 
 const steps = ["Review runs", "Find patterns", "Check evidence"];
+const units = ["runs", "batches", "patterns"];
 
 export function LensProgress({ job, onCancel }: { job: Job; onCancel?: () => void }) {
   const [now, setNow] = useState(Date.now);
@@ -14,54 +25,74 @@ export function LensProgress({ job, onCancel }: { job: Job; onCancel?: () => voi
     return () => window.clearInterval(timer);
   }, []);
   const progress = analysisProgress(job);
-  const percent = progress.total ? Math.min(100, (progress.done / progress.total) * 100) : undefined;
+  const fraction = analysisFraction(progress);
+  const [samples, setSamples] = useState<ProgressSample[]>([]);
+  const latest = samples.at(-1);
+  if (!latest || latest.step !== progress.step || latest.done !== progress.done) {
+    setSamples([...samples, { at: now, step: progress.step, done: progress.done, fraction }].slice(-120));
+  }
+  const pace = analysisPace(samples, now);
+  const percent = Math.round(fraction * 100);
+  const queued = progress.step < 0;
+  const status = queued ? progress.title : `${progress.title}: ${progress.detail}`;
 
   return (
-    <section aria-label="Analysis progress" className="space-y-4 rounded-xl border bg-muted/30 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-sm font-medium" role="status">
-          <Loader2 aria-hidden="true" className="size-4 motion-safe:animate-spin text-muted-foreground" />
-          {progress.title}
-        </div>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {analysisElapsed(job.created_at, now)} elapsed
+    <section aria-label="Analysis progress" className="space-y-2 rounded-xl border bg-muted/30 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+        <span className="min-w-0 font-medium" role="status">
+          {status}
         </span>
+        <span className="tabular-nums text-muted-foreground">{percent}%</span>
       </div>
-      <ol aria-label="Analysis stages" className="grid grid-cols-3 gap-2">
+      <div
+        role="progressbar"
+        aria-label="Investigation progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-valuetext={status}
+        className="relative h-2 overflow-hidden rounded-full bg-muted"
+      >
+        <div
+          className={`h-full rounded-full bg-foreground transition-[width] duration-700 ${queued ? "motion-safe:animate-pulse" : ""}`}
+          style={{ width: queued ? "33%" : `${Math.max(fraction * 100, 1)}%` }}
+        />
+        {stageWeights.slice(0, -1).map((_, index) => (
+          <span
+            key={index}
+            aria-hidden="true"
+            className="absolute inset-y-0 w-0.5 bg-background"
+            style={{ left: `${stageWeights.slice(0, index + 1).reduce((sum, weight) => sum + weight, 0) * 100}%` }}
+          />
+        ))}
+      </div>
+      <ol aria-label="Analysis stages" className="flex text-xs">
         {steps.map((label, index) => (
-          <li key={label} aria-current={index === progress.step ? "step" : undefined} className="space-y-2">
-            <div className={`h-1 rounded-full ${index <= progress.step ? "bg-foreground" : "bg-border"}`} />
-            <span
-              className={`flex items-center gap-1 text-xs ${index === progress.step ? "font-medium" : "text-muted-foreground"}`}
-            >
-              {index < progress.step && <Check aria-label="Complete" className="size-3 shrink-0" />}
-              {label}
-            </span>
+          <li
+            key={label}
+            aria-current={index === progress.step ? "step" : undefined}
+            style={{ width: `${stageWeights[index] * 100}%` }}
+            className={`truncate pr-2 ${index === progress.step ? "font-medium text-foreground" : "text-muted-foreground"}`}
+          >
+            {index < progress.step ? `${label} ✓` : label}
           </li>
         ))}
       </ol>
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">{progress.detail}</p>
-        <div
-          role="progressbar"
-          aria-label={progress.title}
-          aria-valuemin={0}
-          aria-valuemax={progress.total || undefined}
-          aria-valuenow={progress.total ? Math.min(progress.done, progress.total) : undefined}
-          aria-valuetext={progress.detail}
-          className="h-1.5 overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className={`h-full rounded-full bg-foreground/70 transition-[width] duration-500 ${percent === undefined ? "motion-safe:animate-pulse" : ""}`}
-            style={{ width: percent === undefined ? "33%" : `${percent}%` }}
-          />
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        {job.status === "running" && <span>You can leave this page while the investigation runs.</span>}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 pt-1 text-xs text-muted-foreground">
+        <span className="tabular-nums">
+          {queued
+            ? progress.detail
+            : [
+                remainingLabel(pace.secondsLeft),
+                pace.perMinute !== null && `${Math.round(pace.perMinute)} ${units[progress.step]}/min`,
+                `${analysisElapsed(job.created_at, now)} elapsed`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+        </span>
         {onCancel && (
-          <Button variant="ghost" size="sm" onClick={onCancel}>
-            Cancel analysis
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onCancel}>
+            Cancel
           </Button>
         )}
       </div>
