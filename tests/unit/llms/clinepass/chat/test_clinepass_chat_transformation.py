@@ -85,12 +85,33 @@ def test_clinepass_is_not_a_json_configured_provider():
     assert not JSONProviderRegistry.exists("clinepass")
 
 
-def test_clinepass_stays_in_openai_compatible_providers():
-    """Membership drives `_map_openai_exception`, so dropping it silently
-    downgrades a 401 to APIConnectionError. The explicit dispatch branch in
-    main.py precedes the openai_compatible_providers catch-all, so being listed
-    here does NOT route ClinePass to the OpenAI SDK path."""
-    assert "clinepass" in litellm.openai_compatible_providers
+def test_clinepass_is_not_in_openai_compatible_providers():
+    """ClinePass must NOT be in `openai_compatible_providers`.
+
+    An earlier revision listed it there to reach `_map_openai_exception`, on the
+    assumption that the explicit dispatch branch in main.py made membership
+    inert for routing. It is not inert. The list is also consulted by:
+
+    * the speech branch in `main.py` -- which sends the request to the
+      provider's own `api_base` while taking the key from
+      `OPENAI_API_KEY`, leaking the user's OpenAI credential to a third-party
+      host for an endpoint ClinePass does not even implement;
+    * `OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS`, derived from this list, which
+      opens the same hole for transcription;
+    * image generation in `litellm/images/main.py`;
+    * `_add_provider_specific_params` in `litellm/utils.py`, which packs unknown
+      kwargs into `extra_body`. That is an OpenAI *SDK* concept the SDK unwraps
+      client-side. ClinePass dispatches through `BaseLLMHTTPHandler`, which
+      serialises optional params straight into the JSON body -- so membership
+      put a literal `"extra_body": {}` on the wire on every chat request, and
+      buried genuine vendor kwargs one level deep instead of flattening them.
+
+    Exception mapping is preserved by registering ClinePass explicitly alongside
+    `mistral` and `runwayml` in `exception_mapping_utils.py`;
+    `test_upstream_401_maps_to_authentication_error` is the guard for that.
+    """
+    assert "clinepass" not in litellm.openai_compatible_providers
+    assert "clinepass" not in litellm.constants.OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
 
 
 def test_api_base_env_override(monkeypatch):
@@ -358,7 +379,8 @@ def test_no_max_tokens_means_no_rewrite():
     assert response.choices[0].finish_reason == "stop"
 
 
-def test_max_completion_tokens_also_detects_truncation():
+def test_max_completion_tokens_param_detects_truncation_after_mapping():
+    """``max_completion_tokens`` is mapped to ``max_tokens`` before ``request_data`` is built."""
     response = _complete(_truncated_envelope(4000), max_completion_tokens=4000)
     assert response.choices[0].finish_reason == "length"
 

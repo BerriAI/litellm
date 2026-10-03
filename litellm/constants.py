@@ -1042,7 +1042,6 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
     "prism",
     "sail",
-    "clinepass",  # ClinePass (Cline API) - has its own module; listed here for exception mapping
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
