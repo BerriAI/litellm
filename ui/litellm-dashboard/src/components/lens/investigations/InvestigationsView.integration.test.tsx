@@ -582,3 +582,24 @@ it("shows the actual saved failure and run context without opening backend logs"
   expect(failure.getByText(job.settings.model)).toBeVisible();
   expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();
 });
+
+it("keeps a merged finding open to retry when one investigation's update fails", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    return { data: [] };
+  });
+  vi.mocked(apiClient.patch).mockReset();
+  vi.mocked(apiClient.patch).mockImplementation(async (path) => {
+    if (String(path).startsWith("/lens/twin/")) throw new Error("Twin reviews could not be updated");
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  await user.click(await screen.findByRole("row", { name: issue.title }));
+  await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
+  expect(await screen.findByText("Twin reviews could not be updated")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Mark resolved" })).toBeVisible();
+});
