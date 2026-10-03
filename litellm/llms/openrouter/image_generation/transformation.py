@@ -118,7 +118,8 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         ratio of an OpenAI pixel size. A tier size or an image_config set by the caller wins
         """
         size: Final = str(mapped_params.get("size") or "")
-        tier: Final = QUALITY_RESOLUTION_TIERS.get(str(mapped_params["quality"]))
+        quality: Final = mapped_params["quality"]
+        tier: Final = QUALITY_RESOLUTION_TIERS.get(quality) if isinstance(quality, str) else None
         params: Final = {key: value for key, value in mapped_params.items() if key != "quality"}
         if tier is None or (size and PIXEL_SIZE.fullmatch(size) is None):
             return params

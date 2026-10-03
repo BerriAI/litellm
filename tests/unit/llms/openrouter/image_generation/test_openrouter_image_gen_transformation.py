@@ -12,6 +12,7 @@ from litellm.llms.openrouter.common_utils import OpenRouterException
 from litellm.llms.openrouter.image_generation.transformation import (
     OpenRouterImageGenerationConfig,
 )
+from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.utils import ImageResponse, ImageUsage, ImageUsageInputTokensDetails
 
 CONFIG: Final = OpenRouterImageGenerationConfig()
@@ -233,6 +234,26 @@ def test_map_openai_params_quality_tier_yields_to_an_image_config_already_set():
     )
 
     assert mapped == {"image_config": {"image_size": "1K"}, "quality": "high", "size": "1536x1024"}
+
+
+@pytest.mark.parametrize("quality", list(ImageGenerationRequestQuality))
+def test_map_openai_params_reads_a_quality_enum_member_like_its_string(quality: ImageGenerationRequestQuality):
+    """litellm.image_generation takes ImageGenerationRequestQuality members as quality"""
+    from_enum = CONFIG.map_openai_params(
+        non_default_params={"quality": quality, "size": "1024x1024"},
+        optional_params={},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+    from_string = CONFIG.map_openai_params(
+        non_default_params={"quality": quality.value, "size": "1024x1024"},
+        optional_params={},
+        model=RESOLUTION_TIER_MODEL,
+        drop_params=False,
+    )
+
+    assert from_enum == from_string
+    assert "image_size" in from_enum["image_config"]
 
 
 @patch("litellm.llms.openrouter.image_generation.transformation.get_secret_str")
