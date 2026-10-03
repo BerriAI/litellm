@@ -4,12 +4,11 @@ from typing import Final
 import pytest
 
 from litellm.proxy.lens.models import (
-    AgentFix,
     AgentTestCase,
     Check,
     Evidence,
     FindingDraft,
-    FixOption,
+    IssueBrief,
     Lens,
     LensSettings,
     Scope,
@@ -183,36 +182,30 @@ def test_finding_keeps_uncertainty_separate_from_the_main_summary() -> None:
     assert saved.description == draft.description
 
 
-def agent_fix(problem: str) -> AgentFix:
-    return AgentFix(
+def issue_brief(problem: str) -> IssueBrief:
+    return IssueBrief(
         problem=problem,
         user_goal="Open a pull request",
         what_happened="The agent replied that it lacked repository access",
-        options=(
-            FixOption(title="Grant the repository tool", change="Add the repository MCP server to the agent's tools"),
-            FixOption(title="Hand back a patch", change="When pushing fails, return a patch the user can apply"),
-        ),
         test_cases=(AgentTestCase(input="Open a PR fixing the typo", expected="A PR URL is returned"),),
     )
 
 
-def test_agent_fix_survives_merges_and_refreshes_only_when_a_new_one_is_found() -> None:
-    first: Final = merge_finding(lens(), finding("run1").model_copy(update={"fix": agent_fix("No repo tool")}), 1, NOW)
-    assert first.fix == agent_fix("No repo tool")
+def test_issue_brief_survives_merges_and_refreshes_only_when_a_new_one_is_found() -> None:
+    draft: Final = finding("run1").model_copy(update={"brief": issue_brief("No repo tool")})
+    first: Final = merge_finding(lens(), draft, 1, NOW)
+    assert first.brief == issue_brief("No repo tool")
     reviewed: Final = lens().model_copy(update={"findings": (first,)})
-    assert merge_finding(reviewed, finding("run2"), 2, NOW).fix == first.fix
-    refreshed: Final = finding("run2").model_copy(update={"fix": agent_fix("Token expired")})
-    assert merge_finding(reviewed, refreshed, 2, NOW).fix == refreshed.fix
+    assert merge_finding(reviewed, finding("run2"), 2, NOW).brief == first.brief
+    refreshed: Final = finding("run2").model_copy(update={"brief": issue_brief("Token expired")})
+    assert merge_finding(reviewed, refreshed, 2, NOW).brief == refreshed.brief
 
 
-def test_agent_fix_requires_exactly_two_options() -> None:
+def test_issue_brief_requires_a_test_case() -> None:
     from pydantic import ValidationError
 
-    payload: Final = agent_fix("No repo tool").model_dump()
     with pytest.raises(ValidationError):
-        AgentFix.model_validate({**payload, "options": payload["options"][:1]})
-    with pytest.raises(ValidationError):
-        AgentFix.model_validate({**payload, "options": (*payload["options"], payload["options"][0])})
+        IssueBrief.model_validate({**issue_brief("No repo tool").model_dump(), "test_cases": ()})
 
 
 @pytest.mark.parametrize("interval", (1, 2, 37, 90, 10080))

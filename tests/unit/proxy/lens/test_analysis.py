@@ -19,7 +19,7 @@ from litellm.proxy.lens.models import (
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from tests.unit.proxy.lens.test_state import NOW, agent_fix, lens, finding
+from tests.unit.proxy.lens.test_state import NOW, issue_brief, lens, finding
 
 
 @pytest.mark.asyncio
@@ -967,7 +967,7 @@ async def test_invalid_candidate_response_preserves_other_findings_and_reports_i
 
 
 @pytest.mark.asyncio
-async def test_investigator_keeps_the_agent_fix_brief() -> None:
+async def test_investigator_keeps_the_issue_brief() -> None:
     execution: Final = Execution(
         id="run1", source="traces", trace_id="t", team_id="alpha", name="search", start_time="", span_count=1
     )
@@ -978,7 +978,7 @@ async def test_investigator_keeps_the_agent_fix_brief() -> None:
         partial=False,
         cannot_assess=False,
     )
-    draft: Final = finding("run1").model_copy(update={"fix": agent_fix("No repo tool")})
+    draft: Final = finding("run1").model_copy(update={"brief": issue_brief("No repo tool")})
 
     async def model(_request: ModelRequest) -> ModelResult:
         return ModelResult(content='{"action":"submit","finding":' + draft.model_dump_json() + "}", cost=0)
@@ -995,4 +995,4 @@ async def test_investigator_keeps_the_agent_fix_brief() -> None:
         model,
     )
     assert result.finding is not None
-    assert result.finding.fix == draft.fix
+    assert result.finding.brief == draft.brief
