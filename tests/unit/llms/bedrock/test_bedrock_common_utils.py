@@ -479,6 +479,75 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
 
 
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        pytest.param(
+            {"supports_prompt_caching": True, "supports_prompt_cache_breakpoint": False},
+            False,
+            id="priced-cached-tokens-but-rejects-the-explicit-marker",
+        ),
+        pytest.param(
+            {"supports_prompt_caching": False, "supports_prompt_cache_breakpoint": True},
+            True,
+            id="explicit-marker-flag-wins-over-the-caching-flag",
+        ),
+        pytest.param({"supports_prompt_caching": True}, True, id="caching-flag-alone-keeps-emitting"),
+        pytest.param({"supports_prompt_caching": False}, False, id="no-caching-and-no-marker-flag"),
+    ],
+)
+def test_bedrock_model_accepts_cache_points_prefers_the_explicit_breakpoint_flag(monkeypatch, entry, expected):
+    import litellm
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    base = "vendor.breakpoint-flag-test"
+    monkeypatch.setitem(litellm.model_cost, f"us.{base}", {"input_cost_per_token": 1e-06})
+    monkeypatch.setitem(litellm.model_cost, base, entry)
+
+    assert bedrock_model_accepts_cache_points(f"us.{base}") is expected
+
+
+@pytest.mark.parametrize("model", ["moonshotai.kimi-k3", "us.moonshotai.kimi-k3", "global.moonshotai.kimi-k3"])
+def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points(model, local_model_cost_map):
+    import litellm
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    assert bedrock_model_accepts_cache_points(model) is False
+    assert litellm.utils.supports_prompt_caching(model=model, custom_llm_provider="bedrock") is True
+    assert litellm.model_cost[model]["cache_read_input_token_cost"] > 0
+
+
+def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_model_cost_map):
+    from litellm import Router
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    flagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/flagged"
+    unflagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unflagged"
+    converse_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/converse"
+    Router(
+        model_list=[
+            {
+                "model_name": "kimi-k3-profile-converse",
+                "litellm_params": {"model": f"bedrock/converse/{converse_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
+            {
+                "model_name": "kimi-k3-profile",
+                "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
+            {
+                "model_name": "kimi-k3-profile-unflagged",
+                "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+        ]
+    )
+
+    assert bedrock_model_accepts_cache_points(flagged_arn) is False
+    assert bedrock_model_accepts_cache_points(converse_arn) is False
+    assert bedrock_model_accepts_cache_points(unflagged_arn) is True
+
+
 def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
     from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
 
