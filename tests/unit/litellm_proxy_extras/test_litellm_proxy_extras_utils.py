@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -709,6 +710,9 @@ class TestSpendLogsPartitionDetectionMissingPsycopg:
 
 
 _ATTEMPT_BUDGET = 4
+_P3009_MIGRATION_NAME = "20260415120000_health_check_latest_per_model_index"
+_P3009_STARTED_AT = "2026-10-02 23:20:56.439594 UTC"
+_P3009_DEADLOCK_LOGS = "ERROR: deadlock detected\nDETAIL: Process 72 waits for ShareLock on transaction 991"
 
 _P3005_STDERR = """Error: P3005
 
@@ -728,6 +732,80 @@ Database error code: 42P07
 Database error:
 ERROR: relation "SomeTable" already exists
 """
+
+
+def _p3009_stderr(migration_name: str, started_at: str) -> str:
+    return (
+        "Error: P3009\n\n"
+        "migrate found failed migrations in the target database, new migrations will not be applied. "
+        "Read more about how to resolve migration issues in a production database: "
+        "https://pris.ly/d/migrate-resolve\n"
+        f"The `{migration_name}` migration started at {started_at} failed\n"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _LedgerRow:
+    migration_name: str
+    started_at: str
+    finished: bool = False
+    rolled_back: bool = False
+    logs: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _LedgerCursor:
+    row: tuple[object, ...] | None = None
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.row
+
+    def fetchall(self) -> tuple[tuple[object, ...], ...]:
+        return ()
+
+
+class _LedgerConnection:
+    def __init__(self, ledger: "_FakeLedger") -> None:
+        self.ledger = ledger
+
+    def __enter__(self) -> "_LedgerConnection":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, query: object, params: tuple[object, ...] = ()) -> _LedgerCursor:
+        return self.ledger.execute(query, params)
+
+
+class _FakeLedger:
+    def __init__(self, at_error: tuple[_LedgerRow, ...], after_peer: tuple[_LedgerRow, ...]) -> None:
+        self.rows = at_error
+        self.after_peer = after_peer
+        self._peer_observed = False
+
+    def connect(self, *args: object, **kwargs: object) -> _LedgerConnection:
+        return _LedgerConnection(self)
+
+    def execute(self, query: object, params: tuple[object, ...]) -> _LedgerCursor:
+        text: Final = str(query)
+        if "WHERE migration_name = %s" not in text or not params:
+            return _LedgerCursor()
+        if not self._peer_observed:
+            self.rows = self.after_peer
+            self._peer_observed = True
+        matching: Final = tuple(
+            row
+            for row in self.rows
+            if row.migration_name == params[0] and (len(params) == 1 or row.started_at == params[1])
+        )
+        if "rolled_back_at IS NULL" in text:
+            unresolved: Final = next((row for row in matching if not row.finished and not row.rolled_back), None)
+            return _LedgerCursor((unresolved.logs,) if unresolved else None)
+        if "IS NOT NULL" in text:
+            resolved: Final = next((row for row in matching if row.finished or row.rolled_back), None)
+            return _LedgerCursor((1,) if resolved else None)
+        return _LedgerCursor()
 
 
 @pytest.mark.parametrize(
@@ -759,7 +837,15 @@ class _MigrateDeployHarness:
     `prisma migrate deploy` outcomes, with every recovery command faked out so
     nothing touches a database or the packaged migrations directory."""
 
-    def __init__(self, monkeypatch, tmp_path, outcomes, repeat_last=False, confirmed_migrations=()):
+    def __init__(
+        self,
+        monkeypatch,
+        tmp_path,
+        outcomes,
+        repeat_last=False,
+        confirmed_migrations=(),
+        ledger: "_FakeLedger | None" = None,
+    ):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
@@ -772,7 +858,11 @@ class _MigrateDeployHarness:
         self._subprocess_module = subprocess_module
         self.confirmed_migrations = set(confirmed_migrations)
 
-        monkeypatch.delenv("DATABASE_URL", raising=False)
+        if ledger is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+            monkeypatch.setattr("psycopg.connect", ledger.connect)
         monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
         monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
@@ -817,6 +907,84 @@ class _MigrateDeployHarness:
         self.confirmed_migrations.remove(name)
         self.resolved.append(name)
         return True
+
+
+class TestConcurrentP3009Recovery:
+    @pytest.mark.parametrize(
+        "after_peer",
+        (
+            (_LedgerRow(_P3009_MIGRATION_NAME, _P3009_STARTED_AT, rolled_back=True, logs=_P3009_DEADLOCK_LOGS),),
+            (
+                _LedgerRow(_P3009_MIGRATION_NAME, _P3009_STARTED_AT, rolled_back=True, logs=_P3009_DEADLOCK_LOGS),
+                _LedgerRow(_P3009_MIGRATION_NAME, "2026-10-02 23:21:11.539224 UTC"),
+            ),
+            (_LedgerRow(_P3009_MIGRATION_NAME, _P3009_STARTED_AT, finished=True, logs=_P3009_DEADLOCK_LOGS),),
+        ),
+        ids=("rolled-back", "rolled-back-beside-a-fresh-in-flight-row", "finished"),
+    )
+    def test_a_p3009_row_a_peer_already_recovered_is_retried(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        after_peer: tuple[_LedgerRow, ...],
+    ) -> None:
+        deadlocked_row: Final = _LedgerRow(
+            _P3009_MIGRATION_NAME,
+            _P3009_STARTED_AT,
+            logs=_P3009_DEADLOCK_LOGS,
+        )
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_p3009_stderr(_P3009_MIGRATION_NAME, _P3009_STARTED_AT), "ok"],
+            ledger=_FakeLedger(at_error=(deadlocked_row,), after_peer=after_peer),
+        )
+
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 2
+
+    @pytest.mark.parametrize(
+        "ledger_rows",
+        (
+            (
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    _P3009_STARTED_AT,
+                    logs='ERROR: syntax error at or near "SLECT"',
+                ),
+            ),
+            (
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    _P3009_STARTED_AT,
+                    logs='ERROR: syntax error at or near "SLECT"',
+                ),
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    "2026-10-02 23:19:40.120000 UTC",
+                    rolled_back=True,
+                    logs=_P3009_DEADLOCK_LOGS,
+                ),
+            ),
+        ),
+        ids=("only-row", "beside-a-recovered-earlier-attempt"),
+    )
+    def test_an_unresolved_p3009_row_without_the_deadlock_marker_stops(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        ledger_rows: tuple[_LedgerRow, ...],
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_p3009_stderr(_P3009_MIGRATION_NAME, _P3009_STARTED_AT)],
+            ledger=_FakeLedger(at_error=ledger_rows, after_peer=ledger_rows),
+        )
+
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
+            harness.run()
+        assert len(harness.deploy_calls) == 1
 
 
 class TestMigrateDeployAttemptAccounting:
