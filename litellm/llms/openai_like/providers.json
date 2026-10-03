@@ -159,6 +159,14 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "salad_cloud": {
+    "base_url": "https://ai.salad.cloud/v1",
+    "api_key_env": "SALAD_CLOUD_API_KEY",
+    "api_base_env": "SALAD_CLOUD_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "empiriolabs": {
     "base_url": "https://api.empiriolabs.ai/v1",
     "api_key_env": "EMPIRIOLABS_API_KEY",
