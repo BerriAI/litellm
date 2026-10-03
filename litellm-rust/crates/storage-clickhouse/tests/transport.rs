@@ -111,3 +111,36 @@ async fn typed_fetch_encodes_parameters_and_validates_rows(
         assert!(matches!(envelope, Err(Error::InvalidResponse)));
     }
 }
+
+#[rstest]
+#[case::result_limit("396", true)]
+#[case::memory_limit("241", false)]
+#[case::timeout("159", false)]
+#[case::unknown("", false)]
+#[tokio::test]
+async fn server_result_limits_allow_smaller_pages_without_retrying_other_failures(
+    #[case] code: &str,
+    #[case] result_limit: bool,
+) {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500).insert_header("X-ClickHouse-Exception-Code", code))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let connection = Connection::parse(&server.uri()).unwrap();
+    let error = execute_read(
+        &Client::no_redirect_for_test(),
+        &connection,
+        "SELECT 1",
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap_err();
+    if result_limit {
+        assert!(matches!(error, Error::ResponseTooLarge));
+    } else {
+        assert!(matches!(error, Error::QueryFailed(500)));
+    }
+}

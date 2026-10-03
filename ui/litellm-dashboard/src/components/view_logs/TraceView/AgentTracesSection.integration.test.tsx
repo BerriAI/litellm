@@ -85,6 +85,25 @@ describe("AgentTracesSection", () => {
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
   });
 
+  it("keeps the original time window and loaded rows when another page fails", async () => {
+    const user = userEvent.setup();
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-01T00:00Z"));
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    const first = vi.mocked(agentTraceListCall).mock.calls[0][0];
+    now.mockReturnValue(Date.parse("2026-10-01T01:00Z"));
+    vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Please try again", 403, {}));
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more runs");
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
+    expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toEqual({ ...first, cursor: "next" });
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: null });
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it.each([
     [401, "Your session is no longer valid. Sign out and sign in again."],
     [403, "Your account does not have access to these traces."],

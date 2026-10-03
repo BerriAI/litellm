@@ -99,6 +99,7 @@ class UIMessage(typing_extensions.TypedDict):
 
 
 class TraceSummary(typing_extensions.TypedDict):
+    resolution_limited: ReadOnly[NotRequired[bool]]
     trace_id: ReadOnly[str]
     trace_ref: ReadOnly[NotRequired[str]]
     name: ReadOnly[str]
@@ -145,6 +146,7 @@ class Trace(typing_extensions.TypedDict):
     summary: ReadOnly[TraceSummary]
     agents: ReadOnly[tuple[AgentNode, ...]]
     spans: ReadOnly[tuple[Span, ...]]
+    next_cursor: ReadOnly[NotRequired[str | None]]
 
 
 class TracePage(typing_extensions.TypedDict):

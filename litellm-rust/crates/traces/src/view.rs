@@ -17,7 +17,7 @@ pub enum SpanStatus {
 }
 
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     pub span_id: String,
     pub parent_span_id: Option<String>,
@@ -41,7 +41,7 @@ pub struct Span {
 
 /// One distinct agent in a trace: 200 invocations of `researcher` are one node.
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AgentNode {
     pub name: String,
     pub parent_agent: Option<String>,
@@ -53,8 +53,10 @@ pub struct AgentNode {
 }
 
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TraceSummary {
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub resolution_limited: bool,
     pub trace_id: String,
     #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub trace_ref: String,
@@ -81,11 +83,13 @@ pub struct TraceSummary {
 }
 
 #[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Trace {
     pub summary: TraceSummary,
     pub agents: Vec<AgentNode>,
     pub spans: Vec<Span>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub next_cursor: Option<String>,
 }
 
 #[macro_rules_attribute::apply(response_type)]

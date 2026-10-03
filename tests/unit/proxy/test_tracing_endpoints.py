@@ -266,7 +266,7 @@ def test_get_trace_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
     assert response.json() == TRACE_RESPONSE
-    receiver.get_trace.assert_awaited_with("t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "")
+    receiver.get_trace.assert_awaited_with("t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "", None, None)
 
 
 def test_get_span_404_and_200(client, receiver):
@@ -278,10 +278,45 @@ def test_get_span_404_and_200(client, receiver):
     receiver.get_span.assert_awaited_with("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "")
 
 
-def test_trace_detail_passes_scoped_reference(client, receiver):
+@pytest.mark.parametrize("suffix,cursor,page_size", [("", None, None), ("&cursor=next&page_size=200", "next", 200)])
+def test_trace_detail_passes_scoped_reference(client, receiver, suffix, cursor, page_size):
     receiver.get_trace.return_value = TRACE_RESPONSE
-    assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
-    receiver.get_trace.assert_awaited_with("t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one")
+    assert client.get(f"/v1/traces/t1?trace_ref=run-one{suffix}").status_code == 200
+    receiver.get_trace.assert_awaited_with(
+        "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", cursor, page_size
+    )
+
+
+@pytest.mark.parametrize(
+    "path,method",
+    (
+        ("/v1/traces", "list_traces"),
+        ("/v1/traces/t1", "get_trace"),
+        ("/v1/traces/t1/spans/s1", "get_span"),
+        ("/v1/traces/t1/spans/s1/error", "get_span_error"),
+    ),
+)
+@pytest.mark.parametrize(
+    "error,status,message",
+    (
+        (RuntimeError("private database details"), 503, "Traces are temporarily unavailable. Please try again."),
+        (OverflowError("private query details"), 413, "Trace is too large for this view. Use a filtered trace query."),
+    ),
+)
+def test_read_failures_are_actionable_without_exposing_database_details(
+    client: TestClient, receiver: MagicMock, path: str, method: str, error: Exception, status: int, message: str
+) -> None:
+    getattr(receiver, method).side_effect = error
+    response: Final = client.get(path)
+    assert response.status_code == status
+    assert response.json() == {"detail": message}
+
+
+@pytest.mark.parametrize("query", ("page_size=0", "page_size=501", "cursor=" + "x" * 513))
+def test_trace_page_rejects_unbounded_parameters(client: TestClient, receiver: MagicMock, query: str) -> None:
+    response: Final = client.get(f"/v1/traces/t1?{query}")
+    assert response.status_code == 422
+    receiver.get_trace.assert_not_awaited()
 
 
 def test_invalid_export_and_cursor_are_client_errors(client, receiver):
@@ -370,7 +405,9 @@ def test_injected_receiver_ingests_with_the_authenticated_tenant(client: TestCli
     storage: Final = MagicMock(spec=ClickHouseStorage)
     storage.ingest = AsyncMock(return_value=1)
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
-    response: Final = client.post("/v1/traces", content=b'{"resourceSpans": []}', headers={"content-type": "application/json"})
+    response: Final = client.post(
+        "/v1/traces", content=b'{"resourceSpans": []}', headers={"content-type": "application/json"}
+    )
     assert response.status_code == 200, response.text
     assert response.json() == {}
     storage.ingest.assert_awaited_once_with(
@@ -538,9 +575,7 @@ def test_sql_and_help_use_authenticated_scope(
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert result.status_code == 200, result.text
     assert result.json() == SQL_ENVELOPE
-    receiver.storage.query_sql.assert_awaited_once_with(
-        "SELECT * FROM otel_traces", expected_scope, "test-secret"
-    )
+    receiver.storage.query_sql.assert_awaited_once_with("SELECT * FROM otel_traces", expected_scope, "test-secret")
     help_result: Final = client.get("/v1/traces/query/help")
     assert help_result.status_code == 200, help_result.text
     assert help_result.json() == QUERY_HELP
@@ -692,7 +727,7 @@ class _NativeConfig:
 
 
 class _NativeReturningHelp(ModuleType):
-    def __init__(self, help_payload: Mapping[str, object]) -> None:
+    def __init__(self, help_payload: Mapping[str, object], trace_payload: Mapping[str, object] | None = None) -> None:
         super().__init__("native_traces")
 
         class Storage:
@@ -702,10 +737,29 @@ class _NativeReturningHelp(ModuleType):
             async def query_help(self, scope: AllQueryScope, secret: str) -> Mapping[str, object]:
                 return help_payload
 
+            get_trace = AsyncMock(return_value=trace_payload)
+
+        self.trace_read: Final = Storage.get_trace
         self.NativeTraceConfig: Final = _NativeConfig
         self.NativeTraceStorage: Final = Storage
         self.trace_encode_error: Final = bytes
         self.trace_span_rows: Final = list
+
+
+@pytest.mark.parametrize("cursor,page_size", ((None, None), ("next", 200)))
+async def test_storage_preserves_page_cursor_and_normalizes_native_trace_data(
+    monkeypatch: pytest.MonkeyPatch, cursor: str | None, page_size: int | None
+) -> None:
+    native: Final = _NativeReturningHelp(QUERY_HELP, {**TRACE_RESPONSE, "next_cursor": "more"})
+    monkeypatch.setattr(loader, "_cached_bridge", native)
+    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "owner", "team_ids": ()}
+    trace: Final = await storage.get_trace("t1", scope, "run", cursor, page_size)
+    assert trace is not None
+    assert trace["next_cursor"] == "more"
+    assert trace["spans"] == ()
+    assert trace["summary"]["span_count"] == 0
+    native.trace_read.assert_awaited_once_with("t1", scope, "run", cursor, page_size)
 
 
 async def test_storage_validates_the_native_query_help_value(monkeypatch: pytest.MonkeyPatch) -> None:

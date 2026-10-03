@@ -16,7 +16,7 @@ export interface TraceWindow {
 export interface TracesApi {
   list(window: TraceWindow): Promise<TracePage>;
   anyRecorded(): Promise<boolean>;
-  trace(traceId: string, traceRef?: string): Promise<Trace>;
+  trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
   spanError(
     traceId: string,
@@ -32,7 +32,7 @@ export function liveTracesApi(accessToken: string): TracesApi {
       const page = await apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } });
       return page.data.length > 0;
     },
-    trace: (traceId, traceRef) => agentTraceCall(accessToken, traceId, traceRef),
+    trace: (traceId, traceRef, cursor) => agentTraceCall(accessToken, traceId, traceRef, cursor),
     span: (traceId, spanId, traceRef) => agentTraceSpanCall(accessToken, traceId, spanId, traceRef),
     spanError: (traceId, spanId, options) => agentTraceSpanErrorCall(accessToken, traceId, spanId, options),
   };

@@ -35,13 +35,14 @@ fn map_error_ref(error: &Error) -> PyErr {
     use litellm_storage_clickhouse::Error as StorageError;
 
     match error {
-        Error::Decode(litellm_traces::Error::TooLarge) | Error::InsertTooLarge => {
-            PyOverflowError::new_err(error.to_string())
-        }
+        Error::Decode(litellm_traces::Error::TooLarge)
+        | Error::InsertTooLarge
+        | Error::ReadTooLarge => PyOverflowError::new_err(error.to_string()),
         Error::InvalidRow
         | Error::InvalidTable
         | Error::InvalidCursor(_)
         | Error::AmbiguousTrace
+        | Error::TraceChanged
         | Error::Decode(_)
         | Error::InvalidSchema
         | Error::InvalidQuery
@@ -233,26 +234,44 @@ impl NativeTraceStorage {
         )
     }
 
+    #[pyo3(signature = (trace_id, scope, trace_ref, cursor=None, page_size=None))]
     fn get_trace<'py>(
         &self,
         py: Python<'py>,
         trace_id: String,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
         trace_ref: String,
+        cursor: Option<String>,
+        page_size: Option<u32>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
         crate::execution::run_async(
             py,
             async move {
-                litellm_traces_clickhouse::get_trace(
-                    &client,
-                    &connection,
-                    &scope,
-                    &trace_id,
-                    &trace_ref,
-                )
-                .await
+                if let Some(page_size) = page_size {
+                    litellm_traces_clickhouse::get_trace_page(
+                        &client,
+                        &connection,
+                        &scope,
+                        &trace_id,
+                        &trace_ref,
+                        cursor.as_deref(),
+                        page_size,
+                    )
+                    .await
+                } else if cursor.is_some() {
+                    Err(Error::InvalidParameters)
+                } else {
+                    litellm_traces_clickhouse::get_trace(
+                        &client,
+                        &connection,
+                        &scope,
+                        &trace_id,
+                        &trace_ref,
+                    )
+                    .await
+                }
             },
             map_error,
         )
@@ -465,6 +484,8 @@ mod tests {
     #[case::invalid_export(Error::Decode(litellm_traces::Error::InvalidPayload), "ValueError")]
     #[case::cursor(Error::InvalidCursor("trace"), "ValueError")]
     #[case::ambiguous(Error::AmbiguousTrace, "ValueError")]
+    #[case::changed_snapshot(Error::TraceChanged, "ValueError")]
+    #[case::read_budget(Error::ReadTooLarge, "OverflowError")]
     fn trace_read_and_ingest_failures_preserve_public_exception_types(
         #[case] error: Error,
         #[case] exception_name: &str,

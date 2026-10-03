@@ -171,6 +171,7 @@ pub fn resolve_trace(
         .map(|(_, (span, _))| span.input_preview.clone())
         .unwrap_or_default();
     let summary = TraceSummary {
+        resolution_limited: false,
         trace_id: trace_id.to_owned(),
         trace_ref: trace_ref.to_owned(),
         name: spans[root].name.clone(),
@@ -209,11 +210,13 @@ pub fn resolve_trace(
         summary,
         agents,
         spans,
+        next_cursor: None,
     })
 }
 
 pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
     TraceSummary {
+        resolution_limited: true,
         trace_id: row.trace_id.clone(),
         trace_ref: row.trace_ref.clone(),
         name: row.name.clone(),

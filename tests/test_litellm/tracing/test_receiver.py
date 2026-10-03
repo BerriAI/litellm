@@ -61,11 +61,12 @@ async def test_ingest_rejects_oversized_body_before_storage() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reads_delegate_to_storage() -> None:
+@pytest.mark.parametrize("cursor,page_size", ((None, None), ("next", 200)))
+async def test_reads_delegate_to_storage(cursor: str | None, page_size: int | None) -> None:
     storage: Final = _fake_storage()
     scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-research",)}
-    assert await TraceReceiver(storage).get_trace("t1", scope) is None
-    storage.get_trace.assert_awaited_once_with("t1", scope, "")
+    assert await TraceReceiver(storage).get_trace("t1", scope, "", cursor, page_size) is None
+    storage.get_trace.assert_awaited_once_with("t1", scope, "", cursor, page_size)
 
 
 @pytest.mark.asyncio
