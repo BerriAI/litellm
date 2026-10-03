@@ -279,3 +279,28 @@ async def test_gitlab_retries_transient_errors_and_checks_merge_request_access()
         assert next(statuses, None) is None
     finally:
         await source.close()
+
+
+@pytest.mark.asyncio
+async def test_observed_issues_preserve_last_second_boundaries_and_disabled_tracking() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/projects/org/disabled"):
+            return httpx.Response(200, json={"id": 2, "path_with_namespace": "org/disabled", "issues_enabled": False})
+        if request.url.path.endswith("/projects/org/repo"):
+            return httpx.Response(200, json={"id": 1, "path_with_namespace": "org/repo"})
+        assert request.url.params["created_before"] == "2026-10-01T00:00:00Z"
+        return httpx.Response(
+            200,
+            json=[
+                {"iid": 1, "created_at": "2026-09-30T23:59:59.999Z", "labels": ["type::bug"]},
+                {"iid": 2, "created_at": "2026-10-01T00:00:00Z", "labels": ["bug"]},
+            ],
+        )
+
+    source: Final = GitLab(ROISettings(source_provider="gitlab"), httpx.MockTransport(respond))
+    try:
+        issues: Final = await source.issues("org/repo", date(2026, 9, 1), date(2026, 9, 30))
+        assert issues is not None and tuple(issue.number for issue in issues) == (1,)
+        assert await source.issues("org/disabled", date(2026, 9, 1), date(2026, 9, 30)) is None
+    finally:
+        await source.close()

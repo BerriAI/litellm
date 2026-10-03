@@ -45,6 +45,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - shard: roi-database
+            test-path: "tests/integration/database/test_roi_observed.py"
+            seed: none
+            workers: 0
+            timeout-minutes: 10
+            job-timeout-minutes: 35
+
           - shard: proxy-behavior
             test-path: "tests/proxy_behavior"
             seed: db-push
@@ -147,7 +154,7 @@ jobs:
         env:
           TEST_PATH: ${{ matrix.test-path }}
           WORKERS: ${{ matrix.workers }}
-          PYTEST_ADDOPTS: ${{ matrix.shard == 'proxy-behavior' && '--cov=./litellm --cov-report=xml:coverage-lens-postgres.xml' || '' }}
+          PYTEST_ADDOPTS: ${{ matrix.shard == 'proxy-behavior' && '--cov=./litellm --cov-report=xml:coverage-lens-postgres.xml' || matrix.shard == 'roi-database' && '--cov=./litellm --cov-report=xml:coverage-roi-postgres.xml' || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} -vv --tb=short --durations=10
@@ -164,4 +171,15 @@ jobs:
           root_dir: ${{ github.workspace }}
           files: coverage-lens-postgres.xml
           flags: lens-postgres
+          fail_ci_if_error: true
+
+      - name: Upload ROI database coverage
+        if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'roi-database' && !cancelled()
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          use_oidc: true
+          version: v11.3.1
+          root_dir: ${{ github.workspace }}
+          files: coverage-roi-postgres.xml
+          flags: roi-postgres
           fail_ci_if_error: true

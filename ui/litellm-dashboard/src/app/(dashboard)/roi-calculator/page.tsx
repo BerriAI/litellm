@@ -1,9 +1,10 @@
 "use client";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import ROICalculatorView from "./_components/ROICalculatorView";
+import ObservedROIView from "./_components/ObservedROIView";
 
 export default function ROICalculatorPage() {
-  const { accessToken, userRole, isViewOnly } = useAuthorized();
-  return <ROICalculatorView accessToken={accessToken} userRole={userRole} isViewOnly={isViewOnly} />;
+  const { accessToken, isViewOnly } = useAuthorized();
+  if (!accessToken) return null;
+  return <ObservedROIView key={accessToken} accessToken={accessToken} isViewOnly={isViewOnly} />;
 }
