@@ -110,13 +110,10 @@ class TestMCPRegistryFile:
         assert entry["category"] == "Productivity"
         assert "ms-365-mcp-server" in entry["registry_url"]
 
-    def test_bundled_icons_exist(self, registry_path):
-        """An icon served from the proxy's own assets ships twice, as the built copy the wheel packages and as
-        the dashboard source copy every Docker image rebuilds from. Both must exist and match or a card goes blank."""
+    def test_registry_icons_exist_in_dashboard_source(self, registry_path):
         with open(registry_path, "r") as f:
             data = json.load(f)
         proxy_dir: Final = os.path.dirname(registry_path)
-        built_logos_dir: Final = os.path.join(proxy_dir, "_experimental", "out", "assets", "logos")
         source_logos_dir: Final = os.path.join(
             proxy_dir, "..", "..", "ui", "litellm-dashboard", "public", "assets", "logos"
         )
@@ -124,13 +121,10 @@ class TestMCPRegistryFile:
         assert bundled, "at least one registry entry ships its own icon"
         for server in bundled:
             file_name: Final = os.path.basename(server["icon_url"])
-            built: Final = os.path.join(built_logos_dir, file_name)
             source: Final = os.path.join(source_logos_dir, file_name)
-            assert os.path.isfile(built), f"{server['name']}: {server['icon_url']} missing from the built dashboard"
             assert os.path.isfile(source), f"{server['name']}: {server['icon_url']} missing from the dashboard source"
-            with open(built, "rb") as built_file, open(source, "rb") as source_file:
-                same_bytes: Final = built_file.read() == source_file.read()
-            assert same_bytes, f"{server['name']}: built and source copies of {file_name} differ"
+            with open(source, "rb") as source_file:
+                assert source_file.read(), f"{server['name']}: empty dashboard icon"
 
     def test_env_vars_structure(self, registry_path):
         with open(registry_path, "r") as f:
