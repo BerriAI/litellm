@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { useState } from "react";
@@ -29,9 +30,15 @@ const errorReason = (headline: string): string => /^([A-Za-z_][\w.]*)\(/.exec(he
 
 /** Shared lazy fetch of one span's full input / output / attributes. */
 export function useSpanDetail(accessToken: string, traceId: string, spanId: string | null, traceRef?: string) {
+  const demo = useLensDemo();
   const queryOptions: UseQueryOptions<SpanDetail, Error> = {
     queryKey: ["agentTraceSpan", traceId, traceRef, spanId, accessToken],
-    queryFn: () => agentTraceSpanCall(accessToken, traceId, spanId as string, traceRef),
+    queryFn: () =>
+      demo
+        ? demo.client.get<SpanDetail>(
+            `/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId as string)}`,
+          )
+        : agentTraceSpanCall(accessToken, traceId, spanId as string, traceRef),
     enabled: spanId !== null,
     staleTime: Infinity,
   };
@@ -146,11 +153,17 @@ interface DetailContentProps {
 }
 
 function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
+  const demo = useLensDemo();
   const [opened, setOpened] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
   const queryOptions: UseQueryOptions<SpanErrorPage, Error> = {
     queryKey: ["agentTraceSpanError", traceId, traceRef, span.span_id, accessToken, cursor],
-    queryFn: () => agentTraceSpanErrorCall(accessToken, traceId, span.span_id, { traceRef, cursor }),
+    queryFn: () =>
+      demo
+        ? demo.client.get<SpanErrorPage>(
+            `/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(span.span_id)}/error`,
+          )
+        : agentTraceSpanErrorCall(accessToken, traceId, span.span_id, { traceRef, cursor }),
     enabled: opened,
     staleTime: Infinity,
     gcTime: 0,

@@ -40,7 +40,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { cn } from "@/lib/cva.config";
+import { cn, cva } from "@/lib/cva.config";
 
 import "./columnMeta";
 import { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
@@ -58,25 +58,40 @@ const INTERACTIVE_SELECTOR = "button, a, input, select, textarea, [role=checkbox
 
 const noop = () => {};
 
-/**
- * Height-filling mode. The table still sizes to its rows; the parent's height is only a ceiling, so
- * a short table keeps its footer under the last row and a long one scrolls its rows instead of the
- * page.
- */
-const FILL_CLASSES = {
-  outer: "flex max-h-full min-h-0 flex-col",
-  frame: "flex min-h-0 flex-col",
-  body: "min-h-0",
-} as const;
+const dataTableRoot = cva("w-full", {
+  variants: { fill: { true: "flex h-full min-h-0 flex-1 flex-col", false: null } },
+});
 
-const NO_FILL_CLASSES = { outer: "", frame: "", body: "" } as const;
+const dataTableFrame = cva("overflow-hidden rounded-lg border border-border", {
+  variants: { fill: { true: "flex min-h-0 flex-1 flex-col", false: null } },
+});
 
-const STICKY_CLASSES = {
-  body: "[&_[data-slot=table-container]]:overflow-visible",
-  header: "bg-background",
-} as const;
+const dataTableScroller = cva("", {
+  variants: {
+    sticky: { true: "overflow-auto [&_[data-slot=table-container]]:overflow-visible", false: "overflow-x-auto" },
+    fill: { true: "min-h-0 flex-1", false: null },
+    stretchEmpty: { true: "[container-type:inline-size] [&_[data-slot=table-container]]:h-full", false: null },
+  },
+});
 
-const NO_STICKY_CLASSES = { body: "", header: "" } as const;
+const dataTableTable = cva("", {
+  variants: {
+    resizable: { true: "table-fixed", false: null },
+    stretchEmpty: { true: "h-full", false: null },
+  },
+});
+
+const dataTableHeader = cva("", {
+  variants: { sticky: { true: "sticky top-0 z-sticky bg-background", false: null } },
+});
+
+const dataTableBody = cva("", {
+  variants: { stretchEmpty: { true: "h-full", false: null } },
+});
+
+const messageCell = cva("h-24 text-center align-middle text-sm whitespace-normal text-muted-foreground", {
+  variants: { stretch: { true: "p-0", false: null } },
+});
 
 function columnDefId<TData, TValue>(column: ColumnDef<TData, TValue>): string | undefined {
   if ("id" in column && typeof column.id === "string") {
@@ -314,14 +329,23 @@ function DataTableBodyRow<TData>({
   );
 }
 
-function MessageRow({ colSpan, children }: { colSpan: number; children: React.ReactNode }) {
+function MessageRow({
+  colSpan,
+  children,
+  stretch = false,
+}: {
+  colSpan: number;
+  children: React.ReactNode;
+  stretch?: boolean;
+}) {
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell
-        colSpan={colSpan}
-        className="h-24 text-center align-middle text-sm whitespace-normal text-muted-foreground"
-      >
-        {children}
+      <TableCell colSpan={colSpan} className={messageCell({ stretch })}>
+        {stretch ? (
+          <div className="sticky left-0 flex h-full w-[100cqw] items-center justify-center">{children}</div>
+        ) : (
+          children
+        )}
       </TableCell>
     </TableRow>
   );
@@ -598,8 +622,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined || fillHeight;
-  const fill = fillHeight ? FILL_CLASSES : NO_FILL_CLASSES;
-  const sticky = stickyHeader ? STICKY_CLASSES : NO_STICKY_CLASSES;
+  const stretchEmpty = fillHeight && !isLoading && rows.length === 0;
   const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
   const renderPagination = (): React.ReactNode => {
@@ -636,7 +659,11 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
       );
     }
     if (rows.length === 0) {
-      return <MessageRow colSpan={visibleColumnCount}>{noDataMessage ?? <DefaultEmptyState />}</MessageRow>;
+      return (
+        <MessageRow colSpan={visibleColumnCount} stretch={stretchEmpty}>
+          {noDataMessage ?? <DefaultEmptyState />}
+        </MessageRow>
+      );
     }
     return rows.map((row) => (
       <DataTableBodyRow
@@ -655,19 +682,16 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const paginationNode = renderPagination();
 
   return (
-    <div data-testid="data-table-root" className={cn("w-full", fill.outer)}>
-      <div data-testid="data-table-frame" className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
+    <div data-testid="data-table-root" className={dataTableRoot({ fill: fillHeight })}>
+      <div data-testid="data-table-frame" className={dataTableFrame({ fill: fillHeight })}>
         {toolbar !== undefined && <div className="shrink-0 border-b border-border px-4 py-3">{toolbar(table)}</div>}
         <div
           data-testid="data-table-scroller"
-          className={cn(stickyHeader ? "overflow-auto" : "overflow-x-auto", sticky.body, fill.body)}
+          className={dataTableScroller({ sticky: stickyHeader, fill: fillHeight, stretchEmpty })}
           style={maxBodyHeight !== undefined ? { maxHeight: maxBodyHeight } : undefined}
         >
-          <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
-            <TableHeader
-              data-testid="data-table-head"
-              className={cn(stickyHeader ? "sticky top-0 z-sticky" : "", sticky.header)}
-            >
+          <TableRoot className={dataTableTable({ resizable: enableColumnResizing, stretchEmpty })} style={tableStyle}>
+            <TableHeader data-testid="data-table-head" className={dataTableHeader({ sticky: stickyHeader })}>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id} className="bg-muted/50">
                   {headerGroup.headers.map((header) => (
@@ -682,7 +706,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
                 </TableRow>
               ))}
             </TableHeader>
-            <TableBody>{renderBody()}</TableBody>
+            <TableBody className={dataTableBody({ stretchEmpty })}>{renderBody()}</TableBody>
             {footer !== undefined && <TableFooter>{footer(table)}</TableFooter>}
           </TableRoot>
         </div>

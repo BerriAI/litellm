@@ -1354,7 +1354,7 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
     store: Final = MagicMock()
     store.insert_spans = AsyncMock()
     context: Final = await tracing_endpoints.provide_trace_access(
-        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(store)
+        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(store), log_team_lookup=AsyncMock()
     )
 
     parsed, parse_error = await _read_request_body_deferring_parse_failure(request)

@@ -77,7 +77,11 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     Required call-time params (via optional_params or env vars):
     - ``oci_compartment_id`` / ``OCI_COMPARTMENT_ID``
-    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``)
+    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``). The realm comes from the realm
+      key in ``oci_compartment_id`` (``ocid1.compartment.oc2..`` is the Government realm), so
+      non-commercial realms need no extra setting. A realm unknown to litellm can be described in
+      ``OCI_REGION_METADATA`` or ``~/.oci/regions-config.json``, resolved through the OCI SDK when
+      it is installed, or given as ``api_base``.
 
     Optional call-time params:
     - ``oci_serving_mode``: ``"ON_DEMAND"`` (default) or ``"DEDICATED"``

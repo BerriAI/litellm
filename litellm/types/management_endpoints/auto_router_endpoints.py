@@ -205,14 +205,18 @@ class AutoRouterCacheStats(BaseModel):
 
 
 class AutoRouterBenchmarkTotals(BaseModel):
-    """Session-shape and savings aggregates over auto-routed traffic in the window."""
+    """Auto-routed traffic in the window. Turns, spend and savings count requests on the selected UTC days;
+    the session averages and cache stats describe every session overlapping the window, whole."""
 
-    sessions: int
-    turns: int
-    avg_turns_per_session: float
-    avg_session_seconds: float
-    avg_tokens_per_session: float
-    spend: float = Field(description="What the routed traffic actually cost")
+    sessions: int = Field(description="Sessions overlapping the window, counted whole")
+    turns: int = Field(description="Auto-routed requests on the selected UTC days")
+    avg_turns_per_session: float | None = Field(
+        description="Lifetime turns per overlapping session; null when the window has routed requests but no session "
+        "rows for this router type, such as an alias whose router type changed mid-session"
+    )
+    avg_session_seconds: float | None = Field(description="Lifetime seconds per overlapping session; null as above")
+    avg_tokens_per_session: float | None = Field(description="Lifetime tokens per overlapping session; null as above")
+    spend: float = Field(description="What the selected days' routed traffic actually cost")
     classifier_cost: float | None = Field(
         description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
         "subtotal recording, and zero for an empty window"
@@ -229,14 +233,19 @@ class AutoRouterBenchmarkTotals(BaseModel):
         "null when classification costs for those requests are unavailable",
     )
     saved_spend: float | None = Field(
-        description="Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates"
+        description="Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. "
+        "On totals this is the same daily figure the Overall savings view reports"
+    )
+    unattributed_saved_spend: float | None = Field(
+        default=None,
+        description="Part of saved_spend no router's daily rows account for, such as history recorded before "
+        "per-router daily tracking; when set, baseline_spend and saved_pct are null",
     )
     baseline_spend: float | None = Field(
         description="Estimated single-model cost: compared actual spend plus recorded savings; "
         "null when traffic has no recorded savings"
     )
     saved_pct: float | None = Field(description="Recorded savings over baseline_spend, as a percentage")
-    saved_per_session: float | None = Field(description="Recorded savings per session, including historical estimates")
     cache: AutoRouterCacheStats
 
 
@@ -291,7 +300,7 @@ class AutoRouterSessionResponse(BaseModel):
 
 
 class AutoRouterBenchmarksResponse(BaseModel):
-    """Benchmarks for the auto-router dashboard, aggregated from the per-session rollup."""
+    """Benchmarks for the auto-router dashboard, aggregated from the per-session and per-day rollups."""
 
     start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
     end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")

@@ -1,9 +1,15 @@
 import { useMemo, useState } from "react";
 
-import { userDailyActivityAggregatedCall, userDailyActivityCall } from "@/components/networking";
+import { dailyActivityAggregatedCall } from "@/components/networking";
+import {
+  EMPTY_DAILY_ACTIVITY_METADATA,
+  toDailyData,
+  type DailyActivityMetadata,
+  type DailyActivityRequest,
+} from "@/components/UsagePage/dailyActivityApi";
 import { DailyData } from "@/components/UsagePage/types";
 import { spendScopeUserId } from "@/utils/roles";
-import { usePaginatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity";
+import { useAggregatedDailyActivity } from "@/app/(dashboard)/usage/_components/hooks/useAggregatedDailyActivity";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -12,30 +18,22 @@ export interface DateRange {
   to?: Date;
 }
 
+export interface DailyActivityScope {
+  accessToken: string | null;
+  startTime: Date | null;
+  endTime: Date | null;
+  userId: string | null;
+  apiKey: string | null;
+}
+
 export interface DailyActivityRange {
   dateValue: DateRange;
   onDateChange: (value: DateRange) => void;
   results: DailyData[];
+  metadata: DailyActivityMetadata;
   loading: boolean;
-  isFetchingMore: boolean;
-  progress: { currentPage: number; totalPages: number };
-  cancelled: boolean;
   failed: boolean;
-  cancel: () => void;
-}
-
-/**
- * Which slice of daily activity to read. Both fields are passed straight through to the
- * endpoint as filters, so the caller — not this hook — decides what the viewer may see.
- *
- * `userId: null` asks for the whole proxy, which the backend only honours for admins;
- * a non-admin must send its own id or the request is rejected. That role decision lives in
- * `useDailyActivityRange` below rather than in here, so a caller scoping to one key is not
- * silently re-scoped to a user as well.
- */
-export interface DailyActivityScope {
-  userId: string | null;
-  apiKey?: string | null;
+  scope: DailyActivityScope;
 }
 
 export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateChange">;
@@ -47,39 +45,49 @@ export const useActivityDateRange = (): ActivityDateRange => {
   return { dateValue, onDateChange: setDateValue };
 };
 
+export interface ScopedActivityInput {
+  userId: string | null;
+  apiKey?: string | null;
+}
+
 export const useScopedDailyActivityRange = (
   accessToken: string | null,
-  scope: DailyActivityScope,
+  scope: ScopedActivityInput,
   { dateValue, onDateChange }: ActivityDateRange,
 ): DailyActivityRange => {
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
   const { userId, apiKey = null } = scope;
 
-  const activityQueryOptions = {
-    fetchFn: userDailyActivityCall,
-    aggregatedFetchFn: userDailyActivityAggregatedCall,
-    // Positional, and read by two functions whose signatures diverge at index 3: the paginated
-    // call takes `page` there (injected by the hook) and the aggregated one does not. Anything
-    // appended here must therefore be appended to BOTH networking signatures, in this order.
-    args: [accessToken, startTime, endTime, userId, true, apiKey],
-    enabled: !!accessToken && !!startTime && !!endTime,
-  };
-  const { data, loading, isFetchingMore, progress, cancelled, failed, coversRange, cancel } =
-    usePaginatedDailyActivity(activityQueryOptions);
-  const readUnavailable = failed || cancelled;
-  const waitingForRange = activityQueryOptions.enabled && !coversRange && !readUnavailable;
+  const request = useMemo<DailyActivityRequest | null>(
+    () =>
+      accessToken && startTime && endTime
+        ? {
+            accessToken,
+            startTime,
+            endTime,
+            entityIds: userId ? [userId] : null,
+            apiKey,
+            includeCurrentUtcDay: true,
+          }
+        : null,
+    [accessToken, startTime, endTime, userId, apiKey],
+  );
+
+  const { data, loading, failed } = useAggregatedDailyActivity({
+    fetch: () => dailyActivityAggregatedCall("user", request as DailyActivityRequest),
+    enabled: request !== null,
+    deps: [accessToken, startTime, endTime, userId, apiKey],
+  });
 
   return {
     dateValue,
     onDateChange,
-    results: data.results as DailyData[],
-    loading: loading || waitingForRange,
-    isFetchingMore,
-    progress,
-    cancelled,
+    results: toDailyData(data),
+    metadata: data.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA,
+    loading,
     failed,
-    cancel,
+    scope: { accessToken, startTime, endTime, userId, apiKey },
   };
 };
 

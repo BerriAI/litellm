@@ -17,19 +17,16 @@ Pins covered:
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
-from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -682,16 +679,16 @@ class _SampleTD(TypedDict):
 
 
 def test_resolve_typed_dict_type_finds_class_in_optional():
-    typ = Optional[_SampleTD]
+    typ = _SampleTD | None
     result = _resolve_typed_dict_type(typ)
 
     observed = {
-        "input_repr": "Optional[_SampleTD]",
+        "input_repr": "_SampleTD | None",
         "result_is_sample_td": result is _SampleTD,
         "result_is_class": isinstance(result, type),
     }
     assert normalize(observed) == {
-        "input_repr": "Optional[_SampleTD]",
+        "input_repr": "_SampleTD | None",
         "result_is_sample_td": True,
         "result_is_class": True,
     }
@@ -717,7 +714,7 @@ class _SampleModelB(BaseModel):
 
 
 def test_resolve_pydantic_type_extracts_non_none_args_from_union():
-    typ = Union[_SampleModelA, _SampleModelB, None]
+    typ = _SampleModelA | _SampleModelB | None
     result = _resolve_pydantic_type(typ)
 
     observed = {
