@@ -234,15 +234,26 @@ def _streamed(
     key: str | None = None,
     window: float = _CLIENT_WINDOW,
 ) -> _Streamed:
+    with httpx.Client(base_url=_proxy_url(gateway), timeout=window, trust_env=False) as client:
+        return _streamed_on(client, gateway, endpoint, body, content=content, headers=headers, key=key)
+
+
+def _streamed_on(
+    client: httpx.Client,
+    gateway: Gateway,
+    endpoint: Endpoint,
+    body: Mapping[str, JsonValue] | None = None,
+    *,
+    content: bytes | None = None,
+    headers: Mapping[str, str] | None = None,
+    key: str | None = None,
+) -> _Streamed:
     request_headers: Final = {
         "Authorization": f"Bearer {key or gateway.key}",
         **(headers or {}),
         **({"Content-Type": "application/json"} if content is not None else {}),
     }
-    with (
-        httpx.Client(base_url=_proxy_url(gateway), timeout=window, trust_env=False) as client,
-        client.stream("POST", _path(endpoint), json=body, content=content, headers=request_headers) as response,
-    ):
+    with client.stream("POST", _path(endpoint), json=body, content=content, headers=request_headers) as response:
         lines: Final = tuple(line for line in response.iter_lines() if line)
         return _Streamed(response.status_code, dict(response.headers), "\n".join(lines))
 
@@ -545,11 +556,13 @@ def test_r2_a_stream_timeout_falls_back_to_the_next_deployment(gateway: Gateway)
     with _peer("stall") as stalled, _peer("fast") as prompt, gateway.scenario() as scenario:
         slow: Final = _converse(scenario, stalled, timeout=_TIMEOUT_SECONDS)
         fast: Final = _converse(scenario, prompt)
-        served: Final = _streamed(gateway, "chat", _body("chat", slow, fallbacks=[fast]), window=_RETRY_WINDOW)
+        with httpx.Client(base_url=_proxy_url(gateway), timeout=_RETRY_WINDOW, trust_env=False) as same_worker:
+            _assert_answered(_streamed_on(same_worker, gateway, "chat", _body("chat", fast)))
+            served: Final = _streamed_on(same_worker, gateway, "chat", _body("chat", slow, fallbacks=[fast]))
         _assert_answered(served)
         assert served.headers.get("x-litellm-attempted-fallbacks") == "1", served.headers
         _received(stalled, 1)
-        _received(prompt, 1)
+        _received(prompt, 2)
 
 
 _BAD_VALUES: Final = (
