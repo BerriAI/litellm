@@ -27191,7 +27191,6 @@
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
-        "deprecation_date": "2027-06-28",
         "input_cost_per_image": 0.00028,
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
@@ -50510,7 +50509,6 @@
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
-        "deprecation_date": "2027-06-28",
         "input_cost_per_image": 0.00028,
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_batches": 1.25e-07,
@@ -61080,6 +61078,9 @@
         "input_cost_per_audio_token": 2e-06,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "gemini",
+        "max_input_tokens": 98304,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
         "mode": "audio_transcription",
         "output_cost_per_token": 1.2e-05,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -61102,6 +61103,9 @@
         "input_cost_per_audio_token": 3.5e-06,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "gemini",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
         "mode": "audio_transcription",
         "output_cost_per_token": 2.1e-05,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -64111,6 +64115,23 @@
             "text",
             "image",
             "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5-lite": {
+        "input_cost_per_image": 0.01,
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.02,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
         ],
         "supported_output_modalities": [
             "video"
