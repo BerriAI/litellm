@@ -7,6 +7,8 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 
 import json
 import asyncio
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import Mock, patch
 
 
@@ -16,6 +18,7 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 import litellm
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
 from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
 from litellm.types.utils import LlmProviders
@@ -818,6 +821,11 @@ class TestBedrockMantleProviderResolution:
         )
 
 
+def _row_cost(key: str, input_tokens: int, output_tokens: int) -> float:
+    row: Final[Mapping[str, float]] = litellm.model_cost[key]
+    return input_tokens * row["input_cost_per_token"] + output_tokens * row["output_cost_per_token"]
+
+
 def _anthropic_message(request: httpx.Request) -> httpx.Response:
     return httpx.Response(
         status_code=200,
@@ -887,7 +895,6 @@ class TestBedrockMantleClaudeChatRoute:
         )
 
         sent = handler.call_args.args[0]
-        opus = litellm.model_cost["anthropic.claude-opus-5-5"]
         assert str(sent.url) == "https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages"
         assert sent.headers["Authorization"] == "Bearer mantle-key"
         assert json.loads(sent.content) == {
@@ -898,8 +905,9 @@ class TestBedrockMantleClaudeChatRoute:
         }
         assert response.choices[0].message.content == "ok"
         assert response._hidden_params["response_cost"] == pytest.approx(
-            10 * opus["input_cost_per_token"] + 5 * opus["output_cost_per_token"]
+            _row_cost("bedrock_mantle/anthropic.claude-opus-5-5", 10, 5)
         )
+        assert response._hidden_params["response_cost"] != pytest.approx(_row_cost("anthropic.claude-opus-5-5", 10, 5))
 
     def test_claude_streaming_completion_uses_native_messages_endpoint(self, monkeypatch, local_cost_map):
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -916,6 +924,7 @@ class TestBedrockMantleClaudeChatRoute:
             aws_region_name="us-east-2",
             client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
         )
+        assert isinstance(stream, CustomStreamWrapper)
         text = "".join(chunk.choices[0].delta.content or "" for chunk in stream)
 
         sent = handler.call_args.args[0]
@@ -923,13 +932,45 @@ class TestBedrockMantleClaudeChatRoute:
         assert json.loads(sent.content)["stream"] is True
         assert text == "streamed"
 
+    def test_claude_region_prefixed_model_sends_bare_model_to_that_region(self, monkeypatch, local_cost_map):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_API_BASE",
+            "BEDROCK_MANTLE_REGION",
+            "AWS_REGION_NAME",
+            "AWS_REGION",
+            "AWS_PROFILE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0")
+        handler = Mock(side_effect=_anthropic_message)
+
+        response = litellm.completion(
+            model="bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=64,
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        sent = handler.call_args.args[0]
+        assert str(sent.url) == "https://bedrock-mantle.us-gov-west-1.api.aws/anthropic/v1/messages"
+        assert json.loads(sent.content)["model"] == "anthropic.claude-opus-5-5"
+        assert "/us-gov-west-1/bedrock/aws4_request" in sent.headers["Authorization"]
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            _row_cost("bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5", 10, 5)
+        )
+
     def test_non_claude_completion_stays_on_chat_completions(self, monkeypatch, local_cost_map):
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "mantle-key")
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
-        handler = Mock(
-            side_effect=lambda request: httpx.Response(
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
                 status_code=200,
                 json={
                     "id": "chatcmpl-test",
@@ -943,8 +984,8 @@ class TestBedrockMantleClaudeChatRoute:
                 },
                 request=request,
             )
-        )
 
+        handler = Mock(side_effect=respond)
         response = litellm.completion(
             model="bedrock_mantle/openai.gpt-oss-120b",
             messages=[{"role": "user", "content": "hello"}],
