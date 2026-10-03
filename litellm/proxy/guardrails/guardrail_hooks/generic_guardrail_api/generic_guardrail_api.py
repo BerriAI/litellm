@@ -18,10 +18,19 @@ from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+    skip_guardrail_success_record,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.record_scope import (
+    Caller,
+    RecordScope,
+    guardrail_information_scope_from_config,
+    returned_unchanged,
+    session_id_of,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -29,6 +38,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
+    GuardrailInformationScope,
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -204,9 +214,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        guardrail_information_scope: GuardrailInformationScope | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.headers = headers or {}
         self.extra_headers = extra_headers or []
 
@@ -250,6 +264,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
+
+        self._record_scope: Final = RecordScope(guardrail_information_scope_from_config(guardrail_information_scope))
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -339,7 +355,7 @@ class GenericGuardrailAPI(CustomGuardrail):
     def _build_guardrail_return_inputs(
         self,
         *,
-        texts: list,
+        texts: list[str],
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
@@ -499,7 +515,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                     blocked_content=True,
                 )
 
-            return self._build_guardrail_return_inputs(
+            return_inputs: Final = self._build_guardrail_return_inputs(
                 texts=texts,
                 images=images,
                 tools=tools,
@@ -522,6 +538,23 @@ class GenericGuardrailAPI(CustomGuardrail):
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
         except Exception as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj, is_unreachable=False)
+
+        if (
+            guardrail_response.action == "NONE"
+            and not self._record_scope.records_every_allow
+            and returned_unchanged(inputs, return_inputs)
+            and not self._record_scope.should_record_allow(
+                session_id=session_id_of(request_data),
+                caller=Caller(
+                    key_hash=user_metadata.get("user_api_key_hash"),
+                    team_id=user_metadata.get("user_api_key_team_id"),
+                    user_id=user_metadata.get("user_api_key_user_id"),
+                ),
+                input_type=input_type,
+            )
+        ):
+            skip_guardrail_success_record()
+        return return_inputs
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
