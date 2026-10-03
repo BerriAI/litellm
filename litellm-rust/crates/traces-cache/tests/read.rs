@@ -533,19 +533,27 @@ async fn ambiguous_trace_references_fail_and_a_single_reference_is_resolved() {
 }
 
 #[rstest]
+#[case::zero(0)]
+#[case::above_max(501)]
 #[tokio::test]
-async fn invalid_page_sizes_and_list_limits_are_rejected() {
+async fn invalid_page_sizes_are_rejected(#[case] page_size: u32) {
     let store = FakeStore::default();
     let reader = TraceReader::new(usize::MAX);
     let access = access();
-    for page_size in [0, 501] {
-        assert!(matches!(
-            reader
-                .get_trace_page(&store, &access, "trace", "ref", None, page_size)
-                .await,
-            Err(ReadError::InvalidParameters)
-        ));
-    }
+    assert!(matches!(
+        reader
+            .get_trace_page(&store, &access, "trace", "ref", None, page_size)
+            .await,
+        Err(ReadError::InvalidParameters)
+    ));
+}
+
+#[rstest]
+#[tokio::test]
+async fn zero_list_limit_is_rejected() {
+    let store = FakeStore::default();
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
     assert!(matches!(
         reader
             .list_traces(&store, &access, 0, i64::MAX, None, 0)
