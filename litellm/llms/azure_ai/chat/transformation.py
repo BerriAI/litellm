@@ -2,7 +2,6 @@ import copy
 import enum
 import re
 from typing import TYPE_CHECKING, Final, cast
-from urllib.parse import urlparse
 
 import httpx
 from httpx import Response
@@ -15,7 +14,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
-from litellm.llms.azure_ai.common_utils import is_foundry_model_inference_base
+from litellm.llms.azure_ai.common_utils import (
+    api_key_header_for_base,
+    is_foundry_model_inference_base,
+)
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
@@ -28,7 +30,7 @@ from litellm.types.utils import ModelResponse, ProviderField
 from litellm.utils import _add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -146,11 +148,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        parsed_url: Final = urlparse(api_base)
-        host: Final = parsed_url.hostname
-        if host and (host.endswith(".services.ai.azure.com") or host.endswith(".openai.azure.com")):
-            return True
-        return False
+        return api_key_header_for_base(api_base) == "api-key"
 
     def get_complete_url(
         self,
@@ -307,7 +305,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

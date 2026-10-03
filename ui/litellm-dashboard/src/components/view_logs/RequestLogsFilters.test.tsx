@@ -84,8 +84,10 @@ describe("RequestLogsFilters", () => {
 
     for (const label of [
       "Team ID",
+      "Span Type",
       "Status",
       "Cache",
+      "Credential",
       "Key Alias",
       "User ID",
       "End User",
@@ -287,6 +289,48 @@ describe("RequestLogsFilters", () => {
   });
 
   it.each([
+    ["", "All Credentials"],
+    ["true", "Client OAuth token"],
+    ["false", "Configured key"],
+  ])("shows the human label on the Credential trigger for %s", async (credential, label) => {
+    renderFilters(credential === "" ? {} : { [LOG_FILTER_IDS.CREDENTIAL]: credential });
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["", "All Types"],
+    ["llm", "LLM"],
+    ["agent", "Agent"],
+    ["mcp", "MCP"],
+    ["batch", "Batch"],
+  ])("shows the human label on the Span Type trigger for %s", async (spanType, label) => {
+    renderFilters(spanType === "" ? {} : { [LOG_FILTER_IDS.SPAN_TYPE]: spanType });
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it("selecting Batch sets the span_type filter", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByText("All Types"));
+    await user.click(await screen.findByRole("option", { name: "Batch" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.SPAN_TYPE, "batch");
+  });
+
+  it("selecting All Types clears the span_type filter", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.SPAN_TYPE]: "batch" });
+
+    await user.click(await screen.findByText("Batch"));
+    await user.click(await screen.findByRole("option", { name: "All Types" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.SPAN_TYPE, undefined);
+  });
+
+  it.each([
     ["Cache Hit", "hit"],
     ["Cache Miss", "miss"],
   ])("selecting %s sets the cache filter to %s", async (label, expected) => {
@@ -297,6 +341,29 @@ describe("RequestLogsFilters", () => {
     await user.click(await screen.findByRole("option", { name: label }));
 
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CACHE_STATUS, expected);
+  });
+
+  it.each([
+    ["Client OAuth token", "true"],
+    ["Configured key", "false"],
+  ])("selecting %s sets the credential filter to %s", async (label, expected) => {
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByText("All Credentials"));
+    await user.click(await screen.findByRole("option", { name: label }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CREDENTIAL, expected);
+  });
+
+  it("selecting All Credentials clears the credential filter", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.CREDENTIAL]: "true" });
+
+    await user.click(await screen.findByText("Client OAuth token"));
+    await user.click(await screen.findByRole("option", { name: "All Credentials" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CREDENTIAL, undefined);
   });
 
   it("stores the raw status code when a labeled error code is picked", async () => {
@@ -343,5 +410,16 @@ describe("RequestLogsFilters", () => {
     await user.click(await screen.findByRole("option", { name: "All Requests" }));
 
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CACHE_STATUS, undefined);
+  });
+
+  it("clears the raw Error Code combobox through the undefined filter contract", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.ERROR_CODE]: "429" });
+    const input = await screen.findByPlaceholderText("Select or type an error code");
+
+    await user.click(input);
+    await user.click(screen.getByRole("button", { name: "Clear", hidden: true }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.ERROR_CODE, undefined);
   });
 });

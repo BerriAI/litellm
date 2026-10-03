@@ -12,10 +12,12 @@ vi.mock("../components/AutoRouters/AutoRoutersPanel", () => ({
 }));
 
 const mockUseAuthorized = vi.fn();
+const mockUseTeams = vi.fn().mockReturnValue({ data: [] });
+const mockUseUISettings = vi.fn(() => ({ data: { values: {} } }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => mockUseAuthorized() }));
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: [] }) }));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => mockUseTeams() }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
-  useUISettings: () => ({ data: { values: {} } }),
+  useUISettings: () => mockUseUISettings(),
 }));
 
 const SESSION = { accessToken: "at", userRole: "Admin", userId: "u1", isViewOnly: false };
@@ -23,6 +25,23 @@ const SESSION = { accessToken: "at", userRole: "Admin", userId: "u1", isViewOnly
 const lastProps = () => panelProps.mock.calls.at(-1)?.[0] as { createScope: string };
 
 describe("AutoRoutersTabPanel", () => {
+  it("honors member auto-router opt-in when general model creation is disabled", () => {
+    mockUseAuthorized.mockReturnValue({ ...SESSION, userRole: "Internal User" });
+    mockUseTeams.mockReturnValueOnce({
+      data: [
+        {
+          team_id: "team-1",
+          members_with_roles: [{ user_id: "u1", role: "user" }],
+          team_member_permissions: ["/auto_router/manage"],
+        },
+      ],
+    });
+    mockUseUISettings.mockReturnValueOnce({ data: { values: { disable_model_add_for_internal_users: true } } });
+    render(<AutoRoutersTabPanel />);
+
+    expect(lastProps().createScope).toBe("team-required");
+  });
+
   it("grants an unscoped create to a real proxy admin", () => {
     mockUseAuthorized.mockReturnValue(SESSION);
     render(<AutoRoutersTabPanel />);

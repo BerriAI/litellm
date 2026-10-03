@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { tagInfoCall, tagUpdateCall } from "@/components/networking";
@@ -28,7 +28,7 @@ const tagEditShape = {
   description: z.string().optional(),
   models: z.array(z.string()).optional(),
   max_budget: z.union([z.string(), z.number()]).optional(),
-  budget_duration: z.string().optional(),
+  budget_duration: z.string().nullish(),
 };
 
 const tagEditSchema = z.object(tagEditShape);

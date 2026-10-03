@@ -14,7 +14,7 @@ immediately. ``--update`` ratchets a limit down by the violations fixed relative
 to ``--base``, so the ceilings only ever fall. Base counts are measured with the
 *current* checker, so a rule introduced on this branch is counted at the base too
 and ratchets like every other one. The ratchet runs as a scheduled automation
-against litellm_internal_staging, not on PR branches, so concurrent PRs never
+against the repository's default branch, not on PR branches, so concurrent PRs never
 race to edit the same limit.
 
 The deliberate difference from its sibling: this gate has no headroom anywhere.
@@ -29,20 +29,21 @@ import argparse
 import json
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from types import MappingProxyType
+from types import FrameType, MappingProxyType
 from typing import Final, NamedTuple
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent
 CHECKER: Final = REPO_ROOT / "scripts" / "check_test_quality.py"
 BUDGET_PATH: Final = REPO_ROOT / "test-quality-budget.json"
 TARGET: Final = "tests"
-DEFAULT_BASE: Final = "origin/litellm_internal_staging"
+TERMINATION_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 
 _HUNK: Final = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 _FILE_HEADER: Final = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
@@ -111,22 +112,33 @@ def count_by_rule(violations: Sequence[Violation]) -> Mapping[str, int]:
     return MappingProxyType(dict(Counter(v.code for v in violations)))
 
 
-def base_counts(ref: str) -> Mapping[str, int]:
+def _exit_on_termination(signum: int, _frame: FrameType | None) -> None:
+    raise SystemExit(128 + signum)
+
+
+def _install_termination_handlers() -> None:
+    for termination in TERMINATION_SIGNALS:
+        if signal.getsignal(termination) == signal.SIG_DFL:
+            signal.signal(termination, _exit_on_termination)
+
+
+def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* rule logic rather than
     whatever the checker looked like at that commit."""
+    _install_termination_handlers()
     parent: Final = Path(tempfile.mkdtemp(prefix="tq_base_"))
     worktree: Final = parent / "wt"
     try:
-        _run(["git", "worktree", "add", "--detach", str(worktree), ref])
+        _run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_root)
         (worktree / "scripts").mkdir(parents=True, exist_ok=True)
-        checker: Final = worktree / "scripts" / "check_test_quality.py"
-        shutil.copy(CHECKER, checker)
-        return count_by_rule(_check(worktree, checker))
+        base_checker: Final = worktree / "scripts" / "check_test_quality.py"
+        shutil.copy(checker, base_checker)
+        return count_by_rule(_check(worktree, base_checker))
     finally:
         # Teardown must never raise, or it masks the real error when the body failed.
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            cwd=repo_root, capture_output=True, text=True,
         )
         shutil.rmtree(parent, ignore_errors=True)
 
@@ -227,7 +239,7 @@ def ratcheted_budget(
     })
 
 
-def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
+def cmd_update(base_ref: str) -> None:
     """Ratchet each rule's limit down by the violations this branch fixed."""
     budget: Final = json.loads(BUDGET_PATH.read_text())
     base_point: Final = resolve_base_point(base_ref)
@@ -251,19 +263,20 @@ def cmd_seed() -> None:
 
 def main() -> None:
     parser: Final = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("--update", action="store_true")
     parser.add_argument("--seed", action="store_true")
     args: Final = parser.parse_args()
+    from default_branch import resolve_base_ref
     from gate_slot_lock import held_slot
 
     with held_slot():
         if args.seed:
             cmd_seed()
         elif args.update:
-            cmd_update(args.base)
+            cmd_update(resolve_base_ref(args.base, REPO_ROOT))
         else:
-            cmd_check(args.base)
+            cmd_check(resolve_base_ref(args.base, REPO_ROOT))
 
 
 if __name__ == "__main__":

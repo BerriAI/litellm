@@ -7,6 +7,7 @@ import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
+import { Button } from "@/components/ui/button";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import type { KeyResponse } from "../key_team_helpers/key_list";
@@ -23,11 +24,19 @@ import {
 } from "./log_filter_logic";
 import { useLogDetailRouting } from "./logDetailRouting";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
-import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
+import {
+  defaultLogsTimeRange,
+  type LogsTimeRange,
+  LogsTimeRangePicker,
+  LogsToolbar,
+  LogsToolbarSwitch,
+} from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
-const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
+const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId || log.litellm_call_id === logId;
+const findLogById = (logs: readonly LogEntry[], logId: string): LogEntry | null =>
+  logs.find((log) => log.request_id === logId) ?? logs.find((log) => log.litellm_call_id === logId) ?? null;
 
 interface RequestLogsPanelProps {
   accessToken: string;
@@ -43,10 +52,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
 
-  const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-  const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
-  const [isCustomDate, setIsCustomDate] = useState(false);
-  const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>(DEFAULT_INTERVAL);
+  const [timeRange, setTimeRange] = useState<LogsTimeRange>(defaultLogsTimeRange);
+  const { startTime, endTime, isCustomDate } = timeRange;
 
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
@@ -141,9 +148,9 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         page_size: 1,
         params: { request_id: urlLogId },
       });
-      return response.data.find((log) => log.request_id === urlLogId) ?? null;
+      return findLogById(response.data, urlLogId);
     },
-    enabled: urlLogId !== null && selectedLog?.request_id !== urlLogId,
+    enabled: urlLogId !== null && !(selectedLog !== null && matchesLogId(selectedLog, urlLogId)),
     staleTime: Infinity,
   };
 
@@ -151,8 +158,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const displayLog = useMemo<LogEntry | null>(() => {
     if (urlLogId === null) return null;
-    if (selectedLog?.request_id === urlLogId) return selectedLog;
-    return filteredLogs.data.find((log) => log.request_id === urlLogId) ?? urlLog ?? null;
+    if (selectedLog !== null && matchesLogId(selectedLog, urlLogId)) return selectedLog;
+    return findLogById(filteredLogs.data, urlLogId) ?? urlLog ?? null;
   }, [urlLogId, selectedLog, filteredLogs.data, urlLog]);
 
   const displaySessionId = useMemo<string | null>(() => {
@@ -209,15 +216,14 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         setPagination({ ...requested, pageIndex: 0 });
         return;
       }
-      if (requested.pageIndex <= pagination.pageIndex) {
+      if (requested.pageIndex !== pagination.pageIndex + 1) {
         setPagination(requested);
         return;
       }
       const nextCursor = filteredLogs.next_session_cursor;
       if (!nextCursor || logsQuery.isPlaceholderData) return;
-      const nextPageIndex = pagination.pageIndex + 1;
-      setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
-      setPagination({ ...requested, pageIndex: nextPageIndex });
+      setSessionCursors((previous) => ({ ...previous, [requested.pageIndex]: nextCursor }));
+      setPagination(requested);
     },
     [usesSessionCursor, pagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
   );
@@ -230,12 +236,17 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     [resetToFirstPage],
   );
 
+  const handleTimeRangeChange = useCallback(
+    (value: LogsTimeRange) => {
+      setTimeRange(value);
+      resetToFirstPage();
+    },
+    [resetToFirstPage],
+  );
+
   const handleResetFilters = useCallback(() => {
     setColumnFilters([]);
-    setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-    setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
-    setIsCustomDate(false);
-    setSelectedTimeInterval(DEFAULT_INTERVAL);
+    setTimeRange(defaultLogsTimeRange());
     resetToFirstPage();
   }, [resetToFirstPage]);
 
@@ -286,12 +297,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   return (
     <AutoRouterModelGroupsProvider>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Request Logs</h1>
-      </div>
-
-      {isLiveTail && pagination.pageIndex === 0 && <LiveTailBanner onStop={() => setIsLiveTail(false)} />}
-
       <RequestLogsTable
         data={rows}
         rowCount={rowCount}
@@ -312,22 +317,23 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         teams={allTeams ?? []}
         logsWindow={logsWindow}
         toolbarChildren={
-          <LogsTableToolbar
-            startTime={startTime}
-            onStartTimeChange={setStartTime}
-            endTime={endTime}
-            onEndTimeChange={setEndTime}
-            isCustomDate={isCustomDate}
-            onIsCustomDateChange={setIsCustomDate}
-            selectedTimeInterval={selectedTimeInterval}
-            onSelectedTimeIntervalChange={setSelectedTimeInterval}
-            isLiveTail={isLiveTail}
-            onIsLiveTailChange={setIsLiveTail}
-            excludeInternalHealthChecks={excludeInternalHealthChecks}
-            onExcludeInternalHealthChecksChange={handleExcludeInternalHealthChecksChange}
-            onResetToFirstPage={resetToFirstPage}
-            onResetFilters={handleResetFilters}
-          />
+          <LogsToolbar>
+            <LogsTimeRangePicker value={timeRange} onValueChange={handleTimeRangeChange} />
+            <LogsToolbarSwitch label="Live Tail" checked={isLiveTail} onCheckedChange={setIsLiveTail} />
+            {isLiveTail && pagination.pageIndex === 0 && (
+              <span role="status" className="whitespace-nowrap text-xs text-muted-foreground">
+                Refreshing every 15s
+              </span>
+            )}
+            <LogsToolbarSwitch
+              label="Hide Health Checks"
+              checked={excludeInternalHealthChecks}
+              onCheckedChange={handleExcludeInternalHealthChecksChange}
+            />
+            <Button variant="outline" size="sm" onClick={handleResetFilters}>
+              Reset Filters
+            </Button>
+          </LogsToolbar>
         }
       />
 

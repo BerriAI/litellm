@@ -295,7 +295,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <UsersTable
       data={users}
       rowCount={totalUserCount}
-      isLoading={userListQuery.isLoading}
+      isLoading={userListQuery.isLoading || userListQuery.isPlaceholderData}
       possibleUIRoles={possibleUIRoles}
       teams={teams}
       sorting={sorting}

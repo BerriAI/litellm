@@ -134,7 +134,7 @@ async def test_create_mcp_server_direct():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
         ) as mock_get_prisma,
         mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server_if_identifier_free",
             new_callable=mock.AsyncMock,
         ) as mock_create,
         mock.patch(
@@ -157,6 +157,7 @@ async def test_create_mcp_server_direct():
         # Mock server manager
         mock_manager.add_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
 
         # Set up test data
         server_id = str(uuid.uuid4())
@@ -345,7 +346,7 @@ async def test_create_mcp_server_invalid_alias():
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server"
         ) as mock_get_server,
         mock.patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server"
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server_if_identifier_free"
         ) as mock_create,
     ):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (

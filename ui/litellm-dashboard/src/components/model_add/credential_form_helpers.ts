@@ -1,5 +1,3 @@
-import { Providers } from "../provider_info_helpers";
-
 interface CredentialFormAdapter {
   getFieldValue: (field: string) => unknown;
   resetFields: () => void;
@@ -25,8 +23,8 @@ interface CredentialFormAdapter {
  */
 export function resetCredentialFormOnProviderChange(
   form: CredentialFormAdapter,
-  newProvider: Providers,
-  setSelectedProvider: (p: Providers) => void,
+  newProvider: string | null,
+  setSelectedProvider: (p: string | null) => void,
 ): void {
   const preservedName = form.getFieldValue("credential_name");
   form.resetFields();

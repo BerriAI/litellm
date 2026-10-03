@@ -9,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import ClassVar, Final
 
+from pydantic import TypeAdapter
+
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -16,6 +18,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from ..common_utils import resolve_opencode_api_key, with_opencode_session_header
+
+_HEADERS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class OpenCodeChatConfig(OpenAILikeChatConfig):
@@ -44,15 +48,15 @@ class OpenCodeChatConfig(OpenAILikeChatConfig):
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: return type is fixed by BaseConfig.validate_environment, whose callers mutate it
         base_headers: Final[Mapping[str, object]] = super().validate_environment(
-            headers=dict(headers),  # mutable-ok: BaseConfig.validate_environment only accepts mutable dicts
+            headers=dict(headers),
             model=model,
-            messages=list(messages),  # mutable-ok: BaseConfig.validate_environment only accepts a mutable list
-            optional_params=dict(optional_params),  # mutable-ok: as above
-            litellm_params=dict(litellm_params),  # mutable-ok: as above
+            messages=list(messages),
+            optional_params=dict(optional_params),
+            litellm_params=dict(litellm_params),
             api_key=api_key,
             api_base=api_base,
         )
-        return with_opencode_session_header(base_headers, litellm_params)
+        return with_opencode_session_header(_HEADERS_ADAPTER.validate_python(base_headers), litellm_params)
 
 
 class OpenCodeZenChatConfig(OpenCodeChatConfig):
@@ -108,15 +112,15 @@ class OpenCodeMessagesChatConfig(AnthropicConfig):
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: return type is fixed by BaseConfig.validate_environment
         base_headers: Final[Mapping[str, object]] = super().validate_environment(
-            headers=dict(headers),  # mutable-ok: AnthropicConfig.validate_environment needs a mutable dict
+            headers=dict(headers),
             model=model,
-            messages=list(messages),  # mutable-ok: as above
-            optional_params=dict(optional_params),  # mutable-ok: as above
-            litellm_params=dict(litellm_params),  # mutable-ok: as above
+            messages=list(messages),
+            optional_params=dict(optional_params),
+            litellm_params=dict(litellm_params),
             api_key=resolve_opencode_api_key(api_key),
             api_base=api_base,
         )
-        return with_opencode_session_header(base_headers, litellm_params)
+        return with_opencode_session_header(_HEADERS_ADAPTER.validate_python(base_headers), litellm_params)
 
 
 class OpenCodeZenMessagesChatConfig(OpenCodeMessagesChatConfig):
@@ -178,11 +182,11 @@ class OpenCodeZenGeminiChatConfig(GoogleAIStudioGeminiConfig):
 
         cached_content: Final = optional_params.get("cached_content")
         return _transform_request_body(
-            messages=list(messages),  # mutable-ok: the Gemini body builder takes a mutable list
+            messages=list(messages),
             model=model,
-            optional_params=dict(optional_params),  # mutable-ok: as above
+            optional_params=dict(optional_params),
             custom_llm_provider="gemini",
-            litellm_params=dict(litellm_params),  # mutable-ok: as above
+            litellm_params=dict(litellm_params),
             cached_content=cached_content if isinstance(cached_content, str) else None,
         )
 
@@ -201,11 +205,11 @@ class OpenCodeZenGeminiChatConfig(GoogleAIStudioGeminiConfig):
         an `x-api-key` and a `?key=` query parameter all come back as `Missing API key`.
         """
         resolved_key: Final = resolve_opencode_api_key(api_key if isinstance(api_key, str) else None)
-        base_headers: Final[Mapping[str, object]] = dict(  # mutable-ok: validate_environment must return a dict
+        base_headers: Final[Mapping[str, object]] = dict(
             chain(
                 (("Content-Type", "application/json"),),
                 headers.items() if headers else (),
                 (("x-goog-api-key", resolved_key),),
             )
         )
-        return with_opencode_session_header(base_headers, litellm_params)
+        return with_opencode_session_header(_HEADERS_ADAPTER.validate_python(base_headers), litellm_params)
