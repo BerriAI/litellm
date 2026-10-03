@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol
 
 from fastapi import APIRouter, Depends, Request
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
@@ -109,8 +109,10 @@ def _row_with_health(row: HubRow, health: Mapping[str, HealthSnapshot]) -> HubRo
     match row:
         case PassThroughRow():
             return row
-        case ModelGroupRow(info=info):
-            return ModelGroupRow(info=_with_health(info, health.get(info.model_group)))
+        case ModelGroupRow():
+            return ModelGroupRow(info=_with_health(row.info, health.get(row.info.model_group)))
+        case _:
+            assert_never(row)
 
 
 FEATURE_PREFIX: Final = "supports_"

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -255,19 +255,21 @@ async def public_model_hub():
 
 def _with_legacy_health(row: HubRow, health_checks_map: Mapping[str, Mapping[str, object]]) -> ModelGroupInfoProxy:
     match row:
-        case PassThroughRow(info=info):
-            return info
-        case ModelGroupRow(info=info):
-            health_info: Final = health_checks_map.get(info.model_group)
+        case PassThroughRow():
+            return row.info
+        case ModelGroupRow():
+            health_info: Final = health_checks_map.get(row.info.model_group)
             if not health_info:
-                return info
-            return info.model_copy(
+                return row.info
+            return row.info.model_copy(
                 update={
                     "health_status": health_info.get("status"),
                     "health_response_time": health_info.get("response_time_ms"),
                     "health_checked_at": health_info.get("checked_at"),
                 }
             )
+        case _:
+            assert_never(row)
 
 
 @router.get(
