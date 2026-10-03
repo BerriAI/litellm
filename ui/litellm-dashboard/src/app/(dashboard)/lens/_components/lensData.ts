@@ -108,6 +108,15 @@ export function analysisProgress(job: Job) {
         : `${investigated} patterns checked against the original activity`,
     };
   }
+  if (!selected) {
+    return {
+      step: -1,
+      title: "Preparing activity",
+      done: 0,
+      total: 0,
+      detail: "Loading the runs selected for this investigation.",
+    };
+  }
   return {
     step: 0,
     title: "Reviewing activity",

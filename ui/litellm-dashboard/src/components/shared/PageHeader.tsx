@@ -14,11 +14,12 @@ interface PageHeaderProps {
   subtitle: React.ReactNode;
   icon: React.ReactNode;
   primaryAction?: React.ReactNode;
+  titleAction?: React.ReactNode;
   tabs?: React.ReactNode | ((slots: EmbeddedTabsSlots) => React.ReactNode);
   utilities?: React.ReactNode;
 }
 
-export function PageHeader({ title, subtitle, icon, primaryAction, tabs, utilities }: PageHeaderProps) {
+export function PageHeader({ title, subtitle, icon, primaryAction, titleAction, tabs, utilities }: PageHeaderProps) {
   const leadingControls =
     primaryAction == null ? null : (
       <div className="flex h-9 items-center">
@@ -31,14 +32,17 @@ export function PageHeader({ title, subtitle, icon, primaryAction, tabs, utiliti
 
   return (
     <div>
-      <div className="flex items-center gap-2.5">
-        <span
-          aria-hidden="true"
-          className="flex size-5 flex-none items-center justify-center text-foreground [&_svg]:size-5 [&_svg]:stroke-[1.75]"
-        >
-          {icon}
-        </span>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <span
+            aria-hidden="true"
+            className="flex size-5 flex-none items-center justify-center text-foreground [&_svg]:size-5 [&_svg]:stroke-[1.75]"
+          >
+            {icon}
+          </span>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
+        </div>
+        {titleAction}
       </div>
       <p className="mt-1.5 text-sm text-muted-foreground">{subtitle}</p>
 

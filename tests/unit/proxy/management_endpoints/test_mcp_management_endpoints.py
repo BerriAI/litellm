@@ -11059,3 +11059,89 @@ class TestMCPServerResolutionCharacterization:
         health_check.assert_not_awaited()
         effects.assert_no_writes()
         assert httpx_mock.calls.call_count == 0
+
+
+@pytest.mark.parametrize("explicit_transport", [False, True])
+def test_modern_sse_create_is_rejected_before_persistence(explicit_transport: bool) -> None:
+    with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
+        NewMCPServerRequest.model_validate({
+            "url": "https://upstream.example/sse",
+            "mcp_info": {"protocol_version": "2026-07-28"},
+            **({"transport": "sse"} if explicit_transport else {}),
+        })
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+def test_modern_sse_runtime_configuration_is_rejected(metadata: bool) -> None:
+    with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
+        MCPServer.model_validate({
+            "server_id": "modern", "name": "modern", "transport": "sse",
+            **({"mcp_info": {"protocol_version": "2026-07-28"}} if metadata else {"protocol_version": "2026-07-28"}),
+        })
+
+
+@pytest.mark.parametrize("transport,version", [("http", "2026-07-28"), ("stdio", "2026-07-28"), ("sse", "2025-11-25"), ("sse", "auto")])
+def test_supported_protocol_transport_configurations_remain_valid(transport: str, version: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+    payload: Final = NewMCPServerRequest.model_validate({
+        "transport": transport, "url": "https://upstream.example/mcp", "command": "python", "args": ["peer.py"],
+        "mcp_info": {"protocol_version": version},
+    })
+    assert payload.transport == transport
+    assert payload.mcp_info == {"protocol_version": version}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_only", [False, True])
+async def test_modern_sse_partial_update_rejected_without_writes(protocol_only: bool) -> None:
+    old_record: Final = LiteLLM_MCPServerTable(
+        server_id="srv-1", transport="sse" if protocol_only else "http",
+        mcp_info={"protocol_version": "auto" if protocol_only else "2026-07-28"},
+    )
+    payload: Final = UpdateMCPServerRequest.model_validate({
+        "server_id": "srv-1",
+        **({"mcp_info": {"protocol_version": "2026-07-28"}} if protocol_only else {"transport": "sse", "url": "https://upstream.example/sse"}),
+    })
+    update_mock: Final = AsyncMock(side_effect=HTTPException(status_code=418, detail="Unexpected persistence"))
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(old_record, update_mock)
+    with p1, p2, p3, p4, p5:
+        with pytest.raises(HTTPException) as error:
+            await mgmt_endpoints.edit_mcp_server(payload=payload, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+    assert error.value.status_code == 400
+    assert "Modern MCP requires HTTP or stdio" in str(error.value.detail)
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_protocol_partial_update_fails_closed_when_stored_configuration_is_unreadable() -> None:
+    update_mock: Final = AsyncMock(side_effect=HTTPException(status_code=418, detail="Unexpected persistence"))
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(RuntimeError("db unavailable"), update_mock)
+    with p1, p2, p3, p4, p5:
+        with pytest.raises(HTTPException) as error:
+            await mgmt_endpoints.edit_mcp_server(
+                payload=UpdateMCPServerRequest(server_id="srv-1", mcp_info={"protocol_version": "2026-07-28"}),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+    assert error.value.status_code == 503
+    update_mock.assert_not_awaited()
+
+
+def test_modern_sse_complete_update_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
+        UpdateMCPServerRequest(
+            server_id="server", transport=MCPTransport.sse, url="https://upstream.example/sse",
+            mcp_info={"protocol_version": "2026-07-28"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_protocol_update_on_missing_server_preserves_not_found() -> None:
+    update_mock: Final = AsyncMock(return_value=None)
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(None, update_mock)
+    with p1, p2, p3, p4, p5:
+        with pytest.raises(HTTPException) as error:
+            await mgmt_endpoints.edit_mcp_server(
+                payload=UpdateMCPServerRequest(server_id="missing", mcp_info={"protocol_version": "2026-07-28"}),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+    assert error.value.status_code == 404

@@ -34,31 +34,34 @@ interface TimeRangeControlsProps {
   rangeHours: number;
   onRangeHoursChange: (hours: number) => void;
   live: boolean;
+  showLive?: boolean;
   onLiveChange: (live: boolean) => void;
-  zoomed: boolean;
-  onResetZoom: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
 }
 
-/** Joined control group: reset zoom, the actual time range (opens presets), and Live. */
+/** Joined control group: refresh, the actual time range (opens presets), and Live. */
 export function TimeRangeControls({
   range,
   rangeHours,
   onRangeHoursChange,
   live,
+  showLive = true,
   onLiveChange,
-  zoomed,
-  onResetZoom,
+  onRefresh,
+  refreshing,
 }: TimeRangeControlsProps) {
   return (
     <div className="flex items-center gap-1.5">
       <button
         type="button"
-        onClick={onResetZoom}
-        disabled={!zoomed}
-        aria-label="Reset zoom"
-        className="inline-flex size-7 items-center justify-center rounded-md border border-border text-info hover:bg-info/10 disabled:text-muted-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+        onClick={onRefresh}
+        aria-label="Refresh"
+        title="Refresh"
+        aria-busy={refreshing}
+        className="inline-flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60"
       >
-        <RotateCcw className="size-3.5" />
+        <RotateCcw className={cn("size-3.5", refreshing && "animate-spin")} />
       </button>
       <div className="flex items-center divide-x divide-border overflow-hidden rounded-md border border-border bg-card">
         <DropdownMenu>
@@ -83,18 +86,20 @@ export function TimeRangeControls({
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <button
-          type="button"
-          aria-pressed={live}
-          onClick={() => onLiveChange(!live)}
-          className={cn(
-            SEGMENT,
-            live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-          Live
-        </button>
+        {showLive && (
+          <button
+            type="button"
+            aria-pressed={live}
+            onClick={() => onLiveChange(!live)}
+            className={cn(
+              SEGMENT,
+              live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+            Live
+          </button>
+        )}
       </div>
     </div>
   );
