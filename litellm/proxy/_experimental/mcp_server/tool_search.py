@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,16 +57,21 @@ _MAX_VALIDATION_CHARACTERS: Final = 1_048_576
 _VALIDATION_TIMEOUT_SECONDS: Final = 30
 
 
-def _validation_nodes(value: JsonValue | Mapping[str, JsonValue], depth: int = 0) -> Iterator[tuple[int, int]]:
-    yield depth, len(value) if isinstance(value, str) else 0
-    if depth > _MAX_VALIDATION_DEPTH:
-        return
-    if isinstance(value, Mapping):
-        for item in chain(value.keys(), value.values()):
-            yield from _validation_nodes(item, depth + 1)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _validation_nodes(item, depth + 1)
+def _validation_nodes(value: JsonValue | Mapping[str, JsonValue]) -> Iterator[tuple[int, int]]:
+    pending: Final[deque[Iterator[JsonValue | Mapping[str, JsonValue]]]] = deque((iter((value,)),))
+    while pending:
+        try:
+            node, depth = next(pending[-1]), len(pending) - 1
+        except StopIteration:
+            pending.pop()
+            continue
+        yield depth, len(node) if isinstance(node, str) else 0
+        if depth > _MAX_VALIDATION_DEPTH:
+            continue
+        if isinstance(node, Mapping):
+            pending.append(chain(node.keys(), node.values()))
+        elif isinstance(node, list):
+            pending.append(iter(node))
 
 
 def _validation_limit_error(schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]) -> str | None:

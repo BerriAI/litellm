@@ -254,6 +254,7 @@ proxy-dev = [
     "a2a-sdk==1.1.0",
 ]
 ci = [
+    "psutil==7.2.2",
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).

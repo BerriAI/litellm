@@ -23,6 +23,7 @@ import uvicorn
 import yaml
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
@@ -381,7 +382,7 @@ def proxy_server_url(_proxy_server: ProxyRig, setup_and_teardown: None) -> str:
 
 @asynccontextmanager
 async def _http_streams(url: str, headers: dict[str, str]):
-    async with httpx2.AsyncClient(headers=headers) as http_client:
+    async with create_mcp_http_client(headers=headers) as http_client:
         async with streamable_http_client(url, http_client=http_client) as streams:
             yield streams
 

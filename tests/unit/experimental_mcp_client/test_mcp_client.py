@@ -3204,7 +3204,7 @@ async def test_modern_call_emits_listed_argument_headers(paginated: bool, valid_
             name="quote", arguments={"workspace": caller, "count": 3, "preview": True}
         )
         if not valid_annotation:
-            with pytest.raises(MCPError, match="valid upstream catalog"):
+            with pytest.raises(MCPError, match="schema is unavailable"):
                 await client.call_tool(params, raise_on_error=True)
             return
         result: Final = await client.call_tool(params, raise_on_error=True)
@@ -3213,6 +3213,163 @@ async def test_modern_call_emits_listed_argument_headers(paginated: bool, valid_
 
     await asyncio.gather(call_as("Engineering"), call_as("Finance"))
     assert calls.qsize() == (2 if valid_annotation else 0)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ("page_cap", "repeated_cursor"))
+@pytest.mark.parametrize("schema_available", (False, True))
+async def test_modern_call_requires_schema_from_bounded_listing(
+    stop: str, schema_available: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from queue import SimpleQueue
+
+    from mcp.types import DiscoverResult, ToolsCapability
+
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
+    methods: Final[SimpleQueue[str]] = SimpleQueue()
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        methods.put(payload.method)
+        if payload.method == "server/discover":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": DiscoverResult(
+                        supported_versions=["2026-07-28"], capabilities=ServerCapabilities(tools=ToolsCapability())
+                    ).model_dump(by_alias=True, exclude_none=True),
+                },
+            )
+        if payload.method == "tools/list":
+            assert payload.params is not None
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                        "nextCursor": "loop"
+                        if stop == "repeated_cursor"
+                        else str(int(payload.params.get("cursor", "0")) + 1),
+                        "tools": [
+                            {
+                                "name": "quote",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {"workspace": {"type": "string", "x-mcp-header": "Workspace"}},
+                                },
+                            }
+                        ]
+                        if schema_available
+                        else [],
+                    },
+                },
+            )
+        assert payload.method == "tools/call"
+        assert schema_available, "An unavailable schema must not permit dispatch without required headers"
+        assert request.headers["mcp-param-workspace"] == "engineering"
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {"resultType": "complete", "content": [{"type": "text", "text": "quoted"}], "isError": False},
+            },
+        )
+
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", protocol_version="2026-07-28")
+    params: Final = CallToolRequestParams(name="quote", arguments={"workspace": "engineering"})
+    if schema_available:
+        result: Final = await client.call_tool(params, raise_on_error=True)
+        assert not result.is_error
+        assert result.content[0].text == "quoted"
+    else:
+        with pytest.raises(MCPError, match="schema is unavailable") as error:
+            await client.call_tool(params, raise_on_error=True)
+        assert error.value.code == -32603
+    observed: Final = tuple(methods.get_nowait() for _ in range(methods.qsize()))
+    assert observed.count("tools/list") == 2
+    assert observed.count("tools/call") == int(schema_available)
+
+
+def test_modern_call_uses_discovery_deadline_for_multiple_pages() -> None:
+    from mcp.types import DiscoverResult, ToolsCapability
+
+    loop: Final = _AutojumpClockLoop()
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        if payload.method == "server/discover":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": DiscoverResult(
+                        supported_versions=["2026-07-28"], capabilities=ServerCapabilities(tools=ToolsCapability())
+                    ).model_dump(by_alias=True, exclude_none=True),
+                },
+            )
+        if payload.method == "tools/list":
+            await asyncio.sleep(0.06)
+            assert payload.params is not None
+            page: Final = (
+                {"tools": [], "nextCursor": "second"}
+                if "cursor" not in payload.params
+                else {
+                    "tools": [
+                        {
+                            "name": "quote",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {"workspace": {"type": "string", "x-mcp-header": "Workspace"}},
+                            },
+                        }
+                    ]
+                }
+            )
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {"resultType": "complete", "cacheScope": "private", "ttlMs": 0, **page},
+                },
+            )
+        assert payload.method == "tools/call"
+        assert request.headers["mcp-param-workspace"] == "engineering"
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {"resultType": "complete", "content": [{"type": "text", "text": "quoted"}], "isError": False},
+            },
+        )
+
+    async def run() -> None:
+        client: Final = _MockTransportClient(
+            respond, server_url="https://example.com/mcp", protocol_version="2026-07-28", timeout=0.1
+        )
+        assert [tool.name for tool in await client.list_tools(raise_on_error=True)] == ["quote"]
+        result: Final = await client.call_tool(
+            CallToolRequestParams(name="quote", arguments={"workspace": "engineering"}), raise_on_error=True
+        )
+        assert result.is_error is False
+        assert result.content[0].text == "quoted"
+
+    try:
+        loop.run_until_complete(run())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
 
 @pytest.mark.asyncio
 async def test_cancelled_modern_catalog_load_prevents_tool_execution() -> None:
