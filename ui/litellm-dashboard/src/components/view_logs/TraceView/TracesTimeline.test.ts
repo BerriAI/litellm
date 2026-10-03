@@ -35,6 +35,12 @@ describe("bucketRuns", () => {
     expect(buckets[1].runs).toBe(1);
   });
 
+  it("colors a run with several agents by every one of them so filtering to any agent keeps its color", () => {
+    const multi = { ...run(HOUR), agent_names: ["billing", "support"] } as TraceSummary;
+    const single = { ...run(HOUR + 1), agent_names: ["research"] } as TraceSummary;
+    expect(bucketRuns([multi, single], range, 10)[1].agents).toEqual(["billing", "support", "research"]);
+  });
+
   it("counts runs with any errors as failed", () => {
     const buckets = bucketRuns([run(HOUR, 3), run(HOUR + 1), run(HOUR + 2, 1), run(5 * HOUR)], range, 10);
     expect(buckets[1]).toMatchObject({ runs: 3, failed: 2 });
