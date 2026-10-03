@@ -1,3 +1,4 @@
+pub mod guide;
 pub mod named;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::Display, strum::AsRefStr)]
@@ -5,6 +6,7 @@ pub mod named;
 pub enum ReadQuery {
     ListTraces,
     TraceSpans,
+    TracePageSpans,
     TraceIdentity,
     SpanDetail,
     SpanError,

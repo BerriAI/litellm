@@ -211,7 +211,7 @@ def _install_shim(directory: Path, stock: Mapping[str, JsonValue]) -> tuple[Path
 
 def _run_lite_codex(proxy: Gateway, key: str, environment: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-c", "from litellm.proxy.client.cli import cli; cli()", "codex", "--shim-marker"],
+        [sys.executable, "-I", "-c", "from litellm.proxy.client.cli import cli; cli()", "codex", "--shim-marker"],
         env={**environment, "LITELLM_PROXY_URL": str(proxy.client.base_url).rstrip("/"), "LITELLM_PROXY_API_KEY": key},
         stdin=subprocess.DEVNULL,
         capture_output=True,

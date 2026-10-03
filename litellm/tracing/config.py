@@ -5,7 +5,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm.constants import DEFAULT_AGENT_TRACING_RETENTION_DAYS, DEFAULT_CLICKHOUSE_DATABASE
-from litellm.rust_bridge.traces import TraceStorageConfig
+from litellm.rust_bridge.trace.storage import TraceStorageConfig
 
 STORE_SETTINGS: Final = TypeAdapter(dict[str, object])
 

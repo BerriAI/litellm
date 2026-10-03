@@ -1,5 +1,5 @@
 "use client";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
+import { useTracesApi } from "@/components/lens/services";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { useState } from "react";
@@ -8,7 +8,6 @@ import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 
-import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../networking";
 import { type KeyValue, KeyValueRows, objectEntries } from "./KeyValueRows";
 import { Card, MessageCard, Section, ToolResultCard } from "./MessageCard";
 import type { ErrorSource } from "./traceTree";
@@ -17,9 +16,9 @@ import { errorSource, parseJson, parseMessages, prettyPayload } from "./traceUti
 
 const ERROR_SOURCE_LABEL: Record<ErrorSource, string> = { tool: "Tool", model: "Model", litellm: "LiteLLM" };
 const TRACEBACK_MARKER = "Traceback (most recent call last):";
-const STATUS_TEXT = "px-5 py-2 text-[13px] tracking-[-0.26px] text-trace-duration";
+const STATUS_TEXT = "px-5 py-2 text-[13px] tracking-[-0.26px] text-muted-foreground";
 const PAYLOAD_PRE =
-  "font-mono text-[13px] leading-[1.5] tracking-[-0.26px] break-words whitespace-pre-wrap text-trace-text";
+  "font-mono text-[13px] leading-[1.5] tracking-[-0.26px] break-words whitespace-pre-wrap text-foreground";
 
 /** Exporters record `repr(exc)` + traceback with no separator; keep the exception line. */
 export const errorHeadline = (error: string): string =>
@@ -30,15 +29,10 @@ const errorReason = (headline: string): string => /^([A-Za-z_][\w.]*)\(/.exec(he
 
 /** Shared lazy fetch of one span's full input / output / attributes. */
 export function useSpanDetail(accessToken: string, traceId: string, spanId: string | null, traceRef?: string) {
-  const demo = useLensDemo();
+  const traces = useTracesApi(accessToken);
   const queryOptions: UseQueryOptions<SpanDetail, Error> = {
     queryKey: ["agentTraceSpan", traceId, traceRef, spanId, accessToken],
-    queryFn: () =>
-      demo
-        ? demo.client.get<SpanDetail>(
-            `/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId as string)}`,
-          )
-        : agentTraceSpanCall(accessToken, traceId, spanId as string, traceRef),
+    queryFn: () => traces.span(traceId, spanId as string, traceRef),
     enabled: spanId !== null,
     staleTime: Infinity,
   };
@@ -52,7 +46,7 @@ export function ErrorBlock({ span }: { span: Span }) {
   return (
     <section
       aria-label="Error"
-      className="mx-5 mb-2 rounded-[4px] border-[0.67px] border-destructive/40 bg-destructive/5 px-3 py-2.5"
+      className="mx-3 mb-3 rounded-[4px] border-[0.67px] border-destructive/40 bg-destructive/5 px-3 py-2.5"
     >
       <div className="flex items-center gap-2 text-[13px] leading-[1.2] font-medium tracking-[-0.26px] text-destructive">
         <AlertTriangle className="size-3.5" />
@@ -153,17 +147,12 @@ interface DetailContentProps {
 }
 
 function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
-  const demo = useLensDemo();
+  const traces = useTracesApi(accessToken);
   const [opened, setOpened] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
   const queryOptions: UseQueryOptions<SpanErrorPage, Error> = {
     queryKey: ["agentTraceSpanError", traceId, traceRef, span.span_id, accessToken, cursor],
-    queryFn: () =>
-      demo
-        ? demo.client.get<SpanErrorPage>(
-            `/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(span.span_id)}/error`,
-          )
-        : agentTraceSpanErrorCall(accessToken, traceId, span.span_id, { traceRef, cursor }),
+    queryFn: () => traces.spanError(traceId, span.span_id, { traceRef, cursor }),
     enabled: opened,
     staleTime: Infinity,
     gcTime: 0,
@@ -171,7 +160,7 @@ function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailConte
   };
   const query = useQuery(queryOptions);
   return (
-    <section aria-label="Stored diagnostic" className="mx-5 mb-2 space-y-2">
+    <section aria-label="Stored diagnostic" className="mx-3 mb-3 space-y-2">
       {span.error_truncated && <p className="text-xs text-muted-foreground">Error preview truncated</p>}
       {!opened && (
         <Button variant="outline" size="sm" onClick={() => setOpened(true)}>
@@ -215,6 +204,10 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
   const detailQuery = useSpanDetail(accessToken, traceId, span.span_id, traceRef);
   const detail = detailQuery.data;
   const empty = detail && !detail.input && !detail.output;
+  const inputMessages =
+    detail?.input_ui?.kind === "messages"
+      ? detail.input_ui.messages.length
+      : parseMessages(detail?.input ?? "")?.length;
 
   return (
     <div className="flex flex-col px-2 pt-1 pb-4">
@@ -231,7 +224,12 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
       {detailQuery.isLoading && <div className={STATUS_TEXT}>Loading span…</div>}
       {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
       {detail?.input ? (
-        <Section title="Input">
+        <Section
+          key={`${span.span_id}:${inputMessages}`}
+          title="Input"
+          count={inputMessages}
+          defaultOpen={!inputMessages || inputMessages <= 8}
+        >
           <SpanPayload value={detail.input} content={detail.input_ui} span={span} role="input" />
         </Section>
       ) : null}
@@ -241,7 +239,7 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
         </Section>
       ) : null}
       {empty && span.status !== "error" && (
-        <div className="py-12 text-center text-[13px] tracking-[-0.26px] text-trace-duration">
+        <div className="py-12 text-center text-[13px] tracking-[-0.26px] text-muted-foreground">
           No content recorded for this span.
         </div>
       )}
