@@ -2419,6 +2419,16 @@ async def add_new_model(
             )
 
         ## Auth check
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import model_creation_disabled_for_internal_users
+
+        if (
+            user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+            and await model_creation_disabled_for_internal_users(prisma_client)
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Model creation is disabled for internal users by disable_model_add_for_internal_users.",
+            )
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
