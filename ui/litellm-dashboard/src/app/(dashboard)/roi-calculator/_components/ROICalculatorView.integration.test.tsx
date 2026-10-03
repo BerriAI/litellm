@@ -291,7 +291,7 @@ describe("ROICalculatorView", () => {
       available_models: ["estimator", "fast-estimator"],
       estimator_models: [
         { model_name: "estimator", provider_models: ["custom-model"] },
-        { model_name: "fast-estimator", provider_models: ["openai/gpt-6-luna"], recommendation: "GPT-6 Luna" },
+        { model_name: "fast-estimator", provider_models: ["openai/gpt-6-luna"] },
       ],
     };
     vi.mocked(apiClient.get).mockImplementation((path: string) => {

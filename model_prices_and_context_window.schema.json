@@ -892,10 +892,6 @@
           "minimum": 1,
           "description": "Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%)."
         },
-        "roi_recommendation": {
-          "type": "string",
-          "description": "Display name when recommended for ROI effort estimation."
-        },
         "rpm": {
           "type": "integer",
           "minimum": 0,

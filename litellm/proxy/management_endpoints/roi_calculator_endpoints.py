@@ -181,43 +181,19 @@ def _router_estimator_models(model_group: str) -> tuple[EstimatorModel, ...]:
     return _estimator_models_from_deployments(deployments)
 
 
-def _estimator_catalog_entry(
-    deployment: _RouterEstimatorDeployment,
-) -> tuple[str, _RouterEstimatorModelInfo] | None:
+def _is_estimator_deployment(deployment: _RouterEstimatorDeployment) -> bool:
     from litellm import model_cost
 
     underlying: Final = _estimator_model(deployment)
     if underlying is None:
-        return None
+        return False
     model, provider = underlying
     candidates: Final = (f"{provider}/{model}", model, model.split("/", 1)[-1])
-    known: Final = next((name for name in candidates if name in model_cost), None)
-    return (known, _RouterEstimatorModelInfo.model_validate(model_cost[known])) if known else None
-
-
-def _is_estimator_deployment(deployment: _RouterEstimatorDeployment) -> bool:
-    if _estimator_model(deployment) is None:
-        return False
-    entry: Final = _estimator_catalog_entry(deployment)
-    mode: Final = (deployment.model_info.mode if deployment.model_info else None) or (entry[1].mode if entry else None)
+    known_modes: Final = tuple(
+        _RouterEstimatorModelInfo.model_validate(model_cost[name]).mode for name in candidates if name in model_cost
+    )
+    mode: Final = (deployment.model_info.mode if deployment.model_info else None) or next(iter(known_modes), None)
     return mode in (None, "chat")
-
-
-def _catalog_recommendation(deployment: _RouterEstimatorDeployment) -> str | None:
-    from litellm import get_model_info
-
-    entry: Final = _estimator_catalog_entry(deployment)
-    if entry is None:
-        return None
-    try:
-        return get_model_info(entry[0]).get("roi_recommendation")
-    except Exception:
-        return None
-
-
-def _group_recommendation(group: Sequence[_RouterEstimatorDeployment]) -> str | None:
-    recommendations: Final = frozenset(_catalog_recommendation(item) for item in group)
-    return next(iter(recommendations)) if len(recommendations) == 1 else None
 
 
 def _estimator_choices_from_deployments(deployments: Sequence[object]) -> tuple[ROIEstimatorModel, ...]:
@@ -230,7 +206,6 @@ def _estimator_choices_from_deployments(deployments: Sequence[object]) -> tuple[
         ROIEstimatorModel(
             model_name=group[0].model_name,
             provider_models=tuple(sorted(frozenset(model[0] for item in group if (model := _estimator_model(item))))),
-            recommendation=_group_recommendation(group),
         )
         for group in groups
         if all(_is_estimator_deployment(item) for item in group)

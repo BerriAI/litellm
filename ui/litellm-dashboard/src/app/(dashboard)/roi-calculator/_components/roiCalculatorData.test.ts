@@ -125,7 +125,7 @@ it("recommends the real Luna model and preserves its gateway name for requests",
       available_models: ["general", "fast-estimator"],
       estimator_models: [
         { model_name: "general", provider_models: ["anthropic/claude-haiku"] },
-        { model_name: "fast-estimator", provider_models: ["openai/gpt-6-luna"], recommendation: "GPT-6 Luna" },
+        { model_name: "fast-estimator", provider_models: ["openai/gpt-6-luna"] },
       ],
     }),
   ).toEqual([
@@ -147,17 +147,4 @@ it("does not invent available models or recommend an alias pointing to a differe
     }),
   ).toEqual([{ value: "gpt-6-luna", label: "custom-model", sublabel: "Gateway name: gpt-6-luna", recommended: false }]);
   expect(estimatorModelOptions({ available_models: [], estimator_models: [] })).toEqual([]);
-});
-
-it("uses the catalog recommendation without requiring a particular model name", () => {
-  expect(
-    estimatorModelOptions({
-      available_models: ["custom"],
-      estimator_models: [
-        { model_name: "custom", provider_models: ["openai/small-test"], recommendation: "Small test model" },
-      ],
-    }),
-  ).toEqual([
-    { value: "custom", label: "Small test model", sublabel: "Recommended · Gateway name: custom", recommended: true },
-  ]);
 });

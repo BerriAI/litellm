@@ -3827,7 +3827,6 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure_ai/gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
         "cache_read_input_token_cost": 1e-08,
@@ -8377,7 +8376,6 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
         "cache_read_input_token_cost": 1e-08,
@@ -8427,7 +8425,6 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-6-luna-2026-09-22": {
-        "roi_recommendation": "GPT-6 Luna",
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
         "cache_read_input_token_cost": 1e-08,
@@ -9018,7 +9015,6 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/us/gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "deprecation_date": "2028-03-11",
         "cache_creation_input_token_cost": 1.375e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.75e-07,
@@ -34120,7 +34116,6 @@
         "supports_xhigh_reasoning_effort": true
     },
     "gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
         "cache_creation_input_token_cost_above_272k_tokens_flex": 1.25e-07,
@@ -58511,7 +58506,6 @@
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards-openai.html"
     },
     "bedrock_mantle/openai.gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_above_272k_tokens": 2.2e-07,
         "cache_creation_input_token_cost": 1.375e-07,
@@ -58626,7 +58620,6 @@
         ]
     },
     "us.openai.gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_above_272k_tokens": 2.2e-07,
@@ -58774,7 +58767,6 @@
         ]
     },
     "openai.gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_above_272k_tokens": 2e-07,
         "cache_creation_input_token_cost": 1.25e-07,
@@ -58808,7 +58800,6 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "supports_bedrock_runtime_chat_completions_response_format": true,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_above_272k_tokens": 2e-07,
@@ -70985,7 +70976,6 @@
         "supports_reasoning": true
     },
     "azure/eu/gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "deprecation_date": "2028-03-11",
         "cache_creation_input_token_cost": 1.5e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 3e-07,
@@ -75785,7 +75775,6 @@
         "supports_web_search": true
     },
     "openrouter/openai/gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "cache_creation_input_token_cost": 1.25e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
         "cache_read_input_token_cost": 1e-08,
@@ -77934,7 +77923,6 @@
         "supports_web_search": true
     },
     "openrouter/openai/gpt-6-luna:batch": {
-        "roi_recommendation": "GPT-6 Luna",
         "cache_creation_input_token_cost": 6.25e-08,
         "cache_creation_input_token_cost_above_272k_tokens": 1.25e-07,
         "cache_read_input_token_cost": 5e-09,
@@ -79237,7 +79225,6 @@
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
     "perplexity/openai/gpt-6-luna": {
-        "roi_recommendation": "GPT-6 Luna",
         "litellm_provider": "perplexity",
         "mode": "responses",
         "input_cost_per_token": 1e-07,

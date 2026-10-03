@@ -41340,8 +41340,6 @@ export interface components {
             model_name: string;
             /** Provider Models */
             provider_models: string[];
-            /** Recommendation */
-            recommendation?: string | null;
         };
         /** ROIIdentityMapResponse */
         ROIIdentityMapResponse: {
