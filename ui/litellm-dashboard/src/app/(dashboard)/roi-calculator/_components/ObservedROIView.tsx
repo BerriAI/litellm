@@ -80,13 +80,13 @@ function Metric({
   baseline?: number | null;
 }) {
   return (
-    <div className="min-w-0 px-5 py-5">
+    <div className="min-w-0 bg-background px-4 py-3">
       <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="mt-3 flex flex-wrap items-baseline gap-3">
-        <span className="text-3xl font-semibold tracking-tight tabular-nums">{value}</span>
+      <div className="mt-1 flex flex-wrap items-baseline gap-2">
+        <span className="text-2xl font-semibold tracking-tight tabular-nums">{value}</span>
         {current !== undefined && baseline !== undefined && <Delta current={current} baseline={baseline} />}
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
     </div>
   );
 }
@@ -157,7 +157,7 @@ function PeopleTable({
   const [sort, setSort] = useState<PeopleSort>("merged");
   const people = visiblePeople(snapshot.people, query, sort);
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-72">
           <Search className="absolute top-2.5 left-3 size-4 text-muted-foreground" />
@@ -404,33 +404,28 @@ function Report({
   const cost = costPerChange(current);
   const baselineCost = costPerChange(baseline);
   return (
-    <Page className="mx-auto max-w-[1500px] gap-5 pb-10">
-      <PageHeader>
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-3">
-              <PageHeaderTitle>ROI Calculator</PageHeaderTitle>
-            </div>
-            <PageHeaderDescription>Are we shipping more, with fewer bugs, at a better cost?</PageHeaderDescription>
-          </div>
-          <div className="flex gap-2">
-            {!readOnly && (
-              <Button variant="outline" onClick={onConnect}>
-                <Link2 />
-                Connections
-              </Button>
-            )}
-          </div>
+    <Page className="mx-auto max-w-[1500px] gap-3 pb-10 sm:pt-4">
+      <PageHeader className="flex flex-wrap items-center justify-between gap-3">
+        <PageHeaderTitle className="text-xl">ROI Calculator</PageHeaderTitle>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {actions}
+          {!readOnly && (
+            <Button size="sm" variant="outline" onClick={onConnect}>
+              <Link2 />
+              Connections
+            </Button>
+          )}
         </div>
       </PageHeader>
-      {actions}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm">
-          {snapshot.source_provider !== "gitlab" && <Github className="size-4" />}
-          {snapshot.source_provider !== "github" && <Gitlab className="size-4" />}
-          <span className="font-medium">{snapshot.repos.join(", ")}</span>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-2 text-xs">
+          {snapshot.source_provider !== "gitlab" && <Github className="size-4 shrink-0" />}
+          {snapshot.source_provider !== "github" && <Gitlab className="size-4 shrink-0" />}
+          <span className="truncate font-medium" title={snapshot.repos.join(", ")}>
+            {snapshot.repos.join(", ")}
+          </span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Select
             value={String(days)}
             disabled={readOnly || syncing}
@@ -439,7 +434,7 @@ function Report({
             }}
             items={rangeOptions.map((value) => ({ value: String(value), label: `Last ${value} days` }))}
           >
-            <SelectTrigger aria-label="Reporting period">
+            <SelectTrigger size="sm" aria-label="Reporting period">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -450,7 +445,7 @@ function Report({
               ))}
             </SelectContent>
           </Select>
-          <span className="flex items-center gap-2 rounded-md border px-3 py-2 text-xs">
+          <span className="flex h-8 items-center gap-2 text-xs text-muted-foreground">
             <CalendarDays className="size-3.5 text-muted-foreground" />
             {dateRange(current.window)}
           </span>
@@ -464,7 +459,7 @@ function Report({
               { value: "last_year", label: "vs. same period last year" },
             ]}
           >
-            <SelectTrigger aria-label="Comparison period">
+            <SelectTrigger size="sm" aria-label="Comparison period">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -474,20 +469,20 @@ function Report({
           </Select>
         </div>
       </div>
-      <div className="grid grid-cols-1 divide-y rounded-xl border sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-y-0">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border lg:grid-cols-4">
         <Metric
           label={`Merged ${terms.plural}`}
           value={number(current.merged_prs)}
           current={current.merged_prs}
           baseline={baseline.merged_prs}
-          detail={`${number(baseline.merged_prs)} in comparison · selected repositories`}
+          detail={`${number(baseline.merged_prs)} in comparison`}
         />
         <Metric
           label="Median time to merge"
           value={current.merged_prs === 0 ? "No merges" : duration(current.median_merge_hours)}
           current={current.median_merge_hours ?? undefined}
           baseline={baseline.median_merge_hours ?? undefined}
-          detail={`${duration(baseline.median_merge_hours)} in comparison · opened to merged`}
+          detail={`${duration(baseline.median_merge_hours)} in comparison`}
         />
         <Metric
           label="New bugs"
@@ -506,27 +501,29 @@ function Report({
           }
         />
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span>
-          {number(current.matched_internal_prs)} {terms.plural} matched to {snapshot.people.length} engineers ·{" "}
-          {number(current.agents_without_requester)} agent {terms.plural} without a requester
-        </span>
-        {!readOnly && (
-          <Button size="sm" variant="outline" onClick={() => setAccountEmail("")}>
-            <Users />
-            Link accounts
-          </Button>
-        )}
-      </div>
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-5">
-        <PageTabsList>
-          <PageTabsTrigger value="people">
-            Engineers <span className="ml-1.5 text-muted-foreground">{snapshot.people.length}</span>
-          </PageTabsTrigger>
-          <PageTabsTrigger value="pulls">{terms.requests}</PageTabsTrigger>
-          <PageTabsTrigger value="quality">Quality</PageTabsTrigger>
-          <PageTabsTrigger value="branches">Branch spend</PageTabsTrigger>
-        </PageTabsList>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b">
+          <PageTabsList className="min-w-0 flex-1 gap-4 border-0">
+            <PageTabsTrigger value="people">
+              Engineers <span className="ml-1.5 text-muted-foreground">{snapshot.people.length}</span>
+            </PageTabsTrigger>
+            <PageTabsTrigger value="pulls">{terms.requests}</PageTabsTrigger>
+            <PageTabsTrigger value="quality">Quality</PageTabsTrigger>
+            <PageTabsTrigger value="branches">Branch spend</PageTabsTrigger>
+          </PageTabsList>
+          {!readOnly && (
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label="Link accounts"
+              title="Link accounts"
+              onClick={() => setAccountEmail("")}
+            >
+              <Users />
+              <span className="hidden sm:inline">Link accounts</span>
+            </Button>
+          )}
+        </div>
         <TabsContent value="people">
           <PeopleTable
             snapshot={snapshot}
@@ -581,7 +578,11 @@ function Report({
           <BranchSpend snapshot={snapshot} />
         </TabsContent>
       </Tabs>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
+        <span className="w-full">
+          {number(current.matched_internal_prs)} {terms.plural} matched to {snapshot.people.length} engineers ·{" "}
+          {number(current.agents_without_requester)} agent {terms.plural} without a requester
+        </span>
         <span>Comparing with {dateRange(baseline.window)} · All dates UTC</span>
         <span>Spend recorded by this gateway · Merge time is elapsed time, not effort</span>
       </div>
@@ -620,6 +621,7 @@ function SyncActions({
   error,
   busy,
   readOnly,
+  compact = false,
   onSync,
   onRetry,
 }: {
@@ -627,16 +629,17 @@ function SyncActions({
   error: string;
   busy: boolean;
   readOnly: boolean;
+  compact?: boolean;
   onSync: (cancel: boolean) => void;
   onRetry: () => void;
 }) {
   const message = error || data?.status.error;
   return (
-    <div className="space-y-2">
+    <div className={compact ? "contents" : "space-y-2"}>
       {message && (
         <div
           role="alert"
-          className="flex items-center justify-between rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
+          className="flex basis-full items-center justify-between gap-3 rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
         >
           <span>{message}</span>
           <Button size="sm" variant="outline" onClick={onRetry}>
@@ -645,8 +648,10 @@ function SyncActions({
         </div>
       )}
       {data && (
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span role="status">{syncMessage(data.status, data.report)}</span>
+        <div className={compact ? "contents" : "flex flex-wrap items-center justify-between gap-2"}>
+          <span role="status" className="text-xs text-muted-foreground">
+            {syncMessage(data.status, data.report)}
+          </span>
           {!readOnly && data.settings.ready && (
             <Button size="sm" variant="outline" disabled={busy} onClick={() => onSync(data.status.running)}>
               <RefreshCw className={data.status.running ? "animate-spin" : ""} />
@@ -748,6 +753,7 @@ export default function ObservedROIView({
       error={error || actionError}
       busy={busy}
       readOnly={isViewOnly}
+      compact={Boolean(data?.report)}
       onSync={sync}
       onRetry={retry}
     />
