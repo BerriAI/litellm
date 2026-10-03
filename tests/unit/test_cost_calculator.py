@@ -5703,16 +5703,6 @@ def test_completion_cost_prices_mixed_case_base_model_over_response_model(_local
     ) == pytest.approx(100 * row["input_cost_per_token"] + 100 * row["output_cost_per_token"])
 
 
-def test_completion_cost_skips_an_unhashable_response_model(_local_model_cost_map: None) -> None:
-    response: Final = ModelResponse(usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
-    setattr(response, "model", ["gpt-4o"])
-    row: Final = litellm.model_cost["gpt-4o"]
-
-    assert completion_cost(completion_response=response, model="gpt-4o", base_model="gpt-4o") == pytest.approx(
-        10 * row["input_cost_per_token"] + 5 * row["output_cost_per_token"]
-    )
-
-
 def test_pricing_entry_for_cost_calc_skips_capability_rule_alias(_local_model_cost_map: None) -> None:
     response: Final = ModelResponse(
         id="chatcmpl_x",

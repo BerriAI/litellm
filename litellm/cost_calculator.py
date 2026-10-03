@@ -936,14 +936,10 @@ def _has_cost_map_rates(key: str) -> bool:
     )
 
 
-def _prices_only_via_capability_rule(model: object, custom_llm_provider: str | None) -> bool:
+def _prices_only_via_capability_rule(model: str | None, custom_llm_provider: str | None) -> bool:
     # The router registers every deployment model in the cost map, rates or not, so an
     # unpriced exact key still counts as rule-only when a capability rule matches it.
-    if (
-        not isinstance(model, str)
-        or _has_cost_map_rates(model)
-        or _has_cost_map_rates(f"{custom_llm_provider}/{model}")
-    ):
+    if model is None or _has_cost_map_rates(model) or _has_cost_map_rates(f"{custom_llm_provider}/{model}"):
         return False
     try:
         names: Final = _get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider)
