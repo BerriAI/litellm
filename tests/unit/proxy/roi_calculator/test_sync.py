@@ -142,14 +142,28 @@ class _UserTable:
 
 
 class _SpendDatabase:
-    def __init__(self) -> None:
+    def __init__(self, directory: tuple[Mapping[str, str], ...] = ()) -> None:
         self.litellm_dailyuserspend: Final = _DailySpendTable()
         self.litellm_usertable: Final = _UserTable()
+        self.directory: Final = directory or (
+            {"user_id": "inactive", "user_email": "inactive@example.com"},
+            {"user_id": "invalid", "user_email": "not-an-email"},
+            {"user_id": "private", "user_email": "123@users.noreply.github.com"},
+            {"user_id": "u1", "user_email": " Alice@Example.com "},
+        )
+        self.pages_read = 0
+
+    async def query_raw(self, query: str, *args: object) -> object:
+        cursor, size = args
+        assert cursor is None or isinstance(cursor, str)
+        assert isinstance(size, int) and 0 < size <= 1000
+        self.pages_read += 1
+        return tuple(row for row in self.directory if cursor is None or row["user_id"] > cursor)[:size]
 
 
 class _SpendPrismaClient:
-    def __init__(self) -> None:
-        self.db: Final = _SpendDatabase()
+    def __init__(self, directory: tuple[Mapping[str, str], ...] = ()) -> None:
+        self.db: Final = _SpendDatabase(directory)
 
 
 def _settings(estimator_prompt: str = "Estimate effort.") -> ROISettings:
@@ -984,3 +998,60 @@ async def test_gateway_directory_includes_users_without_spend_and_normalizes_ema
     assert await read_gateway_user_emails(_SpendPrismaClient()) == frozenset(
         {"alice@example.com", "inactive@example.com"}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", (1000, 2501))
+async def test_gateway_directory_reads_every_page(size: int) -> None:
+    directory: Final = tuple(
+        {"user_id": f"user-{index:04d}", "user_email": f" Member-{index}@Example.com "} for index in range(size)
+    )
+    client: Final = _SpendPrismaClient(directory)
+    assert await read_gateway_user_emails(client) == frozenset(f"member-{index}@example.com" for index in range(size))
+    assert client.db.pages_read == size // 1000 + 1
+
+
+@pytest.mark.asyncio
+async def test_unlinked_results_survive_when_the_only_linked_estimate_fails() -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    baseline: Final = _transport()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/org/repo/pulls":
+            return httpx.Response(
+                200,
+                content=_PULL_LIST_JSON[:-1]
+                + ","
+                + _PULL_LIST_JSON[1:].replace("42", "43").replace("alice", "outsider"),
+            )
+        if request.url.path.startswith("/repos/org/repo/pulls/43"):
+            original: Final = baseline.handle_request(httpx.Request("GET", str(request.url).replace("/43", "/42")))
+            return httpx.Response(
+                original.status_code, content=original.text.replace("42", "43").replace("alice", "outsider")
+            )
+        if request.url.path == "/users/outsider":
+            return httpx.Response(200, json={"email": "outsider@example.com"})
+        return baseline.handle_request(request)
+
+    async def failed_completion(request: ROICompletionRequest) -> object:
+        raise httpx.ConnectError("Estimator unavailable")
+
+    assert await manager.start(
+        _settings(),
+        repository,
+        _spend_reader(),
+        failed_completion,
+        httpx.MockTransport(respond),
+        gateway_user_reader=_gateway_users,
+    )
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "complete", manager.status.error
+    report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert tuple(
+        (pull["login"], pull["estimate"]["status"], pull["estimate"]["hours"]) for pull in report["pulls"]
+    ) == (
+        ("alice", "error", None),
+        ("outsider", "needs_review", None),
+    )
+    assert "not linked" in report["pulls"][1]["estimate"]["reasoning"]

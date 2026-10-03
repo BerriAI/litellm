@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from itertools import chain
@@ -30,6 +30,7 @@ from litellm.types.roi_calculator import (
 )
 
 PR_CONCURRENCY: Final = 3
+_GATEWAY_USER_PAGE_SIZE: Final = 1000
 _ESTIMATE_ADAPTER: Final = TypeAdapter(ROIEstimate)
 _REPORT_ADAPTER: Final = TypeAdapter(ROIReport)
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -77,6 +78,8 @@ class _UserTable(Protocol):
 
 
 class _PrismaDatabase(Protocol):
+    async def query_raw(self, query: str, *args: object) -> object: ...
+
     @property
     def litellm_dailyuserspend(self) -> _DailySpendTable: ...
 
@@ -165,11 +168,29 @@ async def read_spend(
     )
 
 
+async def _gateway_users(database: _PrismaDatabase) -> AsyncIterator[_UserEmail]:
+    cursor: str | None = None  # rebind-ok: keyset pagination advances after each bounded page
+    while True:
+        users: Final = _USER_EMAILS.validate_python(
+            await database.query_raw(
+                'SELECT "user_id", "user_email" FROM "LiteLLM_UserTable" '
+                'WHERE "user_email" IS NOT NULL AND ($1::text IS NULL OR "user_id" > $1) '
+                'ORDER BY "user_id" LIMIT $2',
+                cursor,
+                _GATEWAY_USER_PAGE_SIZE,
+            )
+        )
+        for user in users:
+            yield user
+        if len(users) < _GATEWAY_USER_PAGE_SIZE:
+            return
+        cursor = users[-1].user_id
+
+
 async def read_gateway_user_emails(prisma_client: _SpendPrismaClient) -> frozenset[str]:
-    users: Final = _USER_EMAILS.validate_python(
-        await prisma_client.db.litellm_usertable.find_many(where={"user_email": {"not": None}})
+    return frozenset(
+        [email async for user in _gateway_users(prisma_client.db) if (email := normalize_email(user.user_email))]
     )
-    return frozenset(email for user in users if (email := normalize_email(user.user_email)))
 
 
 class GatewayUserReader(Protocol):
@@ -352,8 +373,8 @@ def _processed_records(processed: tuple[_ProcessedPull, ...]) -> Mapping[int, RO
         raise SourceError(
             "The repository source could not provide PR metadata. No new report was published; try analysis again later."
         )
-    if any(item.record["estimate"]["status"] == "error" for item in processed) and not any(
-        item.record["estimate"]["status"] == "estimated" for item in processed
+    if any(item.record["estimate"]["status"] == "error" for item in processed) and all(
+        item.record["estimate"]["status"] == "error" or item.metadata_unavailable for item in processed
     ):
         raise SourceError(
             "The estimator could not score any merged changes. No new report was published; "

@@ -50,16 +50,22 @@ export function TraceConversation({
   );
   const complete = loadedCount === steps.length;
   const items = buildConversation(trace.spans, details, complete);
+  const rootErrors = trace.spans.filter(
+    (span) => span.parent_span_id === null && span.status === "error" && span.type !== "tool",
+  );
   return (
     <section aria-label="Trace conversation" className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-3xl space-y-6 px-6 py-5">
+        {rootErrors.map((span) => (
+          <ErrorBlock key={span.span_id} span={span} />
+        ))}
         {items.map((item) => (
           <section
             key={item.id}
             className="group/conversation relative space-y-3"
             aria-label={`Conversation step ${item.span.name}`}
           >
-            {item.showError && <ErrorBlock span={item.span} />}
+            {item.showError && item.span.parent_span_id !== null && <ErrorBlock span={item.span} />}
             {item.messages.map((message, index) => (
               <ConversationMessage key={index} message={message} />
             ))}

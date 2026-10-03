@@ -445,3 +445,33 @@ def test_estimator_choices_show_underlying_models_and_exclude_non_chat_routes() 
         ("custom-chat", ("openai/private-model",)),
         ("estimator", ("gpt-6-luna",)),
     )
+
+
+def test_estimator_picker_keeps_callable_aliases_and_routing_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.router import Router
+
+    configured_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "concrete",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "test"},
+            },
+            {
+                "model_name": "team-only",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "test"},
+                "model_info": {"team_id": "other-team", "team_public_model_name": "private-estimator"},
+            },
+        ],
+        model_group_alias={"friendly": "concrete"},
+        routing_groups=[{"group_name": "balanced", "models": ["concrete"], "routing_strategy": "simple-shuffle"}],
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", configured_router)
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, _ConfigRepository())
+    for name in ("friendly", "balanced"):
+        response: Final = client.put("/roi-calculator/settings", json={"repos": ["org/repo"], "estimator_model": name})
+        assert response.status_code == 200, response.text
+        settings: Final = response.json()
+        assert settings["ready"] is True
+        assert set(settings["available_models"]) == {"concrete", "friendly", "balanced"}
+        assert {"model_name": name, "provider_models": ["openai/gpt-6-luna"]} in settings["estimator_models"]

@@ -217,7 +217,9 @@ def _router_estimator_choices() -> tuple[ROIEstimatorModel, ...]:
 
     if llm_router is None:
         return ()
-    return _estimator_choices_from_deployments(llm_router.model_list)
+    names: Final = frozenset(llm_router.get_model_names())
+    choices: Final = _estimator_choices_from_deployments(llm_router.get_model_list() or ())
+    return tuple(choice for choice in choices if choice.model_name in names)
 
 
 async def _load_stored_settings(repository: ConfigRepository) -> _StoredSettings:

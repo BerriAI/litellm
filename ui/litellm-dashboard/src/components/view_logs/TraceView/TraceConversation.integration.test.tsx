@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
@@ -74,6 +74,35 @@ describe("TraceConversation", () => {
     expect(await screen.findByText("The release is ready")).toBeVisible();
     expect(agentTraceSpanCall).toHaveBeenCalledTimes(31);
     expect(screen.queryByRole("button", { name: /Load next/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the root failure visible before details load and throughout paging without duplicating it", async () => {
+    const user = userEvent.setup();
+    const rootFetch = Promise.withResolvers<SpanDetail>();
+    const failedRoot = { ...root, status: "error", error: "Agent exceeded its execution limit" };
+    const spans = [
+      failedRoot,
+      ...Array.from({ length: 24 }, (_, index) => ({
+        ...tool,
+        span_id: `tool-${index}`,
+        start_offset_ms: index + 1,
+      })),
+    ];
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) =>
+      id === "root" ? rootFetch.promise : { ...toolDetail, span_id: id },
+    );
+    renderWithProviders(
+      <TraceConversation trace={{ ...trace, spans } as Trace} accessToken="test" onOpenStep={vi.fn()} />,
+    );
+    expect(screen.getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
+    await act(async () => rootFetch.resolve(rootDetail));
+    const more = screen.getByRole("button", { name: "Load next 5 steps" });
+    await waitFor(() => expect(more).toBeEnabled());
+    expect(screen.getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
+    expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
+    await user.click(more);
+    expect(await screen.findByText("End of conversation")).toBeVisible();
+    expect(screen.getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
   });
 
   it("shows a missing step explicitly and lets the user retry it", async () => {
