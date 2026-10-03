@@ -157,6 +157,12 @@ billingMetrics:
 proxyConfigMap:
   # when true, creates a new configmap
   create: true
+  # Extra labels and annotations for the generated ConfigMap (only used when
+  # create is true). Useful for tooling that selects or configures objects by
+  # their metadata, e.g. secret-injection webhooks that resolve placeholders
+  # such as ${vault:...} inside proxy_config.
+  labels: {}
+  annotations: {}
   # if create is false and name is set, use existing ConfigMap
   # create: false
   # name: ""
