@@ -5,7 +5,7 @@ import { renderWithProviders as renderProviders, testQueryClient } from "@/../te
 import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
 import { LensView } from "./LensView";
-import { nextCheckStatus, runTime, type Lens, type Finding } from "./lensData";
+import { briefMarkdown, nextCheckStatus, runTime, type Lens, type Finding } from "./lensData";
 
 function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof renderProviders>[1]) {
   return renderProviders(ui, { searchParams: window.location.search, ...options });
@@ -192,24 +192,25 @@ describe("Lens findings and runs", () => {
     const user = userEvent.setup();
     renderWithProviders(<LensView accessToken="test" readOnly />);
     await user.click(await screen.findByRole("button", { name: new RegExp(finding.title) }));
-    return within(screen.getByRole("dialog", { name: finding.title }));
+    return { user, detail: within(screen.getByRole("dialog", { name: finding.title })) };
   }
 
-  it("explains an issue with its problem, user goal, outcome and test cases", async () => {
-    const detail = await openIssue({ ...issue, suggestion: "Check repository access", brief });
-    expect(detail.getByText(brief.problem)).toBeVisible();
-    expect(detail.getByText(brief.user_goal)).toBeVisible();
-    expect(detail.getByText(brief.what_happened)).toBeVisible();
-    expect(detail.getByText(brief.test_cases[0].input)).toBeVisible();
-    expect(detail.getByText(brief.test_cases[0].expected)).toBeVisible();
+  it.each(["Claude Code", "Codex"])("copies the issue brief as markdown for %s", async (agent) => {
+    const { user, detail } = await openIssue({ ...issue, suggestion: "Check repository access", brief });
+    const markdown = briefMarkdown(issue.title, brief);
+    expect(detail.getByText(brief.problem, { exact: false })).toHaveTextContent(markdown, {
+      normalizeWhitespace: false,
+    });
     expect(detail.queryByText("Check repository access")).not.toBeInTheDocument();
+    await user.click(detail.getByRole("button", { name: `Copy for ${agent}` }));
+    expect(await navigator.clipboard.readText()).toBe(markdown);
   });
 
   it("keeps the summary and suggestion for findings recorded before briefs existed", async () => {
-    const detail = await openIssue({ ...issue, suggestion: "Check repository access" });
+    const { detail } = await openIssue({ ...issue, suggestion: "Check repository access" });
     expect(detail.getByText(issue.description)).toBeVisible();
     expect(detail.getByText("Check repository access")).toBeVisible();
-    expect(detail.queryByText("Test cases")).not.toBeInTheDocument();
+    expect(detail.queryByRole("button", { name: "Copy for Claude Code" })).not.toBeInTheDocument();
   });
 
   it("shows the actual frozen run selection in the Runs tab", async () => {
