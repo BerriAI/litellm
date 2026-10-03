@@ -762,12 +762,12 @@ class FallbackAwareStreamWrapper(CustomStreamWrapper):
         if fallback_hidden_params:
             self._hidden_params = {
                 **fallback_hidden_params,
+                "response_cost": None,
                 # dict() because add_retry_fallback_headers mutates additional_headers in place
                 "additional_headers": dict(fallback_headers),
             }
             self._base_hidden_params = {
                 **self._hidden_params,
-                "response_cost": None,
             }
         self.fallback_headers_adopted = True
 
@@ -2906,6 +2906,7 @@ class Router:
         cast(_HiddenParamsHost, fallback_item)._hidden_params = {
             **item_hidden_params,
             **fallback_hidden_params,
+            "response_cost": item_hidden_params.get("response_cost"),
             "additional_headers": {**item_headers, **fallback_headers},
         }
 
