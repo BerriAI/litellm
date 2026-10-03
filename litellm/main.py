@@ -51,6 +51,7 @@ from litellm.utils import (
     filter_out_litellm_params,
     get_litellm_params,
     get_optional_params,
+    peek_extra_body_reasoning_effort,
     peek_reasoning_summary_aliases,
     strip_reasoning_summary_aliases_from_optional_params,
 )
@@ -5778,7 +5779,13 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=(
+                    reasoning_effort
+                    if reasoning_effort is not None
+                    else peek_extra_body_reasoning_effort(
+                        cast(Mapping[str, object], optional_params)  # cast-ok: optional_params is untyped
+                    )
+                ),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
             )

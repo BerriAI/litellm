@@ -4605,3 +4605,48 @@ def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
             drop_params=False,
             mock_response="hi",
         )
+
+
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        pytest.param({"reasoning_effort": "low"}, id="reasoning_effort"),
+        pytest.param({"reasoning": {"effort": "high"}}, id="reasoning-object"),
+    ],
+)
+@pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5"])
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_gpt_5_4_and_5_5_tools_with_extra_body_effort_route_to_responses(
+    mock_responses_completion: MagicMock, model: str, extra_body: dict[str, object]
+) -> None:
+    mock_responses_completion.return_value = MagicMock()
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "ok"}],
+        tools=[_WEATHER_TOOL],
+        extra_body=extra_body,
+        api_key="fake-key",
+    )
+
+    assert mock_responses_completion.called is True
+
+
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_gpt_5_5_tools_with_extra_body_effort_none_stays_chat(mock_responses_completion: MagicMock) -> None:
+    litellm.completion(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "ok"}],
+        tools=[_WEATHER_TOOL],
+        extra_body={"reasoning_effort": "none"},
+        api_key="fake-key",
+        mock_response="hi",
+    )
+
+    assert mock_responses_completion.called is False
