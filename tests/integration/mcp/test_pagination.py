@@ -108,6 +108,13 @@ def test_no_salt_preserves_complete_lists_and_calls_but_rejects_continuations(tm
             )
             assert not called.is_error
             assert called.content[0].text == "7"
+            if page_size == 3:
+                bare = await session.send_request(
+                    CallToolRequest(params=CallToolRequestParams(name="add2", arguments={"a": 3, "b": 4})),
+                    CallToolResult,
+                )
+                assert not bare.is_error
+                assert bare.content[0].text == "7"
 
     with paginated_mcp_peer(page_size=page_size) as peer, httpx.Client() as client:
         seed = Gateway(client, "sk-pagination-test", peer.url)

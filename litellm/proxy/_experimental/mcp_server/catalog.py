@@ -907,7 +907,10 @@ async def get_server_tools(
             raw_headers=raw_headers,
         )
         prefixed_or_original_tools: Final = manager.create_prefixed_tools(
-            list(guarded_tools), server, add_prefix=add_prefix, register_bare_names=params is None
+            list(guarded_tools),
+            server,
+            add_prefix=add_prefix,
+            register_bare_names=params is None or (params.cursor is None and not page.next_cursor),
         )
 
         return page.model_copy(update={"tools": prefixed_or_original_tools})

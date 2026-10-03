@@ -18455,7 +18455,7 @@ async def test_catalog_cached_revision_retains_newly_discovered_tool_routes(monk
         if reader is not None:
             await asyncio.wait_for(ready.wait(), 2)
         async with manager.catalog.operation():
-            manager._create_prefixed_tools([Tool(name="search", input_schema={})], second)
+            manager.create_prefixed_tools([Tool(name="search", input_schema={})], second)
         assert manager.published_tool_routes["search"] == "second"
         release.set()
         if reader is not None:
@@ -18494,7 +18494,7 @@ async def test_cached_discovery_cannot_authorize_another_servers_local_handler(m
     check = AsyncMock(return_value={})
     monkeypatch.setattr(manager, "pre_call_tool_check", check)
     async with manager.catalog.operation():
-        manager._create_prefixed_tools([Tool(name="private-getsecret", input_schema={})], allowed)
+        manager.create_prefixed_tools([Tool(name="private-getsecret", input_schema={})], allowed)
     if poisoned_route:
         manager.published_tool_routes["private-getsecret"] = "allowed"
     async with manager.catalog.operation():
@@ -18529,7 +18529,7 @@ def test_discovery_preserves_registered_tool_namespaces(monkeypatch, local_handl
     if local_handler:
         global_mcp_tool_registry.register_tool("orphan", "Orphan local tool", {}, AsyncMock())
     tools = [Tool(name=name, input_schema={}) for name in ("private-getsecret", "private-alias-getsecret", "orphan")]
-    listed = manager._create_prefixed_tools(tools, allowed)
+    listed = manager.create_prefixed_tools(tools, allowed)
     assert [tool.name for tool in listed] == ["allowed-" + tool.name for tool in tools]
     assert manager.published_tool_routes["private-getsecret"] == "private"
     assert manager.published_tool_routes["private-alias-getsecret"] == "private"
@@ -18804,3 +18804,36 @@ async def test_catalog_rejects_a_changed_anchored_issuer_during_discovery(monkey
             await manager.ensure_oauth_metadata_discovered(server)
     assert rejected.value.status_code == 503
     discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_cursor,next_cursor,expected_owner",
+    [(None, None, "notes"), (None, "next", "other"), ("last", None, "other")],
+)
+async def test_catalog_page_registers_bare_routes_only_for_complete_initial_discovery(
+    request_cursor, next_cursor, expected_owner
+):
+    from types import SimpleNamespace
+
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.catalog import get_server_tools
+
+    manager = _catalog_manager(LIST_NOTES)
+    server = _notes_server()
+    other = MCPServer(server_id="other", name="other", transport=MCPTransport.http)
+    manager.registry = {server.server_id: server, other.server_id: other}
+    manager.create_prefixed_tools([LIST_NOTES], other)
+    manager.create_mcp_client.return_value = SimpleNamespace(
+        list_tools_page=AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES], next_cursor=next_cursor))
+    )
+
+    result = await get_server_tools(
+        manager, server, params=PaginatedRequestParams(cursor=request_cursor)
+    )
+
+    assert [tool.name for tool in result.tools] == ["notes-list_notes"]
+    assert result.next_cursor == next_cursor
+    assert manager._get_mcp_server_from_tool_name("notes-list_notes").server_id == "notes"
+    assert manager._get_mcp_server_from_tool_name("list_notes").server_id == expected_owner
