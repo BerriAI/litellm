@@ -231,39 +231,18 @@ it("runs saved settings immediately without opening setup", async () => {
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
-it("lets a new user inspect example evidence and return to setup without starting an investigation", async () => {
+it("offers the interactive demo without starting an investigation", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: false };
     return { traces: false, requests: false };
   });
+  const onDemo = vi.fn();
   const user = userEvent.setup();
-  renderWithProviders(<LensView accessToken="test" />);
-
-  await user.click(await screen.findByRole("button", { name: "View an example" }));
-  const example = within(screen.getByRole("dialog", { name: "Example investigation" }));
-  expect(example.getByRole("heading", { name: "Failed lookups leave customers without answers" })).toBeVisible();
-  const evidence = example.getByText(/Where is my order\?/);
-  expect(evidence).not.toBeVisible();
-  await user.click(example.getByText("See the trace"));
-  expect(evidence).toBeVisible();
-  expect(example.getByText(/Service unavailable/)).toBeVisible();
-  await user.click(example.getByText("See the trace"));
-  expect(evidence).not.toBeVisible();
-
-  await user.click(example.getByRole("button", { name: "Close" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  expect(screen.getByRole("link", { name: "Set up traces" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Connect worker" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
-
-  await user.click(screen.getByRole("button", { name: "View an example" }));
-  expect(screen.getByRole("dialog", { name: "Example investigation" })).toBeVisible();
-  expect(screen.getByText(/Where is my order\?/)).not.toBeVisible();
-  await user.keyboard("{Escape}");
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  expect(screen.getByRole("button", { name: "View an example" })).toBeVisible();
+  renderWithProviders(<LensView accessToken="test" onDemo={onDemo} />);
+  await user.click(await screen.findByRole("button", { name: "Preview sample" }));
+  expect(onDemo).toHaveBeenCalledOnce();
   expect(apiClient.post).not.toHaveBeenCalled();
 });
 
@@ -276,13 +255,14 @@ it("guides a first-time administrator into worker connection and lens setup", as
     return { traces: true, requests: false, data: [] };
   });
   const user = userEvent.setup();
-  renderWithProviders(<LensView accessToken="test" />);
+  renderWithProviders(<LensView accessToken="test" onDemo={vi.fn()} />);
   const guide = within(await screen.findByRole("region", { name: "Find what needs attention" }));
   expect(apiClient.get).toHaveBeenCalledWith("/lens/activity/available", { accessToken: "test" });
   expect(await guide.findByRole("link", { name: "View traces" })).toHaveAttribute(
     "href",
     expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
   );
+  expect(await guide.findByRole("button", { name: "Preview sample" })).toBeVisible();
   await user.click(guide.getByRole("button", { name: "Connect worker" }));
   const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));
   expect(connection.getByRole("button", { name: "Get install command" })).toBeVisible();
@@ -305,6 +285,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
     });
   });
   await waitFor(() => expect(guide.getByRole("button", { name: "New investigation" })).toBeEnabled());
+  expect(guide.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   await user.click(guide.getByRole("button", { name: "New investigation" }));
   expect(await screen.findByRole("dialog", { name: "Which activity should we investigate?" })).toBeVisible();
 });
