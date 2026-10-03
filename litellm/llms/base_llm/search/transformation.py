@@ -107,6 +107,28 @@ class BaseSearchConfig:
         """
         return False
 
+    def domain_filter_params(self) -> frozenset[str]:
+        """
+        Request params through which this provider restricts results by domain:
+        the unified ``search_domain_filter`` plus any provider-native keys
+        (e.g. ``include_domains``) that reach the request through pass-through.
+
+        Integrations that add their own domain filter (e.g. websearch
+        interception) leave a request alone when any of these is already set,
+        so a filter configured on the search tool is never replaced.
+        """
+        return frozenset(("search_domain_filter",))
+
+    def max_search_domain_filter_entries(self) -> int | None:
+        """
+        How many ``search_domain_filter`` entries this provider's request
+        applies, or None when it takes the whole list.
+
+        Providers whose API takes a single domain return 1, so callers with
+        more domains than that know a forwarded filter would drop the rest.
+        """
+        return None
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Get HTTP method for search requests.

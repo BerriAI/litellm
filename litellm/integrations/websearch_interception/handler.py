@@ -39,7 +39,7 @@ from litellm.integrations.websearch_interception.transformation import (
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
-from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     RESPONSES_AGENTIC_SURFACE,
@@ -1549,18 +1549,45 @@ class WebSearchInterceptionLogger(CustomLogger):
         return None
 
     @staticmethod
-    def _provider_supports_rich_search(search_provider: str | None) -> bool:
-        """Whether the provider's search config accepts objective + multi-query input."""
+    def _search_provider_config(search_provider: str | None) -> BaseSearchConfig | None:
         if not search_provider:
-            return False
+            return None
         try:
             from litellm.utils import ProviderConfigManager
         except ImportError:
-            return False
+            return None
         # SearchProviders is a str enum, so an unknown provider string simply
         # misses the config map and returns None rather than raising.
-        config = ProviderConfigManager.get_provider_search_config(search_provider)  # pyright: ignore[reportArgumentType] -- SearchProviders is a str enum, so the router's provider string hashes to the matching member; unknown strings miss the map and yield None
+        return ProviderConfigManager.get_provider_search_config(search_provider)  # pyright: ignore[reportArgumentType] -- SearchProviders is a str enum, so the router's provider string hashes to the matching member; unknown strings miss the map and yield None
+
+    @classmethod
+    def _provider_supports_rich_search(cls, search_provider: str | None) -> bool:
+        """Whether the provider's search config accepts objective + multi-query input."""
+        config: Final = cls._search_provider_config(search_provider)
         return config is not None and config.supports_rich_search_input()
+
+    @classmethod
+    def _provider_domain_filter(
+        cls,
+        search_provider: str | None,
+        configured_search_kwargs: Mapping[str, object],
+        domains: WebSearchDomainFilter | None,
+    ) -> list[str] | None:
+        """
+        The client's ``allowed_domains`` hosts to send as ``search_domain_filter``, or None.
+
+        Only sent when the search tool config sets no domain filter of its own (the
+        operator's filter must never be replaced) and the provider applies every
+        entry; results are filtered by URL afterwards either way.
+        """
+        if domains is None or not domains.allowed:
+            return None
+        config: Final = cls._search_provider_config(search_provider)
+        if config is None or not config.domain_filter_params().isdisjoint(configured_search_kwargs):
+            return None
+        hosts: Final = list(dict.fromkeys(host for host in map(domain_host, domains.allowed) if host))
+        max_entries: Final = config.max_search_domain_filter_entries()
+        return hosts if hosts and (max_entries is None or len(hosts) <= max_entries) else None
 
     async def _execute_search(
         self,
@@ -1642,10 +1669,13 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             requested_domains: Final = None if kwargs is None else kwargs.get(WEBSEARCH_DOMAIN_FILTER_KEY)
             domains: Final = requested_domains if isinstance(requested_domains, WebSearchDomainFilter) else None
+            provider_domain_filter: Final = self._provider_domain_filter(
+                search_provider, configured_search_kwargs, domains
+            )
             named_params: Final[_AsearchNamedParams] = (
-                {"search_domain_filter": list(dict.fromkeys(domain_host(domain) for domain in domains.allowed))}
-                if domains is not None and domains.allowed and "search_domain_filter" not in configured_search_kwargs
-                else _NO_ASEARCH_NAMED
+                _NO_ASEARCH_NAMED
+                if provider_domain_filter is None
+                else {"search_domain_filter": provider_domain_filter}
             )
             unfiltered_result: Final = (
                 await litellm.asearch(query=query_arg, search_provider=search_provider, **named_params, **search_kwargs)

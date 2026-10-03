@@ -53,6 +53,9 @@ class ExaAISearchConfig(BaseSearchConfig):
     def ui_friendly_name() -> str:
         return "Exa AI"
 
+    def domain_filter_params(self) -> frozenset[str]:
+        return frozenset(("search_domain_filter", "includeDomains", "excludeDomains"))
+
     def validate_environment(
         self,
         headers: dict,
