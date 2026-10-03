@@ -24,6 +24,12 @@ _TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
 
 _DATABASE_ERROR_META: Final = TypeAdapter(dict[str, object])
 _BATCH_POSTGRES_ERROR_CODE: Final = re.compile(r'PostgresError \{ code: "([0-9A-Z]{5})"')
+_CONNECTION_CAPACITY_PHRASES: Final = (
+    "too many clients already",
+    "too many connections for role",
+    "too many connections for database",
+    "remaining connection slots are reserved",
+)
 
 
 def _exception_chain(e: BaseException) -> Iterator[BaseException]:
@@ -237,6 +243,22 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def is_database_capacity_error(e: Exception) -> bool:
+        """True iff Postgres refused the pool a new connection (SQLSTATE 53300:
+        ``too many clients already``, a reserved slot, or a per-role limit). The
+        server is up but full, so the failure is neither a transport error (which
+        would tear the engine down and open yet more connections against it) nor
+        a rejection of the rows being written."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if PrismaDBExceptionHandler.postgres_sqlstate(e) == "53300":
+            return True
+        error_message: Final = str(e).lower()
+        return any(phrase in error_message for phrase in _CONNECTION_CAPACITY_PHRASES)
+
+    @staticmethod
     def postgres_sqlstate(e: Exception) -> str | None:
         """The SQLSTATE Postgres attached to a failed statement, as prisma surfaces it, or None."""
         import prisma
@@ -324,6 +346,8 @@ class PrismaDBExceptionHandler:
         if PrismaDBExceptionHandler.is_database_infrastructure_error(e):
             return True
         if PrismaDBExceptionHandler.is_database_transport_error(e):
+            return True
+        if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return True
         if PrismaDBExceptionHandler.is_prisma_engine_internal_error(e):
             return True
