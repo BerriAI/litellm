@@ -790,16 +790,8 @@ async def update_project(
                 data, existing_project, _router_access_group_names(llm_router)
             )
 
-        object_permission_data: Final = (
-            data.object_permission.model_dump(exclude_none=True) if data.object_permission is not None else None
-        )
-        object_permission_payload: Final = (
-            _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data) if object_permission_data else None
-        )
-
         # Prepare update data
         update_data = _jsonified(prisma_client, data.model_dump(exclude_none=True, exclude={"project_id"}))
-        update_data.pop("object_permission", None)
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
 
         # Handle budget updates
@@ -808,6 +800,11 @@ async def update_project(
             **{k: v for k, v in update_data.items() if k in budget_fields},
             **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
         }
+
+        object_permission_data: Final = update_data.pop("object_permission", None)
+        object_permission_payload: Final = (
+            _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data) if object_permission_data else None
+        )
 
         if data.team_id is not None:
             current_project_record: Final = await _writer_project_table(prisma_client).find_unique(

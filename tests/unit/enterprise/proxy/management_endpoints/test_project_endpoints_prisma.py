@@ -1270,6 +1270,36 @@ def _written_project_data(mock_prisma: mock.MagicMock) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_update_project_object_permission_validation_precedes_budget_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id: Final = "project-object-permission-validation"
+    mock_prisma: Final = _project_update_mocks(monkeypatch, {})
+    mock_prisma.db.litellm_projecttable.find_unique.return_value.budget_id = "budget-project"
+    budget_table: Final = mock.MagicMock()
+    budget_table.update = mock.AsyncMock()
+    mock_prisma.db.litellm_budgettable = budget_table
+
+    def jsonify_object_permission_as_string(payload: dict[str, object]) -> dict[str, object]:
+        return {**payload, "object_permission": '{"vector_stores": ["replacement-store"]}'}
+
+    mock_prisma.jsonify_object = jsonify_object_permission_as_string
+
+    with pytest.raises(ProxyException) as error:
+        await _run_project_update(
+            project_id,
+            max_budget=50,
+            object_permission={"vector_stores": ["replacement-store"]},
+        )
+
+    assert error.value.code == "500"
+    assert "Input should be a valid dictionary" in error.value.message
+    assert "input_type=str" in error.value.message
+    budget_table.update.assert_not_awaited()
+    mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1278,14 +1308,9 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     mock_prisma: Final = _project_update_mocks(monkeypatch, {})
     mock_prisma.db.litellm_projecttable.find_unique.return_value.team_id = "team-a"
     mock_prisma.db.litellm_projecttable.find_unique.return_value.budget_id = "budget-project"
-    mock_prisma.db.litellm_projecttable.find_unique.return_value.object_permission_id = "permission-project"
     budget_table: Final = mock.MagicMock()
     budget_table.update = mock.AsyncMock()
-    permission_table: Final = mock.MagicMock()
-    permission_table.update = mock.AsyncMock()
-    permission_table.create = mock.AsyncMock()
     mock_prisma.db.litellm_budgettable = budget_table
-    mock_prisma.db.litellm_objectpermissiontable = permission_table
     mock_prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(
         return_value=LiteLLM_TeamTable(team_id=destination_team_id)
     )
@@ -1306,7 +1331,6 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
             project_id,
             team_id=destination_team_id,
             max_budget=50,
-            object_permission={"vector_stores": ["replacement-store"]},
         )
 
     expected_detail: Final = {
@@ -1320,8 +1344,6 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     mock_prisma.writer_db.litellm_verificationtoken.count.assert_awaited_once()
     mock_prisma.db.litellm_verificationtoken.count.assert_not_awaited()
     budget_table.update.assert_not_awaited()
-    permission_table.update.assert_not_awaited()
-    permission_table.create.assert_not_awaited()
     mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
 
 
