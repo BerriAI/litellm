@@ -73,10 +73,10 @@ _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
 
 # The proxy's own request dict. Mutable by design: a pre-call guardrail rewrites
 # the caller's payload in place, which is the entire point of the hook.
-MutableRequest: TypeAlias = dict
+MutableRequest: TypeAlias = dict[str, object]
 
 # A JSON body on its way to httpx, which requires a real dict rather than a view.
-JsonBody: TypeAlias = dict
+JsonBody: TypeAlias = dict[str, object]
 
 # One redactable span: the text as it stands, and the write that puts the
 # replacement back where it came from.
@@ -177,25 +177,48 @@ _SlotSink: TypeAlias = list[_Slot]
 # stream. `None` is the content channel; an int is one tool call's accumulating
 # `arguments`. Content and each tool call are separate token streams, so each needs its
 # own window -- one shared window would splice one stream's held-back tail onto another.
-_CarryWindows: TypeAlias = dict
+_CarryKey: TypeAlias = tuple[int, int | None]
+_CarryWindows: TypeAlias = dict[_CarryKey, str]
 
 # A caller-owned list whose entries are rewritten in place, such as a Completions
 # `prompt` sent as an array of strings.
-MutableSeq: TypeAlias = list
+MutableSeq: TypeAlias = list[object]
+
+# A Responses API delta stream: (event family, item id, output index, part index).
+_ResponsesStreamKey: TypeAlias = tuple[str, object, object, object]
+
+
+def _as_object(value: object) -> MutableRequest | None:
+    """`value` as a JSON object, or None.
+
+    `isinstance(value, dict)` alone leaves the keys and values unknown to the type
+    checker. A JSON object's keys are strings, so the type is stated once, here.
+    """
+    return value if isinstance(value, dict) else None
+
+
+def _as_array(value: object) -> MutableSeq | None:
+    """`value` as a JSON array, or None. See `_as_object`."""
+    return value if isinstance(value, list) else None
+
+
+def _is_container(value: object) -> bool:
+    """Whether `value` is a JSON object or array, without narrowing it to unknown types."""
+    return isinstance(value, (dict, list))
 
 
 def _collect(container: MutableRequest, key: str, slots: _SlotSink) -> None:
     """Records the string at `key`, along with the write that replaces it."""
     value: Final = container.get(key)
     if isinstance(value, str) and value:
-        slots.append((value, lambda new, c=container, k=key: c.__setitem__(k, new)))
+        slots.append((value, functools.partial(container.__setitem__, key)))
 
 
 def _collect_entry(entries: MutableSeq, index: int, slots: _SlotSink) -> None:
     """Records a string held directly in a list, rather than under a key."""
     value: Final = entries[index]
     if isinstance(value, str) and value:
-        slots.append((value, lambda new, e=entries, i=index: e.__setitem__(i, new)))
+        slots.append((value, functools.partial(entries.__setitem__, index)))
 
 
 def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
@@ -205,19 +228,21 @@ def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
     if isinstance(prompt, str):
         _collect(data, "prompt", slots)
         return
-    if isinstance(prompt, dict):
+    prompt_object: Final = _as_object(prompt)
+    if prompt_object is not None:
         # A Responses API PromptObject. `variables` are substituted into the stored
         # prompt on the provider side, so they are caller text. `id` and `version`
         # identify which prompt to use and must arrive unchanged.
-        variables: Final = prompt.get("variables")
-        if isinstance(variables, dict):
+        variables: Final = _as_object(prompt_object.get("variables"))
+        if variables is not None:
             for name in tuple(variables):
                 _collect(variables, name, slots)
         return
-    if not isinstance(prompt, list):
+    entries: Final = _as_array(prompt)
+    if entries is None:
         return
-    for index in range(len(prompt)):
-        _collect_entry(prompt, index, slots)
+    for index in range(len(entries)):
+        _collect_entry(entries, index, slots)
 
 
 class _RequestTooDeep(Exception):
@@ -238,7 +263,7 @@ def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
     """
     # Walked in document order: the shield maps its replies back by position, so the
     # order spans are collected in is part of the contract.
-    pending: Final[list] = [(container, 0)]  # mutable-ok: local queue, never escapes.
+    pending: Final[list[tuple[MutableRequest, int]]] = [(container, 0)]  # mutable-ok: local queue, never escapes.
     cursor = 0  # rebind-ok: advances through the queue.
     while cursor < len(pending):
         node, depth = pending[cursor]
@@ -249,8 +274,9 @@ def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
             continue
         if depth >= _MAX_CONTENT_DEPTH and content:
             raise _RequestTooDeep("content")
-        for part in content if isinstance(content, list) else ():
-            if not isinstance(part, dict):
+        for item in _as_array(content) or ():
+            part = _as_object(item)
+            if part is None:
                 continue
             # Image and audio parts have no text and fall through untouched.
             _collect(part, "text", slots)
@@ -278,12 +304,13 @@ def _collect_participant_name(message: MutableRequest, slots: _SlotSink) -> None
 
 def _collect_tool_arguments(message: MutableRequest, slots: _SlotSink) -> None:
     """Tool arguments carry the values a user asked the model to act on."""
-    for tool_call in message.get("tool_calls") or ():
-        function = tool_call.get("function") if isinstance(tool_call, dict) else None
-        if isinstance(function, dict):
+    for tool_call in _read_list(message, "tool_calls"):
+        tool_call_object = _as_object(tool_call)
+        function = _as_object(tool_call_object.get("function")) if tool_call_object is not None else None
+        if function is not None:
             _collect(function, "arguments", slots)
-    legacy: Final = message.get("function_call")
-    if isinstance(legacy, dict):
+    legacy: Final = _as_object(message.get("function_call"))
+    if legacy is not None:
         _collect(legacy, "arguments", slots)
 
 
@@ -293,9 +320,7 @@ def _collect_system(data: MutableRequest, slots: _SlotSink) -> None:
     if isinstance(system, str):
         _collect(data, "system", slots)
         return
-    for part in system if isinstance(system, list) else ():
-        if isinstance(part, dict):
-            _collect(part, "text", slots)
+    _collect_text_parts(data, "system", slots)
 
 
 def _collect_responses_fields(data: MutableRequest, slots: _SlotSink, privileged: _SlotSink) -> None:
@@ -309,14 +334,16 @@ def _collect_responses_fields(data: MutableRequest, slots: _SlotSink, privileged
     if isinstance(request_input, str):
         _collect(data, "input", slots)
         return
-    if not isinstance(request_input, list):
+    entries: Final = _as_array(request_input)
+    if entries is None:
         return
-    for index, item in enumerate(request_input):
-        if isinstance(item, str):
+    for index, entry in enumerate(entries):
+        if isinstance(entry, str):
             # The embeddings and moderations shape: `input` as an array of strings.
-            _collect_entry(request_input, index, slots)
+            _collect_entry(entries, index, slots)
             continue
-        if not isinstance(item, dict):
+        item = _as_object(entry)
+        if item is None:
             continue
         _collect_content(item, slots)
         # A function_call item holds `arguments`; a function_call_output holds `output`.
@@ -329,9 +356,9 @@ def _collect_responses_fields(data: MutableRequest, slots: _SlotSink, privileged
 
 def _collect_text_parts(container: MutableRequest, key: str, slots: _SlotSink) -> None:
     """Collects the `text` of every part in the list held at `key`."""
-    parts: Final = container.get(key)
-    for part in parts if isinstance(parts, list) else ():
-        if isinstance(part, dict):
+    for entry in _as_array(container.get(key)) or ():
+        part = _as_object(entry)
+        if part is not None:
             _collect(part, "text", slots)
 
 
@@ -348,12 +375,12 @@ def _collect_tool_definitions(data: MutableRequest, slots: _SlotSink, privileged
     Responses API and Anthropic share, whose schema is `parameters` or `input_schema`.
     """
     for key in ("tools", "functions"):
-        declared = data.get(key)
-        for tool in declared if isinstance(declared, list) else ():
-            if not isinstance(tool, dict):
+        for entry in _as_array(data.get(key)) or ():
+            tool = _as_object(entry)
+            if tool is None:
                 continue
-            function = tool.get("function")
-            for holder in (tool, function) if isinstance(function, dict) else (tool,):
+            function = _as_object(tool.get("function"))
+            for holder in (tool, function) if function is not None else (tool,):
                 _collect(holder, "description", privileged)
                 _collect_schema_text(holder.get("parameters"), slots, privileged)
                 _collect_schema_text(holder.get("input_schema"), slots, privileged)
@@ -375,35 +402,38 @@ def _collect_schema_text(schema: object, slots: _SlotSink, privileged: _SlotSink
     so all their strings are collected whatever the keys around them are called. Nested
     past `_MAX_JSON_DEPTH`, the request is refused.
     """
-    pending: Final[list] = [(schema, 0)]  # mutable-ok: local walk stack.
+    pending: Final[list[tuple[object, int]]] = [(schema, 0)]  # mutable-ok: local walk stack.
     while pending:
         node, depth = pending.pop()
         if depth > _MAX_JSON_DEPTH:
-            if isinstance(node, (dict, list)) and node:
+            if _is_container(node) and node:
                 raise _RequestTooDeep("schema")
             continue
-        if isinstance(node, list):
-            for index, item in enumerate(node):
-                _collect_entry(node, index, privileged)
-                if isinstance(item, (dict, list)):
+        entries = _as_array(node)
+        if entries is not None:
+            for index, item in enumerate(entries):
+                _collect_entry(entries, index, privileged)
+                if _is_container(item):
                     pending.append((item, depth + 1))
             continue
-        if not isinstance(node, dict):
+        schema_object = _as_object(node)
+        if schema_object is None:
             continue
-        for keyword, value in tuple(node.items()):
+        for keyword, value in tuple(schema_object.items()):
             if keyword in _SCHEMA_STRUCTURAL_KEYWORDS:
                 continue
+            subschemas = _as_object(value) if keyword in _SCHEMA_MAP_KEYWORDS else None
             if keyword in _SCHEMA_LITERAL_KEYWORDS:
-                _collect(node, keyword, slots)
+                _collect(schema_object, keyword, slots)
                 _collect_json_leaves(value, slots, strict=True)
             elif keyword in _SCHEMA_VALUE_KEYWORDS:
-                _collect(node, keyword, privileged)
+                _collect(schema_object, keyword, privileged)
                 _collect_json_leaves(value, privileged, strict=True)
-            elif keyword in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
-                pending.extend((child, depth + 1) for child in value.values())
+            elif subschemas is not None:
+                pending.extend((child, depth + 1) for child in subschemas.values())
             elif isinstance(value, str):
-                _collect(node, keyword, privileged)
-            elif isinstance(value, (dict, list)):
+                _collect(schema_object, keyword, privileged)
+            elif _is_container(value):
                 pending.append((value, depth + 1))
 
 
@@ -416,17 +446,18 @@ def _collect_output_contracts(data: MutableRequest, slots: _SlotSink, privileged
     `text.format` -- is application-authored like a tool schema, so its free text goes
     to the privileged sink, and its names and types stay as sent.
     """
-    prediction: Final = data.get("prediction")
-    if isinstance(prediction, dict):
+    prediction: Final = _as_object(data.get("prediction"))
+    if prediction is not None:
         _collect(prediction, "content", slots)
         _collect_text_parts(prediction, "content", slots)
-    response_format: Final = data.get("response_format")
-    text_options: Final = data.get("text")
-    for wrapper in (
-        response_format.get("json_schema") if isinstance(response_format, dict) else None,
-        text_options.get("format") if isinstance(text_options, dict) else None,
+    response_format: Final = _as_object(data.get("response_format"))
+    text_options: Final = _as_object(data.get("text"))
+    for declared in (
+        response_format.get("json_schema") if response_format is not None else None,
+        text_options.get("format") if text_options is not None else None,
     ):
-        if isinstance(wrapper, dict):
+        wrapper = _as_object(declared)
+        if wrapper is not None:
             _collect(wrapper, "description", privileged)
             _collect_schema_text(wrapper.get("schema"), slots, privileged)
 
@@ -440,13 +471,14 @@ def _collect_user_locations(data: MutableRequest, privileged: _SlotSink) -> None
     restores it from a reply, hence the privileged sink.
     """
     options: Final = data.get("web_search_options")
-    tools: Final = data.get("tools")
-    for holder in (options, *(tools if isinstance(tools, list) else ())):
-        location = holder.get("user_location") if isinstance(holder, dict) else None
-        if not isinstance(location, dict):
+    tools: Final = _as_array(data.get("tools")) or ()
+    for declared in (options, *tools):
+        holder = _as_object(declared)
+        location = _as_object(holder.get("user_location")) if holder is not None else None
+        if location is None:
             continue
-        approximate = location.get("approximate")
-        for container in (location, approximate) if isinstance(approximate, dict) else (location,):
+        approximate = _as_object(location.get("approximate"))
+        for container in (location, approximate) if approximate is not None else (location,):
             _collect(container, "city", privileged)
             _collect(container, "region", privileged)
 
@@ -487,7 +519,9 @@ def _read_list(holder: object, name: str) -> Sequence[object]:
     The entries are the reply's own objects, so writing through them edits the reply.
     """
     value: Final = _read_field(holder, name)
-    return tuple(value) if isinstance(value, (list, tuple)) else ()
+    if isinstance(value, tuple):
+        return value
+    return tuple(_as_array(value) or ())
 
 
 def _write_field(holder: object, name: str, value: str) -> None:
@@ -512,30 +546,32 @@ def _collect_json_leaves(node: object, slots: _SlotSink, *, strict: bool = False
     unredacted: past the bound it raises `_RequestTooDeep`. On the reply side a leaf past
     the bound just keeps its placeholder, which leaks nothing, so it is skipped.
     """
-    pending: Final[list] = [(node, 0)]  # mutable-ok: local walk stack.
+    pending: Final[list[tuple[object, int]]] = [(node, 0)]  # mutable-ok: local walk stack.
     while pending:
         current, current_depth = pending.pop()
         if current_depth > _MAX_JSON_DEPTH:
-            if strict and isinstance(current, (dict, list)) and current:
+            if strict and _is_container(current) and current:
                 raise _RequestTooDeep("json")
             continue
-        if isinstance(current, dict):
-            for key in tuple(current):
-                value = current[key]
+        current_object = _as_object(current)
+        if current_object is not None:
+            for key in tuple(current_object):
+                value = current_object[key]
                 if isinstance(value, str) and value:
-                    slots.append((value, lambda new, d=current, k=key: d.__setitem__(k, new)))
+                    slots.append((value, functools.partial(current_object.__setitem__, key)))
                 else:
                     pending.append((value, current_depth + 1))
             continue
-        if isinstance(current, list):
-            for index, value in enumerate(current):
+        entries = _as_array(current)
+        if entries is not None:
+            for index, value in enumerate(entries):
                 if isinstance(value, str) and value:
-                    slots.append((value, lambda new, entries=current, i=index: entries.__setitem__(i, new)))
+                    slots.append((value, functools.partial(entries.__setitem__, index)))
                 else:
                     pending.append((value, current_depth + 1))
 
 
-def _carry_sort_key(key: tuple) -> tuple:
+def _carry_sort_key(key: _CarryKey) -> tuple[int, int]:
     """Orders streaming windows without ever comparing None to an int.
 
     `sorted()` over the raw keys raises as soon as one choice holds both a content window
@@ -701,10 +737,11 @@ class _AnthropicSSERestorer:
             return block
         line: Final = lines[data_lines[0]]
         try:
-            event: Final = json.loads(line[len("data:") :])
+            parsed: Final[object] = json.loads(line[len("data:") :])
         except ValueError:
             return block
-        if not isinstance(event, dict):
+        event: Final = _as_object(parsed)
+        if event is None:
             return block
         kind: Final = event.get("type")
         index: Final = event.get("index")
@@ -784,8 +821,8 @@ class _ResponsesStreamRestorer:
     def __init__(self, step: _StreamStep, rehydrate: _Rehydrate) -> None:
         self._step: Final = step
         self._rehydrate: Final = rehydrate
-        self._carries: Final[dict[tuple, str]] = {}  # mutable-ok: per-stream windows advanced in place.
-        self._last_deltas: Final[dict[tuple, object]] = {}  # mutable-ok: newest delta per stream.
+        self._carries: Final[dict[_ResponsesStreamKey, str]] = {}  # mutable-ok: per-stream windows advanced in place.
+        self._last_deltas: Final[dict[_ResponsesStreamKey, object]] = {}  # mutable-ok: newest delta per stream.
 
     async def restore(self, event: object) -> tuple[object, ...]:
         """The events to emit in place of `event`: any flush, then the event itself."""
@@ -824,7 +861,7 @@ class _ResponsesStreamRestorer:
         self._last_deltas[key] = event
         _write_field(event, "delta", emitted)
 
-    async def _flush(self, key: tuple) -> tuple[object, ...]:
+    async def _flush(self, key: _ResponsesStreamKey) -> tuple[object, ...]:
         carry: Final = self._carries.pop(key, "")
         template: Final = self._last_deltas.pop(key, None)
         if not carry or template is None:
@@ -837,7 +874,7 @@ class _ResponsesStreamRestorer:
         return (flush,)
 
 
-def _responses_stream_key(event: object, kind: str) -> tuple:
+def _responses_stream_key(event: object, kind: str) -> _ResponsesStreamKey:
     """Identifies the delta stream an event belongs to, the same for its delta and done.
 
     The family is the event type without its `.delta` / `.done` suffix, so an output_text
@@ -861,14 +898,16 @@ def _collect_event_text(event: object, slots: _SlotSink) -> None:
     `.done` event of each stream family names its text differently (`text`, `refusal`,
     `arguments`, ...), and a family added upstream would otherwise leak a placeholder.
     """
-    fields: Final = event if isinstance(event, dict) else getattr(event, "__dict__", None)
-    if not isinstance(fields, dict):
+    # A model's fields live in its `__dict__`; an empty dict has none either way.
+    attributes: Final[object] = getattr(event, "__dict__", None)
+    fields: Final = _as_object(event) or _as_object(attributes)
+    if fields is None:
         return
     for name, value in tuple(fields.items()):
-        if not isinstance(name, str) or name in _RESPONSES_STRUCTURAL_FIELDS or name.endswith("_id"):
+        if name in _RESPONSES_STRUCTURAL_FIELDS or name.endswith("_id"):
             continue
         if isinstance(value, str) and value:
-            slots.append((value, lambda new, n=name: _write_field(event, n, new)))
+            slots.append((value, functools.partial(_write_field, event, name)))
 
 
 class LLMShieldProxyGuardrail(CustomGuardrail):
@@ -959,12 +998,15 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     def _same_length_or_raise(self, returned: object, sent: Sequence[str], operation: str) -> Sequence[str]:
         """Guards the positional mapping the callers rely on to write results back."""
-        if not isinstance(returned, list) or len(returned) != len(sent):
+        entries: Final = _as_array(returned)
+        texts: Final = tuple(entry for entry in entries or () if isinstance(entry, str))
+        # A non-string entry would be written into the request or reply as is.
+        if entries is None or len(entries) != len(sent) or len(texts) != len(entries):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
                 message=f"LLM Shield Proxy {operation} returned an unexpected payload; blocking the request.",
             )
-        return tuple(returned)
+        return texts
 
     # --- session ------------------------------------------------------------------
 
@@ -1029,8 +1071,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         """
         slots: Final[_SlotSink] = []
         privileged: Final[_SlotSink] = []
-        for message in data.get("messages") or ():
-            if isinstance(message, dict):
+        for entry in _read_list(data, "messages"):
+            message = _as_object(entry)
+            if message is not None:
                 sink = privileged if message.get("role") in _PRIVILEGED_ROLES else slots
                 _collect_content(message, sink)
                 _collect_participant_name(message, sink)
@@ -1121,14 +1164,14 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         # characters, and `_same_length_or_raise` is what guarantees the positional
         # mapping -- so a reply carrying more spans than that fails closed, which is this
         # guardrail's posture everywhere else.
-        pending: Final[list] = []  # mutable-ok: local accumulator, frozen before use.
+        pending: Final[_SlotSink] = []
         for choice in choices:
             message = getattr(choice, "message", None)
             if message is None:
                 continue
             content = getattr(message, "content", None)
             if isinstance(content, str) and content:
-                pending.append((content, lambda new, m=message: setattr(m, "content", new)))
+                pending.append((content, functools.partial(setattr, message, "content")))
             # A tool call's `arguments` is model-generated text and the request path
             # redacts it, so leaving it unrestored hands the application a placeholder to
             # invoke a tool with. These are Pydantic objects on this path, not dicts.
@@ -1136,11 +1179,11 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 function = getattr(tool_call, "function", None)
                 arguments = getattr(function, "arguments", None) if function is not None else None
                 if isinstance(arguments, str) and arguments:
-                    pending.append((arguments, lambda new, f=function: setattr(f, "arguments", new)))
+                    pending.append((arguments, functools.partial(setattr, function, "arguments")))
             legacy = getattr(message, "function_call", None)
             legacy_arguments = getattr(legacy, "arguments", None) if legacy is not None else None
             if isinstance(legacy_arguments, str) and legacy_arguments:
-                pending.append((legacy_arguments, lambda new, fn=legacy: setattr(fn, "arguments", new)))
+                pending.append((legacy_arguments, functools.partial(setattr, legacy, "arguments")))
         if not pending:
             return response
 
@@ -1168,15 +1211,17 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         string, and the request path redacts its string leaves -- so the reply's leaves
         have to come back or the application invokes the tool with placeholders.
         """
-        slots: Final[list] = []  # mutable-ok: accumulator, frozen before use.
-        for block in response["content"]:
-            if not isinstance(block, dict):
+        slots: Final[_SlotSink] = []
+        for entry in _read_list(response, "content"):
+            block = _as_object(entry)
+            if block is None:
                 continue
             kind = block.get("type")
-            if kind == "text" and isinstance(block.get("text"), str) and block["text"]:
-                slots.append((block["text"], lambda new, b=block: b.__setitem__("text", new)))
-            elif kind == "tool_use" and isinstance(block.get("input"), dict):
-                _collect_json_leaves(block["input"], slots)
+            text = block.get("text")
+            if kind == "text" and isinstance(text, str) and text:
+                slots.append((text, functools.partial(block.__setitem__, "text")))
+            elif kind == "tool_use" and _as_object(block.get("input")) is not None:
+                _collect_json_leaves(block.get("input"), slots)
         if not slots:
             return response
 
@@ -1237,7 +1282,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         rehydrate: Final = functools.partial(self._rehydrate, session_id=session_id)
         sse: Final = _AnthropicSSERestorer(step)
         events: Final = _ResponsesStreamRestorer(step, rehydrate)
-        carries: Final[dict] = {}  # mutable-ok: per-stream windows, local to this generator.
+        carries: Final[_CarryWindows] = {}
         last_chunk = None  # rebind-ok: tracks the most recent chunk for the final flush.
 
         async for chunk in response:
@@ -1291,7 +1336,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     async def _restore_content_window(
         self,
         delta: Any,
-        key: tuple,
+        key: _CarryKey,
         carries: _CarryWindows,
         session_id: str,
         is_final: bool,
@@ -1357,7 +1402,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         clients concatenate by index, so no id or name is needed. Appending is correct
         even when this chunk already carried a fragment for that tool call.
         """
-        continuations: Final[list] = []  # mutable-ok: built into this chunk's delta.
+        continuations: Final[list[dict[str, object]]] = []  # mutable-ok: built into this chunk's delta.
         for key in sorted((held for held in carries if held[0] == choice_index), key=_carry_sort_key):
             carry = carries[key]
             if not carry:
@@ -1422,9 +1467,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         raw_choices: Final = getattr(chunk, "choices", None)
         if not raw_choices:
             return None
-        choices: Final[tuple] = tuple(raw_choices)
-        matching: Final = tuple(choice for choice in choices if _choice_index(choice) == index)
-        kept: Final = matching[0] if matching else choices[0]
+        choices: Final[tuple[object, ...]] = tuple(raw_choices)
+        position: Final = next((at for at, choice in enumerate(choices) if _choice_index(choice) == index), 0)
+        kept: Final = raw_choices[position]
         if getattr(kept, "delta", None) is None:
             return None
         kept.index = index
@@ -1475,22 +1520,22 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         # Copied rather than mutated: the caller's tool calls are theirs to own, and this
         # method's contract is to hand back a new mapping.
-        restored_calls: Final[list] = [copy.deepcopy(call) for call in tool_calls]  # mutable-ok: a new list.
-        spans: Final[list] = list(text_list)  # mutable-ok: ordered batch, frozen before the call.
-        writers: Final[list] = []  # mutable-ok: one per span appended below.
+        restored_calls: Final[list[object]] = [copy.deepcopy(call) for call in tool_calls]  # mutable-ok: a new list.
+        spans: Final[list[str]] = list(text_list)  # mutable-ok: ordered batch, frozen before the call.
+        writers: Final[list[Callable[[str], None]]] = []  # mutable-ok: one per span appended below.
         for call in restored_calls:
             function = _read_field(call, "function")
             arguments = _read_field(function, "arguments") if function is not None else None
             if isinstance(arguments, str) and arguments:
                 spans.append(arguments)
-                writers.append(lambda new, f=function: _write_field(f, "arguments", new))
+                writers.append(functools.partial(_write_field, function, "arguments"))
 
         replaced: Final = (
             await self._redact(tuple(spans), self._mint_session_id(request_data))
             if input_type == "request"
             else await self._rehydrate(tuple(spans), self._session_id(request_data))
         )
-        restored_values: Final[list] = list(replaced)  # mutable-ok: sliced into the texts list.
+        restored_values: Final[list[str]] = list(replaced)  # mutable-ok: sliced into the texts list.
 
         for write, replacement in zip(writers, restored_values[len(text_list) :]):
             write(replacement)
