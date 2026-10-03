@@ -2349,6 +2349,23 @@ async def test_load_config_yaml_vector_store_deny_by_default_is_boolean(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("yaml_value", ["", "enabled"], ids=["null", "string"])
+async def test_load_config_rejects_non_boolean_vector_store_deny_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, yaml_value: str
+):
+    config_file: Final = tmp_path / "vector_store.yaml"
+    config_file.write_text(
+        f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  vector_store_deny_by_default: {yaml_value}\n"
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match="vector_store_deny_by_default"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
     """Regression: router_settings.plugins dotted-path strings must be resolved to
     live RoutingPlugin instances on the created Router. Previously they were passed

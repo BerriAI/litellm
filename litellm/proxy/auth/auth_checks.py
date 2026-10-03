@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
@@ -153,7 +154,6 @@ from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 from litellm.utils import get_utc_datetime
-from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -1358,15 +1358,7 @@ async def common_checks(
             team_object=team_object,
             valid_token=valid_token,
             user_object=user_object,
-            deny_by_default=ConfigGeneralSettings.model_validate(
-                MappingProxyType(
-                    {
-                        "vector_store_deny_by_default": _typed_request_body(general_settings).get(
-                            "vector_store_deny_by_default", False
-                        )
-                    }
-                )
-            ).vector_store_deny_by_default,
+            deny_by_default=_vector_store_deny_by_default(_typed_request_body(general_settings)),
         )
 
     # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
@@ -6814,6 +6806,73 @@ def _is_strict_vector_store_identity(valid_token: UserAPIKeyAuth | None) -> bool
     )
 
 
+def _vector_store_deny_by_default(general_settings: Mapping[str, object]) -> bool:
+    """
+    Startup rejects a non-boolean value from the config file. A non-boolean value that reaches
+    general_settings another way enables the policy, so only vector store requests are denied.
+    """
+    try:
+        return ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {"vector_store_deny_by_default": general_settings.get("vector_store_deny_by_default", False)}
+            )
+        ).vector_store_deny_by_default
+    except ValidationError:
+        return True
+
+
+_VECTOR_STORE_IDS_ADAPTER: Final[TypeAdapter[list[str]]] = TypeAdapter(list[str])
+_TOOLS_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
+_TOOL_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _validated_vector_store_ids(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    try:
+        return tuple(_VECTOR_STORE_IDS_ADAPTER.validate_python(value, strict=True))
+    except ValidationError:
+        raise _malformed_vector_store_ids() from None
+
+
+def _malformed_vector_store_ids() -> ProxyException:
+    return ProxyException(
+        message="vector_store_ids must be a list of strings",
+        type="invalid_request_error",
+        param="vector_store_ids",
+        code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _tools(tools: object) -> tuple[object, ...]:
+    try:
+        return tuple(_TOOLS_ADAPTER.validate_python(tools, strict=True))
+    except ValidationError:
+        return ()
+
+
+def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+    try:
+        tool_fields: Final = _TOOL_ADAPTER.validate_python(tool, strict=True)
+    except ValidationError:
+        return ()
+    return _validated_vector_store_ids(tool_fields.get("vector_store_ids"))
+
+
+def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    """
+    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, but a vector_store_ids that is
+    not a list of strings is a 400 instead of being skipped or iterated, and tools that are not
+    objects name no store.
+    """
+    return tuple(
+        chain(
+            _validated_vector_store_ids(request_body.get("vector_store_ids")),
+            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
 def _require_vector_store_grant(
     object_type: Literal["key", "team", "user"],
     vector_store_ids_to_run: Sequence[str],
@@ -6864,7 +6923,8 @@ async def vector_store_access_check(
     rescue nor restrict a key or team request.
 
     Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
-    that does not grant a requested store.
+    that does not grant a requested store, and with the flag on, ProxyException (400,
+    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
     """
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -6875,18 +6935,18 @@ async def vector_store_access_check(
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
 
-    vector_store_registry: Final = (
-        VectorStoreRegistry()
-        if litellm.vector_store_registry is None and deny_by_default
-        else litellm.vector_store_registry
-    )
     registry_ids: Final = (
-        vector_store_registry.get_vector_store_ids_to_run(
-            non_default_params=request_body, tools=request_body.get("tools", None)
+        _strict_requested_vector_store_ids(_typed_request_body(request_body))
+        if deny_by_default
+        else (
+            litellm.vector_store_registry.get_vector_store_ids_to_run(
+                non_default_params=request_body, tools=request_body.get("tools", None)
+            )
+            if litellm.vector_store_registry is not None
+            else None
         )
-        if vector_store_registry is not None
-        else None
-    ) or ()
+        or ()
+    )
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
