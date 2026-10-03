@@ -3,7 +3,17 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.lens.models import Check, Lens, LensSettings, Evidence, FindingDraft, Scope, Worker
+from litellm.proxy.lens.models import (
+    AgentTestCase,
+    Check,
+    Evidence,
+    FindingDraft,
+    IssueBrief,
+    Lens,
+    LensSettings,
+    Scope,
+    Worker,
+)
 from litellm.proxy.lens.state import can_access, claim_job, current_job, merge_finding, queue_job, renew_budget
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
@@ -86,7 +96,14 @@ def test_behavior_description_is_sufficient_without_separate_checks() -> None:
 
 
 @pytest.mark.parametrize(
-    "field,value", (("sample_percent", 0), ("sample_percent", 101), ("sample_size", 0), ("concurrency", 0), ("lookback_hours", 0), ("lookback_hours", 8761))
+    "field,value",
+    (
+        ("sample_percent", 0),
+        ("sample_percent", 101),
+        ("sample_size", 0),
+        ("concurrency", 0),
+        ("lookback_hours", 0),
+    ),
 )
 def test_invalid_selection_and_parallelism_are_rejected(field: str, value: int) -> None:
     from pydantic import ValidationError
@@ -164,6 +181,32 @@ def test_finding_keeps_uncertainty_separate_from_the_main_summary() -> None:
     assert saved.description == draft.description
 
 
+def issue_brief(problem: str) -> IssueBrief:
+    return IssueBrief(
+        problem=problem,
+        user_goal="Open a pull request",
+        what_happened="The agent replied that it lacked repository access",
+        test_cases=(AgentTestCase(input="Open a PR fixing the typo", expected="A PR URL is returned"),),
+    )
+
+
+def test_issue_brief_survives_merges_and_refreshes_only_when_a_new_one_is_found() -> None:
+    draft: Final = finding("run1").model_copy(update={"brief": issue_brief("No repo tool")})
+    first: Final = merge_finding(lens(), draft, 1, NOW)
+    assert first.brief == issue_brief("No repo tool")
+    reviewed: Final = lens().model_copy(update={"findings": (first,)})
+    assert merge_finding(reviewed, finding("run2"), 2, NOW).brief == first.brief
+    refreshed: Final = finding("run2").model_copy(update={"brief": issue_brief("Token expired")})
+    assert merge_finding(reviewed, refreshed, 2, NOW).brief == refreshed.brief
+
+
+def test_issue_brief_requires_a_test_case() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        IssueBrief.model_validate({**issue_brief("No repo tool").model_dump(), "test_cases": ()})
+
+
 @pytest.mark.parametrize("interval", (1, 2, 37, 90, 10080))
 def test_custom_schedule_does_not_overlap_an_active_scan(interval: int) -> None:
     original: Final = lens()
@@ -173,7 +216,7 @@ def test_custom_schedule_does_not_overlap_an_active_scan(interval: int) -> None:
     assert queue_job(running, NOW + timedelta(minutes=interval), "second") is running
 
 
-@pytest.mark.parametrize("interval", (0, -1, 10081, 1.5))
+@pytest.mark.parametrize("interval", (0, -1, 1.5))
 def test_invalid_schedule_is_rejected(interval: float) -> None:
     from pydantic import ValidationError
 
@@ -242,3 +285,13 @@ def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check
     separate: Final = merge_finding(reviewed, other, 2, NOW)
     assert separate.id != legacy_id
     assert separate.status == "open" and separate.reason == ""
+
+
+@pytest.mark.parametrize("field", ("lookback_hours", "interval_minutes"))
+def test_calendar_overflow_is_rejected_without_the_old_history_and_interval_caps(field: str) -> None:
+    from pydantic import ValidationError
+
+    accepted: Final = LensSettings.model_validate({**lens().settings.model_dump(), field: 100000})
+    assert getattr(accepted, field) == 100000
+    with pytest.raises(ValidationError, match="supported calendar range"):
+        LensSettings.model_validate({**lens().settings.model_dump(), field: 10**30})

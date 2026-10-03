@@ -6,7 +6,7 @@ mod wire;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-use crate::{DecodeError, NormalizedSpan, Shared};
+use crate::{Error, NormalizedSpan, Shared};
 
 #[derive(Serialize)]
 pub struct DecodedEvent {
@@ -32,13 +32,10 @@ pub struct DecodedSpan {
     pub status_message: String,
     pub events: Vec<DecodedEvent>,
     pub normalized: NormalizedSpan,
-    pub consumed_attributes: [&'static str; 2],
+    pub consumed_attributes: Box<[&'static str]>,
 }
 
-pub fn decode_otlp(
-    body: &[u8],
-    content_type: Option<&str>,
-) -> Result<Vec<DecodedSpan>, DecodeError> {
+pub fn decode_otlp(body: &[u8], content_type: Option<&str>) -> Result<Vec<DecodedSpan>, Error> {
     let request = wire::decode(body, content_type)?;
     span::flatten(request)
 }

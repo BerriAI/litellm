@@ -268,6 +268,7 @@ from functools import lru_cache, partial
 import litellm
 import litellm._redis
 from litellm import Router
+from litellm._internal_context import service_target, with_service_target
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
@@ -348,6 +349,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     log_db_metrics,
 )
+from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
@@ -780,6 +782,9 @@ from litellm.proxy.shutdown.scheduled_jobs import (
     pause_scheduled_jobs,
     stop_in_flight_scheduler_jobs,
 )
+from litellm.proxy.spend_tracking.background_interaction_settlement import (
+    install_background_interaction_settlement,
+)
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -789,6 +794,7 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import (
+    SPEND_COUNTERS_TARGET,
     PendingSpendIncrement,
     active_spend_counter_batch,
     forget_spend_counter,
@@ -1397,6 +1403,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     await asyncio.sleep(5)
 
         asyncio.create_task(_run_agent_grant_id_migration())
+        await install_background_interaction_settlement(prisma_client)
 
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before
@@ -2883,6 +2890,7 @@ async def get_current_spend(
     return current
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None:
     """Raise a counter that has fallen below the authoritative DB spend (e.g.
     Redis restarted and reloaded an older snapshot) so every worker reads the
@@ -3003,6 +3011,7 @@ async def _authoritative_floor_spend(
     return db_spend
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None, bool]:
     """Return (value, authoritative) for the live counter, None when absent. A clean
     Redis miss is final: the per-pod in-memory copy outlives the Redis TTL and only
@@ -3542,10 +3551,11 @@ async def _prepare_spend_counter_increment(
        under-counting (would allow overspend).
     4. Increment is returned for the caller to apply via pipeline
     """
-    await _ensure_spend_counter_initialized(
-        counter_key=counter_key,
-        source_cache_key=source_cache_key,
-    )
+    with service_target(SPEND_COUNTERS_TARGET):
+        await _ensure_spend_counter_initialized(
+            counter_key=counter_key,
+            source_cache_key=source_cache_key,
+        )
     return PendingSpendIncrement(counter_key=counter_key, increment=increment)
 
 
@@ -3613,13 +3623,14 @@ async def _prepare_window_spend_counter_increment(
         )
         return None
 
-    initialized: Final = await _ensure_window_spend_counter_initialized(
-        counter_key=counter_key,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        window_duration=window_duration,
-        window_start=window_start,
-    )
+    with service_target(SPEND_COUNTERS_TARGET):
+        initialized: Final = await _ensure_window_spend_counter_initialized(
+            counter_key=counter_key,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            window_duration=window_duration,
+            window_start=window_start,
+        )
     if initialized is False:
         return None
     return PendingSpendIncrement(counter_key=counter_key, increment=increment)
@@ -3688,6 +3699,7 @@ async def _ensure_window_spend_counter_initialized(
     return True
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
     batched: Final = await read_batched_spend_counter(counter_key)
     if batched is not None:
@@ -3726,6 +3738,7 @@ async def increment_spend_counter(counter_key: str, increment: float):
     return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def refresh_spend_counter_ttl(counter_key: str) -> bool:
     if spend_counter_cache.redis_cache is None:
         return False
@@ -3736,6 +3749,7 @@ async def refresh_spend_counter_ttl(counter_key: str) -> bool:
         return False
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
     if spend_counter_cache.redis_cache is not None:
         try:
@@ -3759,6 +3773,7 @@ async def _increment_spend_counter_cache(counter_key: str, increment: float):
     )
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def _invalidate_spend_counter(counter_key: str):
     forget_spend_counter(counter_key)
     spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
@@ -3795,8 +3810,9 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     if batch is None:
         return False
     ttl: Final = redis_cache.get_ttl()
-    for item in pending:
-        batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
+    with service_target(SPEND_COUNTERS_TARGET):
+        for item in pending:
+            batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
     return True
 
 
@@ -3831,6 +3847,7 @@ async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrem
         raise
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
     """The pipeline behind ``increment_spend_counters_pipeline`` without its invalidation: the caller decides what
     happens to counters whose increment may or may not have landed when the pipeline fails."""
@@ -3884,9 +3901,10 @@ async def arm_update_cache_read(keys: Sequence[str], cache: DualCache | None = N
     target: Final = user_api_key_cache if cache is None else cache
     if request is None or target.redis_cache is None or not keys:
         return
-    request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
-        keys, request.batch(target.redis_cache)
-    )
+    with service_target(AUTH_OBJECTS_TARGET):
+        request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
+            keys, request.batch(target.redis_cache)
+        )
 
 
 async def _take_armed_update_cache_read(keys: Sequence[str], cache: DualCache) -> Mapping[str, object] | None:
@@ -3944,12 +3962,13 @@ async def update_cache(
     """
 
     values_to_update_in_cache: Final[list[tuple[str, object]]] = []
-    cached_values: Final = await _read_update_cache_values(
-        keys=update_cache_read_keys(
-            user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
-        ),
-        parent_otel_span=parent_otel_span,
-    )
+    with service_target(AUTH_OBJECTS_TARGET):
+        cached_values: Final = await _read_update_cache_values(
+            keys=update_cache_read_keys(
+                user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
+            ),
+            parent_otel_span=parent_otel_span,
+        )
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -4193,42 +4212,45 @@ async def update_cache(
                 traceback.format_exc(),
             )
 
-    if token is not None and response_cost is not None:
-        await _update_key_cache(token=token, response_cost=response_cost)
+    with service_target(AUTH_OBJECTS_TARGET):
+        if token is not None and response_cost is not None:
+            await _update_key_cache(token=token, response_cost=response_cost)
 
-    if user_id is not None:
-        await _update_user_cache()
+        if user_id is not None:
+            await _update_user_cache()
 
-    if end_user_id is not None:
-        await _update_end_user_cache()
+        if end_user_id is not None:
+            await _update_end_user_cache()
 
-    if team_id is not None:
-        await _update_team_cache()
+        if team_id is not None:
+            await _update_team_cache()
 
-    if tags is not None:
-        await _update_tag_cache()
+        if tags is not None:
+            await _update_tag_cache()
 
     global_proxy_spend_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
     local_object_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k != global_proxy_spend_key)
     shared_scalar_updates: Final = tuple((k, v) for k, v in values_to_update_in_cache if k == global_proxy_spend_key)
 
     if local_object_updates:
-        asyncio.create_task(
-            user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(local_object_updates),
-                ttl=get_management_object_ttl(user_api_key_cache),
-                litellm_parent_otel_span=parent_otel_span,
-                local_only=True,
+        with service_target(AUTH_OBJECTS_TARGET):
+            asyncio.create_task(
+                user_api_key_cache.async_set_cache_pipeline(
+                    cache_list=list(local_object_updates),
+                    ttl=get_management_object_ttl(user_api_key_cache),
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
             )
-        )
     if shared_scalar_updates:
-        asyncio.create_task(
-            user_api_key_cache.async_set_cache_pipeline(
-                cache_list=list(shared_scalar_updates),
-                ttl=get_management_object_ttl(user_api_key_cache),
-                litellm_parent_otel_span=parent_otel_span,
+        with service_target(SPEND_COUNTERS_TARGET):
+            asyncio.create_task(
+                user_api_key_cache.async_set_cache_pipeline(
+                    cache_list=list(shared_scalar_updates),
+                    ttl=get_management_object_ttl(user_api_key_cache),
+                    litellm_parent_otel_span=parent_otel_span,
+                )
             )
-        )
 
 
 def run_ollama_serve():
@@ -9010,11 +9032,15 @@ class ProxyConfig:
 
         from litellm.proxy.search_endpoints.search_tool_registry import (
             SearchToolRegistry,
+            keep_loaded_search_tools_that_do_not_decrypt,
         )
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
         try:
-            db_search_tools: Final = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+            db_search_tools: Final = keep_loaded_search_tools_that_do_not_decrypt(
+                await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client),
+                loaded_search_tools=llm_router.search_tools if llm_router is not None else (),
+            )
 
             parsed_tools: Final = self.parse_search_tools(self.get_config_state())
             config_search_tools: Final = parsed_tools or []
@@ -9462,12 +9488,17 @@ def _restamp_streaming_chunk_model(
         )
         model_mismatch_logged = True
 
+    # The streaming wrapper keeps these same chunk objects to assemble the response it
+    # prices, so stamp a copy for the client and leave the provider's model for pricing.
+    # The logging object stamps the same model on the assembled response after pricing it.
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.client_facing_stream_model = target_model
     if isinstance(chunk, dict):
-        chunk["model"] = target_model
-        return chunk, model_mismatch_logged
+        return {**chunk, "model": target_model}, model_mismatch_logged
 
     try:
-        chunk.model = target_model
+        return chunk.model_copy(update={"model": target_model}), model_mismatch_logged
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
@@ -12269,6 +12300,8 @@ async def completion(
         )
         litellm_call_id: Final = request_litellm_call_id(data)
         log_llm_api_exception(e, litellm_call_id)
+        if isinstance(e, ProxyException):
+            raise with_litellm_call_id(e, litellm_call_id)
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),

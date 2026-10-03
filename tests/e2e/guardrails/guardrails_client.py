@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, Literal
 
-from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
+from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, SLOW_PROVIDER_TIMEOUT_SECONDS, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -20,6 +20,8 @@ from models import (
     ChatMetadata,
     ChatResponse,
     ChatTool,
+    ImageEditForm,
+    ImageGenerationResponse,
     KeyGenerateBody,
     KeyMetadata,
     LiteLLMParamsBody,
@@ -362,6 +364,19 @@ class GuardrailsClient:
             headers=self.proxy.transport.bearer(key),
             json=VideoCreateBody(model=model, prompt=prompt, seconds="4"),
             response_type=VideoCreateResponse,
+        )
+
+    def edit_image(self, key: str, model: str, prompt: str, image: bytes) -> Result[ImageGenerationResponse]:
+        return self.proxy.transport.upload(
+            "/v1/images/edits",
+            headers=self.proxy.transport.bearer(key),
+            form=ImageEditForm(model=model, prompt=prompt),
+            filename="image.png",
+            content=image,
+            file_content_type="image/png",
+            file_field="image",
+            response_type=ImageGenerationResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     def chat(

@@ -16,6 +16,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 import litellm.types
+from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -81,6 +82,9 @@ def _proxy_llm_router() -> Router | None:
     from litellm.proxy.proxy_server import llm_router
 
     return llm_router
+
+
+_DAILY_REPORT_TARGET: Final = "daily_report_schedule"
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -1760,18 +1764,20 @@ Model Info:
         """
         report_sent_bool = False
 
-        report_sent: Final = await self.internal_usage_cache.async_get_cache(
-            key=SlackAlertingCacheKeys.report_sent_key.value,
-            parent_otel_span=None,
-        )  # None | float
+        with service_target(_DAILY_REPORT_TARGET):
+            report_sent: Final = await self.internal_usage_cache.async_get_cache(
+                key=SlackAlertingCacheKeys.report_sent_key.value,
+                parent_otel_span=None,
+            )  # None | float
 
         current_time: Final = time.time()
 
         if report_sent is None:
-            await self.internal_usage_cache.async_set_cache(
-                key=SlackAlertingCacheKeys.report_sent_key.value,
-                value=current_time,
-            )
+            with service_target(_DAILY_REPORT_TARGET):
+                await self.internal_usage_cache.async_set_cache(
+                    key=SlackAlertingCacheKeys.report_sent_key.value,
+                    value=current_time,
+                )
         elif isinstance(report_sent, float):
             # Check if current time - interval >= time last sent
             interval_seconds: Final = self.alerting_args.daily_report_frequency
@@ -1790,10 +1796,11 @@ Model Info:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
-                await self.internal_usage_cache.async_set_cache(
-                    key=SlackAlertingCacheKeys.report_sent_key.value,
-                    value=current_time,
-                )
+                with service_target(_DAILY_REPORT_TARGET):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=SlackAlertingCacheKeys.report_sent_key.value,
+                        value=current_time,
+                    )
                 report_sent_bool = True
 
         return report_sent_bool
