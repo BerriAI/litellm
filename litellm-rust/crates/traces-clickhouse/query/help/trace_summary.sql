@@ -7,4 +7,6 @@ SELECT TeamId AS team, ApiKeyHash AS api_key, TraceId AS trace_id,
        toUInt32(sum(OutputTokens)) AS output_tokens
 FROM agent_traces_by_key
 GROUP BY TeamId, ApiKeyHash, TraceId
+HAVING min(StartTs) >= now() - INTERVAL 1 DAY
 ORDER BY team, api_key, trace_id
+LIMIT 100

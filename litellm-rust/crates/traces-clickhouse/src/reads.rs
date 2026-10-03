@@ -8,8 +8,8 @@ use litellm_traces::{StoreError, TraceStore, query::named as contracts};
 use crate::{
     Connection, Error,
     query::named::{
-        ListTracesParams, ListTracesRow, SpanDetail as SpanDetailQuery, SpanError, SpanErrorParams,
-        SpendByResponseIdsParams, TraceIdentity, TracePageSpansParams,
+        ListTracesParams, ListTracesRow, SpanDetail as SpanDetailQuery, SpanError,
+        SpanErrorParams, SpendByResponseIdsParams, TraceIdentity, TracePageSpansParams,
     },
 };
 
