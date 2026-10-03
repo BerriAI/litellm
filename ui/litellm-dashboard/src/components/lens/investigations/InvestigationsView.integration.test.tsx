@@ -1,4 +1,4 @@
-import { act, screen, within, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as renderProviders, testQueryClient } from "@/../tests/test-utils";
@@ -86,6 +86,8 @@ const lens: Lens = {
       id: "scan",
       findings: [pattern, issue],
       assessments: [],
+      steps: [],
+      trigger: "schedule",
       attempts: 0,
       error: "",
       cost: 0,
@@ -232,7 +234,7 @@ describe("Lens findings and runs", () => {
   });
 });
 
-it("runs saved settings immediately without opening setup", async () => {
+it("runs with saved settings from Run now without opening setup, then accepts an agent and window", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens")
@@ -258,8 +260,22 @@ it("runs saved settings immediately without opening setup", async () => {
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" />);
   await user.click(await screen.findByRole("button", { name: "Run now" }));
+  const choices = await screen.findByRole("dialog", { name: "Run now" });
+  expect(within(choices).getByRole("button", { name: "Since last run" })).toHaveAttribute("aria-pressed", "true");
+  await user.click(within(choices).getByRole("button", { name: "Run now" }));
   expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", { accessToken: "test", body: {} });
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+  vi.mocked(apiClient.post).mockClear();
+  await user.click(screen.getByRole("button", { name: "Run now" }));
+  const custom = await screen.findByRole("dialog", { name: "Run now" });
+  fireEvent.change(within(custom).getByRole("combobox", { name: "Agent" }), { target: { value: "billing" } });
+  await user.click(within(custom).getByRole("button", { name: "Last 24h" }));
+  await user.click(within(custom).getByRole("button", { name: "Run now" }));
+  expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", {
+    accessToken: "test",
+    body: { agent_name: "billing", lookback_hours: 24 },
+  });
 });
 
 it("offers the interactive demo without starting an investigation", async () => {
