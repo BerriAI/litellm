@@ -226,3 +226,19 @@ def test_worker_configuration_accepts_private_service_address() -> None:
     from litellm_enterprise.proxy.liteadmin import validate_native_configuration
 
     validate_native_configuration("http://liteadmin.default.svc:10000", "s" * 32, True, True)
+
+
+def test_connect_preserves_gateway_prefix_through_login_and_consent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROXY_BASE_URL", ORIGIN + "/gateway")
+    with client_for(Worker(), logged_in=False) as client:
+        login: Final = client.get(PATH, follow_redirects=False)
+    assert login.status_code == 303
+    assert login.headers["location"] == (
+        ORIGIN + "/gateway/sso/key/generate?return_to=%2Fgateway%2Fliteadmin%2Fslack%2Fconnect%2F" + TOKEN
+    )
+    worker: Final = Worker()
+    with client_for(worker) as client:
+        csrf: Final = csrf_from(client)
+        connected: Final = client.post(PATH, data={"csrf": csrf}, headers={"Origin": ORIGIN})
+    assert connected.status_code == 200
+    assert worker.session is not None

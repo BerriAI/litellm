@@ -211,12 +211,13 @@ async def connect_page(
 ) -> Response:
     details: Final = await context.details(token)
     base_url: Final = get_request_base_url(request)
-    if urlsplit(base_url).scheme != "https":
+    parsed_base: Final = urlsplit(base_url)
+    if parsed_base.scheme != "https":
         raise HTTPException(400, "LiteAdmin account connections require HTTPS")
     user_id: Final = await context.session_user(request)
     if user_id is None:
         return RedirectResponse(
-            base_url + "/sso/key/generate?" + urlencode({"return_to": _PREFIX + token}),
+            base_url + "/sso/key/generate?" + urlencode({"return_to": parsed_base.path + _PREFIX + token}),
             status_code=303,
             headers=_HEADERS,
         )
@@ -241,7 +242,9 @@ async def connect_account(
     context: Annotated[NativeAdminContext, Depends(native_admin_context)],
 ) -> Response:
     base_url: Final = get_request_base_url(request)
-    if urlsplit(base_url).scheme != "https" or request.headers.get("Origin") != base_url:
+    parsed_base: Final = urlsplit(base_url)
+    origin: Final = f"{parsed_base.scheme}://{parsed_base.netloc}"
+    if parsed_base.scheme != "https" or request.headers.get("Origin") != origin:
         raise HTTPException(403, "Reopen your private Slack connection link")
     if request.headers.get("Content-Type", "").split(";", 1)[0] != "application/x-www-form-urlencoded":
         raise HTTPException(400, "Expected a connection form")
