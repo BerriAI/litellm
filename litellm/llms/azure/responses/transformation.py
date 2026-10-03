@@ -38,6 +38,15 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
         return AzureOpenAIGPT5Config.effort_resolves_to_none(model, effort)
 
+    @staticmethod
+    def _is_unsupported_reasoning_effort(model: str, effort: str | None) -> bool:
+        """Read the effort capability from the Azure map entry, like the sibling checks above.
+
+        The inherited OpenAI lookup would resolve a bare Azure deployment name (e.g. ``gpt-5.4``)
+        against the OpenAI entry, which can explicitly disable an effort Azure supports.
+        """
+        return AzureOpenAIGPT5Config.is_reasoning_effort_unsupported(model, effort)
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Azure Responses API does not support context_management (compaction).
