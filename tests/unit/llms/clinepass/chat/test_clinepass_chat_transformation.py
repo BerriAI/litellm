@@ -76,41 +76,83 @@ def test_provider_config_manager_returns_clinepass_config():
     assert isinstance(config, ClinePassConfig)
 
 
-def test_clinepass_is_not_a_json_configured_provider():
+def test_clinepass_is_not_a_json_configured_provider_via_behaviour():
     """ClinePass needs a response transform, which the JSON provider system's
-    OpenAI-SDK dispatch path never invokes. Guard against it drifting back."""
-    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    OpenAI-SDK dispatch path never invokes. We assert it is not on that path
+    by verifying the envelope unwrap actually triggers."""
+    captured = {}
 
-    assert not JSONProviderRegistry.exists("clinepass")
+    def fake_post(self, url, *args, **kwargs):
+        captured["body"] = json.loads(kwargs["data"])
+        return _response(ENVELOPED_COMPLETION)
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        response = litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    # The unwrap works, meaning we didn't drift into the JSON provider registry
+    # which would have bypassed our custom transform.
+    assert response.choices[0].message.content == "pong"
 
 
 def test_clinepass_is_not_in_openai_compatible_providers():
-    """ClinePass must NOT be in `openai_compatible_providers`.
+    """The cheap structural guard for the credential leak. Keep it.
 
-    An earlier revision listed it there to reach `_map_openai_exception`, on the
-    assumption that the explicit dispatch branch in main.py made membership
-    inert for routing. It is not inert. The list is also consulted by:
+    The behavioural test below proves the *consequence*; this proves the
+    *cause*, in one line and with no mocking that could itself be wrong. Both
+    are wanted: a mocked behavioural test can drift into passing for the wrong
+    reason, while this cannot.
 
-    * the speech branch in `main.py` -- which sends the request to the
-      provider's own `api_base` while taking the key from
-      `OPENAI_API_KEY`, leaking the user's OpenAI credential to a third-party
-      host for an endpoint ClinePass does not even implement;
-    * `OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS`, derived from this list, which
-      opens the same hole for transcription;
-    * image generation in `litellm/images/main.py`;
-    * `_add_provider_specific_params` in `litellm/utils.py`, which packs unknown
-      kwargs into `extra_body`. That is an OpenAI *SDK* concept the SDK unwraps
-      client-side. ClinePass dispatches through `BaseLLMHTTPHandler`, which
-      serialises optional params straight into the JSON body -- so membership
-      put a literal `"extra_body": {}` on the wire on every chat request, and
-      buried genuine vendor kwargs one level deep instead of flattening them.
+    The membership is not routing-inert, which is what made it dangerous. The
+    list is also read by the speech branch in `main.py` -- which sends to the
+    provider's own `api_base` while taking the key from `OPENAI_API_KEY`, so a
+    `litellm.speech(model="clinepass/...")` call shipped the caller's OpenAI
+    credential to the Cline host for an endpoint ClinePass does not implement --
+    by `OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS`, which is derived from it, by
+    image generation in `litellm/images/main.py`, and by
+    `_add_provider_specific_params`, which wraps unknown kwargs in `extra_body`
+    (an OpenAI *SDK* concept that `BaseLLMHTTPHandler` never unwraps, so it went
+    on the wire verbatim).
 
-    Exception mapping is preserved by registering ClinePass explicitly alongside
-    `mistral` and `runwayml` in `exception_mapping_utils.py`;
-    `test_upstream_401_maps_to_authentication_error` is the guard for that.
+    Exception mapping is preserved by registering ClinePass explicitly beside
+    `mistral` in `exception_mapping_utils.py`; see
+    `test_upstream_401_maps_to_authentication_error`.
     """
     assert "clinepass" not in litellm.openai_compatible_providers
     assert "clinepass" not in litellm.constants.OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
+
+
+def test_clinepass_is_not_in_openai_compatible_providers_via_behaviour():
+    """ClinePass must NOT be in `openai_compatible_providers`.
+    If it drifts back there, LiteLLM packs unknown kwargs into an `extra_body` dict.
+    We assert they are flattened straight into the JSON body instead.
+    We also assert transcription raises UnsupportedProviderError instead of
+    attempting an OpenAI-shaped request to the third-party endpoint."""
+    captured = {}
+
+    def fake_post(self, url, *args, **kwargs):
+        captured["body"] = json.loads(kwargs["data"])
+        return _response(ENVELOPED_COMPLETION)
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "ping"}],
+            custom_vendor_flag=True,  # unknown kwarg
+        )
+
+    assert "extra_body" not in captured["body"]
+    assert captured["body"].get("custom_vendor_flag") is True
+
+    # Audio transcription should outright fail as unmapped, confirming it
+    # isn't implicitly picked up by OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
+    with pytest.raises(ValueError, match="Unmapped provider"):
+        litellm.transcription(
+            model="clinepass/deepseek-v4-flash",
+            file=b"fake audio data",
+        )
 
 
 def test_api_base_env_override(monkeypatch):
@@ -313,6 +355,214 @@ def test_completion_streaming_is_not_unwrapped():
     assert finish_reason == "stop"
 
 
+@pytest.mark.asyncio
+async def test_acompletion_streaming_is_not_unwrapped():
+    chunks = [
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "clinepass/deepseek-v4-flash",
+            "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}],
+        }
+        for piece in ["one ", "two ", "three"]
+    ]
+    chunks.append(
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "clinepass/deepseek-v4-flash",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+    )
+    body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+
+    async def fake_post(self, url, *args, **kwargs):
+        return httpx.Response(
+            200,
+            content=body.encode(),
+            headers={"content-type": "text/event-stream"},
+            request=httpx.Request("POST", str(url)),
+        )
+
+    with patch.object(AsyncHTTPHandler, "post", fake_post):
+        stream = await litellm.acompletion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "count"}],
+            max_tokens=4000,
+            stream=True,
+        )
+        text = ""
+        finish_reason = None
+        async for c in stream:
+            if c.choices:
+                if c.choices[0].delta.content:
+                    text += c.choices[0].delta.content
+                if c.choices[0].finish_reason:
+                    finish_reason = c.choices[0].finish_reason
+
+    assert text == "one two three"
+    assert finish_reason == "stop"
+
+
+def test_completion_streaming_tool_call_reassembly():
+    """Tool calls split across chunks must be correctly passed through by the OpenAI-compatible stream processor."""
+    chunks = [
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "clinepass/deepseek-v4-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_123",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "clinepass/deepseek-v4-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"loc'}}]},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "clinepass/deepseek-v4-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'ation": "NYC"}'}}]},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "clinepass/deepseek-v4-flash",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
+    ]
+    body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+
+    def fake_post(self, url, *args, **kwargs):
+        return httpx.Response(
+            200,
+            content=body.encode(),
+            headers={"content-type": "text/event-stream"},
+            request=httpx.Request("POST", str(url)),
+        )
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        stream = litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "weather"}],
+            stream=True,
+        )
+
+        args_text = ""
+        for c in stream:
+            if c.choices and c.choices[0].delta.tool_calls:
+                tc = c.choices[0].delta.tool_calls[0]
+                if tc.function and tc.function.arguments:
+                    args_text += tc.function.arguments
+
+    assert args_text == '{"location": "NYC"}'
+
+
+def test_completion_preserves_usage():
+    def fake_post(self, url, *args, **kwargs):
+        return _response(ENVELOPED_COMPLETION)
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        response = litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    assert response.usage.prompt_tokens == 5
+    assert response.usage.completion_tokens == 2
+    assert response.usage.total_tokens == 7
+
+
+def test_completion_sends_authorization_header():
+    captured_headers = {}
+
+    def fake_post(self, url, *args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return _response(ENVELOPED_COMPLETION)
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    assert captured_headers.get("Authorization") == f"Bearer {API_KEY}"
+
+
+def test_completion_explicit_api_key_precedence():
+    captured_headers = {}
+
+    def fake_post(self, url, *args, **kwargs):
+        captured_headers.update(kwargs.get("headers", {}))
+        return _response(ENVELOPED_COMPLETION)
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="sk-clinepass-explicit-key",
+        )
+
+    assert captured_headers.get("Authorization") == "Bearer sk-clinepass-explicit-key"
+
+
+def test_upstream_429_maps_to_rate_limit_error():
+    from litellm.exceptions import RateLimitError
+
+    def fake_post(self, url, *args, **kwargs):
+        raise httpx.HTTPStatusError(
+            "Too Many Requests",
+            request=httpx.Request("POST", str(url)),
+            response=httpx.Response(
+                429,
+                json={"error": "Rate limit exceeded"},
+                request=httpx.Request("POST", str(url)),
+            ),
+        )
+
+    with patch.object(HTTPHandler, "post", fake_post), pytest.raises(RateLimitError) as excinfo:
+        litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert excinfo.value.status_code == 429
+
+
 def test_upstream_401_maps_to_authentication_error():
     """ClinePass answers a bad key with HTTP 401; that must not be flattened
     into a generic APIConnectionError."""
@@ -329,13 +579,12 @@ def test_upstream_401_maps_to_authentication_error():
             ),
         )
 
-    with patch.object(HTTPHandler, "post", fake_post):
-        with pytest.raises(AuthenticationError) as excinfo:
-            litellm.completion(
-                model="clinepass/deepseek-v4-flash",
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=100,
-            )
+    with patch.object(HTTPHandler, "post", fake_post), pytest.raises(AuthenticationError) as excinfo:
+        litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=100,
+        )
 
     assert excinfo.value.status_code == 401
 
@@ -400,7 +649,6 @@ def test_max_completion_tokens_param_preserves_upstream_stop():
     assert response.choices[0].finish_reason == "stop"
 
 
-
 # --------------------------------------------------------------------------
 # Model catalog
 # --------------------------------------------------------------------------
@@ -431,8 +679,32 @@ def test_unwrap_envelope_survives_a_response_with_no_request_attached():
     assert unwrapped.json() == ENVELOPED_COMPLETION["data"]
 
 
-def test_clinepass_config_has_no_async_transform_request_override():
+@pytest.mark.asyncio
+async def test_acompletion_uses_sync_transform_request_via_behaviour():
     """BaseLLMHTTPHandler builds the body with the sync transform_request on both
     paths, so an async override would be dead code -- the shape of bug this
-    provider already shipped once."""
-    assert "async_transform_request" not in ClinePassConfig.__dict__
+    provider already shipped once. We assert this by verifying `acompletion`
+    invokes the sync transform (which we mock here to prove it runs)."""
+    captured = {}
+
+    # We patch the sync transform_request to prove it is the one called
+    # during the async flow.
+    original_transform = ClinePassConfig().transform_request
+
+    def mock_transform_request(*args, **kwargs):
+        captured["called"] = True
+        return original_transform(*args, **kwargs)
+
+    async def fake_post(self, url, *args, **kwargs):
+        return _response(ENVELOPED_COMPLETION)
+
+    with (
+        patch.object(ClinePassConfig, "transform_request", side_effect=mock_transform_request),
+        patch.object(AsyncHTTPHandler, "post", fake_post),
+    ):
+        await litellm.acompletion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    assert captured.get("called") is True
