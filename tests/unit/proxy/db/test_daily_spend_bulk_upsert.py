@@ -3,11 +3,13 @@
 import re
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Final
 
 import pytest
 
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
+    DailySpendTable,
     build_bulk_upsert,
     conflict_key,
     merge_by_conflict_key,
@@ -19,7 +21,7 @@ USER_TABLE = DAILY_SPEND_TABLES["user"]
 
 # Every nullable member of the unique constraint, so a test that only varied the provider
 # cannot pass while a sibling column still leaks a NULL into the conflict target.
-NULLABLE_KEY_COLUMNS = ("model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
+NULLABLE_KEY_COLUMNS = ("model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint", "model_group")
 
 
 def tag_txn(**overrides):
@@ -71,13 +73,16 @@ def test_null_and_empty_provider_merge_into_one_row(order):
     assert folded["api_requests"] == 4
 
 
-def test_distinct_keys_are_not_merged_and_are_ordered_deterministically():
-    unordered = (tag_txn(tag="z-team"), tag_txn(tag="a-team"), tag_txn(tag="m-team"))
+@pytest.mark.parametrize("table", tuple(DAILY_SPEND_TABLES.values()), ids=tuple(DAILY_SPEND_TABLES))
+@pytest.mark.parametrize("group_only", (False, True))
+def test_distinct_keys_are_not_merged_and_are_ordered_deterministically(table: DailySpendTable, group_only: bool) -> None:
+    column: Final = "model_group" if group_only else table.entity_id_column
+    unordered: Final = tuple(tag_txn(**{column: name}) for name in ("z-team", "a-team", "m-team"))
 
-    merged = merge_by_conflict_key(TAG_TABLE, unordered)
+    merged: Final = merge_by_conflict_key(table, unordered)
 
-    assert [txn["tag"] for _, txn in merged] == ["a-team", "m-team", "z-team"]
-    assert merged == merge_by_conflict_key(TAG_TABLE, tuple(reversed(unordered)))
+    assert [txn[column] for _, txn in merged] == ["a-team", "m-team", "z-team"]
+    assert merged == merge_by_conflict_key(table, tuple(reversed(unordered)))
 
 
 def test_one_statement_carries_every_row_in_the_batch():
@@ -100,7 +105,7 @@ def test_conflict_target_is_the_full_unique_constraint():
     conflict_target = re.search(r"ON CONFLICT \(([^)]*)\)", sql)
     assert conflict_target is not None
     assert conflict_target.group(1) == (
-        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
+        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint", "model_group"'
     )
 
 
@@ -188,7 +193,7 @@ async def test_writer_survives_a_transaction_whose_key_columns_are_null():
     """A NULL key column used to raise out of prisma and drop the whole batch's spend."""
     prisma_client = _RecordingPrismaClient()
     transactions = {
-        "mcp": tag_txn(model=None, custom_llm_provider=None, mcp_namespaced_tool_name="server/tool"),
+        "mcp": tag_txn(model=None, model_group=None, custom_llm_provider=None, mcp_namespaced_tool_name="server/tool"),
         "chat": tag_txn(),
     }
 

@@ -94,6 +94,14 @@ When the guard fires:
 
 > **AI AGENTS / ASSISTANTS:** Do **not** automatically re-run the command with `--allow-destructive`. If the guard fires while you are driving the runbook for a human, stop, show them the error, and wait for their explicit confirmation before passing the flag. Auto-passing `--allow-destructive` is the exact failure mode this guard exists to prevent.
 
+## Daily spend model-group identity cutover
+
+`20260922000000_daily_spend_model_group_identity` separates daily usage by the requested public model group. Schedule a maintenance window: the six replacement unique indexes scan existing daily spend tables and block writes while building
+
+Drain incoming requests and all in-memory and shared Redis spend buffers, then stop every old proxy and spend collector before applying this migration. Start only upgraded writers after it completes. Old writers require the removed conflict target and cannot run alongside the expanded identity. The migration changes indexes only; previously merged attribution and legacy NULL groups remain as recorded
+
+PTU flat charges retain their deployment/day identity across public-model renames. New inference rows include the requested group in their identity. Rolling back requires stopping writers and reconciling group-separated rows before restoring the old unique indexes; simply starting an older image is unsupported
+
 ## Common Fixes
 
 **Missing testing module:**
