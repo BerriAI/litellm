@@ -198,6 +198,7 @@ def rebase_spend(
 
 def postgres_row(row: SpendLogRecord) -> LiteLLM_SpendLogsCreateWithoutRelationsInput:
     from prisma import Json
+    from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 
     return LiteLLM_SpendLogsCreateWithoutRelationsInput(
         request_id=row["request_id"],
