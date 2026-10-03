@@ -13,6 +13,16 @@ const SCOPES: [&str; 7] = [
 
 pub(super) fn matches(context: &SpanContext<'_>) -> bool {
     SCOPES.contains(&context.scope)
+        || (context.scope == "litellm.gateway.client"
+            && context.name == "gateway.request"
+            && context
+                .attributes
+                .get("litellm.gateway.attempt")
+                .is_some_and(|value| value == "true")
+            && context
+                .attributes
+                .get("http.request.method")
+                .is_some_and(|value| value == "POST"))
 }
 
 pub(super) fn adjust(facts: SpanFacts) -> SpanFacts {

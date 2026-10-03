@@ -4454,6 +4454,7 @@ name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "base64 0.22.1",
  "criterion",
  "indexmap 2.14.0",
  "litellm-llms-types",

@@ -23,6 +23,7 @@ thiserror.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 criterion.workspace = true
 rstest.workspace = true
 
