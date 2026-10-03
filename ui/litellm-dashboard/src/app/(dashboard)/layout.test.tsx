@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
-  default: () => <button>LiteAdmin</button>,
+  LiteAdminFrame: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
@@ -88,31 +88,6 @@ describe("(dashboard) Layout", () => {
     searchParamsValue = new URLSearchParams();
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
   });
-
-  it.each(["/ui/playground", "/ui/playground/"])(
-    "hides LiteAdmin on %s and restores it after leaving Playground",
-    async (pathname) => {
-      const dashboard = () => (
-        <AuthProvider>
-          <Layout>
-            <div data-testid="page-content" />
-          </Layout>
-        </AuthProvider>
-      );
-      const { rerender } = render(dashboard());
-      pendingUiConfig.resolve();
-      expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
-
-      vi.mocked(usePathname).mockReturnValue(pathname);
-      rerender(dashboard());
-      expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
-      expect(screen.getByTestId("page-content")).toBeInTheDocument();
-
-      vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
-      rerender(dashboard());
-      expect(screen.getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
-    },
-  );
 
   it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
     const dashboard = () => (
