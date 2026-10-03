@@ -10611,3 +10611,50 @@ async def test_common_checks_tag_ownership_and_tag_budget_share_one_find_many():
     )
     assert result is True
     assert _per_name_tag_query_count(prisma) == 1
+
+
+def _routed_ownership_prisma(reader_tag_rows, writer_tag_rows, writer_unavailable=False):
+    """A RoutingPrismaWrapper whose reader replica is stale next to the writer."""
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    def _inner(tag_rows):
+        inner = MagicMock()
+
+        async def find_many(**kwargs):
+            if "where" in kwargs:
+                names = set(kwargs["where"]["tag_name"]["in"])
+                return [row for row in tag_rows if row.tag_name in names]
+            return [_tag_registry_row(row.tag_name) for row in tag_rows]
+
+        inner.litellm_tagtable = SimpleNamespace(find_many=AsyncMock(side_effect=find_many), create=AsyncMock())
+        return inner
+
+    routing = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=_inner(writer_tag_rows), iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=_inner(reader_tag_rows), iam_token_db_auth=False),
+    )
+    routing._writer_unavailable = writer_unavailable
+    return SimpleNamespace(db=routing)
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_reads_the_writer_behind_a_read_replica():
+    prisma = _routed_ownership_prisma(
+        reader_tag_rows=[_tag_db_row("shared-tag", team_id=None)],
+        writer_tag_rows=[_tag_db_row("shared-tag", team_id="team-a")],
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce(["shared-tag"], team_id="team-b", prisma=prisma)
+    assert exc_info.value.type == ProxyErrorTypes.tag_ownership_denied
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_falls_back_to_the_reader_when_writer_unavailable():
+    prisma = _routed_ownership_prisma(
+        reader_tag_rows=[_tag_db_row("shared-tag", team_id=None)],
+        writer_tag_rows=[_tag_db_row("shared-tag", team_id="team-a")],
+        writer_unavailable=True,
+    )
+    tag_map = await _enforce(["shared-tag"], team_id="team-b", prisma=prisma)
+    assert tag_map["shared-tag"].team_id is None

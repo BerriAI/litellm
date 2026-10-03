@@ -115,6 +115,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
@@ -2107,7 +2108,7 @@ async def _end_user_id_exists_in_db(
 
 
 async def _load_tag_registry(
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | WriterPinnedClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
     """The set of tag names that have a row in ``LiteLLM_TagTable``."""
@@ -2229,7 +2230,7 @@ async def get_model_access_group_budgets_batch(
 
 async def _query_uncached_tags(
     uncached_tags: Sequence[str],
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | WriterPinnedClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
     """Rows for the tags a cache probe missed; names absent from the registry never reach the DB.
@@ -2266,7 +2267,7 @@ async def _query_uncached_tags(
 
 async def _fetch_uncached_tags(
     uncached_tags: Sequence[str],
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | WriterPinnedClient,
     user_api_key_cache: UserApiKeyCache,
 ) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
     """Fail-safe variant of ``_query_uncached_tags``: a tag fetch error yields
@@ -2347,7 +2348,7 @@ async def get_tag_objects_for_ownership(
     ]
     fetched: Final = await _query_uncached_tags(
         uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
-        prisma_client=prisma_client,
+        prisma_client=WriterPinnedClient(prisma_client.db),
         user_api_key_cache=user_api_key_cache,
     )
     return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
