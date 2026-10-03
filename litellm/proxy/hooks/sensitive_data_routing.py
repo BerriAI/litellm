@@ -83,9 +83,10 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
 
     @staticmethod
     async def _read_pin_from_redis(redis_cache: RedisCache, cache_key: str) -> object:
-        """On the request's Redis pipeline when one is open, so the pin shares the routing read's round trip."""
+        """On the request's Redis pipeline when one is open, so the pin shares the routing read's round trip.
+        A cluster batch has no shared round trip to offer, so there the pin keeps its own GET."""
         batch: Final = active_request_redis_batch(redis_cache)
-        if batch is None:
+        if batch is None or not batch.pipelines:
             return await redis_cache.async_get_cache(key=cache_key)
         return (await batch.mget((cache_key,)))[cache_key]
 

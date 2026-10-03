@@ -343,6 +343,11 @@ class RedisBatch:
     def pending(self) -> int:
         return len(self._pending)
 
+    @property
+    def pipelines(self) -> bool:
+        """Whether a flush is one pipeline round trip; a cluster client runs each operation on its own."""
+        return not isinstance(self.redis_cache, RedisClusterCache)
+
     def _declare(self, op: _Op[_T]) -> BatchResult[_T]:
         self._pending.append(op)  # pyright: ignore[reportArgumentType]  # heterogeneous ops share the flush loop
         return BatchResult(self, op)
@@ -357,7 +362,7 @@ class RedisBatch:
                 return
             self.flushes += 1
             try:
-                if isinstance(self.redis_cache, RedisClusterCache):
+                if not self.pipelines:
                     await asyncio.gather(*(op._settle_alone() for op in ops))  # pyright: ignore[reportPrivateUsage]  # batch owns its ops
                 else:
                     await self._flush_pipeline(ops)
