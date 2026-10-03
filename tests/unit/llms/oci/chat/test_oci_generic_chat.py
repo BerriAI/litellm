@@ -196,7 +196,7 @@ class TestHandleGenericResponse:
     def _make_response(self, body: dict, status: int = 200) -> httpx.Response:
         return httpx.Response(status_code=status, json=body)
 
-    def _valid_body(self, message=None):
+    def _valid_body(self, message=None, finish_reason="COMPLETE"):
         return {
             "modelId": "xai.grok-4",
             "modelVersion": "1",
@@ -204,7 +204,7 @@ class TestHandleGenericResponse:
                 "apiFormat": "GENERIC",
                 "timeCreated": "2024-01-01T00:00:00Z",
                 "choices": [
-                    {"message": message, "finishReason": "COMPLETE", "index": 0}
+                    {"message": message, "finishReason": finish_reason, "index": 0}
                 ],
                 "usage": {"promptTokens": 5, "completionTokens": 5, "totalTokens": 10},
             },
@@ -216,6 +216,27 @@ class TestHandleGenericResponse:
         # Should not raise — None message means no content set
         result = handle_generic_response(body, "xai.grok-4", ModelResponse(), raw)
         assert result.model == "xai.grok-4"
+
+    # GENERIC spellings observed from live OCI GenAI (us-chicago-1) on 2026-10-01: Gemini reports
+    # "max_tokens", Llama reports "length" and "tool_calls", both report "stop". Cohere reports uppercase
+    @pytest.mark.parametrize(
+        ("oci_finish_reason", "expected"),
+        [
+            ("max_tokens", "length"),
+            ("length", "length"),
+            ("tool_calls", "tool_calls"),
+            ("stop", "stop"),
+            ("MAX_TOKENS", "length"),
+            ("COMPLETE", "stop"),
+        ],
+    )
+    def test_finish_reason_is_case_insensitive(self, oci_finish_reason, expected):
+        body = self._valid_body(
+            message={"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "1 2 3"}]},
+            finish_reason=oci_finish_reason,
+        )
+        result = handle_generic_response(body, "google.gemini-2.5-pro", ModelResponse(), self._make_response(body))
+        assert result.choices[0].finish_reason == expected
 
     def test_response_with_text_content(self):
         body = self._valid_body(
@@ -254,13 +275,15 @@ class TestHandleGenericResponse:
 
 
 class TestHandleGenericStreamChunk:
-    def test_max_tokens_finish_reason(self):
-        chunk = {"apiFormat": "GENERIC", "index": 0, "finishReason": "MAX_TOKENS"}
+    @pytest.mark.parametrize("oci_finish_reason", ["MAX_TOKENS", "max_tokens", "length"])
+    def test_max_tokens_finish_reason(self, oci_finish_reason):
+        chunk = {"apiFormat": "GENERIC", "index": 0, "finishReason": oci_finish_reason}
         result = handle_generic_stream_chunk(chunk)
         assert result.choices[0].finish_reason == "length"
 
-    def test_tool_calls_finish_reason(self):
-        chunk = {"apiFormat": "GENERIC", "index": 0, "finishReason": "TOOL_CALLS"}
+    @pytest.mark.parametrize("oci_finish_reason", ["TOOL_CALLS", "tool_calls"])
+    def test_tool_calls_finish_reason(self, oci_finish_reason):
+        chunk = {"apiFormat": "GENERIC", "index": 0, "finishReason": oci_finish_reason}
         result = handle_generic_stream_chunk(chunk)
         assert result.choices[0].finish_reason == "tool_calls"
 
