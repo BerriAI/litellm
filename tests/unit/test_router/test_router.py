@@ -15056,6 +15056,50 @@ async def test_anthropic_messages_retry_raising_a_non_retriable_error_is_handed_
     assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, False]
 
 
+def _anthropic_messages_raise_timeout():
+    raise litellm.Timeout(message="upstream timed out", model="glm", llm_provider="databricks")
+
+
+def _anthropic_messages_raise_internal_server_error():
+    raise litellm.InternalServerError(message="upstream reset", llm_provider="databricks", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_timeout_is_retried_like_a_pre_stream_timeout():
+    """A 408 raised by a retry attempt before its stream opens is retried the way the pre-stream path retries
+    a 408, instead of ending the retries on the error-frame gate that only knows 429 and 5xx."""
+    router = _anthropic_messages_retry_router(num_retries=3)
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_timeout,
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, True, True]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_deployment_num_retries_also_governs_a_failure_before_the_stream_opens():
+    """The deployment's num_retries litellm_param sets the budget for a failure raised before the stream opened
+    on this route, as it does for a mid-stream drop and for chat completions."""
+    router = _anthropic_messages_retry_router(num_retries=0, deployment_params={"num_retries": 2})
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_raise_internal_server_error,
+        _anthropic_messages_raise_internal_server_error,
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 3
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_retry_raising_a_non_retriable_error_reaches_the_client_without_fallbacks():
     router = _anthropic_messages_retry_router(num_retries=2)

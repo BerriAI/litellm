@@ -583,13 +583,14 @@ def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
 def _anthropic_stream_fallback_error_for_raised(
     error: Exception, model: str, has_generated_content: bool
 ) -> "MidStreamFallbackError | None":
-    """Same gate as a detected SSE error event; None means the raise propagates unchanged."""
+    """The pre-stream retry rule (408, 409, 429, 5xx); None means the raise propagates unchanged."""
     if has_generated_content:
         return None
     status_code: Final = _anthropic_stream_raised_error_status(error)
-    if status_code is not None and not _is_retriable_anthropic_status(status_code):
-        return None
-    return _anthropic_stream_pre_content_error(error, model)
+    if status_code is None:
+        return _anthropic_stream_pre_content_error(error, model)
+    retriable: Final = litellm._should_retry(status_code)  # pyright: ignore[reportPrivateUsage]  # shared retry rule
+    return _anthropic_stream_pre_content_error(error, model) if retriable else None
 
 
 def _anthropic_stream_pre_content_error(error: Exception, model: str) -> "MidStreamFallbackError":
@@ -5449,6 +5450,7 @@ class Router:
             if model is not None:
                 self.fail_calls[model] += 1
             if deployment is not None:
+                self._set_deployment_num_retries_on_exception(e, deployment)
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
