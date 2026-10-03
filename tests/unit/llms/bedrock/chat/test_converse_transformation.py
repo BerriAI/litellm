@@ -8093,3 +8093,36 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
     )
     assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
     assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
+
+
+@pytest.mark.parametrize(
+    "stop_reason, expected_finish_reason",
+    [("max_tokens", "length"), ("end_turn", "stop")],
+)
+def test_json_mode_filtered_tool_call_keeps_length_finish_reason(stop_reason, expected_finish_reason):
+    body = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"toolUse": {"toolUseId": "t1", "name": "json_tool_call", "input": {"a": "x"}}}],
+            }
+        },
+        "stopReason": stop_reason,
+        "usage": {"inputTokens": 10, "outputTokens": 60, "totalTokens": 70},
+    }
+    http_response = MagicMock(status_code=200, headers={}, text="")
+    http_response.json.return_value = body
+
+    out = AmazonConverseConfig()._transform_response(
+        model="anthropic.claude-sonnet-4-5",
+        response=http_response,
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=MagicMock(),
+        optional_params={"json_mode": True},
+        api_key="",
+        data={},
+        messages=[],
+        encoding=None,
+    )
+    assert out.choices[0].finish_reason == expected_finish_reason

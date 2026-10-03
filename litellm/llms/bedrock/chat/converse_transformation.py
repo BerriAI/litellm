@@ -2706,7 +2706,7 @@ class AmazonConverseConfig(BaseConfig):
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
         # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if resolved_json_mode and not filtered_tools and tools:
+        if resolved_json_mode and not filtered_tools and tools and initial_finish_reason != "length":
             initial_finish_reason = "stop"
 
         (

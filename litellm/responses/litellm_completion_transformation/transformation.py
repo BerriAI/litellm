@@ -2417,13 +2417,13 @@ class LiteLLMCompletionResponsesConfig:
                 responses_api_request=responses_api_request,
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
-            temperature=getattr(chat_completion_response, "temperature", 0),
+            temperature=responses_api_request.get("temperature", 0),
             tool_choice=LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
                 responses_api_request.get("tool_choice")
             ),
             tools=getattr(chat_completion_response, "tools", []),
-            top_p=getattr(chat_completion_response, "top_p", None),
-            max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
+            top_p=responses_api_request.get("top_p"),
+            max_output_tokens=responses_api_request.get("max_output_tokens"),
             previous_response_id=getattr(chat_completion_response, "previous_response_id", None),
             reasoning=None,
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
