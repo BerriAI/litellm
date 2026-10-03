@@ -188,6 +188,30 @@ def test_credentials_never_redirect_to_a_custom_endpoint():
         )
 
 
+def test_missing_explicit_credentials_fail_at_startup():
+    with pytest.raises(ValueError, match="requires a Base64"):
+        IsMaliciousGuardrail(event_hook=GuardrailEventHooks.pre_mcp_call)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", ["allow", "block"])
+async def test_native_decision_logging_excludes_content_and_credentials(verdict):
+    def handler(request):
+        return service_response(request, verdict)
+
+    data = {"request_id": "test"}
+    inputs = {"texts": ["Private untrusted result"]}
+    if verdict == "block":
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail(handler).apply_guardrail(inputs=inputs, request_data=data, input_type="response")
+    else:
+        await guardrail(handler).apply_guardrail(inputs=inputs, request_data=data, input_type="response")
+    recorded = json.dumps(data)
+    assert "standard_logging_guardrail_information" in recorded
+    assert "Private untrusted result" not in recorded
+    assert URL not in recorded and KEY not in recorded
+
+
 def test_mcp_subcalls_without_guardrail_metadata_use_explicit_default_on():
     gate = guardrail()
     assert gate.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_mcp_call)

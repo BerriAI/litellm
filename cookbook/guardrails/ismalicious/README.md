@@ -4,7 +4,7 @@ Inspect normalized MCP argument strings before tool execution and text/structure
 
 ## Configuration
 
-Obtain an API key and secret from [your account](https://ismalicious.com/app/account). In your secret manager, set `ISMALICIOUS_ENCODED_API_KEY` to the Base64 encoding of `apiKey:apiSecret`, with no newline. Do not log that value or put it directly into YAML
+Obtain an API key and secret from [your account](https://ismalicious.com/app/account). In your secret manager, set `ISMALICIOUS_ENCODED_API_KEY` to the Base64 encoding of `apiKey:apiSecret`, with no newline. Pass the secret explicitly through LiteLLM's `api_key` configuration as shown below; this provider does not read an ambient credential fallback. Do not log that value or put it directly into YAML
 
 Merge [`config.yaml`](config.yaml) into the proxy configuration containing your MCP servers. It sets both MCP modes and `default_on: true`. MCP subcalls do not necessarily inherit a parent chat request's guardrail selection, so relying only on a `guardrails` field on the parent request does not establish MCP enforcement
 
@@ -32,7 +32,7 @@ This provider uses LiteLLM's native MCP guardrail translation. It supports scann
 
 The normalized list is not the complete MCP envelope: transport metadata, content-block metadata, annotations, binary fields and fields not exposed by LiteLLM's string extraction are not inspected. Scanning this list must not be described as scanning every field in the original response
 
-The result can have existed in process memory or logging structures before the post-call inspection. Disable message/content logging and prompt storage as shown in the sample, do not install callbacks that expose raw tool output, and review your tracing configuration. Tool side effects cannot be undone. The failure message omits the raw text, URLs, credentials and upstream exception details. Normal MCP error responses may retain HTTP200 while indicating `isError`; clients must inspect the JSON-RPC/tool result rather than treating HTTP200 as an allow decision
+The result can have existed in process memory or logging structures before the post-call inspection. Disable message/content logging and prompt storage as shown in the sample, do not enable detailed/debug logging or install callbacks that expose raw tool output, and review your tracing configuration. The native logging decorator records a decision summary on success and the fixed refusal on failure, but native debug logging can include allowed content. Tool side effects cannot be undone. The failure message omits the raw text, URLs, credentials and upstream exception details. Normal MCP error responses may retain HTTP200 while indicating `isError`; clients must inspect the JSON-RPC/tool result rather than treating HTTP200 as an allow decision
 
 ## Validation
 

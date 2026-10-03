@@ -2,15 +2,15 @@ import base64
 import binascii
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Literal, NoReturn, Self
+from typing import TYPE_CHECKING, Final, Literal, NoReturn
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from typing_extensions import Self
 
 from litellm.exceptions import GuardrailRaisedException
-from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.secret_managers.main import get_secret_str
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -123,7 +123,7 @@ class IsMaliciousGuardrail(CustomGuardrail):
         default_on: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        resolved_key: Final = api_key or get_secret_str("ISMALICIOUS_ENCODED_API_KEY")
+        resolved_key: Final = api_key
         if not resolved_key:
             raise ValueError("IsMalicious requires a Base64 API key and secret pair")
         try:
@@ -185,6 +185,7 @@ class IsMaliciousGuardrail(CustomGuardrail):
             if failure is not None:
                 self._raise_failure(failure)
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
