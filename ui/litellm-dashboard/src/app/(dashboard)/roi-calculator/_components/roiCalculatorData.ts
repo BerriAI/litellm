@@ -121,3 +121,25 @@ export const branchCostLabel = (pull: ROIPull): string => {
   if (pull.branch_cost.status === "unattributed") return "No tagged requests";
   return formatMoney(pull.branch_cost.spend);
 };
+
+export const estimatorModelOptions = (settings: Pick<ROISettings, "available_models" | "estimator_models">) => {
+  const details = new Map(settings.estimator_models?.map((model) => [model.model_name, model]));
+  const isLuna = (name: string) => /(?:^|\/)gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?$/i.test(name);
+  return settings.available_models
+    .map((name) => {
+      const models = details.get(name)?.provider_models ?? [];
+      const recommended = models.length > 0 && models.every(isLuna);
+      const label = [...new Set(models.map((model) => (isLuna(model) ? "GPT-6 Luna" : model)))].join(", ") || name;
+      return {
+        value: name,
+        label,
+        sublabel: [recommended ? "Recommended" : "", label !== name ? `Gateway name: ${name}` : ""]
+          .filter(Boolean)
+          .join(" · "),
+        recommended,
+      };
+    })
+    .sort(
+      (left, right) => Number(right.recommended) - Number(left.recommended) || left.label.localeCompare(right.label),
+    );
+};

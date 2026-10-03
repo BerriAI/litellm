@@ -37,6 +37,8 @@ from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
     bounded_session_id,
 )
+from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.prisma_query_span import sql_relation
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
@@ -209,7 +211,8 @@ def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTa
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
-    return await prisma_client.db.query_raw(query, *args)
+    async with db_span("auto_router_report_query", sql_relation(query)):
+        return await prisma_client.db.query_raw(query, *args)
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:

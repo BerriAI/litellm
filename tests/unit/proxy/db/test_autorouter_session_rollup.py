@@ -17,10 +17,13 @@ import pytest
 
 from litellm.proxy.db.autorouter_session_rollup import (
     UPSERT_AUTOROUTER_SESSION_SQL,
+    UPSERT_AUTOROUTER_USER_SESSION_SQL,
     AutoRouterTurnTransaction,
     build_autorouter_turn_transaction,
     flush_autorouter_turn_transactions,
+    write_autorouter_turn,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 ROUTING_DECISION = {"router_model_name": "live-auto", "router_type": "complexity", "routed_model": "haiku"}
 
@@ -485,3 +488,21 @@ def test_internal_call_origin_never_reaches_the_rollup():
     gate alone would count it; the internal_call_origin stamp must exclude it."""
     assert _build(metadata=_metadata(internal_call_origin="shadow_eval_router")) is None
     assert _build() is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("statement", "span_name"),
+    (
+        (UPSERT_AUTOROUTER_SESSION_SQL, "postgres.upsert LiteLLM_AutoRouterSession"),
+        (UPSERT_AUTOROUTER_USER_SESSION_SQL, "postgres.upsert LiteLLM_AutoRouterUserSession"),
+    ),
+)
+async def test_the_turn_upsert_span_names_the_session_table_its_statement_writes(
+    statement: str, span_name: str, postgres_span_names
+) -> None:
+    db: Final = SimpleNamespace(execute_raw=engine_call())
+
+    await write_autorouter_turn(db, _transaction(user_id="u1"), statement)
+
+    assert await postgres_span_names() == (span_name,)

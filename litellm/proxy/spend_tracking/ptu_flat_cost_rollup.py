@@ -21,6 +21,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from uuid import NAMESPACE_URL, uuid5
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     PTU_LAPSED_ALERT_LIMIT,
@@ -31,6 +32,7 @@ from litellm.constants import (
     PTU_SENTINEL_API_KEY,
 )
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.repositories.model_repository import ModelRepository
@@ -648,6 +650,7 @@ async def run_scheduled_ptu_rollup(
         await pod_lock_manager.release_lock(cronjob_id=PTU_ROLLUP_JOB_ID)
 
 
+@with_service_target(POD_LOCK_TARGET)
 async def _lock_is_held(pod_lock_manager: "PodLockManager") -> bool:
     """True only when the rollup lock is readable and someone is holding it.
 

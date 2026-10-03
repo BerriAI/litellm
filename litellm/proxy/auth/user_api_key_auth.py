@@ -22,6 +22,7 @@ from fastapi.security.api_key import APIKeyHeader
 from starlette.exceptions import WebSocketException
 
 import litellm
+from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache
@@ -35,7 +36,7 @@ from litellm.constants import (
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.integrations.otel.runtime import phase_span, seed_request_identity
+from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
@@ -73,7 +74,12 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
-from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects, prefetch_identity_keys
+from litellm.proxy.auth.auth_object_prefetch import (
+    AUTH_OBJECTS_TARGET,
+    AuthObjectRefs,
+    prefetch_auth_objects,
+    prefetch_identity_keys,
+)
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
@@ -126,6 +132,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_auth_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
@@ -1029,16 +1036,17 @@ async def _auto_register_jwt_mapping(
         token_hash = hash_token(key_data["token"])
 
     try:
-        await prisma_client.db.litellm_jwtkeymapping.create(
-            data={
-                "jwt_issuer": jwt_issuer or "",
-                "jwt_claim_name": virtual_key_claim_field,
-                "jwt_claim_value": claim_value,
-                "token": token_hash,
-                "created_by": "auto_register",
-                "updated_by": "auto_register",
-            }
-        )
+        async with db_span("auto_register_jwt_mapping", "LiteLLM_JWTKeyMapping"):
+            await prisma_client.db.litellm_jwtkeymapping.create(
+                data={
+                    "jwt_issuer": jwt_issuer or "",
+                    "jwt_claim_name": virtual_key_claim_field,
+                    "jwt_claim_value": claim_value,
+                    "token": token_hash,
+                    "created_by": "auto_register",
+                    "updated_by": "auto_register",
+                }
+            )
     except Exception as e:
         error_str: Final = str(e).lower()
         if "unique" in error_str or "p2002" in error_str:
@@ -1055,7 +1063,8 @@ async def _auto_register_jwt_mapping(
             )
             if minted:
                 try:
-                    await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
+                    async with db_span("delete_orphaned_jwt_key", "LiteLLM_VerificationToken"):
+                        await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
                 except Exception as delete_err:
                     # Don't fail the request if cleanup fails — the orphan is
                     # unmapped and inert. Log so an operator can prune it later.
@@ -3492,13 +3501,19 @@ async def user_api_key_auth(
     _ensure_parent_otel_span_on_request_state(request)
 
     request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
+    phase_event("litellm.request.body_parsed")
     route: Final[str] = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED
 
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it
     # triggers (key/user/team object reads) nest under it instead of flattening
-    # onto the server span. No-op when OTel V2 isn't active.
-    with phase_span(f"auth {route}"), spend_counter_batch_scope(_spend_counter_redis_cache()):
+    # onto the server span, and name every cache read in it an auth-object read.
+    # No-op when OTel V2 isn't active.
+    with (
+        phase_span(f"auth {route}"),
+        service_target(AUTH_OBJECTS_TARGET),
+        spend_counter_batch_scope(_spend_counter_redis_cache()),
+    ):
         try:
             user_api_key_auth_obj: Final = await _user_api_key_auth_builder(
                 request=request,

@@ -5,6 +5,7 @@ plus the LiteLLM_DailyToolSpend rollup in one transaction.
 """
 
 from types import SimpleNamespace
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +19,8 @@ from litellm.proxy.db.spend_log_tool_index import (
     flush_tool_usage_transactions,
     response_tool_call_names,
 )
+from litellm.proxy.db.log_db_metrics import record_db_io
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 def _response_with_tool_calls(*names: str) -> SimpleNamespace:
@@ -34,13 +37,13 @@ class _FakeBatcher:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        return None
+        record_db_io()
 
 
 def _prisma(batch_: MagicMock) -> MagicMock:
     prisma = MagicMock()
     prisma.db.batch_ = batch_
-    prisma.db.litellm_spendlogtoolindex.create_many = AsyncMock()
+    prisma.db.litellm_spendlogtoolindex.create_many = engine_call()
     return prisma
 
 
@@ -377,3 +380,18 @@ class TestFlushToolUsageTransactions:
         with pytest.raises((httpx.ReadTimeout, httpx.ReadError)):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_tool_usage_flush_renders_one_postgres_span_per_table_written(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    prisma, _ = _prisma_with_batcher()
+    await flush_tool_usage_transactions(
+        prisma_client=prisma,
+        transactions=[_transaction("r1", tool_names=("tool_a",), spend=0.10, total_tokens=100)],
+    )
+    assert await postgres_span_names() == (
+        "postgres.insert LiteLLM_SpendLogToolIndex",
+        "postgres.upsert LiteLLM_DailyToolSpend",
+    )
