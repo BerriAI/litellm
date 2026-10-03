@@ -1,4 +1,4 @@
-- Own OTLP decoding, normalization, shared authorization and named query contracts; remain independent of storage and Python
+- Own OTLP decoding, normalization, shared authorization, named query contracts, and storage-independent read orchestration over the `TraceStore` port; remain independent of storage and Python
 - Never depend on `litellm-traces-clickhouse` or `litellm-storage-clickhouse`
 - Preserve decoding limits, normalization precedence and shared resource identity
 - Keep ClickHouse schema, row encoding and queries in `litellm-traces-clickhouse`; keep PyO3 conversion in `python-bridge`

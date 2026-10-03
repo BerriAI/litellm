@@ -5,7 +5,7 @@ use std::{future::Future, marker::PhantomData};
 
 use litellm_http::Client;
 use litellm_storage_clickhouse::{Query, fetch};
-use litellm_traces::query::named as contracts;
+use litellm_traces::{MAX_GRAPH_BYTES, MAX_GRAPH_SPANS, StoreError, query::named as contracts};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -14,8 +14,6 @@ use crate::{
 };
 
 const PAGE_SIZE: u32 = 256;
-pub(crate) const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
-const MAX_GRAPH_SPANS: usize = 100_000;
 
 #[derive(Default)]
 struct ReadBudget {
@@ -24,17 +22,18 @@ struct ReadBudget {
 }
 
 impl ReadBudget {
-    fn reserve(&mut self, bytes: usize) -> Result<(), Error> {
+    fn reserve(&mut self, bytes: usize) -> Result<(), StoreError<Error>> {
         self.bytes = self.bytes.saturating_add(bytes);
         if self.bytes > MAX_GRAPH_BYTES || self.rows == MAX_GRAPH_SPANS {
-            return Err(Error::ReadTooLarge);
+            return Err(StoreError::TooLarge);
         }
         self.rows += 1;
         Ok(())
     }
 
-    fn record(&mut self, row: &impl Serialize) -> Result<(), Error> {
-        let bytes = serde_json::to_vec(row).map_err(|_| Error::InvalidResponse)?;
+    fn record(&mut self, row: &impl Serialize) -> Result<(), StoreError<Error>> {
+        let bytes =
+            serde_json::to_vec(row).map_err(|_| StoreError::Failed(Error::InvalidResponse))?;
         self.reserve(bytes.len())
     }
 }
@@ -77,7 +76,7 @@ impl<K: Keyset> Query for Paged<K> {
 async fn read_all<K: Keyset, S: PageSource<K>>(
     source: &S,
     keyset: K,
-) -> Result<Vec<K::Row>, Error> {
+) -> Result<Vec<K::Row>, StoreError<Error>> {
     let mut batch = Batch {
         keyset,
         page_size: PAGE_SIZE,
@@ -91,9 +90,9 @@ async fn read_all<K: Keyset, S: PageSource<K>>(
                 continue;
             }
             Err(litellm_storage_clickhouse::Error::ResponseTooLarge) => {
-                return Err(Error::ReadTooLarge);
+                return Err(StoreError::TooLarge);
             }
-            result => result?,
+            result => result.map_err(|error| StoreError::Failed(Error::Storage(error)))?,
         };
         let complete = page.len() < batch.page_size as usize;
         for row in &page {
@@ -127,7 +126,7 @@ async fn read_paged<K: Keyset>(
     client: &Client,
     connection: &Connection,
     keyset: K,
-) -> Result<Vec<K::Row>, Error> {
+) -> Result<Vec<K::Row>, StoreError<Error>> {
     let source = ClickHouse { client, connection };
     read_all(&source, keyset).await
 }
@@ -162,7 +161,7 @@ pub(crate) async fn read_spans(
     connection: &Connection,
     trace: contracts::TraceSpansParams,
     snapshot_ms: u64,
-) -> Result<Vec<contracts::TraceSpansRow>, Error> {
+) -> Result<Vec<contracts::TraceSpansRow>, StoreError<Error>> {
     let keyset = SpanKeyset {
         trace,
         after_span_id: String::new(),
@@ -203,7 +202,7 @@ pub(crate) async fn read_list_spans(
     connection: &Connection,
     runs: crate::query::named::TracePageSpansParams,
     snapshot_ms: u64,
-) -> Result<Vec<contracts::TraceSpansRow>, Error> {
+) -> Result<Vec<contracts::TraceSpansRow>, StoreError<Error>> {
     let keyset = ListSpanKeyset {
         runs,
         after_team: String::new(),
@@ -245,7 +244,7 @@ pub(crate) async fn read_spend(
     client: &Client,
     connection: &Connection,
     lookup: SpendByResponseIdsParams,
-) -> Result<Vec<contracts::SpendByResponseIdsRow>, Error> {
+) -> Result<Vec<contracts::SpendByResponseIdsRow>, StoreError<Error>> {
     let keyset = SpendKeyset {
         lookup,
         has_cursor: 0,
@@ -344,7 +343,7 @@ mod tests {
             requests: Mutex::new(Vec::new()),
         };
         let result = read_all(&table, Numbers { after: 0 }).await;
-        assert!(matches!(result, Err(Error::ReadTooLarge)), "{result:?}");
+        assert!(matches!(result, Err(StoreError::TooLarge)), "{result:?}");
         assert_eq!(
             table.requests.lock().unwrap().as_slice(),
             &[256, 128, 64, 32, 16, 8, 4, 2, 1]

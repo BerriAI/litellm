@@ -1,27 +1,15 @@
-//! Scoped trace reads: the trace list, one trace resolved with its spend, and span payloads.
+use std::future::Future;
 
-use std::collections::HashMap;
-use std::ops::Range;
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
-
-use base64::{Engine, engine::general_purpose::URL_SAFE};
 use litellm_http::Client;
+use litellm_storage_clickhouse::Error as StorageError;
 use litellm_storage_clickhouse::{Query, fetch};
-use litellm_traces::{
-    SpanDetail, SpanErrorPage, SpendLookup, Trace, TracePage, listed_summary,
-    query::named as contracts, resolve_trace, to_ui_content,
-};
-use moka::future::Cache;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use litellm_traces::{StoreError, TraceStore, query::named as contracts};
 
 use crate::{
     Connection, Error,
     query::named::{
-        ListTracesParams, ListTracesRow, ReadAccessParams, SpanDetail as SpanDetailQuery,
-        SpanDetailParams, SpanError, SpanErrorParams, SpendByResponseIdsParams, TraceIdentity,
-        TraceIdentityParams, TracePageSpansParams, TraceSpansParams,
+        ListTracesParams, ListTracesRow, SpanDetail as SpanDetailQuery, SpanError, SpanErrorParams,
+        SpendByResponseIdsParams, TraceIdentity, TracePageSpansParams,
     },
 };
 
@@ -37,571 +25,124 @@ impl Query for RunCandidates {
     );
 }
 
-/// A resolved graph pinned at one `snapshot_ms`, with the facts every page of it needs.
-struct Snapshot {
-    trace: Trace,
-    version: String,
-    weight: u32,
+pub struct ClickHouseTraces {
+    client: Client,
+    connection: Connection,
 }
 
-impl Snapshot {
-    fn new(trace: Trace) -> Result<Self, Error> {
-        let encoded = serde_json::to_vec(&trace).map_err(|_| Error::InvalidResponse)?;
-        if encoded.len() > crate::span_batches::MAX_GRAPH_BYTES {
-            return Err(Error::ReadTooLarge);
-        }
-        let span_ids: Vec<&str> = trace
-            .spans
-            .iter()
-            .map(|span| span.span_id.as_str())
-            .collect();
-        let version = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&span_ids).map_err(|_| Error::InvalidResponse)?)
-        );
-        Ok(Self {
-            trace,
-            version,
-            weight: u32::try_from(encoded.len() * 2).unwrap_or(u32::MAX),
-        })
+impl ClickHouseTraces {
+    pub fn new(client: Client, connection: Connection) -> Self {
+        Self { client, connection }
     }
 }
 
-// Cursor pages share a bounded snapshot so advancing does not resolve the whole graph again.
-static TRACE_SNAPSHOTS: LazyLock<Cache<String, Arc<Snapshot>>> = LazyLock::new(|| {
-    Cache::builder()
-        .max_capacity((2 * crate::span_batches::MAX_GRAPH_BYTES) as u64)
-        .weigher(|_: &String, snapshot: &Arc<Snapshot>| snapshot.weight)
-        .time_to_live(Duration::from_secs(120))
-        .build()
-});
+impl TraceStore for ClickHouseTraces {
+    type Error = Error;
 
-const NANOS_PER_MS: i64 = 1_000_000;
-const SPEND_WINDOW_MS: i64 = 30 * 60 * 1000;
-
-fn now_ms() -> u64 {
-    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64
-}
-
-/// Spend logged within half an hour of the spans belongs to the same run.
-fn spend_window(rows: &[contracts::TraceSpansRow]) -> Option<Range<i64>> {
-    let start_ns = rows.iter().map(|row| row.start_ns).min()?;
-    let end_ns = rows
-        .iter()
-        .map(|row| row.start_ns.saturating_add_unsigned(row.duration_ns))
-        .max()?;
-    Some(
-        start_ns.div_euclid(NANOS_PER_MS) - SPEND_WINDOW_MS
-            ..end_ns.div_euclid(NANOS_PER_MS) + SPEND_WINDOW_MS,
-    )
-}
-
-/// The rows of `spend`, sorted by `start_ms`, that fall inside `window`.
-fn spend_within(
-    spend: &[contracts::SpendByResponseIdsRow],
-    window: Range<i64>,
-) -> &[contracts::SpendByResponseIdsRow] {
-    let first = spend.partition_point(|row| row.start_ms < window.start);
-    let end = spend.partition_point(|row| row.start_ms < window.end);
-    &spend[first..end.max(first)]
-}
-
-fn encode_cursor<T: Serialize>(position: &T) -> String {
-    URL_SAFE.encode(serde_json::to_vec(position).unwrap_or_default())
-}
-
-fn decode_cursor<T: for<'de> Deserialize<'de>>(
-    cursor: &str,
-    kind: &'static str,
-) -> Result<T, Error> {
-    URL_SAFE
-        .decode(cursor)
-        .ok()
-        .and_then(|json| serde_json::from_slice(&json).ok())
-        .ok_or(Error::InvalidCursor(kind))
-}
-
-fn trace_position(cursor: Option<&str>) -> Result<(i64, String), Error> {
-    let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
-        return Ok((0, String::new()));
-    };
-    match decode_cursor::<(i64, String)>(cursor, "trace")? {
-        (start_ms, trace_ref) if start_ms > 0 && !trace_ref.is_empty() => Ok((start_ms, trace_ref)),
-        _ => Err(Error::InvalidCursor("trace")),
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-struct ErrorPosition {
-    offset: u64,
-    version: String,
-}
-
-fn error_position(cursor: Option<&str>) -> Result<Option<ErrorPosition>, Error> {
-    let Some(cursor) = cursor else {
-        return Ok(None);
-    };
-    let position = decode_cursor::<ErrorPosition>(cursor, "diagnostic")?;
-    let valid_version = position.version.len() == 64
-        && position
-            .version
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte));
-    if i64::try_from(position.offset).is_err() || !valid_version {
-        return Err(Error::InvalidCursor("diagnostic"));
-    }
-    Ok(Some(position))
-}
-
-/// The stored run a trace id names for this caller; ids can repeat across tenants and runs.
-async fn reference(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    trace_id: &str,
-    trace_ref: &str,
-) -> Result<Option<String>, Error> {
-    if !trace_ref.is_empty() {
-        return Ok(Some(trace_ref.to_owned()));
-    }
-    let params = TraceIdentityParams {
-        access: access.clone(),
-        trace_id: trace_id.to_owned(),
-    };
-    let mut identities = fetch::<TraceIdentity>(client, connection, &params).await?;
-    if identities.len() > 1 {
-        return Err(Error::AmbiguousTrace);
-    }
-    Ok(identities.pop().map(|identity| identity.trace_ref))
-}
-
-/// Spend records behind the spans' calls, sorted by `start_ms`. A failed lookup leaves cost
-/// unknown instead of failing the read.
-async fn spend(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    rows: &[contracts::TraceSpansRow],
-) -> Vec<contracts::SpendByResponseIdsRow> {
-    let lookup = SpendLookup::new(rows);
-    let Some(window) = spend_window(rows) else {
-        return Vec::new();
-    };
-    if lookup.is_empty() {
-        return Vec::new();
-    }
-    let params = SpendByResponseIdsParams::from(contracts::SpendByResponseIdsParams {
-        access: access.clone(),
-        response_ids: lookup.response_ids,
-        request_ids: lookup.request_ids,
-        trace_ids: lookup.trace_ids,
-        start_ms: window.start,
-        end_ms: window.end,
-    });
-    match crate::span_batches::read_spend(client, connection, params).await {
-        Ok(mut rows) => {
-            rows.sort_by_key(|row| row.start_ms);
-            rows
-        }
-        Err(error) => {
-            tracing::warn!(%error, "trace spend lookup unavailable");
-            Vec::new()
+    fn trace_refs(
+        &self,
+        params: &contracts::TraceIdentityParams,
+    ) -> impl Future<Output = Result<Vec<String>, StoreError<Self::Error>>> + Send {
+        async move {
+            fetch::<TraceIdentity>(&self.client, &self.connection, params)
+                .await
+                .map(|rows| rows.into_iter().map(|row| row.trace_ref).collect())
+                .map_err(failed)
         }
     }
-}
 
-pub async fn list_traces(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    start_ms: i64,
-    end_ms: i64,
-    cursor: Option<&str>,
-    limit: u32,
-) -> Result<TracePage, Error> {
-    if limit == 0 {
-        return Err(Error::InvalidParameters);
-    }
-    let (cursor_ms, cursor_trace_id) = trace_position(cursor)?;
-    let mut params = ListTracesParams::from(contracts::ListTracesParams {
-        access: access.clone(),
-        start_ms,
-        end_ms,
-        cursor_ms,
-        cursor_trace_id,
-        limit: limit.min(500),
-    });
-    let page: Vec<contracts::ListTracesRow> = loop {
-        match fetch::<RunCandidates>(client, connection, &params).await {
-            Err(litellm_storage_clickhouse::Error::ResponseTooLarge) if params.0.limit > 1 => {
-                params.0.limit /= 2;
-            }
-            Err(litellm_storage_clickhouse::Error::ResponseTooLarge) => {
-                return Err(Error::ReadTooLarge);
-            }
-            result => break result?.into_iter().map(|row| row.0).collect(),
-        }
-    };
-    let next_cursor = page
-        .last()
-        .filter(|_| page.len() == params.0.limit as usize)
-        .map(|last| encode_cursor(&(last.start_ms, &last.trace_ref)));
-    let mut data = Vec::with_capacity(page.len());
-    for batch in page.chunks(RUNS_PER_SPAN_READ) {
-        match list_summaries(client, connection, access, batch).await {
-            Ok(summaries) => data.extend(summaries),
-            Err(Error::ReadTooLarge) => {
-                for row in batch {
-                    data.push(run_summary(client, connection, access, row).await?);
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(TracePage { data, next_cursor })
-}
-
-const RUNS_PER_SPAN_READ: usize = 16;
-
-fn run_key(team_id: &str, api_key_hash: &str, trace_id: &str) -> (String, String, String) {
-    (
-        team_id.to_owned(),
-        api_key_hash.to_owned(),
-        trace_id.to_owned(),
-    )
-}
-
-/// Summaries for a few runs from one span read and one spend read. Spend is matched to each run
-/// inside that run's own window, so a response id reused across runs costs each run only its own
-/// calls.
-async fn list_summaries(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    runs: &[contracts::ListTracesRow],
-) -> Result<Vec<litellm_traces::TraceSummary>, Error> {
-    let (Some(start_ms), Some(end_ms)) = (
-        runs.iter().map(|row| row.start_ms).min(),
-        runs.iter()
-            .map(|row| row.start_ms.saturating_add(row.duration_ms))
-            .max(),
-    ) else {
-        return Ok(Vec::new());
-    };
-    let params = TracePageSpansParams::from(contracts::TracePageSpansParams {
-        access: access.clone(),
-        trace_refs: runs.iter().map(|row| row.trace_ref.clone()).collect(),
-        start_ms,
-        end_ms: end_ms.saturating_add(1),
-    });
-    let mut spans =
-        crate::span_batches::read_list_spans(client, connection, params, now_ms()).await?;
-    let spend_rows = spend(client, connection, access, &spans).await;
-    spans.sort_by(|left, right| {
-        run_key(&left.team_id, &left.api_key_hash, &left.trace_id)
-            .cmp(&run_key(
-                &right.team_id,
-                &right.api_key_hash,
-                &right.trace_id,
-            ))
-            .then(left.start_ns.cmp(&right.start_ns))
-    });
-    let by_run: HashMap<_, &[contracts::TraceSpansRow]> = spans
-        .chunk_by(|left, right| {
-            (&left.team_id, &left.api_key_hash, &left.trace_id)
-                == (&right.team_id, &right.api_key_hash, &right.trace_id)
-        })
-        .map(|run| {
-            (
-                run_key(&run[0].team_id, &run[0].api_key_hash, &run[0].trace_id),
-                run,
-            )
-        })
-        .collect();
-    Ok(runs
-        .iter()
-        .map(|row| {
-            let spans = by_run
-                .get(&run_key(&row.team_id, &row.api_key_hash, &row.trace_id))
-                .copied()
-                .unwrap_or_default();
-            let spend =
-                spend_window(spans).map_or(&[][..], |window| spend_within(&spend_rows, window));
-            resolve_trace(&row.trace_id, &row.trace_ref, spans, spend)
-                .map_or_else(|| listed_summary(row), |trace| trace.summary)
-        })
-        .collect())
-}
-
-/// One run resolved on its own; the fallback when a batch of runs exceeds the read budget.
-async fn run_summary(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    row: &contracts::ListTracesRow,
-) -> Result<litellm_traces::TraceSummary, Error> {
-    match get_trace(client, connection, access, &row.trace_id, &row.trace_ref).await {
-        Ok(trace) => Ok(trace.map_or_else(|| listed_summary(row), |trace| trace.summary)),
-        Err(Error::ReadTooLarge) => Ok(listed_summary(row)),
-        Err(error) => Err(error),
-    }
-}
-
-pub async fn get_trace(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    trace_id: &str,
-    trace_ref: &str,
-) -> Result<Option<Trace>, Error> {
-    let Some(trace_ref) = reference(client, connection, access, trace_id, trace_ref).await? else {
-        return Ok(None);
-    };
-    let params = TraceSpansParams {
-        access: access.clone(),
-        trace_id: trace_id.to_owned(),
-        trace_ref: trace_ref.clone(),
-    };
-    let rows = crate::span_batches::read_spans(client, connection, params, u64::MAX).await?;
-    if rows.is_empty() {
-        return Ok(None);
-    }
-    let spend_rows = spend(client, connection, access, &rows).await;
-    Ok(resolve_trace(trace_id, &trace_ref, &rows, &spend_rows))
-}
-
-#[derive(Deserialize, Serialize)]
-struct SpanPosition {
-    trace_ref: String,
-    snapshot_ms: u64,
-    offset: usize,
-    version: String,
-}
-
-pub async fn get_trace_page(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    trace_id: &str,
-    trace_ref: &str,
-    cursor: Option<&str>,
-    page_size: u32,
-) -> Result<Option<Trace>, Error> {
-    if !(1..=500).contains(&page_size) {
-        return Err(Error::InvalidParameters);
-    }
-    let Some(trace_ref) = reference(client, connection, access, trace_id, trace_ref).await? else {
-        return Ok(None);
-    };
-    let position = match cursor {
-        Some(cursor) => {
-            let position: SpanPosition = decode_cursor(cursor, "span")?;
-            if position.trace_ref != trace_ref || position.snapshot_ms == 0 {
-                return Err(Error::InvalidCursor("span"));
-            }
-            position
-        }
-        None => SpanPosition {
-            trace_ref: trace_ref.clone(),
-            snapshot_ms: now_ms(),
-            offset: 0,
-            version: String::new(),
-        },
-    };
-    let key_bytes = serde_json::to_vec(&(
-        connection.url().as_str(),
-        access,
-        trace_id,
-        &trace_ref,
-        position.snapshot_ms,
-    ))
-    .map_err(|_| Error::InvalidParameters)?;
-    let key = format!("{:x}", Sha256::digest(key_bytes));
-    let snapshot = if let Some(snapshot) = TRACE_SNAPSHOTS.get(&key).await {
-        snapshot
-    } else {
-        let params = TraceSpansParams {
-            access: access.clone(),
-            trace_id: trace_id.to_owned(),
-            trace_ref: trace_ref.clone(),
-        };
-        let rows =
-            crate::span_batches::read_spans(client, connection, params, position.snapshot_ms)
-                .await?;
-        let spend_rows = spend(client, connection, access, &rows).await;
-        let Some(trace) = resolve_trace(trace_id, &trace_ref, &rows, &spend_rows) else {
-            return Ok(None);
-        };
-        let snapshot = Arc::new(Snapshot::new(trace)?);
-        TRACE_SNAPSHOTS.insert(key, Arc::clone(&snapshot)).await;
-        snapshot
-    };
-    if cursor.is_some() && position.version != snapshot.version {
-        return Err(Error::TraceChanged);
-    }
-    let spans = &snapshot.trace.spans;
-    if position.offset > spans.len() {
-        return Err(Error::InvalidCursor("span"));
-    }
-    let page = |count: usize| {
-        let end = position.offset.saturating_add(count).min(spans.len());
-        Trace {
-            summary: snapshot.trace.summary.clone(),
-            agents: snapshot.trace.agents.clone(),
-            spans: spans[position.offset..end].to_vec(),
-            next_cursor: (end < spans.len()).then(|| {
-                encode_cursor(&SpanPosition {
-                    trace_ref: trace_ref.clone(),
-                    snapshot_ms: position.snapshot_ms,
-                    offset: end,
-                    version: snapshot.version.clone(),
-                })
-            }),
-        }
-    };
-    let mut trace = page(page_size as usize);
-    while serde_json::to_vec(&trace)
-        .map_err(|_| Error::InvalidResponse)?
-        .len()
-        > litellm_storage_clickhouse::READ_LIMITS.response_bytes
+    fn list_runs(
+        &self,
+        params: &contracts::ListTracesParams,
+    ) -> impl Future<Output = Result<Vec<contracts::ListTracesRow>, StoreError<Self::Error>>> + Send
     {
-        if trace.spans.len() <= 1 {
-            return Err(Error::ReadTooLarge);
+        async move {
+            let storage_params = ListTracesParams::from(params.clone());
+            match fetch::<RunCandidates>(&self.client, &self.connection, &storage_params).await {
+                Ok(rows) => Ok(rows.into_iter().map(|row| row.0).collect()),
+                Err(StorageError::ResponseTooLarge) => Err(StoreError::TooLarge),
+                Err(error) => Err(failed(error)),
+            }
         }
-        trace = page(trace.spans.len() / 2);
     }
-    Ok(Some(trace))
-}
 
-pub async fn get_span(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    trace_id: &str,
-    span_id: &str,
-    trace_ref: &str,
-) -> Result<Option<SpanDetail>, Error> {
-    let Some(trace_ref) = reference(client, connection, access, trace_id, trace_ref).await? else {
-        return Ok(None);
-    };
-    let params = SpanDetailParams {
-        access: access.clone(),
-        trace_id: trace_id.to_owned(),
-        trace_ref,
-        span_id: span_id.to_owned(),
-    };
-    let row = fetch::<SpanDetailQuery>(client, connection, &params)
-        .await?
-        .into_iter()
-        .next();
-    Ok(row.map(|row| SpanDetail {
-        input_ui: to_ui_content(&row.input),
-        output_ui: to_ui_content(&row.output),
-        span_id: row.span_id,
-        input: row.input,
-        output: row.output,
-        attributes: row.attributes,
-    }))
-}
-
-pub async fn get_span_error(
-    client: &Client,
-    connection: &Connection,
-    access: &ReadAccessParams,
-    trace_id: &str,
-    span_id: &str,
-    trace_ref: &str,
-    cursor: Option<&str>,
-) -> Result<Option<SpanErrorPage>, Error> {
-    let position = error_position(cursor)?;
-    let Some(trace_ref) = reference(client, connection, access, trace_id, trace_ref).await? else {
-        return Ok(None);
-    };
-    let offset = position.as_ref().map_or(0, |position| position.offset);
-    let params = SpanErrorParams::from(contracts::SpanErrorParams {
-        access: access.clone(),
-        trace_id: trace_id.to_owned(),
-        trace_ref,
-        span_id: span_id.to_owned(),
-        error_offset: offset,
-        error_version: position
-            .map(|position| position.version)
-            .unwrap_or_default(),
-    });
-    let Some(row) = fetch::<SpanError>(client, connection, &params)
-        .await?
-        .into_iter()
-        .next()
-    else {
-        return Ok(None);
-    };
-    let row = row.0;
-    let next_offset = offset + row.message.chars().count() as u64;
-    let next_cursor = (next_offset < row.total_chars).then(|| {
-        encode_cursor(&ErrorPosition {
-            offset: next_offset,
-            version: row.version,
-        })
-    });
-    Ok(Some(SpanErrorPage {
-        span_id: row.span_id,
-        message: row.message,
-        total_chars: row.total_chars,
-        next_cursor,
-    }))
-}
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use super::*;
-
-    #[rstest]
-    fn trace_cursor_round_trips_the_last_listed_run() {
-        let cursor = encode_cursor(&(1_790_742_989_377_i64, "4bad42b84e9de3ba46fc870185f8f023"));
-        assert_eq!(
-            trace_position(Some(&cursor)).unwrap(),
-            (
-                1_790_742_989_377,
-                "4bad42b84e9de3ba46fc870185f8f023".to_owned()
+    fn trace_spans(
+        &self,
+        params: &contracts::TraceSpansParams,
+        snapshot_ms: u64,
+    ) -> impl Future<Output = Result<Vec<contracts::TraceSpansRow>, StoreError<Self::Error>>> + Send
+    {
+        async move {
+            crate::span_batches::read_spans(
+                &self.client,
+                &self.connection,
+                params.clone(),
+                snapshot_ms,
             )
-        );
-        assert_eq!(trace_position(None).unwrap(), (0, String::new()));
-        assert_eq!(trace_position(Some("")).unwrap(), (0, String::new()));
+            .await
+        }
     }
 
-    #[rstest]
-    #[case::not_base64("abc")]
-    #[case::not_json("bm90LWpzb24=")]
-    #[case::numeric_reference("WzEsIDJd")]
-    #[case::zero_start("WzAsICJ0Il0=")]
-    fn malformed_trace_cursors_are_rejected(#[case] cursor: &str) {
-        assert!(matches!(
-            trace_position(Some(cursor)),
-            Err(Error::InvalidCursor("trace"))
-        ));
+    fn run_spans(
+        &self,
+        params: &contracts::TracePageSpansParams,
+        snapshot_ms: u64,
+    ) -> impl Future<Output = Result<Vec<contracts::TraceSpansRow>, StoreError<Self::Error>>> + Send
+    {
+        async move {
+            crate::span_batches::read_list_spans(
+                &self.client,
+                &self.connection,
+                TracePageSpansParams::from(params.clone()),
+                snapshot_ms,
+            )
+            .await
+        }
     }
 
-    #[rstest]
-    #[case::not_base64("garbage")]
-    #[case::missing_fields("e30=")]
-    #[case::not_an_object("WzEsMl0=")]
-    fn malformed_diagnostic_cursors_are_rejected(#[case] cursor: &str) {
-        assert!(matches!(
-            error_position(Some(cursor)),
-            Err(Error::InvalidCursor("diagnostic"))
-        ));
+    fn spend(
+        &self,
+        params: &contracts::SpendByResponseIdsParams,
+    ) -> impl Future<Output = Result<Vec<contracts::SpendByResponseIdsRow>, StoreError<Self::Error>>>
+    + Send {
+        async move {
+            crate::span_batches::read_spend(
+                &self.client,
+                &self.connection,
+                SpendByResponseIdsParams::from(params.clone()),
+            )
+            .await
+        }
     }
 
-    #[rstest]
-    #[case::lowercase_version("a".repeat(64))]
-    #[case::short_version("A".repeat(63))]
-    fn diagnostic_cursor_requires_a_content_version(#[case] version: String) {
-        let cursor = encode_cursor(&ErrorPosition { offset: 1, version });
-        assert!(matches!(
-            error_position(Some(&cursor)),
-            Err(Error::InvalidCursor("diagnostic"))
-        ));
+    fn span_detail(
+        &self,
+        params: &contracts::SpanDetailParams,
+    ) -> impl Future<Output = Result<Option<contracts::SpanDetailRow>, StoreError<Self::Error>>> + Send
+    {
+        async move {
+            match fetch::<SpanDetailQuery>(&self.client, &self.connection, params).await {
+                Ok(rows) => Ok(rows.into_iter().next()),
+                Err(error) => Err(failed(error)),
+            }
+        }
     }
+
+    fn span_error(
+        &self,
+        params: &contracts::SpanErrorParams,
+    ) -> impl Future<Output = Result<Option<contracts::SpanErrorRow>, StoreError<Self::Error>>> + Send
+    {
+        async move {
+            let storage_params = SpanErrorParams::from(params.clone());
+            match fetch::<SpanError>(&self.client, &self.connection, &storage_params).await {
+                Ok(rows) => Ok(rows.into_iter().next().map(|row| row.0)),
+                Err(error) => Err(failed(error)),
+            }
+        }
+    }
+}
+
+fn failed(error: StorageError) -> StoreError<Error> {
+    StoreError::Failed(Error::Storage(error))
 }
