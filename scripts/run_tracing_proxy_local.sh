@@ -49,7 +49,8 @@ general_settings:
       retention_days: 14
 EOF
 
-export LITELLM_MASTER_KEY=sk-local-tracing
+export LITELLM_MASTER_KEY=sk-1234
+export LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true
 export LITELLM_SALT_KEY=sk-local-tracing-salt-key
 export DATABASE_URL=postgresql://litellm:litellm@127.0.0.1:15432/litellm
 export STORE_MODEL_IN_DB=True
