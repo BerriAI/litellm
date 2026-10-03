@@ -1553,13 +1553,6 @@ async def _common_key_generation_helper(
                 prisma_client=prisma_client,
             )
 
-    if data.project_id is not None and prisma_client is not None:
-        await _check_key_project_team(
-            project_id=data.project_id,
-            key_team_id=data.team_id,
-            prisma_client=prisma_client,
-        )
-
     response = await generate_key_helper_fn(request_type="key", **data_json, table_name="key", llm_router=llm_router)
 
     response["soft_budget"] = data.soft_budget  # include the user-input soft budget in the response
@@ -4922,6 +4915,13 @@ async def generate_key_helper_fn(
                 # the LiteLLM_VerificationToken table will increase in size if we don't do this check
                 return user_data
 
+            if project_id is not None:
+                await _check_key_project_team(
+                    project_id=project_id,
+                    key_team_id=team_id,
+                    prisma_client=prisma_client,
+                )
+
             ## CREATE KEY
             verbose_proxy_logger.debug(
                 "prisma_client: Creating Key= %s",
@@ -5742,6 +5742,13 @@ async def _execute_virtual_key_regeneration(
         prisma_client=prisma_client,
     )
     update_data.update(update_values)
+    if data is not None:
+        await _check_key_project_team_on_mutation(
+            data=data,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+        )
+
     jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
 
     # Snapshot before the token update: the FK cascade rewrites mapping rows to the new hash,
@@ -5765,13 +5772,6 @@ async def _execute_virtual_key_regeneration(
         new_token_hash=new_token_hash,
         grace_period=data.grace_period if data else None,
     )
-
-    if data is not None:
-        await _check_key_project_team_on_mutation(
-            data=data,
-            existing_key_row=key_in_db,
-            prisma_client=prisma_client,
-        )
 
     updated_token: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
         VerificationTokenRepository(prisma_client)

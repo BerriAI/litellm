@@ -33,6 +33,20 @@ def _key_rows(key: str) -> list[dict[str, JsonValue]]:
     )
 
 
+def _deleted_key_rows(key: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE token = %s',
+        (sha256(key.encode()).hexdigest(),),
+    )
+
+
+def _deprecated_key_rows(key: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT token FROM "LiteLLM_DeprecatedVerificationToken" WHERE token = %s',
+        (sha256(key.encode()).hexdigest(),),
+    )
+
+
 def _cli_session_token(
     user_id: str,
     team_id: str | None,
@@ -289,13 +303,19 @@ def test_key_regenerate_rejects_foreign_project_without_changing_key(ownership_g
         key: Final = string_value(JSON_OBJECT.validate_json(generated.content)["key"])
         scenario.cleanups.callback(scenario.delete_key, key)
         before: Final = _key_rows(key)
+        before_deleted: Final = _deleted_key_rows(key)
+        before_deprecated: Final = _deprecated_key_rows(key)
         assert len(before) == 1
+        assert before_deleted == []
+        assert before_deprecated == []
         response: Final = ownership_gateway.request(
-            "POST", f"/key/{key}/regenerate", {"project_id": project_b}
+            "POST", f"/key/{key}/regenerate", {"project_id": project_b, "grace_period": "1h"}
         )
         _discard_unexpected_key(ownership_gateway, response)
         assert response.status_code == 400, response.text
         assert _key_rows(key) == before
+        assert _deleted_key_rows(key) == before_deleted
+        assert _deprecated_key_rows(key) == before_deprecated
 
 
 def test_key_generation_rejects_missing_project_without_writing_key(ownership_gateway: Gateway) -> None:

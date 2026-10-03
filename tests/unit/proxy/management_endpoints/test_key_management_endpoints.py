@@ -20672,6 +20672,37 @@ async def test_key_generation_organization_membership_error_precedes_project_own
 
 
 @pytest.mark.asyncio
+async def test_key_generation_premium_permission_error_precedes_project_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_api_key_cache: Final = await _cache_with_project(
+        _OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM
+    )
+    mock_prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+    with pytest.raises(HTTPException) as error:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                project_id=_OWNED_PROJECT,
+                team_id=_OWNERSHIP_KEY_TEAM,
+                permissions={"get_spend_routes": True},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Internal Server Error."}
+    mock_prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_key_generation_duplicate_alias_error_precedes_project_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -21175,6 +21206,12 @@ async def test_regenerate_checks_project_team_ownership(
     mock_prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
         return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id="team-b")
     )
+    deleted_history_table: Final = MagicMock()
+    deleted_history_table.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken = deleted_history_table
+    deprecated_key_table: Final = MagicMock()
+    deprecated_key_table.upsert = AsyncMock()
+    mock_prisma_client.db.litellm_deprecatedverificationtoken = deprecated_key_table
     user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id="team-b")
 
     async def regenerate() -> None:
@@ -21183,10 +21220,6 @@ async def test_regenerate_checks_project_team_ownership(
                 "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
                 new_callable=AsyncMock,
                 return_value="sk-newtoken1234ab12",
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
-                new_callable=AsyncMock,
             ),
             patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
@@ -21198,7 +21231,10 @@ async def test_regenerate_checks_project_team_ownership(
                 key_in_db=existing_key,
                 hashed_api_key="abc123",
                 key="abc123",
-                data=RegenerateKeyRequest(project_id=_OWNED_PROJECT),
+                data=RegenerateKeyRequest(
+                    project_id=_OWNED_PROJECT,
+                    grace_period="1h" if expected_status is not None else None,
+                ),
                 user_api_key_dict=_make_regenerate_user_api_key_dict(),
                 litellm_changed_by=None,
                 user_api_key_cache=user_api_key_cache,
@@ -21210,6 +21246,8 @@ async def test_regenerate_checks_project_team_ownership(
             await regenerate()
         assert error.value.status_code == expected_status
         assert "belongs to team team-b, but the key belongs to team-a" in str(error.value.detail)
+        deleted_history_table.create_many.assert_not_awaited()
+        deprecated_key_table.upsert.assert_not_awaited()
     else:
         await regenerate()
 
