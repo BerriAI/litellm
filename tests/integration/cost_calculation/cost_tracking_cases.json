@@ -57,6 +57,13 @@
         "search_context_size_high": 0.012
       }
     },
+    "perplexity/pplx-decider-v1-27b": {
+      "input_cost_per_token": 4e-08,
+      "litellm_provider": "perplexity",
+      "max_input_tokens": 262144,
+      "mode": "evaluation",
+      "output_cost_per_token": 0.0
+    },
     "deepseek/deepseek-v4-chat": {
       "litellm_provider": "deepseek",
       "mode": "chat",
@@ -30923,6 +30930,47 @@
         "output_cost": 0.0,
         "prompt_tokens": 1840,
         "completion_tokens": 412
+      }
+    },
+    {
+      "name": "perplexity/pplx-decider-v1-27b-decisions",
+      "covers": "quota_management.spend_tracking.decisions_costs",
+      "model": "perplexity/pplx-decider-v1-27b",
+      "endpoint": "/v1/decisions",
+      "request": {
+        "model": "$MODEL",
+        "state": {
+          "source": "cost-tracking"
+        },
+        "questions": {
+          "is_defect": {
+            "type": "noul",
+            "instructions": "Is this a defect?"
+          }
+        }
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "model": "pplx-decider-v1-27b",
+          "answers": {
+            "is_defect": {
+              "type": "noul",
+              "noul": 0.9
+            }
+          },
+          "usage": {
+            "input_tokens": 367,
+            "output_tokens": 3
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.468e-05,
+        "input_cost": 1.468e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 367,
+        "completion_tokens": 3
       }
     },
     {

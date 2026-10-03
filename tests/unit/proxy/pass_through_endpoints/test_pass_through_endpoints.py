@@ -9,15 +9,16 @@ from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from io import BytesIO
-from types import MappingProxyType, SimpleNamespace
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from fastapi import HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -27,12 +28,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    SafeRouteAdder,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _with_trace_context,
@@ -8319,3 +8322,31 @@ async def test_pass_throughs_stay_open_while_a_db_sync_reads_the_database(tmp_pa
     await sync
 
     assert (config_during_sync.status_code, db_during_sync.status_code) == (200, 200)
+
+
+def _lazy_feature(monkeypatch: pytest.MonkeyPatch, name: str, path: str) -> LazyFeature:
+    async def served() -> dict[str, str]:
+        return {"served_by": name}
+
+    router: Final = APIRouter()
+    router.add_api_route(path, served, methods=["POST"])
+    module: Final = ModuleType(f"tests.unit.proxy.pass_through_endpoints.lazy_fixture_{name}")
+    module.router = router  # pyright: ignore[reportAttributeAccessIssue]  # fixture module built at test time
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return LazyFeature(name=name, module_path=module.__name__, path_prefixes=(path,))
+
+
+def test_a_pass_through_added_after_a_lazy_feature_loaded_takes_over_its_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+
+    async def pass_through() -> dict[str, str]:
+        return {"served_by": "pass-through"}
+
+    app: Final = FastAPI()
+    attach_lazy_features(app, (_lazy_feature(monkeypatch, "decider", "/v1/decider"),))
+    with TestClient(app) as client:
+        assert client.post("/v1/decider").json() == {"served_by": "decider"}
+        assert SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
+        assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
+        assert not SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
+        assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
