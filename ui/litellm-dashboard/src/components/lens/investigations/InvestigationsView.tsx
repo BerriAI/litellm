@@ -25,6 +25,9 @@ import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
 import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
+import { FindingsInbox } from "./FindingsInbox";
+import { findingAgents, type InboxRow } from "../model/inbox";
+import { WatchAllBanner } from "./WatchAllBanner";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
 import { InvestigationsWelcome } from "./InvestigationsWelcome";
 import { workerConnected, readiness } from "../model/status";
@@ -50,11 +53,19 @@ export function InvestigationsView({
   const query = useQuery(lensQueries.list(api, !!demo, workerSetup));
   const models = useQuery(lensQueries.models(api));
   const modelDetails = useQuery(lensQueries.modelDetails(api));
+  const [agentsAsOf] = useState(() => new Date().toISOString());
+  const agents = useQuery(lensQueries.agents(api, agentsAsOf, "traces"));
   const [liveSelected, setLiveSelected] = useQueryState("lens", parseAsString.withOptions({ history: "push" }));
   const [demoSelected, setDemoSelected] = useState<string | null>(null);
   const selected = demo ? demoSelected : liveSelected;
   const setSelected = demo ? setDemoSelected : setLiveSelected;
   const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
+  const [liveView, setLiveView] = useQueryState("view", parseAsString.withDefault("findings"));
+  const [demoView, setDemoView] = useState("findings");
+  const [peek, setPeek] = useState(false);
+  const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
+  const view = demo ? demoView : liveView;
+  const setView = (next: string) => (demo ? setDemoView(next) : void setLiveView(next));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const lenses = [...(query.data?.lenses ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
@@ -135,14 +146,19 @@ export function InvestigationsView({
     setEditing(null);
     refresh();
   };
+  const openFinding = (row: InboxRow) => {
+    setPeek(true);
+    selectLens(row.sources[0].lens.id);
+    setFindingId(row.sources[0].finding.id);
+  };
   const changeFinding = async (status: Finding["status"], reason: string) => {
     if (!lens || !finding) return;
     await update((current) => current.reviewFinding(lens.id, finding.id, status, reason));
   };
 
   return (
-    <section aria-label="Investigations" className="w-full min-w-0 space-y-6">
-      {!showEmpty && (
+    <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
+      {!showEmpty && !!selected && !peek && (
         <InvestigationNavigation
           lens={lens}
           showActions={showActions}
@@ -173,12 +189,66 @@ export function InvestigationsView({
           onDemo={activity.isSuccess && !ready ? onDemo : undefined}
         />
       )}
-      {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} />}
-      {!selected && lenses.length > 0 && (
-        <InvestigationList lenses={lenses} connected={connected} onSelect={selectLens} />
+      {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
+      {(!selected || peek) && lenses.length > 0 && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div role="tablist" aria-label="Findings or manage" className="flex rounded-lg bg-muted/60 p-0.5">
+              {(["findings", "investigations"] as const).map((name) => (
+                <button
+                  key={name}
+                  role="tab"
+                  type="button"
+                  aria-selected={view === name}
+                  onClick={() => setView(name)}
+                  className="rounded-md px-3 py-1 text-sm text-muted-foreground hover:text-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm"
+                >
+                  {name === "findings" ? "Findings" : `Manage (${lenses.length})`}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {!readOnly && (
+                <WatchAllBanner
+                  lenses={lenses}
+                  busy={busy}
+                  skipped={skipped}
+                  onWatchAll={() =>
+                    update(async (api) => {
+                      const result = await api.watchAll();
+                      setSkipped(result.skipped);
+                    })
+                  }
+                />
+              )}
+              <InvestigationNavigation
+                lens={undefined}
+                showActions={showActions}
+                activityReady={activityReady}
+                connected={connected}
+                ready={ready}
+                selectLens={selectLens}
+                setWorkerSetup={setWorkerSetup}
+                setEditing={setEditing}
+              />
+            </div>
+          </div>
+          {view === "findings" ? (
+            <FindingsInbox lenses={lenses} onOpen={openFinding} />
+          ) : (
+            <InvestigationList
+              lenses={lenses}
+              connected={connected}
+              onSelect={(id) => {
+                setPeek(false);
+                selectLens(id);
+              }}
+            />
+          )}
+        </div>
       )}
-      {missingSelection && !lens && <InvestigationMissing selectLens={selectLens} />}
-      {lens && (
+      {missingSelection && !lens && !peek && <InvestigationMissing selectLens={selectLens} />}
+      {lens && !peek && (
         <InvestigationDetail
           lens={lens}
           readOnly={readOnly}
@@ -189,6 +259,7 @@ export function InvestigationsView({
           update={update}
           connected={connected}
           results={results}
+          agents={Array.isArray(agents.data) ? agents.data : []}
         />
       )}
       {editing && (
@@ -236,10 +307,17 @@ export function InvestigationsView({
       )}
       <FindingSheet
         finding={finding}
+        agents={lens && finding ? findingAgents(lens, finding) : []}
         sampledRuns={sampledRuns}
         readOnly={readOnly}
         busy={busy}
-        onClose={() => setFindingId(null)}
+        onClose={() => {
+          setFindingId(null);
+          if (peek) {
+            setPeek(false);
+            selectLens(null);
+          }
+        }}
         changeFinding={changeFinding}
         onEvidence={(value) => {
           setRequestOffset(0);
