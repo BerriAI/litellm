@@ -356,6 +356,7 @@ jobs:
               tests/unit/ocr
               tests/unit/passthrough
               tests/unit/realtime_api
+              tests/unit/repositories
               tests/unit/sandbox
               tests/unit/skills/test_skills_main.py
               tests/unit/tracing
