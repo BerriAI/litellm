@@ -17,6 +17,7 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\nfakepng"
 def _capture_image_edit_request(captured):
     def respond(request):
         captured["content_type"] = request.headers.get("content-type")
+        captured["headers"] = request.headers
         captured["body"] = request.content
         return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
 
@@ -76,6 +77,30 @@ def test_image_edit_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request
     fields = _multipart_text_fields(captured["content_type"], captured["body"])
     assert "_litellm_undeclared_sentinel" not in fields
     assert fields["seed"] == "42"
+
+
+def test_azure_image_edit_sends_azure_ad_token_as_bearer_header_not_form_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="azure/gpt-image-deployment",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_base="https://resource.services.ai.azure.com",
+        api_version="2025-04-01-preview",
+        azure_ad_token="entra-token",
+        client=client,
+        seed=42,
+    )
+
+    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert b"entra-token" not in captured["body"]
+    assert "azure_ad_token" not in fields
+    assert fields["seed"] == "42"
+    assert captured["headers"]["authorization"] == "Bearer entra-token"
 
 
 def test_image_edit_extra_body_takes_precedence_over_kwargs():

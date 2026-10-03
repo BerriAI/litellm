@@ -311,7 +311,7 @@ def image_generation(
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            azure_ad_token_param: Final = optional_params.pop("azure_ad_token", None)
+            azure_ad_token_param: Final = optional_params.get("extra_body", {}).pop("azure_ad_token", None)
             azure_ad_token: Final = (
                 azure_ad_token_param
                 if isinstance(azure_ad_token_param, str) and azure_ad_token_param
@@ -861,7 +861,7 @@ def image_edit(
         ):
             image_edit_request_params.update(
                 flatten_form_field_values(
-                    non_default_params,
+                    {k: v for k, v in non_default_params.items() if k not in GenericLiteLLMParams.model_fields},
                     extra_body if isinstance(extra_body, dict) else None,
                 )
             )
