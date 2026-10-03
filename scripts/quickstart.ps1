@@ -20,7 +20,8 @@
 # from other machines, remove LITELLM_BIND from .env and put it behind TLS.
 #
 # Keys and the database password are random, written only to .env, which only
-# your Windows account can read, and never printed. Needs Docker Desktop.
+# your Windows account can read, and never printed. Needs Docker Desktop,
+# Podman, or Rancher Desktop.
 # Works in Windows PowerShell 5.1 and PowerShell 7. Everything runs inside
 # Invoke-LiteLLMQuickstart, so a partial download runs nothing.
 param([switch]$Yes)
@@ -314,27 +315,40 @@ function Invoke-LiteLLMQuickstart {
       Say 'LiteLLM quickstart'
     }
 
-    $dockerCmd = Get-Command docker -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $dockerCmd) {
-      Fail 'Docker is not installed.' 'The LiteLLM Gateway runs in Docker alongside a Postgres database.'
+    # Podman and Rancher Desktop (nerdctl in containerd mode; its dockerd mode
+    # already provides a docker CLI) work the same way through Compose v2.
+    $engineCmd = foreach ($cand in 'docker', 'podman', 'nerdctl') {
+      $c = Get-Command $cand -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($c) { $c; break }
+    }
+    if (-not $engineCmd) {
+      Fail 'No container engine found (docker, podman, or nerdctl).' 'The LiteLLM Gateway runs in a container alongside a Postgres database.'
       $install = if ($onWindows) { 'https://docs.docker.com/desktop/setup/install/windows-install/' } else { 'https://docs.docker.com/get-docker/' }
       Say '' -Err
-      Say "  Install Docker Desktop, then run this again:  $install" -Err
+      Say "  Install Docker Desktop ($install)," -Err
+      Say '  Podman (https://podman.io), or Rancher Desktop (https://rancherdesktop.io), then run this again.' -Err
       Say '  Or deploy in one click (Railway or Render):  https://docs.litellm.ai/docs/proxy/docker_quick_start' -Err
       Say '  Only need to call models from Python?  pip install litellm' -Err
       return 1
     }
-    $docker = $dockerCmd.Source
+    $docker = $engineCmd.Source
+    $engine = $engineCmd.Name -replace '\.exe$', ''
+    $engineName = switch ($engine) { 'podman' { 'Podman' } 'nerdctl' { 'nerdctl' } default { 'Docker' } }
     $compose = Invoke-Native $docker @('compose', 'version', '--short')
-    if ($compose.Code -ne 0) { Fail "Docker Compose v2 ('docker compose') is required."; return 1 }
+    if ($compose.Code -ne 0) { Fail "Compose v2 ('$engine compose') is required."; return 1 }
     if ((Invoke-Native $docker @('info')).Code -ne 0) {
-      Fail 'Docker is installed but not running.' 'Start Docker Desktop and run this again.'
+      $startHint = switch ($engine) {
+        'podman' { 'Start it (podman machine start) and run this again.' }
+        'nerdctl' { 'Start Rancher Desktop and run this again.' }
+        default { 'Start Docker Desktop and run this again.' }
+      }
+      Fail "$engineName is installed but not running." $startHint
       return 1
     }
     $server = Invoke-Native $docker @('version', '--format', '{{.Server.Version}}')
-    $dockerVersion = if ($server.Code -eq 0 -and $server.Out.Count) { "$($server.Out[0]) " } else { '' }
+    $engineVersion = if ($server.Code -eq 0 -and $server.Out.Count) { "$($server.Out[0]) " } else { '' }
     $composeVersion = "$($compose.Out[0])".TrimStart('v')
-    Step "Docker ${dockerVersion}with Compose $composeVersion is running"
+    Step "$engineName ${engineVersion}with Compose $composeVersion is running"
 
     # Where the files go
     $homeDir = Join-Path $HOME 'litellm-gateway'
@@ -401,12 +415,12 @@ function Invoke-LiteLLMQuickstart {
       # Postgres keeps the password it was created with, so a new password over an
       # old database volume would lock the gateway out. Stop and explain instead.
       if ((Invoke-Native $docker @('volume', 'inspect', "${project}_postgres_data")).Code -eq 0) {
-        Fail 'Found a database from an earlier install' "(Docker volume ${project}_postgres_data)"
+        Fail 'Found a database from an earlier install' "($engineName volume ${project}_postgres_data)"
         Say ('but no ' + (Lit (Join-Path (Tildify $dir) '.env')) + ' with its password.') -Err
         Say '' -Err
         Say '  Restore that .env file and run this again to keep your models and keys, or' -Err
         Say '  delete the old database and start fresh (this removes its models and keys):' -Err
-        Say "    docker volume rm ${project}_postgres_data" -Err
+        Say "    $engine volume rm ${project}_postgres_data" -Err
         return 1
       }
     }
@@ -484,12 +498,12 @@ function Invoke-LiteLLMQuickstart {
     if (-not $style) { Say 'Starting LiteLLM and Postgres (the first run downloads the images)...' }
     $code = Invoke-WithSpinner 'Starting LiteLLM and Postgres' $detail $docker @('compose', '-f', 'docker-compose.quickstart.yml', 'up', '-d')
     if ($code -ne 0) {
-      Fail 'Docker could not start LiteLLM and Postgres.' 'Its output is above.'
+      Fail "$engineName could not start LiteLLM and Postgres." 'Its output is above.'
       return 1
     }
     if (-not (Wait-Ready $port)) {
       Fail 'The gateway did not become ready in 3 minutes.' 'See what it logged:'
-      Say ('    cd ' + (Lit (Tildify $dir)) + '; docker compose -f docker-compose.quickstart.yml logs litellm') -Err
+      Say ('    cd ' + (Lit (Tildify $dir)) + "; $engine compose -f docker-compose.quickstart.yml logs litellm") -Err
       return 1
     }
     Step ("LiteLLM and Postgres are up {d:$($sym.Dot) $(Elapsed $started)}")
@@ -503,7 +517,7 @@ function Invoke-LiteLLMQuickstart {
       , @('Username', 'admin')
       , @('Password', "the LITELLM_MASTER_KEY value in $(Join-Path (Tildify $dir) '.env')")
       , @('Next', 'in the UI, open Models + Endpoints > Add Model and paste a provider API key')
-      , @('Stop it', "cd $where; docker compose -f docker-compose.quickstart.yml down"))
+      , @('Stop it', "cd $where; $engine compose -f docker-compose.quickstart.yml down"))
 
     if ($interactive) {
       $open = Menu 'Open the admin UI in your browser?' 1 @(

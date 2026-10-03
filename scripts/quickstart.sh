@@ -21,7 +21,8 @@
 # from other machines, remove LITELLM_BIND from .env and put it behind TLS.
 #
 # Keys and the database password are random (openssl rand), written only to
-# .env with permissions 600, and never printed. Needs Docker with Compose v2.
+# .env with permissions 600, and never printed. Needs Docker, Podman, or
+# Rancher Desktop, each with Compose v2.
 # Everything runs inside main(), so a partial download runs nothing.
 set -eu
 
@@ -386,21 +387,21 @@ check_new_install() {
   [ "$DIR" = "$HOME/litellm-gateway" ] || project="litellm-gateway-$(printf '%s' "$DIR" | cksum | cut -d ' ' -f 1)"
   # Postgres keeps the password it was created with, so a new password over an
   # old database volume would lock the gateway out. Stop and explain instead.
-  if docker volume inspect "${project}_postgres_data" >/dev/null 2>&1; then
-    fail "Found a database from an earlier install" "(Docker volume ${project}_postgres_data)"
+  if "$ENGINE" volume inspect "${project}_postgres_data" >/dev/null 2>&1; then
+    fail "Found a database from an earlier install" "($ENGINE_NAME volume ${project}_postgres_data)"
     cat >&2 <<EOF
 but no $(tildify "$DIR")/.env with its password.
 
   Restore that .env file and run this again to keep your models and keys, or
   delete the old database and start fresh (this removes its models and keys):
-    docker volume rm ${project}_postgres_data
+    $ENGINE volume rm ${project}_postgres_data
 EOF
     exit 1
   fi
 }
 
 start_stack() {
-  docker compose -f docker-compose.quickstart.yml up -d
+  "$ENGINE" compose -f docker-compose.quickstart.yml up -d
 }
 
 wait_ready() {
@@ -450,23 +451,44 @@ main() {
     echo "LiteLLM quickstart"
   fi
 
-  if ! command -v docker >/dev/null 2>&1; then
-    fail "Docker is not installed." "The LiteLLM Gateway runs in Docker alongside a Postgres database."
+  # Podman and Rancher Desktop (nerdctl in containerd mode; its dockerd mode
+  # already provides a docker CLI) work the same way through Compose v2.
+  ENGINE=''
+  for cand in docker podman nerdctl; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      ENGINE="$cand"
+      break
+    fi
+  done
+  if [ -z "$ENGINE" ]; then
+    fail "No container engine found (docker, podman, or nerdctl)." "The LiteLLM Gateway runs in a container alongside a Postgres database."
     cat >&2 <<'EOF'
 
-  Install Docker, then run this again:  https://docs.docker.com/get-docker/
+  Install Docker (https://docs.docker.com/get-docker/), Podman (https://podman.io),
+  or Rancher Desktop (https://rancherdesktop.io), then run this again.
   Or deploy in one click (Railway or Render):  https://docs.litellm.ai/docs/proxy/docker_quick_start
   Only need to call models from Python?  pip install litellm
 EOF
     exit 1
   fi
-  compose_version="$(docker compose version --short 2>/dev/null)" ||
-    { fail "Docker Compose v2 ('docker compose') is required."; exit 1; }
-  docker info >/dev/null 2>&1 ||
-    { fail "Docker is installed but not running." "Start it and run this again."; exit 1; }
+  case "$ENGINE" in
+    podman) ENGINE_NAME=Podman ;;
+    nerdctl) ENGINE_NAME=nerdctl ;;
+    *) ENGINE_NAME=Docker ;;
+  esac
+  compose_version="$("$ENGINE" compose version --short 2>/dev/null)" ||
+    { fail "Compose v2 ('$ENGINE compose') is required."; exit 1; }
+  if ! "$ENGINE" info >/dev/null 2>&1; then
+    if [ "$ENGINE" = podman ]; then
+      fail "Podman is installed but not running." "Start it (podman machine start) and run this again."
+    else
+      fail "$ENGINE_NAME is installed but not running." "Start it and run this again."
+    fi
+    exit 1
+  fi
   command -v openssl >/dev/null 2>&1 || { fail "openssl is required to generate keys."; exit 1; }
-  docker_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null)" || docker_version=''
-  step "Docker ${docker_version:+$docker_version }with Compose ${compose_version#v} is running"
+  engine_version="$("$ENGINE" version --format '{{.Server.Version}}' 2>/dev/null)" || engine_version=''
+  step "$ENGINE_NAME ${engine_version:+$engine_version }with Compose ${compose_version#v} is running"
 
   pick_folder
   [ -f .env ] || check_new_install
@@ -492,17 +514,17 @@ EOF
 
   started="$(date +%s)"
   detail=''
-  for image in $(docker compose -f docker-compose.quickstart.yml config --images 2>/dev/null); do
-    docker image inspect "$image" >/dev/null 2>&1 || detail="downloading images, first run only"
+  for image in $("$ENGINE" compose -f docker-compose.quickstart.yml config --images 2>/dev/null); do
+    "$ENGINE" image inspect "$image" >/dev/null 2>&1 || detail="downloading images, first run only"
   done
   [ "$STYLE" = 1 ] || echo "Starting LiteLLM and Postgres (the first run downloads the images)..."
   if ! spin "Starting LiteLLM and Postgres" "$detail" start_stack; then
-    fail "Docker could not start LiteLLM and Postgres." "Its output is above."
+    fail "$ENGINE_NAME could not start LiteLLM and Postgres." "Its output is above."
     exit 1
   fi
   if ! spin "Waiting for the gateway to be ready" "" wait_ready; then
     fail "The gateway did not become ready in 3 minutes." "See what it logged:"
-    echo "    cd $(tildify "$DIR") && docker compose -f docker-compose.quickstart.yml logs litellm" >&2
+    echo "    cd $(tildify "$DIR") && $ENGINE compose -f docker-compose.quickstart.yml logs litellm" >&2
     exit 1
   fi
   step "LiteLLM and Postgres are up ${C_DIM}· $(elapsed_since "$started")"
@@ -514,7 +536,7 @@ EOF
     "Username|admin" \
     "Password|the LITELLM_MASTER_KEY value in $(tildify "$DIR")/.env" \
     "Next|in the UI, open Models + Endpoints > Add Model and paste a provider API key" \
-    "Stop it|cd $(tildify "$DIR") && docker compose -f docker-compose.quickstart.yml down"
+    "Stop it|cd $(tildify "$DIR") && $ENGINE compose -f docker-compose.quickstart.yml down"
 
   open_browser "$url"
 }
