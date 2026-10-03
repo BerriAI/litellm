@@ -1984,10 +1984,12 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
 
 
 def request_dispatched_to_provider_pass_through(request: Request) -> bool:
-    return (
-        getattr(request.scope.get("endpoint"), LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER, False) is True
-        or "endpoint" in request.path_params
-    )
+    """Built-in provider pass-through handlers (``/anthropic/{endpoint:path}``, ...) bind ``endpoint``."""
+    return "endpoint" in request.path_params
+
+
+def request_dispatched_to_marked_provider_pass_through(request: Request) -> bool:
+    return getattr(request.scope.get("endpoint"), LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER, False) is True
 
 
 def get_model_from_request(

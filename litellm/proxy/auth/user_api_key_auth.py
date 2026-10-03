@@ -2793,6 +2793,7 @@ async def _inherit_org_identity(
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
+        check_db_only=user_api_key_auth_obj.requires_fresh_policy,
     )
     if org_object is None:
         return

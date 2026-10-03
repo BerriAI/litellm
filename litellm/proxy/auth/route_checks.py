@@ -17,6 +17,7 @@ from litellm.proxy._types import (
 from .auth_checks_organization import _user_is_org_admin
 from .auth_utils import (
     get_request_route_template,
+    request_dispatched_to_marked_provider_pass_through,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
 )
@@ -111,6 +112,7 @@ class RouteChecks:
             route.isprintable()
             and not request_dispatched_to_pass_through_endpoint(request)
             and not request_dispatched_to_provider_pass_through(request)
+            and not request_dispatched_to_marked_provider_pass_through(request)
             and not RouteChecks.check_route_access(template, excluded)
             and RouteChecks.check_route_access(template, allowed)
         )

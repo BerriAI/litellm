@@ -62,6 +62,26 @@ def test_delegated_admin_scope_limits_api_access(route: str, allowed: bool) -> N
         assert RouteChecks.is_delegated_admin_route(route, request) is allowed
 
 
+def test_marked_provider_pass_through_without_endpoint_param_keeps_model_alias_dispatch() -> None:
+    from litellm.proxy.auth.auth_utils import (
+        request_dispatched_to_marked_provider_pass_through,
+        request_dispatched_to_provider_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import laya_proxy_route
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/laya/v1/systemone",
+            "endpoint": laya_proxy_route,
+            "path_params": {},
+        }
+    )
+    assert request_dispatched_to_marked_provider_pass_through(request)
+    assert not request_dispatched_to_provider_pass_through(request)
+
+
 DAILY_ACTIVITY_ROUTE_PAIRS: Final[tuple[tuple[str, str], ...]] = (
     ("/user/daily/activity", "/user/daily/activity/aggregated"),
     ("/user/daily/activity", "/user/daily/activity/aggregated/keys"),
