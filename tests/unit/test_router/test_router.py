@@ -15032,6 +15032,67 @@ async def test_anthropic_messages_retries_run_out_before_the_fallback_chain_is_c
     assert provider.calls[-1][0] == "anthropic/fb-model"
 
 
+def _anthropic_messages_fb_deployment_hidden_params() -> dict:
+    return {"model_id": "fb-deployment", "additional_headers": {"x-litellm-model-group": "fb"}}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_fallback_after_exhausted_retries_attributes_the_response_to_the_fallback_deployment():
+    """The retry's stream carries a wrapper of its own, so a fallback it makes before its first byte must reach
+    the wrapper the proxy reads headers off: the response names the deployment that served it, not the primary."""
+    router = _anthropic_messages_retry_router(num_retries=1, fallbacks=[{"glm": ["fb"]}])
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesFallbackByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")],
+            hidden_params=_anthropic_messages_fb_deployment_hidden_params(),
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert stream._hidden_params["model_id"] == "fb-deployment"
+    assert stream._hidden_params["additional_headers"]["x-litellm-model-group"] == "fb"
+    assert stream._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+
+
+def test_anthropic_messages_wrapper_follows_the_attribution_of_a_source_that_fell_back():
+    inner = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), object())
+    outer = FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), inner)
+    fallback = _AnthropicMessagesFallbackByteStream([], hidden_params=_anthropic_messages_fb_deployment_hidden_params())
+
+    outer.follow_source_attribution()
+    assert "model_id" not in outer._hidden_params
+
+    inner.merge_fallback_hidden_params(*Router._prepare_fallback_hidden_params(fallback))
+    inner.adopt_fallback_source(fallback)
+    outer.follow_source_attribution()
+    assert outer._hidden_params["model_id"] == "fb-deployment"
+    assert outer._hidden_params["additional_headers"]["x-litellm-model-group"] == "fb"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drops", [1, 2])
+async def test_anthropic_messages_mid_stream_retries_are_counted_in_the_response_retry_headers(drops: int):
+    """A retry made after the stream opened never passes through async_function_with_retries, so the wrapper
+    stamps the retry headers that path would have and the client reads them along with the first byte."""
+    router = _anthropic_messages_retry_router(num_retries=2)
+    provider = _AnthropicMessagesScriptedProvider(
+        *([_anthropic_messages_dropped_before_content] * drops), _anthropic_messages_retried_stream
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    first = await stream.__anext__()
+    headers = stream._hidden_params["additional_headers"]
+
+    assert first == _anthropic_messages_message_start_chunk()
+    assert (headers["x-litellm-attempted-retries"], headers["x-litellm-max-retries"]) == (drops, 2)
+    assert [chunk async for chunk in stream] == [_anthropic_messages_content_chunk("pong")]
+
+
 def _anthropic_messages_raise_authentication_error():
     raise litellm.AuthenticationError(message="invalid api key", llm_provider="anthropic", model="glm")
 
@@ -15172,7 +15233,39 @@ def test_anthropic_messages_stream_can_retry_direct_call():
     assert router._anthropic_messages_stream_can_retry(spent) is False
     assert router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
     assert policy_router._anthropic_messages_stream_can_retry({"model": "glm"}) is True
+    assert policy_router._anthropic_messages_stream_can_retry(spent) is False
     assert policy_router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
+    assert policy_router._anthropic_messages_resolved_retry_policy({"model": "glm"}) is not None
+    assert policy_router._anthropic_messages_resolved_retry_policy({"model": "glm", "num_retries": 0}) is None
+
+
+def test_retry_policy_ceiling_is_the_largest_budget_any_error_class_is_granted():
+    from litellm.router import _retry_policy_ceiling
+
+    assert _retry_policy_ceiling(RetryPolicy(InternalServerErrorRetries=1, RateLimitErrorRetries=3)) == 3
+    assert _retry_policy_ceiling(RetryPolicy()) == 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_last_attempt_under_a_retry_policy_forwards_lifecycle_frames_live():
+    """A retry policy bounds the hold the way a plain budget does: once the attempts reach the most retries the
+    policy grants, the stream is the last one, so its frames reach the client as they arrive and a drop after
+    them is the provider's error in-band rather than an error raised before any byte."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(DefaultRetries=1))
+    drop = _anthropic_messages_transport_drop()
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        lambda: _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], drop),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    received: list = []
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        await _anthropic_messages_drain_into(stream, received)
+
+    assert raised.value is drop.original_exception
+    assert received == [_anthropic_messages_message_start_chunk()]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
 
 
 @pytest.mark.asyncio

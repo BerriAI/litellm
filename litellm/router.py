@@ -649,6 +649,8 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
 @dataclass(frozen=True, slots=True)
 class _AnthropicStreamRetryOpened:
     response: object
+    attempted_retries: int
+    max_retries: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -660,6 +662,11 @@ _AnthropicStreamRetryOutcome: TypeAlias = _AnthropicStreamRetryOpened | _Anthrop
 
 
 MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
+
+
+def _retry_policy_ceiling(policy: RetryPolicy) -> int:
+    """The most retries any error class under this policy can be granted."""
+    return max((retries for retries in policy.model_dump().values() if isinstance(retries, int)), default=0)
 
 
 def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
@@ -685,6 +692,7 @@ class FallbackAwareAnthropicMessagesStream:
         self._source_iterator = source_iterator
         self.fallback_headers_adopted = False
         self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
+        self._followed_source_params: object = None
 
     @property
     def has_buffered_provider_output(self) -> bool:
@@ -711,6 +719,22 @@ class FallbackAwareAnthropicMessagesStream:
     def adopt_fallback_source(self, fallback_response: object) -> None:
         self._source_iterator = fallback_response
         self.fallback_headers_adopted = True
+
+    def follow_source_attribution(self) -> None:
+        """
+        A retry's or a fallback's stream carries a wrapper of its own, so a hop it makes before its
+        first byte lands on that wrapper while the proxy reads the headers off this one. Mirrors the
+        source's current attribution onto this wrapper whenever the source has adopted a new one.
+        """
+        source: Final = self._source_iterator
+        if not getattr(source, "fallback_headers_adopted", False):
+            return
+        source_params: Final = getattr(source, "_hidden_params", None)
+        if source_params is None or source_params is self._followed_source_params:
+            return
+        self._followed_source_params = source_params
+        hidden_params, headers = Router._prepare_fallback_hidden_params(source)
+        self.merge_fallback_hidden_params(hidden_params, headers)
 
     def __aiter__(self) -> "FallbackAwareAnthropicMessagesStream":
         return self
@@ -5695,8 +5719,8 @@ class Router:
             raise stream_error
         outcome: Final = await self._aanthropic_messages_retry_same_group(fallback_error, initial_kwargs)
         match outcome:
-            case _AnthropicStreamRetryOpened(response=retried):
-                async for item in self._aanthropic_messages_yield_recovered(retried, wrapper):
+            case _AnthropicStreamRetryOpened(response=retried, attempted_retries=attempted, max_retries=budget):
+                async for item in self._aanthropic_messages_yield_recovered(retried, wrapper, (attempted, budget)):
                     yield item
             case _AnthropicStreamRetriesExhausted(error=last_error):
                 async for item in self._aanthropic_messages_fallback_attempt(last_error, initial_kwargs, wrapper):
@@ -5708,16 +5732,18 @@ class Router:
         configured: Final = kwargs.get("model_group_retry_policy", self.model_group_retry_policy)
         return cast("dict[str, RetryPolicy] | None", configured)  # cast-ok: same type as the router attribute
 
-    def _anthropic_messages_retry_policy_in_force(self, kwargs: Mapping[str, object]) -> bool:
-        """A retry policy resolves for this request's model group and the request did not opt out with num_retries=0."""
+    def _anthropic_messages_resolved_retry_policy(self, kwargs: Mapping[str, object]) -> RetryPolicy | None:
+        """The retry policy for this request's model group, unless the request opted out with num_retries=0."""
         if kwargs.get("num_retries") == 0:
-            return False
-        resolved: Final = resolve_retry_policy(
+            return None
+        return resolve_retry_policy(
             retry_policy=self.retry_policy,
             model_group=_request_model_group(kwargs),
             model_group_retry_policy=self._anthropic_messages_group_retry_policy(kwargs),
         )
-        return resolved is not None
+
+    def _anthropic_messages_retry_policy_in_force(self, kwargs: Mapping[str, object]) -> bool:
+        return self._anthropic_messages_resolved_retry_policy(kwargs) is not None
 
     def _anthropic_messages_plain_retry_budget(self, kwargs: Mapping[str, object]) -> int:
         """
@@ -5753,11 +5779,14 @@ class Router:
         """
         Whether a pre-content failure of this stream would be retried within its own model group,
         the other case where holding lifecycle frames back from the client buys a clean restart.
-        A retry policy names its budget per error class, so one in force counts as retries remaining.
+        A retry policy names its budget per error class, so the largest budget it names bounds the
+        hold: holding frames one attempt too long is safe, forwarding them before a retry is not.
         """
-        if self._anthropic_messages_retry_policy_in_force(kwargs):
-            return True
-        return self._anthropic_messages_plain_retry_budget(kwargs) > attempted_retries_for_request(kwargs)
+        attempted: Final = attempted_retries_for_request(kwargs)
+        plain_budget: Final = self._anthropic_messages_plain_retry_budget(kwargs)
+        policy: Final = self._anthropic_messages_resolved_retry_policy(kwargs)
+        ceiling: Final = plain_budget if policy is None else max(plain_budget, _retry_policy_ceiling(policy))
+        return ceiling > attempted
 
     def _anthropic_messages_should_retry(
         self,
@@ -5837,13 +5866,20 @@ class Router:
                     )
                 last_error = wrapped
                 continue
-            return _AnthropicStreamRetryOpened(response)
+            return _AnthropicStreamRetryOpened(response, attempted_retries=attempt + 1, max_retries=budget)
         return _AnthropicStreamRetriesExhausted(last_error)
 
     async def _aanthropic_messages_yield_recovered(
-        self, recovered: object, wrapper: "FallbackAwareAnthropicMessagesStream"
+        self,
+        recovered: object,
+        wrapper: "FallbackAwareAnthropicMessagesStream",
+        retry_counters: tuple[int, int] | None = None,
     ) -> AsyncGenerator[bytes, None]:
-        """Hands a retry's or a fallback's response to the client through the wrapper, closing it afterwards."""
+        """
+        Hands a retry's or a fallback's response to the client through the wrapper, closing it afterwards.
+        A retry stamps the retry headers async_function_with_retries would have for a pre-stream retry;
+        a later hop the recovered stream makes replaces them with its own, the way a fallback's do.
+        """
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
             anthropic_messages_response_as_sse_events,
@@ -5852,9 +5888,14 @@ class Router:
         hidden_params, headers = Router._prepare_fallback_hidden_params(recovered)
         wrapper.merge_fallback_hidden_params(hidden_params, headers)
         wrapper.adopt_fallback_source(recovered)
+        if retry_counters is not None:
+            add_retry_headers_to_response(
+                response=wrapper, attempted_retries=retry_counters[0], max_retries=retry_counters[1]
+            )
         try:
             if hasattr(recovered, "__aiter__"):
                 async for item in cast("AsyncIterator[bytes]", recovered):  # cast-ok: __aiter__ checked above
+                    wrapper.follow_source_attribution()
                     yield item
                 return
             # A recovery can resolve to a complete AnthropicMessagesResponse
