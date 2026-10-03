@@ -266,7 +266,8 @@ def build_autorouter_turn_transaction(
     the payload's own usage record through the savings owner, never handed in beside it.
     The baseline the turn's saved_spend was priced against travels with the turn, so the
     row can name the counterfactual for the money it holds even after the router is
-    reconfigured or removed.
+    reconfigured or removed. A request with no session id still owns its router-day money,
+    so it becomes a turn with an empty session id that writes the day row and no session row.
     """
     if payload.get("status") != "success":
         return None
@@ -278,9 +279,9 @@ def build_autorouter_turn_transaction(
     router_name: Final = routing_decision.get("router_model_name") or payload.get("model_group")
     api_key: Final = payload.get("api_key") or ""
     user_id: Final = payload.get("user") or ""
-    session_id: Final = payload.get("session_id")
+    session_id: Final = payload.get("session_id") or ""
     model: Final = payload.get("model")
-    if not (isinstance(router_name, str) and router_name and (api_key or user_id) and session_id and model):
+    if not (isinstance(router_name, str) and router_name and (api_key or user_id) and model):
         return None
     turn_at: Final = _turn_time_utc(str(payload.get("startTime") or ""))
     if turn_at is None:
@@ -379,7 +380,7 @@ SELECT
     {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}, {_BASELINE_DELTA},
     {_p("savings_estimated_turns")}::int, {_p("savings_estimated_actual_spend")}::float8,
     {_p("savings_estimated_saved_spend")}::float8, {_ESTIMATED_BASELINE_DELTA}
-WHERE {required_identity}::text <> ''
+WHERE {required_identity}::text <> '' AND {_p("session_id")}::text <> ''
 ON CONFLICT ({user_column}api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
     total_tokens = t.total_tokens + EXCLUDED.total_tokens,

@@ -124,6 +124,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
@@ -5293,6 +5294,15 @@ async def _rotate_master_key(
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
 
+    try:
+        from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+
+        await GuardrailRegistry.rotate_guardrail_params_master_key(
+            prisma_client=prisma_client, new_master_key=new_master_key
+        )
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate guardrail params: %s", str(e))
+
     # 4. process MCP server table
     try:
         await rotate_mcp_server_credentials_master_key(
@@ -5329,6 +5339,11 @@ async def _rotate_master_key(
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
+
+    try:
+        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate search tool credentials: %s", str(e))
 
     # 5. process credentials table
     try:

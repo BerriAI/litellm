@@ -2030,6 +2030,61 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_params_do_not_decrypt(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    pc.update_config_state({})
+    loaded_tool = {
+        "search_tool_id": "rotated-id",
+        "search_tool_name": "rotated-search",
+        "litellm_params": {"search_provider": "perplexity", "api_key": "pplx-loaded"},
+    }
+    fake_router = MagicMock()
+    fake_router.search_tools = [
+        loaded_tool,
+        {
+            "search_tool_id": "typo-id",
+            "search_tool_name": "typo-search",
+            "litellm_params": {"search_provider": "tavily"},
+        },
+    ]
+    db_tools = [
+        {
+            "search_tool_id": "rotated-id",
+            "search_tool_name": "rotated-search",
+            "litellm_params": {
+                "search_provider": "zM9FVihBfZj0LRkl6_J4TeIEO8ijpxKov0QnfZa1uM9J1lO7Txy9IQ==",
+                "api_key": "c2VhbGVkLWtleQ",
+            },
+        },
+        {
+            "search_tool_id": "fresh-id",
+            "search_tool_name": "fresh-search",
+            "litellm_params": {"search_provider": "tavily", "api_key": "tvly-fresh"},
+        },
+        {
+            "search_tool_id": "typo-id",
+            "search_tool_name": "typo-search",
+            "litellm_params": {"search_provider": "Tavily", "api_key": "tvly-edited"},
+        },
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        AsyncMock(return_value=db_tools),
+    )
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    assert [tool["litellm_params"] for tool in fake_router.search_tools] == [
+        {"search_provider": "perplexity", "api_key": "pplx-loaded"},
+        {"search_provider": "tavily", "api_key": "tvly-fresh"},
+        {"search_provider": "Tavily", "api_key": "tvly-edited"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_reload_search_tools_from_db_refreshes_router(monkeypatch):
     from litellm.proxy import proxy_server
 

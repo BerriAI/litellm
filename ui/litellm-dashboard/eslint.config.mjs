@@ -20,7 +20,7 @@ const eslintConfig = [
   {
     plugins: { "unused-imports": unusedImports, local },
     rules: {
-      "@tanstack/query/exhaustive-deps": ["error", { allowlist: { variables: ["accessToken"] } }],
+      "@tanstack/query/exhaustive-deps": ["error", { allowlist: { variables: ["accessToken", "apiClient", "demo"] } }],
       "unused-imports/no-unused-imports": "error",
       "local/no-large-inline-object-arg": "warn",
       "local/no-long-condition-chain": "warn",
@@ -60,6 +60,10 @@ const eslintConfig = [
               group: ["@tremor/react", "@tremor/react/*"],
               message:
                 "@tremor/react is being phased out; build new UI with shadcn/ui primitives instead of adding tremor imports.",
+            },
+            {
+              group: ["zod/*"],
+              message: 'Import Zod from "zod"; the dashboard uses Zod 4 only.',
             },
           ],
         },

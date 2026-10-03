@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";

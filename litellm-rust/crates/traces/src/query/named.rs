@@ -6,7 +6,6 @@ pub struct ReadAccessParams {
     pub all_teams: u8,
     pub user_id: String,
     pub team_ids: Vec<String>,
-    pub api_key_hash: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

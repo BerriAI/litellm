@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import moment from "moment";
 import { useMemo, useState } from "react";
@@ -61,6 +62,7 @@ interface AgentTracesSectionProps {
   onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  onDemo?: () => void;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -102,7 +104,9 @@ export function AgentTracesSection({
   onRunOpenChange,
   readOnly = false,
   canMintTracingKey = false,
+  onDemo,
 }: AgentTracesSectionProps) {
+  const demo = useLensDemo();
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
   const [agent, setAgent] = useState(ALL_AGENTS);
@@ -160,10 +164,11 @@ export function AgentTracesSection({
     checking: traces.isFetching,
   };
 
-  if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
+  if (setup.disabledDetail != null)
+    return <TracingSetupCard detail={setup.disabledDetail} onDemo={onDemo} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
   if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} {...setupProps} />;
+    return <TracingSetupCard detail={null} onDemo={onDemo} {...setupProps} />;
   if (showSetup) {
     return (
       <div>
@@ -185,11 +190,7 @@ export function AgentTracesSection({
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
-      {setup.received && (
-        <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
-          Traces received. Select a run to inspect it.
-        </p>
-      )}
+      <TracesReceived received={setup.received} />
       <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
       <RunsToolbar
         query={query}
@@ -200,19 +201,25 @@ export function AgentTracesSection({
         onAgentChange={setAgent}
         onStatusChange={setStatus}
       >
-        <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-          <ActiveDot />
-          Set up tracing
-        </Button>
+        {!demo && (
+          <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
+            <ActiveDot />
+            Set up tracing
+          </Button>
+        )}
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}
             rangeHours={timeControls.rangeHours}
             onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
             live={isLiveTail}
+            showLive={!demo}
             onLiveChange={timeControls.onLiveChange}
-            zoomed={zoom !== null}
-            onResetZoom={() => setZoom(null)}
+            onRefresh={() => {
+              setZoom(null);
+              checkTraces();
+            }}
+            refreshing={traces.isFetching}
           />
         )}
       </RunsToolbar>
@@ -234,6 +241,16 @@ export function AgentTracesSection({
         onResetZoom={() => setZoom(null)}
       />
     </div>
+  );
+}
+
+function TracesReceived({ received }: { received: boolean }) {
+  const demo = useLensDemo();
+  if (!received || demo) return null;
+  return (
+    <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
+      Traces received. Select a run to inspect it.
+    </p>
   );
 }
 
