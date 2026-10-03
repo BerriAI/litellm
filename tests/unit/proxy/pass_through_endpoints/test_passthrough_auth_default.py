@@ -19,15 +19,18 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 
 
 from litellm.proxy._types import PassThroughGenericEndpoint
 from litellm.proxy.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
+    user_api_key_auth,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _register_pass_through_endpoint,
@@ -61,7 +64,7 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
     # Regression: setting ``auth: true`` used to raise at startup
     # unless ``premium_user`` was True, leaving OSS with no safe
     # configuration.
-    app = MagicMock(spec=FastAPI)
+    app = FastAPI()
     visited: set = set()
 
     endpoint = PassThroughGenericEndpoint(
@@ -76,6 +79,22 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
         app=app,
         premium_user=False,
         visited_endpoints=visited,
+    )
+
+    forwarder_routes: Final = [
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/forwarder"
+    ]
+    assert len(forwarder_routes) == 1
+    route: Final = forwarder_routes[0]
+    assert any(
+        dependency.call is user_api_key_auth
+        for dependency in route.dependant.dependencies
+    )
+    assert any(
+        dependency.dependency is user_api_key_auth
+        for dependency in route.dependencies
     )
 
 
