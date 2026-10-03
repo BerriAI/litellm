@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from pydantic import BaseModel
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -229,12 +229,14 @@ class _LabeledMetric:
     def remove(self, *labelvalues: object) -> None:
         match self._tracker:
             case SharedPrometheusSeriesAdmissions():
-                return
+                pass
             case BoundedPrometheusSeriesTracker():
                 kept_values: Final = self._kept_values(labelvalues)
                 with self._tracker.lock:
                     self._tracker.forget_series(self._metric_name, kept_values)
                     self._metric.remove(*kept_values)
+            case _:
+                assert_never(self._tracker)
 
     def _admits(self, kept_values: tuple[str, ...]) -> bool:
         match self._tracker:
@@ -246,6 +248,8 @@ class _LabeledMetric:
                 return self._tracker.admit_series(
                     metric=self._metric, metric_name=self._metric_name, label_values=kept_values, limits=self._limits
                 )
+            case _:
+                assert_never(self._tracker)
 
     def _kept_values(self, values: tuple[object, ...]) -> tuple[str, ...]:
         return tuple(
