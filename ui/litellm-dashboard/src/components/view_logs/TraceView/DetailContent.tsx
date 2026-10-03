@@ -97,6 +97,7 @@ function Messages({ messages, model }: { messages: TraceMessage[]; model: string
 
 const toTraceMessage = (message: UIMessage): TraceMessage => ({
   ...message,
+  name: message.name ?? undefined,
   tool_calls: message.tool_calls?.map((call) => ({
     name: call.name,
     args: parseJson(call.arguments) ?? call.arguments,

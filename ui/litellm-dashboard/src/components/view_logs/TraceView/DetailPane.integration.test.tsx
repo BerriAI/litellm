@@ -119,6 +119,7 @@ const standardDetail: SpanDetail = {
       {
         role: "assistant",
         content: "Refund approved for T-981.",
+        name: null,
         tool_calls: [{ name: "issue_refund", arguments: '{"amount_usd": 40}' }],
       },
     ],
