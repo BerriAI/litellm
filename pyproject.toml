@@ -75,7 +75,7 @@ proxy = [
     "mcp>=2.2.0,<3",
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.104",
+    "litellm-proxy-extras==0.4.105",
     "litellm-enterprise==0.1.73",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
@@ -315,6 +315,7 @@ include = [
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/client/cli/commands/codex_base_instructions.md",
+    "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [
     "litellm/proxy/enterprise",

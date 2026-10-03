@@ -4,8 +4,13 @@ import {
   workerConnected,
   type LensList,
   analysisProgress,
+  analysisFraction,
+  analysisPace,
+  remainingLabel,
+  stageDurations,
   normalizeFilters,
   sortedFindings,
+  briefMarkdown,
   type Finding,
   type Job,
 } from "./lensData";
@@ -58,6 +63,28 @@ const job: Job = {
 };
 
 describe("Analysis progress", () => {
+  it.each(["Collecting executions", "Reading executions"])(
+    "does not turn an unreported run count into zero runs during %s",
+    (stage) => {
+      expect(analysisProgress({ ...job, stage })).toEqual({
+        step: -1,
+        title: "Preparing activity",
+        done: 0,
+        total: 0,
+        detail: "Loading the runs selected for this investigation.",
+      });
+    },
+  );
+
+  it("shows the selected count as soon as the worker reports it", () => {
+    expect(analysisProgress({ ...job, coverage: { ...coverage, selected: 7 } })).toMatchObject({
+      step: 0,
+      done: 0,
+      total: 7,
+      detail: "0 of 7 selected runs reviewed",
+    });
+  });
+
   it("measures review progress against the sample, not all eligible runs", () => {
     const expected = { step: 0, done: 7, total: 20, detail: "7 of 20 selected runs reviewed" };
     expect(
@@ -114,6 +141,96 @@ describe("Analysis progress", () => {
   });
 });
 
+describe("Analysis pace", () => {
+  it("fills the bar left to right across stages without jumping backwards at a stage boundary", () => {
+    const endOfReview = analysisFraction({ step: 0, done: 20, total: 20 });
+    const startOfGrouping = analysisFraction({ step: 1, done: 0, total: 4 });
+    expect(analysisFraction({ step: -1, done: 0, total: 0 })).toBe(0);
+    expect(analysisFraction({ step: 0, done: 10, total: 20 })).toBeLessThan(endOfReview);
+    expect(startOfGrouping).toBeCloseTo(endOfReview);
+    expect(analysisFraction({ step: 2, done: 5, total: 5 })).toBeCloseTo(1);
+  });
+
+  it("measures speed within the current stage and projects time left from overall progress", () => {
+    const start = Date.parse("2026-09-30T12:00:00Z");
+    const pace = analysisPace(
+      [
+        { at: start, step: 0, done: 0, fraction: 0 },
+        { at: start + 30000, step: 0, done: 30, fraction: 0.25 },
+      ],
+      start + 30000,
+    );
+    expect(pace.perMinute).toBe(60);
+    expect(pace.secondsLeft).toBe(90);
+  });
+
+  it("waits for enough samples instead of showing a wild first estimate", () => {
+    const start = Date.parse("2026-09-30T12:00:00Z");
+    expect(analysisPace([{ at: start, step: 0, done: 1, fraction: 0.01 }], start + 2000)).toEqual({
+      perMinute: null,
+      secondsLeft: null,
+    });
+    expect(remainingLabel(null)).toBe("estimating");
+  });
+
+  it("lengthens the estimate while progress stalls", () => {
+    const start = Date.parse("2026-09-30T12:00:00Z");
+    const samples = [
+      { at: start, step: 0, done: 0, fraction: 0 },
+      { at: start + 10000, step: 0, done: 10, fraction: 0.1 },
+    ];
+    const moving = analysisPace(samples, start + 10000).secondsLeft ?? 0;
+    const stalled = analysisPace(samples, start + 40000).secondsLeft ?? 0;
+    expect(stalled).toBeGreaterThan(moving);
+  });
+
+  it("still estimates when the worker reports progress less than once a minute", () => {
+    const start = Date.parse("2026-09-30T12:00:00Z");
+    const pace = analysisPace(
+      [
+        { at: start, step: 2, done: 0, fraction: 0.8 },
+        { at: start + 90000, step: 2, done: 1, fraction: 0.85 },
+      ],
+      start + 90000,
+    );
+    expect(pace.secondsLeft).toBeCloseTo(270);
+    expect(pace.perMinute).toBeCloseTo(2 / 3);
+  });
+
+  it("measures from the last minute rather than the whole run once updates are frequent", () => {
+    const start = Date.parse("2026-09-30T12:00:00Z");
+    const samples = [
+      { at: start, step: 0, done: 0, fraction: 0 },
+      { at: start + 120000, step: 0, done: 12, fraction: 0.06 },
+      { at: start + 180000, step: 0, done: 72, fraction: 0.36 },
+    ];
+    expect(analysisPace(samples, start + 180000).perMinute).toBe(60);
+  });
+
+  it("rounds remaining time up so the label never promises less than the estimate", () => {
+    expect(remainingLabel(61)).toBe("~2m");
+    expect(remainingLabel(30)).toBe("<1m");
+  });
+});
+
+describe("Stage durations", () => {
+  const start = Date.parse("2026-09-30T12:00:00Z");
+  const createdAt = "2026-09-30T12:00:00Z";
+
+  it("times finished stages from the transitions it saw and the active stage up to now", () => {
+    const samples = [
+      { at: start + 5000, step: 0, done: 10, fraction: 0.1 },
+      { at: start + 124000, step: 1, done: 0, fraction: 0.6 },
+    ];
+    expect(stageDurations(samples, createdAt, start + 145000)).toEqual([124, 21, null]);
+  });
+
+  it("does not guess when a stage started before the page was opened", () => {
+    const samples = [{ at: start + 90000, step: 1, done: 2, fraction: 0.7 }];
+    expect(stageDurations(samples, createdAt, start + 100000)).toEqual([null, null, null]);
+  });
+});
+
 describe("Lens selection and findings", () => {
   it("preserves literal equals signs in a metadata value", () => {
     expect(normalizeFilters([{ key: " swarm ", value: " research=v2 " }])).toEqual([
@@ -143,6 +260,28 @@ describe("Lens selection and findings", () => {
     };
     const high: Finding = { ...base, id: "high", priority: "high", last_seen: "2026-09-30T11:00:00Z" };
     expect(sortedFindings([base, high]).map((f) => f.id)).toEqual(["high", "low"]);
+  });
+  it("turns an issue brief into a pasteable markdown document", () => {
+    expect(
+      briefMarkdown("PRs were never opened", {
+        problem: "The workspace was not a Git repository.",
+        user_goal: "Open a PR fixing a typo",
+        what_happened: 'Git returned "fatal: not a git repository"',
+        test_cases: [
+          { input: "Fix the typo and open a PR", expected: "A PR URL is returned" },
+          { input: "Rename greet", expected: "The rename is committed" },
+        ],
+      }),
+    ).toBe(
+      [
+        "# PRs were never opened",
+        "## Problem\nThe workspace was not a Git repository.",
+        "## User goal\nOpen a PR fixing a typo",
+        '## What happened\nGit returned "fatal: not a git repository"',
+        "## Test cases\n1. **Input:** Fix the typo and open a PR  \n   **Expect:** A PR URL is returned\n" +
+          "2. **Input:** Rename greet  \n   **Expect:** The rename is committed",
+      ].join("\n\n"),
+    );
   });
 });
 

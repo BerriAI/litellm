@@ -224,6 +224,33 @@ async def test_update_spend_logs_job_drains_tool_queue_when_spend_queue_empty(
 
 
 @pytest.mark.asyncio
+async def test_update_spend_logs_job_drains_the_whole_model_usage_queue_in_one_run(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.db.model_usage_rollup as model_usage_mod
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    queued = [MagicMock() for _ in range(25_000)]
+    mock_prisma_client.model_usage_transactions = list(queued)
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False)
+    flush_stub = AsyncMock()
+    monkeypatch.setattr(model_usage_mod, "flush_model_usage_transactions", flush_stub, raising=False)
+
+    await update_spend_logs_job(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+
+    assert flush_stub.await_args.kwargs["transactions"] == queued
+    assert mock_prisma_client.model_usage_transactions == []
+
+
+@pytest.mark.asyncio
 async def test_update_spend_logs_job_processes_and_clears_queue(
     mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:

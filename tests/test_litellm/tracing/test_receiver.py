@@ -20,7 +20,7 @@ from litellm.tracing.types import TraceScope
 pytestmark = pytest.mark.requires_rust_extension
 
 FIXTURE = Path(__file__).parent / "fixtures" / "langsmith_deep_agent_export.json"
-TENANT = Tenant(team_id="team-research", api_key_hash="hashed-key", org_id="org-1")
+TENANT = Tenant(team_id="team-research", api_key_hash="hashed-key", org_id="org-1", user_id="user-1")
 
 
 def _fake_store() -> MagicMock:
@@ -38,6 +38,7 @@ def _spoofed_export() -> bytes:
             KeyValue(key="service.name", value=AnyValue(string_value="svc")),
             KeyValue(key="litellm.team_id", value=AnyValue(string_value="someone-elses-team")),
             KeyValue(key="litellm.api_key_hash", value=AnyValue(string_value="someone-elses-key")),
+            KeyValue(key="litellm.user_id", value=AnyValue(string_value="someone-elses-user")),
         ]
     )
     return ExportTraceServiceRequest(resource_spans=[resource_spans]).SerializeToString()
@@ -64,6 +65,8 @@ async def test_ingest_overwrites_client_supplied_tenant_attributes():
     assert row["TeamId"] == "team-research"
     assert row["ResourceAttributes"]["litellm.team_id"] == "team-research"
     assert row["ResourceAttributes"]["litellm.api_key_hash"] == "hashed-key"
+    assert row["UserId"] == TENANT.user_id
+    assert row["ResourceAttributes"]["litellm.user_id"] == TENANT.user_id
 
 
 @pytest.mark.asyncio
@@ -103,7 +106,7 @@ async def test_empty_export_writes_nothing():
 async def test_reads_delegate_to_store():
     store = _fake_store()
     tracing = TraceReceiver(store)
-    scope: TraceScope = {"team_ids": ("team-research",), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-research",)}
     assert await tracing.get_trace("t1", scope) is None
     store.get_trace.assert_awaited_once_with("t1", scope, "")
 

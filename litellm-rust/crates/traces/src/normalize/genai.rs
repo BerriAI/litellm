@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, first, usage_tokens};
-use crate::DecodeError;
+use crate::{Error, otlp::DecodedEvent};
 
 pub(super) struct GenAiNormalizer;
 
@@ -30,7 +30,8 @@ impl SpanNormalizer for GenAiNormalizer {
         _name: &str,
         parent_span_id: &str,
         attributes: &BTreeMap<String, String>,
-    ) -> Result<NormalizedSpan, DecodeError> {
+        _events: &[DecodedEvent],
+    ) -> Result<NormalizedSpan, Error> {
         let (input_tokens, output_tokens) = usage_tokens(attributes)?;
         let observation_type = match attr(attributes, "gen_ai.operation.name") {
             "invoke_agent" => ObservationType::Agent,
@@ -42,6 +43,7 @@ impl SpanNormalizer for GenAiNormalizer {
         Ok(NormalizedSpan {
             observation_type,
             agent_name: attr(attributes, "gen_ai.agent.name").to_owned(),
+            framework: String::new(),
             litellm_request_id: attr(attributes, "gen_ai.response.id").to_owned(),
             model: first(attributes, "gen_ai.request.model", "gen_ai.response.model").to_owned(),
             input_tokens,

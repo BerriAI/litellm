@@ -23,6 +23,8 @@ from starlette.datastructures import FormData
 
 
 import litellm
+from litellm.caching.caching import DualCache
+from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
@@ -7362,6 +7364,8 @@ class TestTypeSafePassthroughRoute:
         "provider, endpoint, is_decision_request",
         (
             ("typesafe", "systemone", True),
+            ("laya", "systemone", True),
+            ("bespoke", "systemone", True),
             ("typesafe", "systemone/", True),
             ("typesafe", "systemone?trace=1", True),
             ("typesafe", "systemone/?trace=1", True),
@@ -7380,7 +7384,7 @@ class TestTypeSafePassthroughRoute:
         self,
         client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
-        provider: Literal["typesafe", "openrouter"],
+        provider: Literal["typesafe", "openrouter", "laya", "bespoke"],
         endpoint: str,
         is_decision_request: bool,
         quota_scope: Literal["key", "project_output"],
@@ -7401,12 +7405,15 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
         monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
-        model: Final = "jev-latest" if provider == "typesafe" else "test-generative-model"
+        monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
+        monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
+        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
+        permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
             tpm_limit=token_limit if quota_scope == "key" else None,
             project_id="test-project" if quota_scope == "project_output" else None,
-            project_metadata={"model_otpm_limit": {model: token_limit}} if quota_scope == "project_output" else {},
+            project_metadata={"model_otpm_limit": {permission_model: token_limit}} if quota_scope == "project_output" else {},
         )
         monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: auth)
         body: Final = (
@@ -7471,6 +7478,162 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+@pytest.mark.parametrize("provider", ["laya", "bespoke"])
+class TestOssDecisionPassthroughRoute:
+    @pytest.fixture
+    def checkpoint(self, provider: str) -> str:
+        return "english" if provider == "laya" else "nimble-latest"
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch, provider: str) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv(f"{provider.upper()}_API_BASE", f"http://{provider}.test/base")
+        monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+        monkeypatch.delenv(f"{provider.upper()}_API_KEY", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    @pytest.mark.parametrize("api_key", [None, "oss-provider-key"])
+    def test_oss_forwards_native_decisions_without_gateway_or_typesafe_credentials(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, api_key: str | None, provider: str, checkpoint: str
+    ) -> None:
+        if api_key is not None:
+            monkeypatch.setenv(f"{provider.upper()}_API_KEY", api_key)
+        body: Final = {
+            "model": checkpoint,
+            "state": "refund",
+            "questions": {"department": {"type": "choice", "criteria": {"billing": "refunds"}}},
+        }
+        answer: Final = {
+            "model": "laya-rl-agent" if provider == "laya" else checkpoint, "answers": {},
+            **({"routing": {"model": checkpoint}} if provider == "laya" else {}),
+        }
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone?trace=yes").respond(200, json=answer)
+            response: Final = client.post(
+                f"/{provider}/v1/systemone?trace=yes",
+                json=body,
+                headers={"Authorization": "Bearer sk-virtual", "x-pass-authorization": "Bearer attacker"},
+            )
+
+        assert (response.status_code, response.json()) == (200, answer)
+        sent: Final = route.calls.last.request
+        assert sent.headers.get("authorization") == (f"Bearer {api_key}" if api_key else None)
+        assert json.loads(sent.content) == body
+
+    def test_oss_missing_server_fails_without_contacting_another_provider(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, provider: str, checkpoint: str
+    ) -> None:
+        monkeypatch.delenv(f"{provider.upper()}_API_BASE")
+        with respx.mock(assert_all_called=False) as upstream:
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint})
+        assert response.status_code == 503
+        assert f"{provider.upper()}_API_BASE" in response.text
+        assert len(upstream.calls) == 0
+
+    def test_oss_does_not_forward_unsupported_endpoints(self, client: TestClient, provider: str, checkpoint: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            response: Final = client.post(f"/{provider}/v1/evaluate", json={"model": checkpoint})
+        assert response.status_code == 404
+        assert len(upstream.calls) == 0
+
+    @pytest.mark.parametrize("model", [None, "auto", "jev-latest"])
+    def test_oss_rejects_implicit_checkpoint_selection(self, client: TestClient, model: str | None, provider: str) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": model})
+        assert response.status_code == 400
+        assert len(upstream.calls) == 0
+
+    @pytest.mark.parametrize(
+        "controls",
+        [{"custom_body": {"model": "multilingual", "state": "refund"}}, {"stream": True}, {"stream": "true"}],
+    )
+    def test_oss_rejects_controls_that_change_authorized_body_or_usage_accounting(
+        self, client: TestClient, controls: Mapping[str, object], provider: str, checkpoint: str
+    ) -> None:
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint, **controls})
+        assert response.status_code == 400
+        assert not route.called
+
+
+    @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
+    def test_oss_hooks_enforce_canonical_model_limits_and_keep_native_wire_body(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str, provider: str, checkpoint: str
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.utils import InternalUsageCache
+        from litellm.proxy.proxy_server import app
+
+        cache: Final = DualCache()
+        limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        auth: Final = UserAPIKeyAuth(
+            api_key="oss-native-rpm", metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
+        )
+        def authenticated_key() -> UserAPIKeyAuth:
+            return auth
+
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, authenticated_key)
+
+        class LimitHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
+                data: dict[str, object], call_type: CallTypesLiteral,
+            ) -> dict[str, object]:
+                assert data["model"] == f"{provider}/{checkpoint}"
+                metadata: Final = data.get(metadata_slot)
+                assert isinstance(metadata, dict)
+                assert "standard_logging_guardrail_information" not in metadata
+                assert metadata["customer_label"] == "retained"
+                await limiter.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
+                return data
+
+        monkeypatch.setattr(litellm, "callbacks", [LimitHook()])
+        body: Final = {
+            "model": checkpoint, "state": "refund",
+            metadata_slot: {
+                "customer_label": "retained", "model_group": "unbounded-client-choice",
+                "standard_logging_guardrail_information": [{"guardrail_cost": 25.0}],
+            },
+        }
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
+            first: Final = client.post(f"/{provider}/v1/systemone", json=body)
+            second: Final = client.post(f"/{provider}/v1/systemone", json=body)
+        assert first.status_code == 200, first.text
+        assert second.status_code == 429, second.text
+        assert route.call_count == 1
+        assert json.loads(route.calls.last.request.content) == {"model": checkpoint, "state": "refund"}
+
+    def test_oss_preserves_trusted_hook_checkpoint_changes(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, provider: str, checkpoint: str
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        changed_checkpoint: Final = "multilingual" if provider == "laya" else "bespokelabs/Bespoke-Nimble-9B"
+
+        class CheckpointHook(CustomLogger):
+            async def async_pre_call_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
+                data: dict[str, object], call_type: CallTypesLiteral,
+            ) -> dict[str, object]:
+                assert data["model"] == f"{provider}/{checkpoint}"
+                return {**data, "model": f"{provider}/{changed_checkpoint}"}
+
+        monkeypatch.setattr(litellm, "callbacks", [CheckpointHook()])
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint, "state": "refund"})
+        assert response.status_code == 200, response.text
+        assert json.loads(route.calls.last.request.content) == {"model": changed_checkpoint, "state": "refund"}
 
 
 class TestFalAIPassthroughRoute:
