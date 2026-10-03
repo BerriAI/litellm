@@ -19,9 +19,14 @@ import pytest
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.responses.main import build_web_search_call
@@ -1171,3 +1176,102 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
             ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ):
             assert event.item_id == message_item_adds[0].item.id
+
+
+@pytest.mark.parametrize(
+    "thinking_text,include_redacted",
+    [("echoecho", False), ("", False), (None, True), ("echoecho", True)],
+    ids=["visible", "signature-only", "redacted-only", "mixed"],
+)
+@pytest.mark.parametrize("end_with_tool", [False, True], ids=["text", "tool"])
+@pytest.mark.asyncio
+async def test_reasoning_done_payload_replays_signed_blocks(
+    thinking_text: str | None, include_redacted: bool, end_with_tool: bool
+) -> None:
+    fragments: Final[tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...]] = (
+        *(
+            ChatCompletionThinkingBlock(type="thinking", thinking=part)
+            for part in (("echo", "echo") if thinking_text else ())
+        ),
+        *(
+            (ChatCompletionThinkingBlock(type="thinking", thinking="", signature="test-signature"),)
+            if thinking_text is not None
+            else ()
+        ),
+        *(
+            (ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data="test-redacted-data"),)
+            if include_redacted
+            else ()
+        ),
+    )
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            model="test-model",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=fragment.get("thinking", ""),
+                        thinking_blocks=[fragment],
+                        provider_specific_fields={"thinking_blocks": [fragment]},
+                    ),
+                )
+            ],
+        )
+        for fragment in fragments
+    )
+    ending: Final = (
+        _tool_call_chunk(finish_reason="tool_calls") if end_with_tool else _chunk("answer", finish_reason="stop")
+    )
+    iterator: Final = _build_iterator([*chunks, ending])
+
+    events: Final = [event async for event in iterator]
+    done: Final = next(
+        event.item
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and event.item.type == "reasoning"
+    )
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    reasoning: Final = next(item for item in completed.output if item.type == "reasoning")
+    payload: Final = done.model_dump().get("encrypted_content")
+    expected: Final = [
+        *(
+            [ChatCompletionThinkingBlock(type="thinking", thinking=thinking_text, signature="test-signature")]
+            if thinking_text is not None
+            else []
+        ),
+        *(
+            [ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data="test-redacted-data")]
+            if include_redacted
+            else []
+        ),
+    ]
+
+    assert isinstance(payload, str)
+    assert json.loads(payload) == expected
+    assert payload == reasoning.encrypted_content
+    messages: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+        input_item=done.model_dump(exclude_none=True), replay_reasoning=True
+    )
+    assert messages[0]["thinking_blocks"] == expected
+
+
+def test_reasoning_done_without_a_response_snapshot_preserves_summary() -> None:
+    iterator: Final = _build_iterator([])
+
+    event: Final = iterator.create_reasoning_output_item_done_event(
+        reasoning_item_id="rs_pending",
+        reasoning_content="The response snapshot is not available yet.",
+        sequence_number=7,
+    )
+
+    assert event.type == "response.output_item.done"
+    assert event.sequence_number == 7
+    assert event.item.model_dump(exclude_none=True) == {
+        "id": "rs_pending",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "The response snapshot is not available yet."}],
+    }
