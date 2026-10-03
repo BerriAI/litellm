@@ -4,12 +4,14 @@ from unittest.mock import Mock
 
 import pytest
 
+import litellm
 from litellm import Router
-from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.constants import PINNED_DEPLOYMENT_ID_METADATA_KEY, ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
+    filter_pinned_deployment,
     filter_team_based_models,
     filter_web_search_deployments,
     provider_for_generic_call,
@@ -774,3 +776,88 @@ class TestWarnOnProviderCredentialMismatch:
 def test_provider_for_generic_call(litellm_params, expected, monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
     assert provider_for_generic_call(litellm_params) == expected
+
+
+def _pinned_router(routing_strategy: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "sora-2",
+                "litellm_params": {"model": "openai/sora-2", "api_key": f"sk-mock-{name}", "weight": weight},
+                "model_info": {"id": f"deployment-{name}"},
+            }
+            for name, weight in (("a", 1), ("b", 0))
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_filter_pinned_deployment_keeps_only_the_pinned_id(bucket):
+    deployments = [{"model_info": {"id": "deployment-a"}}, {"model_info": {"id": "deployment-b"}}]
+
+    kept = filter_pinned_deployment("sora-2", deployments, {bucket: {PINNED_DEPLOYMENT_ID_METADATA_KEY: "deployment-b"}})
+
+    assert kept == [{"model_info": {"id": "deployment-b"}}]
+
+
+def test_filter_pinned_deployment_without_a_pin_keeps_every_deployment():
+    deployments = [{"model_info": {"id": "deployment-a"}}, {"model_info": {"id": "deployment-b"}}]
+
+    assert filter_pinned_deployment("sora-2", deployments, {"metadata": {}}) == deployments
+
+
+def test_filter_pinned_deployment_rejects_a_pin_outside_the_candidates():
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        filter_pinned_deployment(
+            "sora-2",
+            [{"model_info": {"id": "deployment-a"}}],
+            {"metadata": {PINNED_DEPLOYMENT_ID_METADATA_KEY: "deployment-b"}},
+        )
+
+    assert rejected.value.status_code == 400
+    assert "You passed in model=sora-2. There are no healthy deployments for this model" in rejected.value.message
+
+
+@pytest.mark.asyncio
+async def test_async_routing_reaches_the_pinned_deployment():
+    router = _pinned_router("simple-shuffle")
+    request_kwargs = {"metadata": {PINNED_DEPLOYMENT_ID_METADATA_KEY: "deployment-b"}}
+
+    picked = [
+        (await router.async_get_available_deployment(model="sora-2", request_kwargs=request_kwargs))["model_info"]["id"]
+        for _ in range(20)
+    ]
+
+    assert picked == ["deployment-b"] * 20
+
+
+def test_sync_routing_reaches_the_pinned_deployment():
+    router = _pinned_router("usage-based-routing")
+    request_kwargs = {"metadata": {PINNED_DEPLOYMENT_ID_METADATA_KEY: "deployment-b"}}
+
+    picked = [
+        router.get_available_deployment(model="sora-2", request_kwargs=request_kwargs)["model_info"]["id"]
+        for _ in range(20)
+    ]
+
+    assert picked == ["deployment-b"] * 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_kwargs", "expected_ids"),
+    [
+        ({"metadata": {PINNED_DEPLOYMENT_ID_METADATA_KEY: "deployment-b"}}, ["deployment-b"]),
+        ({"metadata": {}}, ["deployment-a", "deployment-b"]),
+    ],
+)
+async def test_retry_candidates_of_a_pinned_request_are_only_the_pinned_deployment(request_kwargs, expected_ids):
+    router = _pinned_router("simple-shuffle")
+
+    healthy, all_deployments = await router._async_get_healthy_deployments(
+        model="sora-2", parent_otel_span=None, request_kwargs=request_kwargs
+    )
+
+    assert [d["model_info"]["id"] for d in healthy] == expected_ids
+    assert [d["model_info"]["id"] for d in all_deployments] == expected_ids

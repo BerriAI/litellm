@@ -180,11 +180,13 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
+    filter_pinned_deployment,
     filter_team_based_models,
     filter_web_search_deployments,
     format_fallback_outcome_message,
     format_no_fallback_group_message,
     get_request_team_id,
+    pinned_deployment_id,
     provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
@@ -7690,6 +7692,9 @@ class Router:
 
     @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):
+        typed_request_kwargs: Final = cast(  # cast-ok: Python kwargs always have str keys and arbitrary object values
+            Mapping[str, object], kwargs
+        )
         verbose_router_logger.debug("Inside async function with retries.")
         original_function: Final = kwargs.pop("original_function")
         fallbacks: Final = kwargs.pop("fallbacks", self.fallbacks)
@@ -7747,6 +7752,7 @@ class Router:
             ) = await self._async_get_healthy_deployments(
                 model=kwargs.get("model") or "",
                 parent_otel_span=parent_otel_span,
+                request_kwargs=typed_request_kwargs,
             )
 
             # Check retry policy FIRST, before should_retry_this_error
@@ -7839,6 +7845,7 @@ class Router:
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
+                            request_kwargs=typed_request_kwargs,
                         )
                     else:
                         _healthy_deployments = []
@@ -8615,7 +8622,7 @@ class Router:
         return healthy_deployments, _all_deployments
 
     async def _async_get_healthy_deployments(
-        self, model: str, parent_otel_span: Span | None
+        self, model: str, parent_otel_span: Span | None, request_kwargs: Mapping[str, object] | None = None
     ) -> tuple[list[dict], list[dict]]:
         """
         Returns Tuple of:
@@ -8632,6 +8639,9 @@ class Router:
                 return [], _all_deployments
         except Exception:
             pass
+        pinned_id: Final = pinned_deployment_id(request_kwargs)
+        if pinned_id is not None:
+            _all_deployments = [d for d in _all_deployments if d["model_info"]["id"] == pinned_id]
 
         unhealthy_deployments: Final = await _async_get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
@@ -13053,6 +13063,11 @@ class Router:
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
+        pinned_request_kwargs: Final = cast(  # cast-ok: this API's legacy bare dict is a str-keyed request mapping
+            Mapping[str, object], request_kwargs
+        )
+        healthy_deployments = filter_pinned_deployment(model, healthy_deployments, pinned_request_kwargs)
+
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
                 raise litellm.ServiceUnavailableError(
@@ -14244,6 +14259,14 @@ class Router:
             specific_deployment=specific_deployment,
             request_kwargs=request_kwargs,
         )
+        pinned_request_kwargs: Final = (
+            cast(  # cast-ok: this API's legacy bare dict is a str-keyed request mapping
+                Mapping[str, object], request_kwargs
+            )
+            if request_kwargs is not None
+            else None
+        )
+        healthy_deployments = filter_pinned_deployment(model, healthy_deployments, pinned_request_kwargs)
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
         pick_attributes: Final = _deployment_pick_attributes(
             model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
