@@ -1,8 +1,8 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import SpendLogsTable from "./index";
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import LogsPage from "./page";
+import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 
 const { useAuthorizedMock, useOrganizationsMock } = vi.hoisted(() => ({
   useAuthorizedMock: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: useOrganizationsMock,
 }));
 
-vi.mock("./RequestLogsPanel", () => ({
+vi.mock("@/components/view_logs/RequestLogsPanel", () => ({
   default: function RequestLogsPanelMock() {
     return <div data-testid="request-logs-panel" />;
   },
@@ -47,17 +47,13 @@ const defaultProps = {
 const ORG_ADMIN_MEMBERSHIPS = [{ organization_id: "org-1", members: [{ user_id: "user-1", user_role: "org_admin" }] }];
 
 const renderAs = (sessionRole: string, organizations: unknown[] = []) => {
-  useAuthorizedMock.mockReturnValue({
-    accessToken: "sk-test",
-    userId: "user-1",
-    userRole: sessionRole,
-    premiumUser: true,
-  });
+  const session = { ...defaultProps, userId: defaultProps.userID, userRole: sessionRole };
+  useAuthorizedMock.mockReturnValue(session);
   useOrganizationsMock.mockReturnValue({ data: organizations });
-  return renderWithProviders(<SpendLogsTable {...defaultProps} userRole={sessionRole} />);
+  return renderWithProviders(<LogsPage />);
 };
 
-describe("SpendLogsTable network access by role", () => {
+describe("LogsPage network access by role", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.clearAllMocks();

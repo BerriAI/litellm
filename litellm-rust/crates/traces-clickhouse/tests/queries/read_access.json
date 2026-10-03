@@ -1,6 +1,8 @@
 {
   "all_teams": 1,
   "user_id": "",
-  "team_ids": ["team-a", "team-b"],
-  "api_key_hash": ""
+  "team_ids": [
+    "team-a",
+    "team-b"
+  ]
 }
