@@ -5292,8 +5292,14 @@ def _with_config_file_pass_through_endpoints(
 
 def _reload_settings_store(section: Section, store: SettingsStore, section_config: object) -> None:
     serving_pass_throughs: Final = store.get("pass_through_endpoints")
+    stored_pass_throughs: Final = store.db_value("pass_through_endpoints")
     store.load_yaml(_as_settings_mapping(section_config))
-    store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+    store.apply_db_row(
+        section,
+        MappingProxyType({"pass_through_endpoints": stored_pass_throughs})
+        if isinstance(stored_pass_throughs, list)
+        else _EMPTY_SETTINGS_MAPPING,
+    )
     if is_resource_list(section, "pass_through_endpoints") and serving_pass_throughs is not None:
         store["pass_through_endpoints"] = serving_pass_throughs
 
