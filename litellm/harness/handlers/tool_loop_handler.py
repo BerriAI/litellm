@@ -46,10 +46,12 @@ class _FunctionToolCall:
 AsyncCompletion: TypeAlias = Callable[..., Awaitable[ModelResponse]]
 _ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_ADAPTER: Final = TypeAdapter(object)
 _MODEL_RESPONSE_ADAPTER: Final = TypeAdapter(ModelResponse)
 _RAW_DECODE_ADAPTER: Final = TypeAdapter(tuple[object, int])
 _JSON_DECODER: Final = json.JSONDecoder()
 _HISTORY_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+_TOOL_CALLS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
 class _Usage(BaseModel):
@@ -86,6 +88,41 @@ def _normalize_tool_call(
             arguments=call.function.arguments,
         )
     return _FunctionToolCall(id=call.id, name=call.custom.name, arguments=call.custom.input)
+
+
+def _tool_call_id(call: Mapping[str, object]) -> str | None:
+    call_id: Final[object] = call.get("id")
+    return call_id if isinstance(call_id, str) else None
+
+
+def _tool_call_ids(message: ChatCompletionMessageParam) -> tuple[str, ...]:
+    message_mapping: Final = _as_mapping(message)
+    if message_mapping is None or message_mapping.get("role") != "assistant":
+        return ()
+    tool_calls_value: Final = message_mapping.get("tool_calls")
+    if tool_calls_value is None:
+        return ()
+    try:
+        tool_calls: Final = _TOOL_CALLS_ADAPTER.validate_python(tool_calls_value)
+    except ValidationError:
+        return ()
+    return tuple(call_id for call_id in map(_tool_call_id, tool_calls) if call_id is not None)
+
+
+def _tool_message_call_id(message: ChatCompletionMessageParam) -> str | None:
+    message_mapping: Final = _as_mapping(message)
+    if message_mapping is None or message_mapping.get("role") != "tool":
+        return None
+    call_id: Final[object] = message_mapping.get("tool_call_id")
+    return call_id if isinstance(call_id, str) else None
+
+
+def _interrupted_tool_message(call_id: str) -> ChatCompletionMessageParam:
+    return {
+        "role": "tool",
+        "tool_call_id": call_id,
+        "content": "interrupted: the turn ended before this tool ran",
+    }
 
 
 def _parse_arguments(raw: str) -> tuple[dict[str, object], str | None]:  # mutable-ok: event input uses a dict
@@ -173,24 +210,31 @@ async def _tool_outcome(
 
 
 def _record_usage(ctx: SessionContext, response: ModelResponse) -> None:
+    ctx.calls += 1  # rebind-ok: SessionContext is the runtime's per-session usage sink
+    input_tokens, output_tokens = _usage_counts(response)
+    ctx.input_tokens += input_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
+    ctx.output_tokens += output_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
+    ctx.cost += _response_cost(response)  # rebind-ok: SessionContext is the runtime's per-session usage sink
+
+
+def _usage_counts(response: ModelResponse) -> tuple[int, int]:
     try:
         usage_value: Final[object] = getattr(response, "usage", None)
         usage: Final = _USAGE_ADAPTER.validate_python(usage_value)
-        input_tokens: Final = usage.prompt_tokens or 0
-        output_tokens: Final = usage.completion_tokens or 0
-        ctx.calls += 1  # rebind-ok: SessionContext is the runtime's per-session usage sink
-        ctx.input_tokens += input_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
-        ctx.output_tokens += output_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
-        ctx.cost += _response_cost(response)  # rebind-ok: SessionContext is the runtime's per-session usage sink
     except Exception:
-        return
+        return 0, 0
+    return usage.prompt_tokens or 0, usage.completion_tokens or 0
 
 
 async def _execute_tool(tool: FunctionTool, arguments: Mapping[str, object]) -> object:
     validated_model: Final = tool.args_model.model_validate(arguments)
-    values_object: Final[object] = validated_model.model_dump()
-    validated: Final = _MAPPING_ADAPTER.validate_python(values_object)
     parameters: Final = tuple(inspect.signature(tool.fn).parameters.values())
+    validated: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            parameter.name: _OBJECT_ADAPTER.validate_python(getattr(validated_model, parameter.name))
+            for parameter in parameters
+        }
+    )
     positional_args: Final = tuple(
         validated[parameter.name] for parameter in parameters if parameter.kind is inspect.Parameter.POSITIONAL_ONLY
     )
@@ -253,11 +297,31 @@ class ToolLoopHandler(BaseHarnessHandler):
         return _HISTORY_ADAPTER.validate_python(history_object)  # pyright: ignore[reportIncompatibleMethodOverride]  # base history uses Any
 
     async def stop(self, ctx: SessionContext) -> None:
-        return None
+        self._close_pending_calls()
+
+    def _close_pending_calls(self) -> None:
+        assistant_offset: Final[int | None] = next(
+            (offset for offset, message in enumerate(reversed(self._messages)) if _tool_call_ids(message)),
+            None,
+        )
+        if assistant_offset is None:
+            return
+        assistant_message: Final = self._messages[-assistant_offset - 1]
+        messages_after: Final = self._messages[len(self._messages) - assistant_offset :]
+        completed_call_ids: Final = frozenset(
+            call_id for call_id in map(_tool_message_call_id, messages_after) if call_id is not None
+        )
+        pending_call_ids: Final = tuple(
+            call_id for call_id in _tool_call_ids(assistant_message) if call_id not in completed_call_ids
+        )
+        pending_messages: Final[tuple[ChatCompletionMessageParam, ...]] = tuple(
+            _interrupted_tool_message(call_id) for call_id in pending_call_ids
+        )
+        self._messages = (*self._messages, *pending_messages)
 
     async def turn(self, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
+        self._close_pending_calls()
         ctx.final_text = ""  # rebind-ok: SessionContext is the runtime's per-turn result sink
-        ctx.output_json = None  # rebind-ok: SessionContext is the runtime's per-turn result sink
         user_message: Final[ChatCompletionMessageParam] = {"role": "user", "content": prompt}
         self._messages = (*self._messages, user_message)
         for _ in range(TOOL_LOOP_MAX_MODEL_CALLS):
@@ -289,7 +353,6 @@ class ToolLoopHandler(BaseHarnessHandler):
             if not tool_calls:
                 final_text = content or ""
                 ctx.final_text = final_text  # rebind-ok: SessionContext is the runtime's per-turn result sink
-                ctx.output_json = content if ctx.output is not None else None  # rebind-ok: per-turn output sink
                 final_message: ChatCompletionMessageParam = {
                     "role": "assistant",
                     "content": content,
@@ -335,11 +398,11 @@ class ToolLoopHandler(BaseHarnessHandler):
                     parse_error,
                     approval_error,
                 )
-                yield ToolResult(id=call.id, output=outcome.output, is_error=outcome.is_error)
                 tool_message: ChatCompletionMessageParam = {
                     "role": "tool",
                     "tool_call_id": call.id,
                     "content": outcome.output,
                 }
                 self._messages = (*self._messages, tool_message)
+                yield ToolResult(id=call.id, output=outcome.output, is_error=outcome.is_error)
         raise HarnessTurnError(f"Harness.TOOL_LOOP exceeded {TOOL_LOOP_MAX_MODEL_CALLS} model calls in one turn")
