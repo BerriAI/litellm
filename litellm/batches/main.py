@@ -200,7 +200,7 @@ def create_batch(
     LiteLLM Equivalent of POST: https://api.openai.com/v1/batches
     """
     try:
-        optional_params: Final = GenericLiteLLMParams(**kwargs)
+        optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
         litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         proxy_server_request: Final = kwargs.get("proxy_server_request", None)
         model_info: Final = kwargs.get("model_info", None)
@@ -217,7 +217,7 @@ def create_batch(
             )
 
         _is_async: Final = kwargs.pop("acreate_batch", False) is True
-        litellm_params: Final = dict(GenericLiteLLMParams(**kwargs))
+        litellm_params: Final = dict(GenericLiteLLMParams.model_validate(kwargs))
         litellm_logging_obj: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None))
         ### TIMEOUT LOGIC ###
         timeout: Final = _resolve_timeout(optional_params, kwargs, custom_llm_provider)
@@ -575,7 +575,7 @@ def retrieve_batch(
     LiteLLM Equivalent of GET https://api.openai.com/v1/batches/{batch_id}
     """
     try:
-        optional_params: Final = GenericLiteLLMParams(**kwargs)
+        optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
         litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -757,7 +757,7 @@ def list_batches(
     """
     try:
         # set API KEY
-        optional_params: Final = GenericLiteLLMParams(**kwargs)
+        optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
         litellm_params: Final = get_litellm_params(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
@@ -958,7 +958,7 @@ def cancel_batch(
             verbose_logger.exception(
                 "litellm.batches.main.py::cancel_batch() - Error inferring custom_llm_provider - %s", e
             )
-        optional_params: Final = GenericLiteLLMParams(**kwargs)
+        optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
         litellm_params: Final = get_litellm_params(
             custom_llm_provider=custom_llm_provider,
             **kwargs,

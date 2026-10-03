@@ -74,7 +74,7 @@ class _MemberOpenSourceClassifierConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["jev", "laya"] = "jev"
+    provider: Literal["jev", "laya", "bespoke"] = "jev"
     model: str
     api_key: None = None
     api_base: None = None

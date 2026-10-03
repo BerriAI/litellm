@@ -416,6 +416,7 @@ PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
     "/transcribe/{operation}": {"POST"},
     "/tinyfish/{endpoint:path}": {"GET", "POST"},
     "/laya/v1/systemone": {"POST"},
+    "/bespoke/v1/systemone": {"POST"},
 }
 
 
