@@ -2,7 +2,7 @@ import { act, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as renderProviders, testQueryClient } from "@/../tests/test-utils";
-import { ApiError } from "@/lib/http/client";
+import { ApiError, createApiClient } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
 import { LensView } from "./LensView";
 import { nextCheckStatus, runTime, type Lens, type Finding } from "./lensData";
@@ -181,6 +181,36 @@ describe("Lens findings and runs", () => {
     expect(screen.getByTitle("trace-42")).toHaveTextContent("Release-42");
     expect(screen.getByText(/1 selected from 1 matching runs/)).toBeInTheDocument();
   });
+});
+
+it("shows a readable gateway error and recovers through Retry using the real HTTP client", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path === "/lens") {
+      return new Response("<html><h1>503 Service Temporarily Unavailable</h1></html><!-- gateway padding -->", {
+        status: 503,
+        headers: { "Content-Type": "text/html" },
+      });
+    }
+    return Response.json({ data: [] });
+  });
+  const client = createApiClient({ getBaseUrl: () => "", fetchImpl });
+  vi.mocked(apiClient.get).mockImplementation(client.get);
+  const user = userEvent.setup();
+  renderWithProviders(<LensView accessToken="test" readOnly />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Service temporarily unavailable (HTTP 503). Try again shortly. If this persists, contact your proxy administrator.",
+  );
+  expect(screen.getByRole("alert")).not.toHaveTextContent("<html>");
+  fetchImpl.mockImplementation(async (input) => {
+    if (String(input) === "/lens") return Response.json({ lenses: [lens], workers: [], tracing_enabled: true });
+    return Response.json({ data: [] });
+  });
+  await user.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("Release reviews")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 it("shows the actual next schedule and avoids a stale countdown during active scans", () => {

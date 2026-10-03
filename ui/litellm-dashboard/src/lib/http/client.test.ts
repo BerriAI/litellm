@@ -15,9 +15,6 @@ const emptyResponse = (status: number): Response => ({ ok: true, status, text: a
 const errorResponse = (status: number, body: unknown): Response =>
   ({ ok: false, status, text: async () => JSON.stringify(body) }) as unknown as Response;
 
-const rawErrorResponse = (status: number, text: string): Response =>
-  ({ ok: false, status, text: async () => text }) as unknown as Response;
-
 describe("createApiClient", () => {
   it("builds the URL from base + path + query and sets the auth + JSON headers", async () => {
     const fetchImpl = vi.fn(async () => okResponse({ ok: true }));
@@ -85,15 +82,64 @@ describe("createApiClient", () => {
     expect(onError).toHaveBeenCalledWith(conflict);
   });
 
-  it("falls back to the raw text body when a non-2xx response is not JSON (e.g. an HTML 502)", async () => {
-    const fetchImpl = vi.fn(async () => rawErrorResponse(502, "<html>Bad Gateway</html>"));
+  it.each([
+    [
+      503,
+      "text/html; charset=utf-8",
+      "<html><head><title>503 Service Temporarily Unavailable</title></head><body><h1>503 Service Temporarily Unavailable</h1></body></html><!-- a padding to disable MSIE and Chrome friendly error page -->",
+    ],
+    [503, "TEXT/HTML", "<h1>Unavailable</h1>"],
+    [503, "application/xhtml+xml", '<?xml version="1.0"?><html>Unavailable</html>'],
+    [502, "text/plain", "<html>Bad Gateway</html>"],
+    [504, "", " \n<!DOCTYPE HTML><HTML><BODY>Timeout</BODY></HTML>"],
+    [500, "application/json", '<HTML lang="en">Server error</HTML>'],
+    [403, "text/html", "<p>Access denied</p>"],
+  ])("normalizes HTML errors with status %i and content type %s", async (status, contentType, raw) => {
+    const message =
+      status === 503
+        ? "Service temporarily unavailable (HTTP 503). Try again shortly. If this persists, contact your proxy administrator."
+        : `The server returned an HTML error page (HTTP ${status}). Contact your proxy administrator if this persists.`;
     const onError = vi.fn();
-    const client = createApiClient({ getBaseUrl: () => "", onError, fetchImpl });
+    const client = createApiClient({
+      getBaseUrl: () => "",
+      onError,
+      fetchImpl: async () => new Response(raw, { status, headers: { "Content-Type": contentType } }),
+    });
 
-    const promise = client.get("/keys", { accessToken: "sk" });
+    for (const request of [client.get, client.getBlob]) {
+      const promise = request("/lens");
+      await expect(promise).rejects.toBeInstanceOf(ApiError);
+      await expect(promise).rejects.toMatchObject({ message, status, body: raw });
+    }
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenLastCalledWith(message);
+  });
 
-    await expect(promise).rejects.toMatchObject({ message: "<html>Bad Gateway</html>", status: 502 });
-    expect(onError).toHaveBeenCalledWith("<html>Bad Gateway</html>");
+  it.each([
+    ["upstream connection refused", "upstream connection refused", "text/plain"],
+    ["Expected <model> in the request", "Expected <model> in the request", "text/plain"],
+    ["", "HTTP 503", "text/plain"],
+    ["", "HTTP 503", "text/html"],
+    ["", "HTTP 503", "application/xhtml+xml"],
+  ])("preserves body %j as %j with content type %s", async (raw, message, contentType) => {
+    const client = createApiClient({
+      getBaseUrl: () => "",
+      fetchImpl: async () => new Response(raw, { status: 503, headers: { "Content-Type": contentType } }),
+    });
+    await expect(client.get("/lens")).rejects.toMatchObject({ message, status: 503, body: raw });
+  });
+
+  it("preserves structured 503 diagnostics even when the response is mislabeled HTML", async () => {
+    const body = { detail: "Lens needs a connected Postgres database" };
+    const onError = vi.fn();
+    const client = createApiClient({
+      getBaseUrl: () => "",
+      onError,
+      fetchImpl: async () =>
+        new Response(JSON.stringify(body), { status: 503, headers: { "Content-Type": "text/html" } }),
+    });
+    await expect(client.get("/lens")).rejects.toMatchObject({ message: body.detail, status: 503, body });
+    expect(onError).toHaveBeenCalledWith(body.detail);
   });
 
   it("returns undefined for an empty success body (e.g. a 204 No Content)", async () => {

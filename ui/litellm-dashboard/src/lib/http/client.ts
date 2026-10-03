@@ -172,7 +172,16 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
         errorBody = JSON.parse(raw);
         message = deriveErrorMessage(errorBody);
       } catch {
-        message = raw || `HTTP ${response.status}`;
+        const contentType = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+        const isHtml =
+          contentType === "text/html" ||
+          contentType === "application/xhtml+xml" ||
+          /^\s*<(?:!doctype\s+html\b|html\b)/i.test(raw);
+        const htmlMessage =
+          response.status === 503
+            ? "Service temporarily unavailable (HTTP 503). Try again shortly. If this persists, contact your proxy administrator."
+            : `The server returned an HTML error page (HTTP ${response.status}). Contact your proxy administrator if this persists.`;
+        message = raw && isHtml ? htmlMessage : raw || `HTTP ${response.status}`;
       }
       onError?.(message);
       throw new ApiError(message, response.status, errorBody);
