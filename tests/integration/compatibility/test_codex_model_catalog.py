@@ -18,7 +18,7 @@ from pydantic import JsonValue
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.wire import Reply, Request, wire_server
+from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 T = TypeVar("T")
 
@@ -158,7 +158,6 @@ def _new_model(
     model: str = "openai/gpt-4o-mini",
     model_info: Mapping[str, JsonValue] | None = None,
     api_base: str | None = None,
-    cleanup: bool = True,
 ) -> str:
     created: Final = scenario.gateway.post(
         "/model/new",
@@ -173,8 +172,7 @@ def _new_model(
         },
     )
     identity: Final = string_value(object_value(created["model_info"])["id"])
-    if cleanup:
-        scenario.cleanups.callback(scenario.delete_model, identity)
+    scenario.cleanups.callback(_delete_model_if_present, scenario.gateway, identity)
     return identity
 
 
@@ -472,8 +470,7 @@ def test_tier_update_propagates(gateway: Gateway) -> None:
 def test_model_delete_drops_the_slug(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         name: Final = _model_name("codex-deletable")
-        identity: Final = _new_model(scenario, name, model_info={"service_tiers": ["priority"]}, cleanup=False)
-        scenario.cleanups.callback(_delete_model_if_present, gateway, identity)
+        identity: Final = _new_model(scenario, name, model_info={"service_tiers": ["priority"]})
         _settled(lambda: _tiers_by_slug(gateway).get(name), lambda value: value == ("priority",))
         gateway.post("/model/delete", {"id": identity})
         _settled(lambda: _tiers_by_slug(gateway).get(name), lambda value: value is None)
@@ -543,6 +540,8 @@ def _responses_reply() -> Reply:
 
 
 def _upstream(request: Request) -> Reply:
+    if request.method == "GET" and request.target.endswith("/models"):
+        return Reply(body=json.dumps({"object": "list", "data": []}).encode())
     if request.target.endswith("/responses"):
         return _responses_reply()
     return _chat_reply(json.loads(request.body).get("stream") is True)
@@ -550,6 +549,10 @@ def _upstream(request: Request) -> Reply:
 
 def _v1(gateway: Gateway) -> str:
     return str(gateway.client.base_url).rstrip("/") + "/v1"
+
+
+def _llm_requests(wire: Wire) -> tuple[Request, ...]:
+    return tuple(request for request in wire.drain() if request.method == "POST")
 
 
 def _request_bodies(requests: Sequence[Request]) -> list[dict[str, JsonValue]]:
@@ -636,7 +639,7 @@ def test_advertised_tier_reaches_the_upstream(gateway: Gateway) -> None:
             )
             .id
         )
-        received: Final = wire.drain()
+        received: Final = _llm_requests(wire)
         assert len(received) == 4, [request.target for request in received]
         targets: Final = sorted(request.target for request in received)
         assert targets == ["/v1/chat/completions"] * 2 + ["/v1/responses"] * 2, targets
@@ -732,7 +735,7 @@ def test_catalog_burst_with_model_churn(gateway: Gateway) -> None:
 
         def churn(index: int) -> tuple[str, str]:
             churned: Final = _new_model(
-                scenario, _model_name(f"codex-churn-{index}"), model_info={"service_tiers": ["flex"]}, cleanup=False
+                scenario, _model_name(f"codex-churn-{index}"), model_info={"service_tiers": ["flex"]}
             )
             gateway.post("/model/delete", {"id": churned})
             return ("churn", churned)
@@ -752,7 +755,7 @@ def test_catalog_burst_with_model_churn(gateway: Gateway) -> None:
         llm_ids: Final = sorted(identity for kind, identity in outcomes if kind in llm_kinds)
         assert len(llm_ids) == BURST_CHAT + BURST_STREAM + BURST_RESPONSES + BURST_MESSAGES, outcomes
         assert len(set(llm_ids)) == len(llm_ids), llm_ids
-        received: Final = _request_bodies(wire.drain())
+        received: Final = _request_bodies(_llm_requests(wire))
         assert len(received) == len(llm_ids), len(received)
         prompts_sent: Final = sorted(prompt(kind, index) for kind, index in _llm_tasks())
         prompts_seen: Final = sorted(_sent_prompt(body, prompts_sent) for body in received)
