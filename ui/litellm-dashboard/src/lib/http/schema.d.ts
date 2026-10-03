@@ -25504,22 +25504,6 @@ export interface components {
             /** Uri */
             uri?: string;
         };
-        /** AgentFix */
-        AgentFix: {
-            /** Options */
-            options: [
-                components["schemas"]["FixOption"],
-                components["schemas"]["FixOption"]
-            ];
-            /** Problem */
-            problem: string;
-            /** Test Cases */
-            test_cases: components["schemas"]["AgentTestCase"][];
-            /** User Goal */
-            user_goal: string;
-            /** What Happened */
-            what_happened: string;
-        };
         /** AgentIdentityBinding */
         AgentIdentityBinding: {
             /**
@@ -31936,6 +31920,7 @@ export interface components {
         };
         /** Finding */
         Finding: {
+            brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
             /** Description */
@@ -31949,7 +31934,6 @@ export interface components {
              * Format: date-time
              */
             first_seen: string;
-            fix?: components["schemas"]["AgentFix"] | null;
             /** Id */
             id: string;
             /**
@@ -32002,6 +31986,7 @@ export interface components {
         };
         /** FindingDraft */
         FindingDraft: {
+            brief?: components["schemas"]["IssueBrief"] | null;
             /** Check Id */
             check_id: string;
             /** Description */
@@ -32010,7 +31995,6 @@ export interface components {
             evidence: components["schemas"]["Evidence"][];
             /** Existing Finding Id */
             existing_finding_id?: string | null;
-            fix?: components["schemas"]["AgentFix"] | null;
             /**
              * Kind
              * @default issue
@@ -32048,13 +32032,6 @@ export interface components {
              * @enum {string}
              */
             status: "open" | "resolved" | "dismissed";
-        };
-        /** FixOption */
-        FixOption: {
-            /** Change */
-            change: string;
-            /** Title */
-            title: string;
         };
         /** FunctionCall */
         FunctionCall: {
@@ -33193,6 +33170,17 @@ export interface components {
             invitation_id: string;
             /** Is Accepted */
             is_accepted: boolean;
+        };
+        /** IssueBrief */
+        IssueBrief: {
+            /** Problem */
+            problem: string;
+            /** Test Cases */
+            test_cases: components["schemas"]["AgentTestCase"][];
+            /** User Goal */
+            user_goal: string;
+            /** What Happened */
+            what_happened: string;
         };
         /**
          * ItemReference
