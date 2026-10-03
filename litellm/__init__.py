@@ -644,6 +644,7 @@ gemini_models: Set = set()
 xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
+clinepass_models: Set = set()
 tencent_models: Set = set()
 runwayml_models: Set = set()
 azure_ai_models: Set = set()
@@ -866,6 +867,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             fal_ai_models.add(key)
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
+        elif value.get("litellm_provider") == "clinepass":
+            clinepass_models.add(key)  # pyright: ignore[reportUnknownArgumentType]  # key comes from the untyped model cost map
         elif value.get("litellm_provider") == "tencent":
             tencent_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
@@ -1078,6 +1081,7 @@ model_list = list(
     | zai_models
     | fal_ai_models
     | deepseek_models
+    | clinepass_models
     | modelscope_models
     | azure_ai_models
     | voyage_models
@@ -1183,6 +1187,7 @@ def _build_models_by_provider() -> dict:
         "zai": zai_models,
         "fal_ai": fal_ai_models,
         "deepseek": deepseek_models,
+        "clinepass": clinepass_models,
         "tencent": tencent_models,
         "runwayml": runwayml_models,
         "mistral": mistral_chat_models,
@@ -2051,6 +2056,9 @@ if TYPE_CHECKING:
     )
     from .llms.heroku.chat.transformation import HerokuChatConfig as HerokuChatConfig
     from .llms.cometapi.chat.transformation import CometAPIConfig as CometAPIConfig
+    from .llms.clinepass.chat.transformation import (
+        ClinePassConfig as ClinePassConfig,
+    )
     from .llms.azure.chat.gpt_transformation import (
         AzureOpenAIConfig as AzureOpenAIConfig,
     )
