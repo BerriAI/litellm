@@ -8,8 +8,8 @@
 
 pub mod call;
 pub mod hooks;
-pub mod interceptors;
+pub use hooks::interceptors;
 pub mod lifecycle;
 pub mod machine;
-pub mod observation;
+pub use hooks::observation;
 pub mod protocol;
