@@ -5,9 +5,36 @@ use serde_json::json;
 
 use crate::query::lens;
 
+fn quoted_u64() -> Schema {
+    let upper = u64::MAX.to_string();
+    let alternatives = upper
+        .char_indices()
+        .filter_map(|(index, digit)| {
+            let lower = if index == 0 { '1' } else { '0' };
+            if digit <= lower {
+                return None;
+            }
+            Some(format!(
+                "{}[{}-{}][0-9]{{{}}}",
+                &upper[..index],
+                lower,
+                char::from(digit as u8 - 1),
+                upper.len() - index - 1
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("|");
+    json!({
+        "type": "string",
+        "pattern": format!("^(?:0|[1-9][0-9]{{0,{}}}|{alternatives}|{upper})$", upper.len() - 2),
+    })
+    .try_into()
+    .unwrap()
+}
+
 fn numeric_wire(normalized: Schema, python_type: String) -> Schema {
     json!({
-        "anyOf": [normalized, {"type": "string", "pattern": "^[0-9]+$"}],
+        "anyOf": [normalized, quoted_u64()],
         "x-python-normalized": {"type": python_type, "minimum": 0, "maximum": u64::MAX},
     })
     .try_into()
@@ -64,4 +91,29 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ("AgentRow", received::<lens::LensAgentsRow>()),
         ("TraceQueryHelp", crate::query::help_schema()),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::zero(json!(0), true)]
+    #[case::quoted_zero(json!("0"), true)]
+    #[case::maximum(json!(u64::MAX), true)]
+    #[case::quoted_maximum(json!(u64::MAX.to_string()), true)]
+    #[case::negative(json!(-1), false)]
+    #[case::overflow(json!((u128::from(u64::MAX) + 1).to_string()), false)]
+    #[case::fraction(json!(1.5), false)]
+    fn count_schema_enforces_the_native_range(
+        #[case] value: serde_json::Value,
+        #[case] valid: bool,
+    ) {
+        let schema = received::<lens::LensEvidenceRow>();
+        assert_eq!(
+            jsonschema::is_valid(schema.as_value(), &json!({"count": value})),
+            valid
+        );
+    }
 }
