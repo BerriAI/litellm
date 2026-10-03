@@ -11,7 +11,11 @@ from fastapi import HTTPException
 
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy.guardrails.guardrail_hooks.akto.akto import UNMASKABLE_REASON, AktoGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.akto.akto import (
+    MALFORMED_ATTACHMENT_REASON,
+    UNMASKABLE_REASON,
+    AktoGuardrail,
+)
 from litellm.proxy.guardrails.guardrail_registry import (
     guardrail_class_registry,
     guardrail_initializer_registry,
@@ -1664,6 +1668,21 @@ def test_the_client_ip_is_the_first_forwarded_hop(akto_pre_call):
     payload = akto_pre_call.build_akto_payload(GenericGuardrailAPIInputs(texts=["hi"]), request_data)
 
     assert payload["ip"] == "10.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_attachment_blocks_the_request(akto_pre_call):
+    akto_pre_call.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+    request_data = {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "file", "file": "x"}]}]
+    }
+
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await akto_pre_call.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hi"]), request_data=request_data, input_type="request"
+        )
+
+    assert exc_info.value.message == MALFORMED_ATTACHMENT_REASON
 
 
 def test_the_proxy_recorded_ip_wins_over_a_client_forwarding_header(akto_pre_call):

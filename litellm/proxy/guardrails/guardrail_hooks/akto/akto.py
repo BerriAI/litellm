@@ -77,6 +77,7 @@ MCP_PATH: Final = "/mcp"
 MCP_TOOL_PREFIX: Final = "mcp"
 DEFAULT_BLOCK_REASON: Final = "Blocked by Akto Guardrails"
 UNMASKABLE_REASON: Final = "Content masked by Akto guardrail policy could not be applied"
+MALFORMED_ATTACHMENT_REASON: Final = "Attachment could not be read for the Akto guardrail check"
 UNREACHABLE_REASON: Final = "Akto guardrail service unreachable"
 BLOCKING_BEHAVIOURS: Final = frozenset(("block", ""))
 SESSION_ID_HEADER: Final = "x-akto-installer-akto_session_id"
@@ -684,6 +685,8 @@ class AktoGuardrail(CustomGuardrail):
     async def check_attachments(self, inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object]) -> None:
         """Attachments can't be put back masked, so masking blocks."""
         found: Final = request_attachments(request_data)
+        if found.malformed_count:
+            raise self.blocked(MALFORMED_ATTACHMENT_REASON, streamed=False)
         if found.unsendable_count:
             verbose_proxy_logger.warning(
                 "Akto: %d attachment(s) have no inline content or URL to check", found.unsendable_count

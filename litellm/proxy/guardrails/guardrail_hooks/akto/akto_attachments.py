@@ -18,14 +18,14 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, TypeVar
 from urllib.parse import unquote, unquote_to_bytes, urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
 
 AttachmentType: TypeAlias = Literal["image", "audio", "file"]
 
 _REMOTE_URI_SCHEMES: Final = ("http://", "https://")
 _URL_SAFE_TO_STANDARD: Final = str.maketrans("-_", "+/")
 _ATTACHMENT_BLOCK_TYPES: Final = frozenset(
-    ("image_url", "input_image", "input_audio", "file", "input_file", "image", "document", "video_url")
+    ("image_url", "input_image", "input_audio", "file", "input_file", "image", "document", "video_url", "search_result")
 )
 _OBJECT_MAPPING: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
@@ -48,6 +48,15 @@ class Attachment:
 class RequestAttachments:
     attachments: tuple[Attachment, ...]
     unsendable_count: int
+    malformed_count: int = 0
+
+
+def _text_or_none(value: object) -> object:
+    return value if isinstance(value, str) else None
+
+
+# Optional metadata the provider ignores when malformed, so a bad value must not fail the whole block
+_Metadata: TypeAlias = Annotated[str | None, BeforeValidator(_text_or_none)]
 
 
 class _Model(BaseModel):
@@ -76,7 +85,7 @@ class _InputImageBlock(_Model):
 
 class _InputAudio(_Model):
     data: str | None = None
-    format: str | None = None
+    format: _Metadata = None
 
 
 class _InputAudioBlock(_Model):
@@ -87,7 +96,7 @@ class _InputAudioBlock(_Model):
 class _FileData(_Model):
     file_data: str | None = None
     file_id: str | None = None
-    filename: str | None = None
+    filename: _Metadata = None
 
 
 class _FileBlock(_Model):
@@ -100,13 +109,13 @@ class _InputFileBlock(_Model):
     file_data: str | None = None
     file_url: str | None = None
     file_id: str | None = None
-    filename: str | None = None
+    filename: _Metadata = None
 
 
 class _Source(_Model):
-    type: str | None = None
+    type: _Metadata = None
     data: str | None = None
-    media_type: str | None = None
+    media_type: _Metadata = None
     url: str | None = None
     content: object = None
 
@@ -124,18 +133,22 @@ class _ImageBlock(_Model):
 class _DocumentBlock(_Model):
     type: Literal["document"]
     source: _Source
-    title: str | None = None
+    title: _Metadata = None
 
 
 class _SearchResultBlock(_Model):
     type: Literal["search_result"]
-    title: str | None = None
+    title: _Metadata = None
     content: object = None
 
 
 class _ToolResultBlock(_Model):
     type: Literal["tool_result"]
     content: object = None
+
+
+class _MalformedBlock(_Model):
+    """An attachment type that doesn't parse; it can't be checked, so it blocks."""
 
 
 class _Message(_Model):
@@ -158,6 +171,7 @@ _AttachmentBlock: TypeAlias = (
 _BLOCK_ADAPTER: Final[TypeAdapter[_AttachmentBlock]] = TypeAdapter(
     Annotated[_AttachmentBlock, Field(discriminator="type")]
 )
+_Block: TypeAlias = _AttachmentBlock | _MalformedBlock
 _TEXT_BLOCK_ADAPTER: Final[TypeAdapter[_TextBlock]] = TypeAdapter(_TextBlock)
 _MESSAGE_ADAPTER: Final[TypeAdapter[_Message]] = TypeAdapter(_Message)
 _ITEMS_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
@@ -171,17 +185,18 @@ _UNSENDABLE: Final[_Classified] = (None, True)
 def request_attachments(request_data: Mapping[str, object]) -> RequestAttachments:
     # Both, so a decoy "messages" can't hide attachments in a Responses API "input"
     containers: Final = (_parse(_ITEMS_ADAPTER, request_data.get(key)) or () for key in ("messages", "input"))
-    blocks: Final = chain.from_iterable(_message_blocks(message) for message in chain.from_iterable(containers))
+    blocks: Final = tuple(chain.from_iterable(_message_blocks(message) for message in chain.from_iterable(containers)))
     classified: Final = tuple(
         chain.from_iterable(_block_attachments(block, index) for index, block in enumerate(blocks))
     )
     return RequestAttachments(
         attachments=tuple(attachment for attachment, _ in classified if attachment is not None),
         unsendable_count=sum(1 for _, is_unsendable in classified if is_unsendable),
+        malformed_count=sum(1 for block in blocks if isinstance(block, _MalformedBlock)),
     )
 
 
-def _message_blocks(message: object) -> tuple[_AttachmentBlock, ...]:
+def _message_blocks(message: object) -> tuple[_Block, ...]:
     parsed: Final = _parse(_MESSAGE_ADAPTER, message)
     top: Final = (_blocks(parsed.content) + _blocks(parsed.output)) if parsed else ()
     nested: Final = _nested_blocks(top)
@@ -189,11 +204,11 @@ def _message_blocks(message: object) -> tuple[_AttachmentBlock, ...]:
     return top + nested + _nested_blocks(nested)
 
 
-def _nested_blocks(blocks: tuple[_AttachmentBlock, ...]) -> tuple[_AttachmentBlock, ...]:
+def _nested_blocks(blocks: tuple[_Block, ...]) -> tuple[_Block, ...]:
     return tuple(chain.from_iterable(_blocks(_nested_content(block)) for block in blocks))
 
 
-def _nested_content(block: _AttachmentBlock) -> object:
+def _nested_content(block: _Block) -> object:
     match block:
         case _ToolResultBlock():
             return block.content
@@ -203,13 +218,21 @@ def _nested_content(block: _AttachmentBlock) -> object:
             return None
 
 
-def _blocks(content: object) -> tuple[_AttachmentBlock, ...]:
+def _blocks(content: object) -> tuple[_Block, ...]:
     items: Final = _parse(_ITEMS_ADAPTER, content)
-    parsed: Final = (_parse(_BLOCK_ADAPTER, block) for block in items or ())
+    parsed: Final = (_block(item) for item in items or ())
     return tuple(block for block in parsed if block is not None)
 
 
-def _block_attachments(block: _AttachmentBlock, index: int) -> tuple[_Classified, ...]:
+def _block(item: object) -> _Block | None:
+    parsed: Final = _parse(_BLOCK_ADAPTER, item)
+    if parsed is not None:
+        return parsed
+    block_type: Final = (_parse(_OBJECT_MAPPING, item) or {}).get("type")
+    return _MalformedBlock() if block_type in _ATTACHMENT_BLOCK_TYPES else None
+
+
+def _block_attachments(block: _Block, index: int) -> tuple[_Classified, ...]:
     """A file block can name several sources and providers differ on which they send, so all are checked."""
     match block:
         case _FileBlock():
@@ -238,7 +261,7 @@ def _from_file_id(file_id: str, name: str | None, index: int, kind: AttachmentTy
     return _from_uri(file_id, name, index, kind) if is_url else _UNSENDABLE
 
 
-def _classify_block(block: _AttachmentBlock, index: int) -> _Classified:
+def _classify_block(block: _Block, index: int) -> _Classified:
     match block:
         case _ImageURLBlock():
             return _from_uri(_url(block.image_url), None, index, "image")

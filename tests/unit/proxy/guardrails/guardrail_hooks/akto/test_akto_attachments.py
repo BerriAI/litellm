@@ -1,4 +1,5 @@
 import base64
+import json
 
 import pytest
 
@@ -189,7 +190,38 @@ def test_request_attachments_names_files_by_their_type():
             Attachment("plain.png", "image", url="https://example.com/plain.png"),
         ),
         unsendable_count=2,
+        malformed_count=1,
     ), "names get an extension from the media type; raw and line-wrapped base64 are sent; invalid base64 is not"
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{PDF_B64}", "filename": {}}},
+        {"type": "input_file", "file_data": f"data:application/pdf;base64,{PDF_B64}", "filename": ["x"]},
+        {"type": "document", "title": 7, "source": {"type": "base64", "media_type": None, "data": PDF_B64}},
+    ],
+)
+def test_bad_optional_metadata_does_not_hide_an_attachment(block):
+    found = request_attachments({"messages": [{"role": "user", "content": [block]}]})
+
+    assert [attachment.content for attachment in found.attachments] == [PDF_B64]
+    assert found.malformed_count == 0
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"type": "file", "file": "not a file block"},
+        {"type": "input_audio"},
+        {"type": "image_url", "image_url": {"url": 123}},
+        {"type": "tool_result", "content": [{"type": "document", "source": "nope"}]},
+    ],
+)
+def test_an_attachment_that_cannot_be_read_is_counted_malformed(block):
+    found = request_attachments({"messages": [{"role": "user", "content": [block]}]})
+
+    assert (found.attachments, found.malformed_count) == ((), 1), "it can't be checked, so it must not be dropped"
 
 
 def test_a_malformed_attachment_url_is_named_by_position():
@@ -348,12 +380,13 @@ def test_a_document_keeps_its_title_and_context_in_the_text_check():
         {"type": "tool_result", "content": [{"type": "search_result", "title": "results", "content": "secret"}]},
     ],
 )
-def test_search_results_are_sent_as_text_files(block):
+def test_search_results_are_sent_as_text_files_and_kept_out_of_the_text_check(block):
     request_data = {"messages": [{"role": "user", "content": [block]}]}
 
     assert request_attachments(request_data).attachments == (
         Attachment("results.txt", "file", content=base64.b64encode(b"secret").decode()),
     )
+    assert "secret" not in json.dumps(without_attachment_content(request_data["messages"])), "checked once, as a file"
 
 
 @pytest.mark.parametrize("video_url", [{"url": f"data:video/mp4;base64,{PNG_B64}"}, f"data:video/mp4;base64,{PNG_B64}"])
