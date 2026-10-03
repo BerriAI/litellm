@@ -28,6 +28,7 @@ from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomPara
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import ModelResponse
@@ -237,21 +238,24 @@ def _is_text_only_choice(choice: "Choices") -> bool:
     return not getattr(choice.message, "tool_calls", None)
 
 
+class _MergedReasoningFields(TypedDict):
+    reasoning_content: ReadOnly[str | None]
+    reasoning_items: ReadOnly[list[ChatCompletionReasoningItem] | None]
+
+
 def _merged_reasoning_fields(
     message: "Message",
     reasoning_content: str | None,
     pending_reasoning_item: _BuiltReasoningItem | None,
-) -> dict[str, object]:
-    merged: Final = {
-        "reasoning_content": " ".join(
-            text for text in (getattr(message, "reasoning_content", None), reasoning_content) if text
-        ),
-        "reasoning_items": [
-            *(getattr(message, "reasoning_items", None) or ()),
-            *(_pending_reasoning_items(pending_reasoning_item) or ()),
-        ],
-    }
-    return {field: value for field, value in merged.items() if value}
+) -> _MergedReasoningFields:
+    merged_content: Final = " ".join(
+        text for text in (getattr(message, "reasoning_content", None), reasoning_content) if text
+    )
+    merged_items: Final = [
+        *(getattr(message, "reasoning_items", None) or ()),
+        *(_pending_reasoning_items(pending_reasoning_item) or ()),
+    ]
+    return {"reasoning_content": merged_content or None, "reasoning_items": merged_items or None}
 
 
 _ToolChoiceT = TypeVar("_ToolChoiceT")
@@ -769,8 +773,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             )
             return [*choices, Choices(message=tool_only_message, finish_reason="tool_calls", index=fallback_index)]
         target: Final = choices[target_position]
-        merged_message: Final = target.message.model_copy(
-            update={
+        merged_message: Final = Message(
+            **{
+                **target.message.model_dump(),
                 "content": "" if target.message.content is None else target.message.content,
                 "tool_calls": tool_calls,
                 **_merged_reasoning_fields(target.message, reasoning_content, pending_reasoning_item),

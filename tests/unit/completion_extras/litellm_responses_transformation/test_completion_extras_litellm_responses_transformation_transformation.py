@@ -3469,6 +3469,40 @@ def test_reasoning_emitted_after_the_message_stays_on_the_merged_choice():
     assert [item["encrypted_content"] for item in replayed] == ["enc_before_FAKE==", "enc_after_FAKE=="]
 
 
+def _make_encrypted_only_reasoning_item(item_id: str, encrypted_content: str) -> "ResponseReasoningItem":
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem
+
+    return ResponseReasoningItem(
+        id=item_id,
+        summary=[],
+        type="reasoning",
+        content=None,
+        encrypted_content=encrypted_content,
+        status=None,
+    )
+
+
+def test_empty_reasoning_summary_leaves_no_reasoning_content_on_the_merged_choice():
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            _make_encrypted_only_reasoning_item("rs_encrypted_only", "enc_only_FAKE=="),
+            _make_output_message("Let me look that up."),
+            _make_function_tool_call(
+                call_id="call_encrypted_only",
+                name="search_legislation",
+                arguments='{"query": "Article 7"}',
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "tool_calls"
+    message = result.choices[0].message.model_dump()
+    assert "reasoning_content" not in message
+    assert [item["id"] for item in message["reasoning_items"]] == ["rs_encrypted_only"]
+    assert [tool_call["function"]["name"] for tool_call in message["tool_calls"]] == ["search_legislation"]
+
+
 def test_streaming_text_plus_function_call_lands_on_choice_index_zero():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
