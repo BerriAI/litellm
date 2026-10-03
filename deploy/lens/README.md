@@ -187,6 +187,6 @@ Upgrades using `--use_prisma_db_push` stop before schema changes if any legacy L
 
 Released gateway and worker images carry `LITELLM_RELEASE_TAG`. A worker announces its release and protocol before claiming an investigation. A mismatch returns HTTP 409 with the required image, leaving queued investigations untouched. During a rolling upgrade, workers wait for a gateway from their release
 
-The dashboard reads its image from the running gateway. `LENS_WORKER_IMAGE` overrides the registry/image for private deployments. Worker-only Compose accepts `LITELLM_VERSION` (without `v`) or an explicit `LENS_WORKER_IMAGE`. Release workers are available as `ghcr.io/berriai/litellm-lens-worker:vX.Y.Z` and `docker.io/berriai/litellm-lens-worker:vX.Y.Z`, including matching RC/dev suffixes, on amd64 and arm64
+The dashboard reads its image from the running gateway. `LENS_WORKER_IMAGE` overrides the registry/image for private deployments. Worker-only Compose accepts `LITELLM_VERSION` (without `v`) or an explicit `LENS_WORKER_IMAGE`. Release workers are available as `ghcr.io/berriai/litellm-lens-worker:vX.Y.Z` and `docker.io/litellm/litellm-lens-worker:vX.Y.Z`, including matching RC/dev suffixes, on amd64 and arm64
 
 For source development, use `make lens-dev`. Custom paired builds must pass the same `--build-arg LITELLM_RELEASE_TAG=<tag>` to the proxy/backend and worker. The hourly development pipeline pins all component images to the same selected commit and publishes its chart only after every build and worker smoke test succeeds
