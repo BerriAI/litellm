@@ -444,6 +444,34 @@ def test_wildcard_deployment_never_listed(gateway: Gateway) -> None:
         assert all("*" not in slug for slug in slugs), slugs
 
 
+def test_a_tiered_model_listed_last_survives_the_byte_cut(gateway: Gateway) -> None:
+    """Codex 0.159.3 rejects a `model_catalog_url` body over `MAX_MODEL_CATALOG_BYTES` (1 MiB,
+    `codex-rs/model-provider/src/models_endpoint.rs`, read on 2026-10-03), so the proxy keeps the
+    entries offering a tier first and then listing order; fallback entries carry Codex's base
+    prompt, so some fifty of them overrun the limit."""
+    with gateway.scenario() as scenario:
+        plain: Final = tuple(scenario.model() for _ in range(52))
+        tiered: Final = scenario.model(model_info={"service_tiers": ["ultrafast"]})
+        key: Final = scenario.key(models=[*plain, tiered])
+        listing: Final = eventually(
+            lambda: _plain_ids(gateway, key=key), lambda ids: set(ids) == {*plain, tiered}, seconds=CONVERGENCE_SECONDS
+        )
+        assert listing.index(tiered) == len(plain), listing
+        response: Final = eventually(
+            lambda: _catalog_response(gateway, key=key),
+            lambda value: value.status_code == 200 and tiered in {entry["slug"] for entry in _entries(value)},
+            seconds=CONVERGENCE_SECONDS,
+        )
+        entries: Final = _entries(response)
+        slugs: Final = [string_value(entry["slug"]) for entry in entries]
+        assert len(response.content) <= 1024 * 1024, len(response.content)
+        assert 0 < len(slugs) < len(listing), (len(slugs), len(listing))
+        assert slugs == [slug for slug in listing if slug in slugs], slugs
+        assert slugs[-1] == tiered and _tier_ids(entries[-1]) == ("ultrafast",), entries[-1]
+        assert slugs[:-1] == list(plain[: len(slugs) - 1]), slugs
+        assert [entry["priority"] for entry in entries] == [listing.index(slug) for slug in slugs], slugs
+
+
 def test_model_info_echoes_configured_tiers(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         configured: Final = ["priority", {"id": "ultrafast", "name": "Ultra", "description": "fast lane"}]

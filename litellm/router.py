@@ -10568,6 +10568,14 @@ class Router:
             return display_name
         return None
 
+    def routable_model_group(self, model_name: str) -> str:
+        """
+        The model group a request to model_name routes to: its target when
+        model_name is a `model_group_alias`, else model_name itself.
+        """
+        target: Final = self._get_model_from_alias(model_name)
+        return target if target is not None else model_name
+
     def get_configured_service_tiers(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
         """
         Return the service_tiers value each routable deployment of model_name
@@ -10577,15 +10585,17 @@ class Router:
         and decides how the deployments combine.
 
         Routable means what a request from team_id can reach, selected the way
-        routing selects deployments: another team's deployment of the name is
-        left out, and so is one an admin paused via
-        `LiteLLM_ProxyModelTable.blocked`.
+        routing selects deployments: a `model_group_alias` reads its target's
+        deployments, another team's deployment of the name is left out, and so
+        is one an admin paused via `LiteLLM_ProxyModelTable.blocked`.
 
         Returns an empty tuple for wildcard-expanded or unknown names.
         """
         model_infos: Final = tuple(
             _configured_model_info(deployment)
-            for deployment in self._get_all_deployments(model_name=model_name, team_id=team_id)
+            for deployment in self._get_all_deployments(
+                model_name=self.routable_model_group(model_name), team_id=team_id
+            )
         )
         return tuple(
             model_info.get("service_tiers") for model_info in model_infos if model_info.get("blocked") is not True

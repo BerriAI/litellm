@@ -123,7 +123,9 @@ def test_yaml_tiers_and_alias_in_owned_proxy(gateway: Gateway, tmp_path: Path) -
         assert catalog[tiered]["display_name"] == "YAML Tiered", catalog[tiered]
         assert catalog[tiered]["context_window"] == 4321, catalog[tiered]
         assert catalog[plain]["service_tiers"] == [] and catalog[plain]["display_name"] == plain, catalog[plain]
-        assert catalog[alias]["service_tiers"] == [], catalog[alias]
+        assert catalog[alias]["service_tiers"] == catalog[tiered]["service_tiers"], catalog[alias]
+        assert catalog[alias]["display_name"] == alias, catalog[alias]
+        assert catalog[alias]["context_window"] == 4321, catalog[alias]
         assert string_value(catalog[alias]["base_instructions"]), alias
 
 

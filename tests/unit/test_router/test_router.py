@@ -10368,6 +10368,49 @@ def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_r
     assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"], None)
 
 
+@pytest.mark.parametrize(
+    "alias_value, expected_group",
+    [
+        ("gpt-6-astra", "gpt-6-astra"),
+        ({"model": "gpt-6-astra", "hidden": True}, "gpt-6-astra"),
+        ({"model": "", "hidden": False}, "gpt-6"),
+    ],
+    ids=["string-alias", "item-alias", "malformed-alias-is-itself"],
+)
+def test_routable_model_group_is_the_alias_target_else_the_name_itself(alias_value, expected_group):
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra"}}],
+        model_group_alias={"gpt-6": alias_value},
+    )
+
+    assert router.routable_model_group("gpt-6") == expected_group
+    assert router.routable_model_group("gpt-6-astra") == "gpt-6-astra"
+    assert router.routable_model_group("not-a-real-model") == "not-a-real-model"
+
+
+def test_get_configured_service_tiers_reads_an_alias_off_its_target_deployments():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["priority"]},
+            },
+        ],
+        model_group_alias={"gpt-6": "gpt-6-astra", "gpt-6-quiet": {"model": "gpt-6-astra", "hidden": True}},
+    )
+
+    assert router.get_configured_service_tiers("gpt-6") == router.get_configured_service_tiers("gpt-6-astra")
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-2") == (["ultrafast"], ["priority"])
+    assert router.get_configured_service_tiers("gpt-6-quiet", team_id="team-1") == (["ultrafast"],)
+
+
 def test_get_configured_display_name_treats_malformed_values_as_absent():
     malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
     router = litellm.Router(

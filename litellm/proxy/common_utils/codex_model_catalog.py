@@ -316,6 +316,17 @@ def _fitting_count(serialized: Sequence[str], byte_limit: int | None) -> int:
     return sum(1 for total in running if total <= budget)
 
 
+def _kept_positions(
+    entries: Sequence[CodexCatalogEntry], serialized: Sequence[str], byte_limit: int | None
+) -> frozenset[int]:
+    """The listing positions that survive the byte limit: an entry offering a service tier is kept
+    ahead of one offering none, each group in listing order, since a model without a tier is driven
+    by name just as well off Codex's bundled catalog."""
+    survival: Final = sorted(range(len(entries)), key=lambda position: (not entries[position].service_tiers, position))
+    kept: Final = _fitting_count(tuple(serialized[position] for position in survival), byte_limit)
+    return frozenset(survival[:kept])
+
+
 @dataclass(frozen=True, slots=True)
 class CodexCatalogBody:
     """A `ModelsResponse` body, the ids it lists, and the chat-capable ids the byte limit left out."""
@@ -336,21 +347,21 @@ def codex_models_response_json(
 
     Only chat-capable rows are listed (Codex cannot drive an embedding or image model, and a
     wildcard id is no model), their order is their `priority`. Codex drops a catalog over its
-    byte limit silently and keeps its bundled one, so the body stops before the entry that would
-    cross the limit; `byte_limit=None` keeps every entry.
+    byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
+    the ones offering a service tier kept first and the rest in listing order, every kept entry
+    at its listing position; `byte_limit=None` keeps every entry.
     """
     known: Final = bundled_codex_models() if stock is None else stock
     prompt: Final = codex_base_instructions() if instructions is None else instructions
     drivable: Final = tuple(row for row in rows if _codex_can_drive(row))
     served: Final = frozenset(row.id for row in drivable)
-    serialized: Final = tuple(
-        _serialized(_entry(index, row, known, served, prompt)) for index, row in enumerate(drivable)
-    )
-    kept: Final = _fitting_count(serialized, byte_limit)
+    entries: Final = tuple(_entry(index, row, known, served, prompt) for index, row in enumerate(drivable))
+    serialized: Final = tuple(_serialized(entry) for entry in entries)
+    kept: Final = _kept_positions(entries, serialized, byte_limit)
     return CodexCatalogBody(
-        json=f"{_BODY_PREFIX}{','.join(serialized[:kept])}{_BODY_SUFFIX}",
-        listed=tuple(row.id for row in drivable[:kept]),
-        left_out=tuple(row.id for row in drivable[kept:]),
+        json=f"{_BODY_PREFIX}{','.join(serialized[position] for position in sorted(kept))}{_BODY_SUFFIX}",
+        listed=tuple(row.id for position, row in enumerate(drivable) if position in kept),
+        left_out=tuple(row.id for position, row in enumerate(drivable) if position not in kept),
     )
 
 
@@ -358,7 +369,9 @@ def _catalog_row(
     row: ModelInfoResponse, lookup_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
     deployment: Final = (
-        llm_router.get_deployment_by_model_group_name(model_group_name=lookup_id) if llm_router is not None else None
+        llm_router.get_deployment_by_model_group_name(model_group_name=llm_router.routable_model_group(lookup_id))
+        if llm_router is not None
+        else None
     )
     return CodexCatalogRow(
         id=row["id"],
@@ -377,8 +390,9 @@ def codex_catalog_rows(
     team_id: str | None = None,
 ) -> tuple[CodexCatalogRow, ...]:
     """`rows` joined with the router's configured metadata, looked up by each entry's internal id so
-    team-scoped rows resolve the way the Anthropic listing's display names do; `team_id` is the
-    requesting key's team, so a tier is read only off the deployments its requests can route to."""
+    team-scoped rows resolve the way the Anthropic listing's display names do, a `model_group_alias`
+    reading its target's deployments under its own name; `team_id` is the requesting key's team, so a
+    tier is read only off the deployments its requests can route to."""
     lookup_ids: Final = MappingProxyType(dict(entries))
     return tuple(_catalog_row(row, lookup_ids.get(row["id"], row["id"]), llm_router, team_id) for row in rows)
 
@@ -393,7 +407,8 @@ def codex_model_list_body(
     body: Final = codex_models_response_json(codex_catalog_rows(rows, entries, llm_router, team_id))
     if body.left_out:
         verbose_proxy_logger.warning(
-            "Codex model catalog cut at %d bytes, left out: %s. List the models Codex users need first in model_list",
+            "Codex model catalog cut at %d bytes, left out: %s. Models offering a service tier are kept first, "
+            "then model_list order; list the models Codex users need first in model_list",
             CODEX_CATALOG_BYTE_LIMIT,
             ", ".join(body.left_out),
         )

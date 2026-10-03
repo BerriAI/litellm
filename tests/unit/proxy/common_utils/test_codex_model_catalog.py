@@ -310,6 +310,26 @@ def test_body_stops_before_the_entry_that_would_cross_the_byte_limit():
     assert [entry["slug"] for entry in json.loads(body.json)["models"]] == list(body.listed)
 
 
+def test_entries_offering_a_tier_survive_the_byte_limit_ahead_of_the_rest_and_keep_their_listing_place():
+    rows = (
+        _row("plain-first"),
+        _row("gpt-5.5"),
+        _row("plain-middle"),
+        _row("tiered-last", service_tiers=["ultrafast"]),
+    )
+    unlimited = _models(*rows, byte_limit=None)
+    two_entries_only = len(_body(rows[1], rows[3], byte_limit=None).json.encode())
+
+    body = _body(*rows, byte_limit=two_entries_only)
+    models = json.loads(body.json)["models"]
+
+    assert body.listed == ("gpt-5.5", "tiered-last") and body.left_out == ("plain-first", "plain-middle")
+    assert [entry["slug"] for entry in models] == ["gpt-5.5", "tiered-last"]
+    assert [entry["priority"] for entry in models] == [1, 3]
+    assert models == [unlimited[1], unlimited[3]]
+    assert len(body.json.encode()) <= two_entries_only
+
+
 def test_unlimited_body_keeps_every_entry():
     rows = tuple(_row(f"model-{index}") for index in range(3))
 
@@ -382,6 +402,35 @@ def test_catalog_rows_read_the_router_by_each_entry_lookup_id():
         ),
         CodexCatalogRow(id="plain", upstream_model="openai/some-unmapped-model", service_tiers=(None,)),
     )
+
+
+def test_catalog_rows_read_an_alias_off_its_target_under_the_alias_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"display_name": "Astra", "service_tiers": ["ultrafast"]},
+            }
+        ],
+        model_group_alias={"gpt-6": "gpt-6-astra"},
+    )
+    listing = (
+        {"id": "gpt-6", "object": "model", "created": 0, "owned_by": "openai", "mode": "chat", "max_input_tokens": 9},
+    )
+
+    (row,) = codex_catalog_rows(listing, (("gpt-6", "gpt-6"),), router)
+
+    assert row == CodexCatalogRow(
+        id="gpt-6", mode="chat", max_input_tokens=9, upstream_model="openai/gpt-6-astra", service_tiers=(["ultrafast"],)
+    )
+    (entry,) = json.loads(codex_model_list_body(listing, (("gpt-6", "gpt-6"),), router))["models"]
+    assert (entry["slug"], entry["display_name"], [tier["id"] for tier in entry["service_tiers"]]) == (
+        "gpt-6",
+        "gpt-6",
+        ["ultrafast"],
+    )
+    assert entry["model_messages"] == bundled_codex_models()["gpt-6-astra"].model_dump(mode="json")["model_messages"]
 
 
 def test_model_list_body_offers_a_tier_only_off_the_deployments_the_key_team_can_route_to():
