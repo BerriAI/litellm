@@ -5,6 +5,7 @@ import BudgetDurationDropdown from "@/components/common_components/budget_durati
 import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { useSeededState } from "@/components/key_team_helpers/useSeededState";
+import { isValidRateLimitInput, rateLimitUpdate } from "./userRateLimitPayload";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
@@ -67,6 +68,14 @@ const budgetSchema = (unlimitedBudget: boolean) =>
         (value) => unlimitedBudget || (value !== "" && value !== null && value !== undefined),
         "Please enter a budget or select Unlimited Budget",
       ),
+    tpm_limit: z
+      .union([z.string(), z.number()])
+      .nullish()
+      .refine(isValidRateLimitInput, "Enter a non-negative whole number, or leave empty for unlimited"),
+    rpm_limit: z
+      .union([z.string(), z.number()])
+      .nullish()
+      .refine(isValidRateLimitInput, "Enter a non-negative whole number, or leave empty for unlimited"),
   });
 
 type UserEditFormValues = z.infer<ReturnType<typeof budgetSchema>>;
@@ -92,7 +101,14 @@ const toFormValues = (
   const maxBudget = userData.user_info?.max_budget;
   const isUnlimited = maxBudget === null || maxBudget === undefined;
   return {
-    ...(isBulkEdit ? {} : { user_id: userData.user_id, user_email: userData.user_info?.user_email }),
+    ...(isBulkEdit
+      ? {}
+      : {
+          user_id: userData.user_id,
+          user_email: userData.user_info?.user_email,
+          tpm_limit: userData.user_info?.tpm_limit ?? "",
+          rpm_limit: userData.user_info?.rpm_limit ?? "",
+        }),
     user_alias: userData.user_info?.user_alias,
     user_role: userData.user_info?.user_role,
     models: userData.user_info?.models || [],
@@ -171,11 +187,16 @@ export function UserEditView({
       return;
     }
 
+    const { tpm_limit: tpmLimitInput, rpm_limit: rpmLimitInput, ...formValues } = values;
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
+    const tpmLimit = rateLimitUpdate(tpmLimitInput, isBulkEdit ? undefined : userData.user_info?.tpm_limit);
+    const rpmLimit = rateLimitUpdate(rpmLimitInput, isBulkEdit ? undefined : userData.user_info?.rpm_limit);
     onSubmit({
-      ...values,
+      ...formValues,
       ...("metadata" in values ? { metadata: metadata.value } : {}),
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
+      ...(tpmLimit !== undefined && { tpm_limit: tpmLimit }),
+      ...(rpmLimit !== undefined && { rpm_limit: rpmLimit }),
       max_budget:
         unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
     });
@@ -292,6 +313,56 @@ export function UserEditView({
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
             {({ id, value, onChange }) => <BudgetDurationDropdown id={id} value={value} onChange={onChange} />}
           </FormField>
+
+          {!isBulkEdit && (
+            <>
+              <FormField
+                control={form.control}
+                name="tpm_limit"
+                label={labelWithHint(
+                  "TPM Limit",
+                  "Applies across all keys owned by this user. Team and key limits still apply as ceilings.",
+                )}
+              >
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                    onWheel={(event) => event.currentTarget.blur()}
+                    placeholder="Unlimited"
+                  />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="rpm_limit"
+                label={labelWithHint(
+                  "RPM Limit",
+                  "Applies across all keys owned by this user. Team and key limits still apply as ceilings.",
+                )}
+              >
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                    onWheel={(event) => event.currentTarget.blur()}
+                    placeholder="Unlimited"
+                  />
+                )}
+              </FormField>
+            </>
+          )}
 
           {/* Bulk edit forwards a fixed field list and has no single stored budget to
               diff against, so the editor would silently discard whatever was typed. */}

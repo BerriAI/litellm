@@ -457,6 +457,121 @@ describe("UserEditView", () => {
       expect(checkbox).toBeChecked();
     });
   });
+
+  describe("user rate limits", () => {
+    const userDataWithRateLimits = () => ({
+      ...MOCK_USER_DATA,
+      user_info: {
+        ...MOCK_USER_DATA.user_info,
+        tpm_limit: 100000,
+        rpm_limit: 50,
+      },
+    });
+
+    it("seeds the TPM and RPM inputs from the selected user", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} />);
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(100000);
+      expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(50);
+    });
+
+    it("keeps unset rate limits empty and omits them from an untouched save", async () => {
+      const onSubmit = vi.fn();
+      const userDataWithNullRateLimits = {
+        ...MOCK_USER_DATA,
+        user_info: {
+          ...MOCK_USER_DATA.user_info,
+          tpm_limit: null,
+          rpm_limit: null,
+        },
+      };
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithNullRateLimits} onSubmit={onSubmit} />);
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(null);
+      expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(null);
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("tpm_limit");
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
+    });
+
+    it("omits unchanged rate limits from the submit payload", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("tpm_limit");
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
+    });
+
+    it("sends null only for a deliberately cleared TPM limit", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value: "" },
+      });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].tpm_limit).toBeNull();
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
+    });
+
+    it("submits a new RPM limit as a number", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /rpm limit/i }), {
+        target: { value: "1" },
+      });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].rpm_limit).toBe(1);
+      expect(typeof onSubmit.mock.calls[0][0].rpm_limit).toBe("number");
+    });
+
+    it.each(["-1", "1.5"])("rejects an invalid TPM limit of %s", async (value) => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value },
+      });
+      const submitButton = screen.getByRole("button", { name: /save changes/i }) as HTMLButtonElement;
+      const form = submitButton.form;
+      if (!form) {
+        throw new Error("User edit form was not rendered");
+      }
+      fireEvent.submit(form);
+
+      expect(
+        await screen.findByText("Enter a non-negative whole number, or leave empty for unlimited"),
+      ).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("hides both rate-limit inputs in bulk edit mode", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} isBulkEdit={true} />);
+
+      await screen.findByRole("button", { name: /save changes/i });
+      expect(screen.queryByRole("spinbutton", { name: /tpm limit/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("spinbutton", { name: /rpm limit/i })).not.toBeInTheDocument();
+    });
+  });
+
   describe("submit payload parity", () => {
     const submittedPayload = async (props: Partial<Parameters<typeof UserEditView>[0]> = {}) => {
       const onSubmit = vi.fn();
