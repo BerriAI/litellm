@@ -264,7 +264,8 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
         # via getattr(guardrail_to_apply, "streaming_*", default).
-        self.streaming_end_of_stream_only: bool = self.fire_and_forget or (
+        self.streaming_observe_only: bool = self.fire_and_forget
+        self.streaming_end_of_stream_only: bool = (
             False if streaming_end_of_stream_only is None else streaming_end_of_stream_only
         )
         if streaming_sampling_rate is not None and streaming_sampling_rate < 1:
@@ -275,7 +276,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         # "block_only" (default) drops text rewrites on the streaming path;
         # "incremental_diff" emits them as synthetic deltas.
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
-            "block_only" if streaming_transform_mode is None or self.fire_and_forget else streaming_transform_mode
+            "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
 
         # Set supported event hooks
@@ -292,8 +293,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             verbose_proxy_logger.warning(
                 "Generic Guardrail API (%s): fire_and_forget=True makes this guardrail observe-only. "
                 "action=BLOCKED and action=GUARDRAIL_INTERVENED are ignored, fail_on_error=%s and "
-                "unreachable_fallback=%s cannot block the request, and streaming is forced to "
-                "end-of-stream observation in block_only mode.",
+                "unreachable_fallback=%s cannot block the request, and a stream is checked once when it "
+                "closes, with whatever reached the client.",
                 self.guardrail_name,
                 self.fail_on_error,
                 self.unreachable_fallback,

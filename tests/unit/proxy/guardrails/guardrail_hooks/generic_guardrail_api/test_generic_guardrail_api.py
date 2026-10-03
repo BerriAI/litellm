@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from types import SimpleNamespace
 from typing import Final
 
@@ -346,23 +346,29 @@ def _stream_chunks() -> list[ModelResponseStream]:
     ]
 
 
-async def _streamed_texts(guardrail: GenericGuardrailAPI) -> list[str]:
-    async def stream() -> AsyncIterator[ModelResponseStream]:
-        for chunk in _stream_chunks():
-            yield chunk
+async def _upstream(*, fail_after: int | None = None) -> AsyncIterator[ModelResponseStream]:
+    for i, chunk in enumerate(_stream_chunks()):
+        if i == fail_after:
+            raise ConnectionError("upstream reset")
+        yield chunk
 
-    return [
-        chunk.choices[0].delta.content or ""
-        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
-            response=stream(),
-            request_data={
-                "messages": [{"role": "user", "content": "hi"}],
-                "guardrail_to_apply": guardrail,
-                "metadata": {"guardrails": ["ff-guardrail"]},
-            },
-        )
-    ]
+
+def _guarded_stream(
+    guardrail: GenericGuardrailAPI, upstream: AsyncIterator[ModelResponseStream]
+) -> AsyncGenerator[ModelResponseStream, None]:
+    return UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
+        response=upstream,
+        request_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": ["ff-guardrail"]},
+        },
+    )
+
+
+async def _streamed_texts(guardrail: GenericGuardrailAPI) -> list[str]:
+    return [chunk.choices[0].delta.content or "" async for chunk in _guarded_stream(guardrail, _upstream())]
 
 
 @pytest.mark.parametrize("streaming_transform_mode", ["block_only", "incremental_diff"])
@@ -383,6 +389,31 @@ async def test_a_stream_is_emitted_live_and_sends_one_call_with_the_whole_text(
 
     assert streamed == list(_STREAM_WORDS), "every chunk must be emitted as it arrives"
     assert [payload["texts"] for payload in endpoint.payloads] == [["Hello world! Bye"]]
+
+
+async def test_an_abandoned_stream_still_sends_what_reached_the_client() -> None:
+    endpoint: Final = _Endpoint()
+    guardrail, dispatcher = _fire_and_forget(endpoint, event_hook="post_call")
+    stream: Final = _guarded_stream(guardrail, _upstream())
+
+    received: Final = [await anext(stream), await anext(stream)]
+    await stream.aclose()
+    await dispatcher.wait_for_pending()
+
+    assert [chunk.choices[0].delta.content for chunk in received] == ["Hello", " "]
+    assert [payload["texts"] for payload in endpoint.payloads] == [["Hello "]]
+
+
+async def test_a_stream_that_fails_upstream_still_sends_what_reached_the_client() -> None:
+    endpoint: Final = _Endpoint()
+    guardrail, dispatcher = _fire_and_forget(endpoint, event_hook="post_call")
+
+    with pytest.raises(ConnectionError, match="upstream reset"):
+        async for _ in _guarded_stream(guardrail, _upstream(fail_after=3)):
+            pass
+    await dispatcher.wait_for_pending()
+
+    assert [payload["texts"] for payload in endpoint.payloads] == [["Hello world"]]
 
 
 async def test_an_awaited_stream_is_checked_per_sampled_chunk() -> None:

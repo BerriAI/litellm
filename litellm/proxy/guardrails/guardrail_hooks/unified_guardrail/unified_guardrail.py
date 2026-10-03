@@ -9,8 +9,10 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+import anyio
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -19,6 +21,7 @@ from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -960,6 +963,70 @@ class UnifiedLLMGuardrails(CustomLogger):
         choices: Final = _chunk_choices(item)
         return any(getattr(choice, "finish_reason", None) is not None for choice in choices)
 
+    async def _stream_then_observe(
+        self,
+        *,
+        guardrail_to_apply: CustomGuardrail,
+        response: AsyncIterable[object],
+        request_data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+    ) -> AsyncGenerator[object, None]:
+        streamed: Final[list[object]] = []  # mutable-ok: records chunks as they are forwarded
+        try:
+            async for item in response:
+                streamed.append(item)
+                yield item
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self._observe_streamed(
+                    streamed=streamed,
+                    guardrail_to_apply=guardrail_to_apply,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    mappings=mappings,
+                )
+
+    @staticmethod
+    async def _observe_streamed(
+        *,
+        streamed: list[object],
+        guardrail_to_apply: CustomGuardrail,
+        request_data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+    ) -> None:
+        if not streamed:
+            return
+        try:
+            route_call_types: Final = (
+                None
+                if user_api_key_dict.request_route is None
+                else get_call_types_for_route(user_api_key_dict.request_route)
+            )
+            call_type: Final = (
+                route_call_types[0].value
+                if route_call_types
+                else _infer_call_type(call_type=None, completion_response=streamed[0])
+            )
+            handler_cls: Final = None if call_type is None else mappings.get(CallTypes(call_type))
+            if handler_cls is None:
+                return
+            logging_obj: Final = request_data.get("litellm_logging_obj")
+            await handler_cls().process_output_streaming_response(
+                responses_so_far=copy.deepcopy(streamed),
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            )
+        except Exception as e:  # noqa: BLE001  # an observe-only guardrail must never break the stream
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: observe-only stream check for %s failed: %s",
+                guardrail_to_apply.guardrail_name,
+                e,
+            )
+
     def resolve_streaming_flag(self, guardrail_to_apply: CustomGuardrail | None, name: str, default: object) -> object:
         """Streaming flag resolution order (later wins): default < guardrail
         attribute < guardrail_config dict < this callback's optional_params."""
@@ -1050,6 +1117,20 @@ class UnifiedLLMGuardrails(CustomLogger):
             return
 
         mappings: Final = load_guardrail_translation_mappings()
+
+        if _streaming_flag("streaming_observe_only", False):
+            async with aclosing(
+                self._stream_then_observe(
+                    guardrail_to_apply=guardrail_to_apply,
+                    response=response,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    mappings=mappings,
+                )
+            ) as observed:
+                async for observed_item in observed:
+                    yield observed_item
+            return
 
         # Streaming text transformation (incremental_diff) diverges enough from the
         # block_only path that it runs as its own iterator. It requires a route we

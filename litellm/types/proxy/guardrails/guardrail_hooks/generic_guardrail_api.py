@@ -108,8 +108,8 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         description=(
             "Observe-only mode: the guardrail call runs in the background and the request never waits for it, so "
             "BLOCKED and GUARDRAIL_INTERVENED answers are ignored. A dispatched call is recorded as success. "
-            "Streaming sends one end-of-stream call in block_only mode. The background call uses timeout, or "
-            "30 seconds when unset. Defaults to false."
+            "A stream sends one call when it closes, with whatever reached the client. The background call uses "
+            "timeout, or 30 seconds when unset. Defaults to false."
         ),
     )
 
