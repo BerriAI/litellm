@@ -11,6 +11,10 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -n "${LENS_DEV_CONFIG:-}" ]; then
+  [ -f "$LENS_DEV_CONFIG" ] || { echo "lens-dev: LENS_DEV_CONFIG not found: $LENS_DEV_CONFIG" >&2; exit 1; }
+  LENS_DEV_CONFIG="$(cd "$(dirname "$LENS_DEV_CONFIG")" && pwd)/$(basename "$LENS_DEV_CONFIG")"
+fi
 cd "$repo_root"
 
 proxy_port="${LENS_DEV_PROXY_PORT:-4000}"
