@@ -65,6 +65,13 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "tokenmix": {
+    "base_url": "https://api.tokenmix.ai/v1",
+    "api_key_env": "TOKENMIX_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "abliteration": {
     "base_url": "https://api.abliteration.ai/v1",
     "api_key_env": "ABLITERATION_API_KEY"
