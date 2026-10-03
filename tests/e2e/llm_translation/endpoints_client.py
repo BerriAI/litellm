@@ -97,6 +97,7 @@ class CompletionsRequest(BaseModel):
     model: str
     prompt: str
     max_tokens: int = 32
+    reasoning_effort: str | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
@@ -378,12 +379,20 @@ class EndpointsClient:
         )
 
     def text_completions(
-        self, key: str, model: str, prompt: str, *, max_tokens: int = 32
+        self,
+        key: str,
+        model: str,
+        prompt: str,
+        *,
+        max_tokens: int = 32,
+        reasoning_effort: str | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/completions",
             key,
-            CompletionsRequest(model=model, prompt=prompt, max_tokens=max_tokens),
+            CompletionsRequest(
+                model=model, prompt=prompt, max_tokens=max_tokens, reasoning_effort=reasoning_effort
+            ),
         )
 
     def embeddings(self, key: str, model: str, text: str) -> StreamingResponse:
