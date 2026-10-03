@@ -943,21 +943,43 @@ class TestConcurrentP3009Recovery:
         assert harness.run() is True
         assert len(harness.deploy_calls) == 2
 
+    @pytest.mark.parametrize(
+        "ledger_rows",
+        (
+            (
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    _P3009_STARTED_AT,
+                    logs='ERROR: syntax error at or near "SLECT"',
+                ),
+            ),
+            (
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    _P3009_STARTED_AT,
+                    logs='ERROR: syntax error at or near "SLECT"',
+                ),
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    "2026-10-02 23:19:40.120000 UTC",
+                    rolled_back=True,
+                    logs=_P3009_DEADLOCK_LOGS,
+                ),
+            ),
+        ),
+        ids=("only-row", "beside-a-recovered-earlier-attempt"),
+    )
     def test_an_unresolved_p3009_row_without_the_deadlock_marker_stops(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        ledger_rows: tuple[_LedgerRow, ...],
     ) -> None:
-        unresolved_row: Final = _LedgerRow(
-            _P3009_MIGRATION_NAME,
-            _P3009_STARTED_AT,
-            logs='ERROR: syntax error at or near "SLECT"',
-        )
         harness: Final = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
             [_p3009_stderr(_P3009_MIGRATION_NAME, _P3009_STARTED_AT)],
-            ledger=_FakeLedger(at_error=(unresolved_row,), after_peer=(unresolved_row,)),
+            ledger=_FakeLedger(at_error=ledger_rows, after_peer=ledger_rows),
         )
 
         with pytest.raises(RuntimeError, match="Migration completion could not be verified"):

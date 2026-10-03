@@ -377,7 +377,7 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _failed_migration_logs(migration_name: str, started_at: str) -> Optional[str]:
-        row = ProxyExtrasDBManager._read_migration_ledger(
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
             "SELECT logs FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
             "AND finished_at IS NULL AND rolled_back_at IS NULL",
             (migration_name, started_at),
@@ -388,7 +388,7 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _failed_migration_recovered(migration_name: str, started_at: str) -> bool:
-        row = ProxyExtrasDBManager._read_migration_ledger(
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
             "SELECT 1 FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
             "AND (finished_at IS NOT NULL OR rolled_back_at IS NOT NULL)",
             (migration_name, started_at),
@@ -1112,7 +1112,7 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _v2_failed_migration_started_at(stderr: str, migration_name: str) -> "str | None":
-        match = re.search(rf"`{re.escape(migration_name)}` migration started at ([^\r\n]+?) failed", stderr)
+        match: Final = re.search(rf"`{re.escape(migration_name)}` migration started at ([^\r\n]+?) failed", stderr)
         return match.group(1) if match else None
 
     @staticmethod
@@ -1143,11 +1143,11 @@ class ProxyExtrasDBManager:
 
         if "P3009" in stderr:
             migration_name = ProxyExtrasDBManager._v2_failed_migration_name(stderr)
-            started_at = (
+            started_at: Final = (
                 ProxyExtrasDBManager._v2_failed_migration_started_at(stderr, migration_name) if migration_name else None
             )
             if migration_name and started_at:
-                ledger_logs = ProxyExtrasDBManager._failed_migration_logs(migration_name, started_at)
+                ledger_logs: Final = ProxyExtrasDBManager._failed_migration_logs(migration_name, started_at)
                 if ledger_logs and _MIGRATION_DEADLOCK_MARKER in ledger_logs:
                     logger.info(
                         "Migration %s failed in a concurrent migrate deploy "
