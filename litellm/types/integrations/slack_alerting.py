@@ -3,7 +3,7 @@ import time
 from collections.abc import Mapping
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Final, Literal, Optional, Union
+from typing import Annotated, Any, Final, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -68,6 +68,12 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=SlackAlertingArgsEnum.budget_alert_ttl.value,
         description="Cache ttl for budgets alerts. Prevents spamming same alert, each time budget is crossed. Value is in seconds.",
     )  # 24 hours
+    slack_budget_alert_key_aliases: (  # mutable-ok: public alerting config accepts and serializes a list
+        Annotated[list[Annotated[str, Field(strict=True, min_length=1)]], Field(strict=True)] | None
+    ) = Field(
+        default=None,
+        description="Case-sensitive key alias glob patterns for Slack budget alerts. Null allows all budget alerts; an empty list disables them.",
+    )
     outage_alert_ttl: int = Field(
         default=SlackAlertingArgsEnum.outage_alert_ttl.value,
         description="Cache ttl for model outage alerts. Sets time-window for errors. Default is 1 minute. Value is in seconds.",

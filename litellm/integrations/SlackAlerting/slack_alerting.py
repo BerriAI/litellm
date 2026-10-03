@@ -7,6 +7,7 @@ import random
 import time
 from collections.abc import Callable
 from datetime import timedelta
+from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from openai import APIError
@@ -1500,7 +1501,17 @@ Model Info:
         if send_to_ms_teams:
             self._enqueue_ms_teams_alert(formatted_message=formatted_message, alert_type=alert_type)
 
-        if not send_to_slack:
+        budget_key_aliases: Final = self.alerting_args.slack_budget_alert_key_aliases
+        if not send_to_slack or (
+            alert_type == AlertType.budget_alerts
+            and budget_key_aliases is not None
+            and (
+                user_info is None
+                or user_info.event_group != Litellm_EntityType.KEY
+                or not user_info.key_alias
+                or not any(fnmatchcase(user_info.key_alias, pattern) for pattern in budget_key_aliases)
+            )
+        ):
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
             return
