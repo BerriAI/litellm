@@ -1,16 +1,40 @@
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Protocol
 
 import orjson
 
 from litellm.types.videos.utils import encode_character_id_with_provider
 
 
-def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
+class VideoModelIdResolver(Protocol):
+    def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None: ...
+
+
+def resolve_video_request_model(
+    *,
+    model_id_from_decoded: str | None,
+    query_model: str | None,
+    llm_router: VideoModelIdResolver | None,
+) -> str | None:
+    if model_id_from_decoded:
+        if llm_router is not None:
+            resolved: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+            if isinstance(resolved, str) and resolved:
+                return resolved
+        return model_id_from_decoded
+    if isinstance(query_model, str) and query_model:
+        return query_model
+    return None
+
+
+def extract_model_from_target_model_names(target_model_names: object) -> str | None:
     if isinstance(target_model_names, str):
-        target_model_names = [m.strip() for m in target_model_names.split(",") if m.strip()]
-    elif not isinstance(target_model_names, list):
-        return None
-    return target_model_names[0] if target_model_names else None
+        names: Final = tuple(m.strip() for m in target_model_names.split(",") if m.strip())
+        return names[0] if names else None
+    if isinstance(target_model_names, Sequence) and not isinstance(target_model_names, (str, bytes)):
+        first: Final = target_model_names[0] if target_model_names else None
+        return first if isinstance(first, str) else None
+    return None
 
 
 def video_reference_to_id(video_ref: object) -> str:
@@ -25,9 +49,9 @@ def video_reference_to_id(video_ref: object) -> str:
     return parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
 
 
-def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
+def get_custom_provider_from_data(data: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = data.get("custom_llm_provider")
-    if custom_llm_provider:
+    if isinstance(custom_llm_provider, str) and custom_llm_provider:
         return custom_llm_provider
 
     extra_body = data.get("extra_body")

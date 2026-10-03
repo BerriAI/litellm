@@ -21,12 +21,59 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    resolve_video_request_model,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
     encode_character_id_with_provider,
 )
+
+# =========================================================================== #
+# resolve_video_request_model
+# =========================================================================== #
+
+
+class _Resolver:
+    def __init__(self, mapping: dict[str, str | None]):
+        self.mapping = mapping
+
+    def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None:
+        return self.mapping.get(model_id) if model_id else None
+
+
+def test_resolve_video_request_model__router_hit():
+    assert (
+        resolve_video_request_model(
+            model_id_from_decoded="deployment-123",
+            query_model="ignored",
+            llm_router=_Resolver({"deployment-123": "azure-sora"}),
+        )
+        == "azure-sora"
+    )
+
+
+def test_resolve_video_request_model__keeps_decoded_id_when_router_misses():
+    assert (
+        resolve_video_request_model(
+            model_id_from_decoded="grok-imagine-video-1.5",
+            query_model=None,
+            llm_router=_Resolver({}),
+        )
+        == "grok-imagine-video-1.5"
+    )
+
+
+def test_resolve_video_request_model__query_model_on_plain_id():
+    assert (
+        resolve_video_request_model(
+            model_id_from_decoded=None,
+            query_model="grok-imagine-video-1.5",
+            llm_router=None,
+        )
+        == "grok-imagine-video-1.5"
+    )
+
 
 # =========================================================================== #
 # extract_model_from_target_model_names
