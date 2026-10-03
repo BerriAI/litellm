@@ -940,6 +940,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
+    "https://api.aiand.com/v1",
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
     "https://serverless.tensormesh.ai/v1",
@@ -1002,6 +1003,7 @@ openai_compatible_providers: Final[list] = [
     "chatgpt",  # ChatGPT subscription API
     "novita",
     "meta_llama",
+    "aiand",
     "publicai",  # PublicAI - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "tensormesh",  # Tensormesh - JSON-configured provider
@@ -1069,6 +1071,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "lambda_ai",
     "hyperbolic",
     "wandb",
+    "aiand",
 ]
 _openai_like_providers: Final[list] = [
     "predibase",

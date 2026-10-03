@@ -1803,6 +1803,71 @@ def _map_together_ai_exception(
         )
 
 
+_AIAND_ERROR_PAYLOAD_KEYS: Final = ("message", "code", "type", "param")
+
+
+def _map_aiand_exception(
+    *,
+    model: str,
+    original_exception: _ProviderHTTPException,
+    custom_llm_provider: str,
+    error_str: str,
+    exception_type: str,
+    exception_provider: str,
+    extra_information: str,
+) -> None:
+    error_body: object = getattr(original_exception, "body", None)
+    if not isinstance(error_body, Mapping):
+        try:
+            error_body = json.loads(error_str)
+        except ValueError:
+            error_body = None
+    inner: Final[object] = error_body.get("error") if isinstance(error_body, Mapping) else None
+    error_payload: Final[Mapping[str, object]] = (
+        inner
+        if isinstance(inner, Mapping)
+        else error_body
+        if isinstance(error_body, Mapping) and any(key in error_body for key in _AIAND_ERROR_PAYLOAD_KEYS)
+        else {}
+    )
+    status_code: Final[int | None] = getattr(original_exception, "status_code", None)
+    error_message: Final[object] = error_payload.get("message")
+    message: Final[str] = error_message if isinstance(error_message, str) else error_str
+    if status_code == 402 and (
+        error_payload.get("code") == "insufficient_credits"
+        or error_payload.get("type") == "billing_error"
+        or "insufficient_credits" in error_str
+        or "billing_error" in error_str
+    ):
+        raise PermissionDeniedError(
+            message=f"{exception_provider} - {message}",
+            llm_provider="aiand",
+            model=model,
+            response=_response_or_stub(original_exception, status_code=403),
+            litellm_debug_info=extra_information,
+        )
+    elif status_code == 401 and (error_payload.get("code") == "invalid_api_key" or "invalid_api_key" in error_str):
+        raise AuthenticationError(
+            message=f"{exception_provider} - {message}",
+            llm_provider="aiand",
+            model=model,
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
+        )
+    elif status_code == 404 and (
+        error_payload.get("code") == "model_not_found"
+        or error_payload.get("param") == "model"
+        or "model_not_found" in error_str
+    ):
+        raise NotFoundError(
+            message=f"{exception_provider} - {message}",
+            model=model,
+            llm_provider="aiand",
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
+        )
+
+
 def _map_aleph_alpha_exception(
     *,
     model: str,
@@ -2462,6 +2527,17 @@ def exception_type(
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                     body=getattr(original_exception, "body", None),
+                )
+            if custom_llm_provider == "aiand":
+                _aiand_model: Final = model if isinstance(model, str) else ""
+                _map_aiand_exception(
+                    model=_aiand_model,
+                    original_exception=mappable_exception,
+                    custom_llm_provider=custom_llm_provider,
+                    error_str=error_str,
+                    exception_type=exception_type,
+                    exception_provider="AiandException",
+                    extra_information=extra_information,
                 )
             if (
                 custom_llm_provider == "openai"
