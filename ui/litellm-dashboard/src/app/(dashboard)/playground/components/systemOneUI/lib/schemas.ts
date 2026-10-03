@@ -56,23 +56,21 @@ const questionSchema = z.discriminatedUnion("type", [choiceQuestionSchema, noulQ
   error: (iss) => QUESTION_ERROR_MESSAGES[iss.code],
 });
 
-export const systemOneRequestSchema = z
-  .looseObject(
-    {
-      model: nonEmptyString("Model must be a non-empty string.").optional(),
-      state: z.unknown(),
-      questions: z
-        .record(z.string(), questionSchema, {
-          error: (iss) =>
-            iss.input === undefined
-              ? "Required property 'questions' is missing."
-              : "Questions must be a non-empty object.",
-        })
-        .refine((questions) => Object.keys(questions).length > 0, "At least one question is required."),
-    },
-    { error: "Payload must be a JSON object." },
-  )
-  .refine((request) => "state" in request, { error: "Required property 'state' is missing.", path: ["state"] });
+export const systemOneRequestSchema = z.looseObject(
+  {
+    model: nonEmptyString("Model must be a non-empty string.").optional(),
+    state: z.unknown().nonoptional({ error: "Required property 'state' is missing." }),
+    questions: z
+      .record(z.string(), questionSchema, {
+        error: (iss) =>
+          iss.input === undefined
+            ? "Required property 'questions' is missing."
+            : "Questions must be a non-empty object.",
+      })
+      .refine((questions) => Object.keys(questions).length > 0, "At least one question is required."),
+  },
+  { error: "Payload must be a JSON object." },
+);
 
 const probability = z.number().finite().min(0).max(1);
 const probabilities = z.record(z.string(), probability);
