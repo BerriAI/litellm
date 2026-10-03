@@ -1294,6 +1294,7 @@ class LiteLLMParamsBody(BaseModel):
     tpm: int | None = None
     weight: int | None = None
     order: int | None = None
+    num_retries: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
