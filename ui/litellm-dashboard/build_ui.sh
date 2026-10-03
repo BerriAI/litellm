@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Check if nvm is not installed
 if ! command -v nvm &> /dev/null; then
@@ -48,10 +49,11 @@ if [ $? -eq 0 ]; then
   destination_dir="../../litellm-proxy-extras/litellm_proxy_extras/ui"
 
   # Remove existing files in the destination directory
+  mkdir -p "$destination_dir"
   rm -rf "$destination_dir"/*
 
   # Copy the contents of the output directory to the specified destination
-  cp -r ./out/* "$destination_dir"
+  cp -r ./out/. "$destination_dir"
 
   rm -rf ./out
 

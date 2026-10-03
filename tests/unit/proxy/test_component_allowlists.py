@@ -283,19 +283,9 @@ def test_backend_keeps_swagger_mount():
 
 
 def test_backend_drops_non_allowlisted_mounts():
-    """Verify that Mounts NOT in BACKEND_MOUNT_PATHS would be dropped from backend."""
-    all_mounts = {
-        getattr(r, "path")
-        for r in app.router.routes
-        if isinstance(r, Mount) and getattr(r, "path", None) is not None
-    }
-    non_backend_mounts = all_mounts - BACKEND_MOUNT_PATHS
-
-    assert len(non_backend_mounts) > 0, \
-        "Expected at least one non-backend Mount (e.g., /ui, /_next) to verify filtering logic"
-    for mount_path in non_backend_mounts:
-        assert mount_path not in BACKEND_MOUNT_PATHS, \
-            f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
+    routes: Final = [Mount(path, app=Starlette()) for path in ("/swagger", "/ui", "/_next")]
+    retained: Final = {route.path for route in routes if route.path in BACKEND_MOUNT_PATHS}
+    assert retained == {"/swagger"}
 
 
 def test_gateway_mount_paths_defined():

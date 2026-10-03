@@ -51,6 +51,9 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
     [
         ("mcp-dependencies", ["pyproject.toml"], "run"),
         ("mcp-dependencies", ["uv.lock"], "run"),
+        ("mcp-dependencies", ["ui/litellm-dashboard/build_ui.sh"], "run"),
+        ("mcp-dependencies", ["ui/litellm-dashboard/build_ui_custom_path.sh"], "run"),
+        ("mcp-dependencies", ["ui/litellm-dashboard/build_release_ui.sh"], "run"),
         ("mcp-dependencies", ["litellm/experimental_mcp_client/client.py"], "run"),
         ("mcp-dependencies", ["tests/e2e/mcp/oauth_chat_client.py"], "run"),
         ("mcp-dependencies", ["litellm-proxy-extras/pyproject.toml"], "run"),
