@@ -43,6 +43,7 @@ def span_row() -> dict[str, JsonValue]:
         "name": "root",
         "type": "agent",
         "agent": "",
+        "framework": "",
         "status": "STATUS_CODE_OK",
         "status_message": "",
         "error_truncated": 0,
@@ -55,6 +56,7 @@ def span_row() -> dict[str, JsonValue]:
         "output_tokens": 0,
         "litellm_request_id": "",
         "team_id": "",
+        "api_key_hash": "",
         "user_id": "",
     }
 
@@ -294,14 +296,23 @@ async def test_insert_validates_values_without_pydantic_copy(recording_server: R
     assert stored["SpanAttributes"] == attributes
 
 
-@pytest.mark.parametrize("role", ["proxy_admin", "proxy_admin_viewer", "internal_user"])
-def test_trace_sql_endpoint_executes_for_admin_and_preserves_clickhouse_envelope(
-    recording_server: RecordingServer, role: str
+@pytest.mark.parametrize(
+    ("role", "user_id", "expected_status"),
+    (
+        ("proxy_admin", None, 200),
+        ("proxy_admin_viewer", None, 200),
+        ("internal_user", "user", 200),
+        ("internal_user", None, 403),
+    ),
+)
+def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope(
+    recording_server: RecordingServer, role: str, user_id: str | None, expected_status: int
 ) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
@@ -311,19 +322,28 @@ def test_trace_sql_endpoint_executes_for_admin_and_preserves_clickhouse_envelope
         "rows": 1,
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
     }
-    recording_server.expected_requests = 12
-    for _ in range(11):
-        recording_server.enqueue(ResponseSpec(body=""))
-    recording_server.enqueue(ResponseSpec(body=envelope))
+    recording_server.expected_requests = 12 if expected_status == 200 else 0
+    if expected_status == 200:
+        for _ in range(11):
+            recording_server.enqueue(ResponseSpec(body=""))
+        recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, token="test")
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, user_id=user_id, token="test")
     app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+
+    async def permitted_teams(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ()
+
+    app.dependency_overrides[get_log_team_lookup] = lambda: permitted_teams
     with TestClient(app) as client:
         result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
-        assert result.status_code == 200, result.text
+        assert result.status_code == expected_status, result.text
+        if expected_status == 403:
+            assert result.json() == {"detail": "Not allowed to view logs"}
+            return
         assert result.json() == envelope
         assert recording_server.requests[-1].raw_body == b"SELECT 42 AS answer"
         assert client.post("/v1/traces/query", json={"sql": "  "}).status_code == 400
