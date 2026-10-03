@@ -37,7 +37,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -83,7 +83,6 @@ _SSE_EVENT_SEPARATOR: Final = re.compile(r"\r?\n[ \t]*\r?\n")
 _SSE_LINE_PREFIXES: Final = ("event:", "data:", ":", "id:", "retry:")
 
 _JSON_VALUE: Final = TypeAdapter(object)
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _gateway_host_match(api_base: str) -> re.Match[str] | None:
@@ -431,7 +430,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         """
         text: Final = raw_response.text
         if not text.lstrip().startswith(_SSE_LINE_PREFIXES):
-            return _JSON_OBJECT.validate_python(raw_response.json())
+            return raw_response.json()
 
         events: Final = tuple(_iter_sse_events(text))
         response_event: Final = next(

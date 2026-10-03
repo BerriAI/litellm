@@ -11,7 +11,6 @@ import os
 
 import httpx
 import pytest
-from pydantic import ValidationError
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import litellm
@@ -679,9 +678,3 @@ def test_transform_search_response_ignores_text_blocks_without_result_objects(bl
     body = {"result": {"content": [{"type": "text", "text": block_text}]}}
 
     assert _transform_text(json.dumps(body)).results == []
-
-
-@pytest.mark.parametrize("text", ["[]", '[{"result": {}}]', '"text"', "5", "true", "null"])
-def test_transform_search_response_rejects_a_json_body_that_is_not_an_object(text: str):
-    with pytest.raises(ValidationError):
-        _transform_text(text)

@@ -6,13 +6,11 @@ Documentation: https://api-dashboard.search.brave.com/app/documentation/web-sear
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal, TypedDict
 
 import httpx
 from dateutil import parser
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 _ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
 _UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
@@ -93,24 +91,6 @@ class BraveSearchRequest(_BraveSearchRequestRequired, total=False):
     enable_rich_callback: bool  # Optional - structured result blocks
     include_fetch_metadata: bool  # Optional - include fetch metadata
     operators: bool  # Optional - enable advanced operators
-
-
-class _BraveResultFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    title: str = ""
-    url: str = ""
-    description: str = ""
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
-
-
-def _date_input(value: object) -> str | float | None:
-    if value is None or isinstance(value, str | int | float):
-        return value
-    return str(value) if value else None
 
 
 class BraveSearchConfig(BaseSearchConfig):
@@ -266,7 +246,7 @@ class BraveSearchConfig(BaseSearchConfig):
         """
         Transform Brave Search API response to LiteLLM unified SearchResponse format.
         """
-        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
         results: Final[list[SearchResult]] = []
@@ -276,8 +256,7 @@ class BraveSearchConfig(BaseSearchConfig):
         max_results: Final = max(1, min(int(query_params.get("count", 20)), 20))
 
         for section in sections_to_process:
-            section_json = _JSON_OBJECT.validate_python(response_json.get(section, {}))
-            for raw_result in _JSON_VALUES.validate_python(section_json.get("results", [])):
+            for result in response_json.get(section, {}).get("results", []):
                 # Because the `max_results`/`count` parameters do not affect
                 # the number of "discussion", "faq", "news", or "videos"
                 # results, we need to manually limit the number of results
@@ -285,13 +264,11 @@ class BraveSearchConfig(BaseSearchConfig):
                 if len(results) >= max_results:
                     break
 
-                result = _JSON_OBJECT.validate_python(raw_result)
-                fields = _BraveResultFields.model_validate(result)
-                title = fields.title
-                url = fields.url
-                snippet = fields.description
-                date = to_yyyy_mm_dd(_date_input(result.get("page_age") or result.get("age")))
-                last_updated = to_yyyy_mm_dd(_date_input(result.get("fetched_content_timestamp", "")))
+                title = result.get("title", "")
+                url = result.get("url", "")
+                snippet = result.get("description", "")
+                date = to_yyyy_mm_dd(result.get("page_age") or result.get("age"))
+                last_updated = to_yyyy_mm_dd(result.get("fetched_content_timestamp", ""))
 
                 search_result = SearchResult(
                     title=title,

@@ -4,12 +4,10 @@ Calls SearchAPI.io's Google Search API endpoint.
 SearchAPI.io API Reference: https://www.searchapi.io/docs/google
 """
 
-from collections.abc import Iterable, Mapping
 from typing import Final, Literal, TypedDict, cast
 from urllib.parse import urlencode
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -51,19 +49,6 @@ class SearchAPIRequest(_SearchAPIRequestRequired, total=False):
     num: int  # Optional - number of results (phased out by Google, constant 10)
     page: int  # Optional - page number for pagination
     optimization_strategy: str  # Optional - 'performance' or 'ads'
-
-
-class _SearchAPIResultFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    title: str = ""
-    link: str = ""
-    snippet: str = ""
-    date: str | None = None
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class SearchAPIConfig(BaseSearchConfig):
@@ -228,18 +213,17 @@ class SearchAPIConfig(BaseSearchConfig):
         - organic_results[].snippet → SearchResult.snippet
         - organic_results[].date → SearchResult.date
         """
-        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
         results: Final[list[SearchResult]] = []
 
         # Process organic results
-        for result in _JSON_OBJECTS.validate_python(response_json.get("organic_results", [])):
-            fields = _SearchAPIResultFields.model_validate(result)
-            title = fields.title
-            url = fields.link
-            snippet = fields.snippet
-            date = fields.date  # SearchAPI.io provides date in some results
+        for result in response_json.get("organic_results", []):
+            title = result.get("title", "")
+            url = result.get("link", "")
+            snippet = result.get("snippet", "")
+            date = result.get("date")  # SearchAPI.io provides date in some results
 
             search_result = SearchResult(
                 title=title,

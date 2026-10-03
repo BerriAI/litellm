@@ -4,11 +4,9 @@ Calls DataForSEO SERP API to search the web.
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
 
-from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.constants import DEFAULT_DATAFORSEO_LOCATION_CODE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -18,22 +16,6 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
-
-
-class _DataForSEOItemFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    title: str = ""
-    url: str = ""
-    description: str = ""
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
-_JSON_ARRAY: Final = TypeAdapter(Sequence[object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | Sequence[object] | str]] = TypeAdapter(
-    Mapping[str, object] | Sequence[object] | str, config=ConfigDict(hide_input_in_errors=True)
-)
 
 
 class DataForSEOSearchConfig(BaseSearchConfig):
@@ -206,36 +188,29 @@ class DataForSEOSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = _JSON_CONTAINER.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
         results: Final = []
 
         # DataForSEO wraps results in tasks array
-        tasks: Final = (
-            _JSON_CONTAINER.validate_python(_JSON_OBJECT.validate_python(response_json)["tasks"])
-            if "tasks" in response_json
-            else ()
-        )
-        if len(tasks) > 0:
-            task: Final = _JSON_OBJECT.validate_python(_JSON_ARRAY.validate_python(tasks)[0])
+        if "tasks" in response_json and len(response_json["tasks"]) > 0:
+            task: Final = response_json["tasks"][0]
 
             # Check if task was successful
             if task.get("status_code") == 20000 and "result" in task:
-                task_result: Final = _JSON_CONTAINER.validate_python(task["result"])
                 # Result is an array, take first element
-                if len(task_result) > 0:
-                    result: Final = _JSON_OBJECT.validate_python(_JSON_ARRAY.validate_python(task_result)[0])
+                if len(task["result"]) > 0:
+                    result: Final = task["result"][0]
 
                     # Items contain the actual search results
-                    for item in _JSON_OBJECTS.validate_python(result.get("items", [])):
+                    for item in result.get("items", []):
                         # Only process organic search results
                         if item.get("type") == "organic":
-                            fields = _DataForSEOItemFields.model_validate(item)
                             search_result = SearchResult(
-                                title=fields.title,
-                                url=fields.url,
-                                snippet=fields.description,
+                                title=item.get("title", ""),
+                                url=item.get("url", ""),
+                                snippet=item.get("description", ""),
                                 date=None,  # DataForSEO doesn't provide date in standard response
                                 last_updated=None,
                             )

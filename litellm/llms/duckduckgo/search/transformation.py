@@ -4,12 +4,10 @@ Calls DuckDuckGo's Instant Answer API to search the web.
 DuckDuckGo API Reference: https://duckduckgo.com/api
 """
 
-from collections.abc import Iterable, Mapping
 from typing import Final, Literal, TypedDict
 from urllib.parse import urlencode
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -37,11 +35,6 @@ class DuckDuckGoSearchRequest(_DuckDuckGoSearchRequestRequired, total=False):
     no_redirect: int  # Optional - skip HTTP redirects (0 or 1), default 0
     no_html: int  # Optional - remove HTML from text (0 or 1), default 0
     skip_disambig: int  # Optional - skip disambiguation results (0 or 1), default 0
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
-_STR: Final = TypeAdapter(str)
 
 
 class DuckDuckGoSearchConfig(BaseSearchConfig):
@@ -166,7 +159,7 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         # Extract max_results from the request URL params
         query_params: Final = raw_response.request.url.params if raw_response.request else {}
@@ -186,16 +179,16 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         # Check if there's an Abstract with URL
         if response_json.get("AbstractURL") and response_json.get("AbstractText"):
             abstract_result: Final = SearchResult(
-                title=_STR.validate_python(response_json.get("Heading", "")),
-                url=_STR.validate_python(response_json.get("AbstractURL", "")),
-                snippet=_STR.validate_python(response_json.get("AbstractText", "")),
+                title=response_json.get("Heading", ""),
+                url=response_json.get("AbstractURL", ""),
+                snippet=response_json.get("AbstractText", ""),
                 date=None,
                 last_updated=None,
             )
             results.append(abstract_result)
 
         # Process RelatedTopics
-        related_topics: Final = _JSON_VALUES.validate_python(response_json.get("RelatedTopics", []))
+        related_topics: Final = response_json.get("RelatedTopics", [])
         for topic in related_topics:
             # Stop if we've reached max_results
             if max_results is not None and len(results) >= max_results:

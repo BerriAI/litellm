@@ -4,11 +4,9 @@ Calls Serper's /search endpoint to search Google.
 Serper API Reference: https://serper.dev
 """
 
-from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -38,19 +36,6 @@ class SerperSearchRequest(_SerperSearchRequestRequired, total=False):
     location: str  # Optional - specific location for search targeting
     autocorrect: bool  # Optional - enable autocorrect (default True)
     tbs: str  # Optional - time-based search filter (e.g., "qdr:h", "qdr:d", "qdr:w")
-
-
-class _SerperResultFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    title: str = ""
-    link: str = ""
-    snippet: str = ""
-    date: str | None = None
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class SerperSearchConfig(BaseSearchConfig):
@@ -171,16 +156,15 @@ class SerperSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         results: Final = []
-        for result in _JSON_OBJECTS.validate_python(response_json.get("organic", [])):
-            fields = _SerperResultFields.model_validate(result)
+        for result in response_json.get("organic", []):
             search_result = SearchResult(
-                title=fields.title,
-                url=fields.link,
-                snippet=fields.snippet,
-                date=fields.date,
+                title=result.get("title", ""),
+                url=result.get("link", ""),
+                snippet=result.get("snippet", ""),
+                date=result.get("date"),
                 last_updated=None,
             )
             results.append(search_result)

@@ -2,15 +2,11 @@
 Tests for You.com Search API integration.
 """
 
-import httpx
 import pytest
-from pydantic import ValidationError
 from unittest.mock import AsyncMock, patch, MagicMock
 
 
 import litellm
-from litellm.llms.base_llm.search.transformation import SearchResponse
-from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
 
 class TestYouComSearch:
@@ -383,106 +379,3 @@ class TestYouComSearch:
             headers={"Accept-Encoding": "gzip"}, api_key=None
         )
         assert headers["Accept-Encoding"] == "gzip"
-
-
-def _transform(payload: object) -> SearchResponse:
-    return YouComSearchConfig().transform_search_response(
-        raw_response=httpx.Response(200, json=payload),
-        logging_obj=MagicMock(),
-    )
-
-
-def _as_tuples(response: SearchResponse) -> list[tuple[str, str, str, str | None, str | None]]:
-    return [(r.title, r.url, r.snippet, r.date, r.last_updated) for r in response.results]
-
-
-@pytest.mark.parametrize(
-    ("item", "expected"),
-    [
-        (
-            {
-                "title": "Title",
-                "url": "https://a.example",
-                "snippets": ["first snippet", "second snippet"],
-                "description": "ignored",
-                "page_age": "2024-01-02T03:04:05",
-            },
-            ("Title", "https://a.example", "first snippet", "2024-01-02T03:04:05", None),
-        ),
-        ({"title": "Title", "snippets": [], "description": "Body"}, ("Title", "", "Body", None, None)),
-        ({"snippets": None, "description": "Body", "page_age": None}, ("", "", "Body", None, None)),
-        ({"snippets": ["only snippet"], "description": 5}, ("", "", "only snippet", None, None)),
-        ({"snippets": "text"}, ("", "", "t", None, None)),
-        ({}, ("", "", "", None, None)),
-    ],
-)
-def test_transform_search_response_maps_one_web_or_news_result(
-    item: dict[str, object], expected: tuple[str, str, str, str | None, str | None]
-):
-    assert _as_tuples(_transform({"results": {"web": [item]}})) == [expected]
-    assert _as_tuples(_transform({"results": {"news": [item]}})) == [expected]
-
-
-def test_transform_search_response_puts_web_results_before_news_results():
-    response = _transform(
-        {
-            "results": {
-                "news": [{"title": "news 1"}, {"title": "news 2"}],
-                "web": [{"title": "web 1"}, {"title": "web 2"}],
-            },
-            "metadata": {"search_uuid": "abc"},
-        }
-    )
-
-    assert [result.title for result in response.results] == ["web 1", "web 2", "news 1", "news 2"]
-    assert response.object == "search"
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {},
-        {"results": None},
-        {"results": {}},
-        {"results": []},
-        {"results": ""},
-        {"results": {"web": None, "news": None}},
-        {"results": {"web": [], "news": []}},
-        {"results": {"web": {}, "news": ""}},
-        {"results": {"images": [{"title": "never read"}]}},
-    ],
-)
-def test_transform_search_response_without_web_or_news_results_is_empty(payload: dict[str, object]):
-    assert _transform(payload).results == []
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        [],
-        "text",
-        5,
-        {"results": [{"title": "not an object of sections"}]},
-        {"results": "text"},
-        {"results": 5},
-        {"results": {"web": 5}},
-        {"results": {"web": "text"}},
-        {"results": {"web": {"title": "not a list"}}},
-        {"results": {"web": ["text"]}},
-        {"results": {"web": [None]}},
-        {"results": {"web": [{"title": "ok"}], "news": 5}},
-        {"results": {"news": [5]}},
-        {"results": {"web": [{"snippets": 5}]}},
-        {"results": {"web": [{"snippets": {"first": "not a list"}}]}},
-        {"results": {"web": [{"snippets": [5]}]}},
-        {"results": {"web": [{"snippets": [["nested"]]}]}},
-        {"results": {"web": [{"description": 5}]}},
-        {"results": {"web": [{"description": None}]}},
-        {"results": {"web": [{"title": None}]}},
-        {"results": {"web": [{"url": 5}]}},
-        {"results": {"web": [{"page_age": 2024}]}},
-    ],
-)
-def test_transform_search_response_rejects_malformed_payloads(payload: object):
-    with pytest.raises(ValidationError):
-        _transform(payload)

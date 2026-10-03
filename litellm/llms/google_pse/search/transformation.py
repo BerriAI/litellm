@@ -4,11 +4,9 @@ Calls Google Programmable Search Engine (PSE) API to search the web.
 Google PSE API Reference: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
 """
 
-from collections.abc import Iterable, Mapping
 from typing import Final, Literal, TypedDict
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -55,18 +53,6 @@ class GooglePSESearchRequest(_GooglePSESearchRequestRequired, total=False):
     siteSearch: str  # Optional - restricts results to URLs from specified site
     siteSearchFilter: str  # Optional - controls whether to include or exclude siteSearch ('e'=exclude, 'i'=include)
     sort: str  # Optional - sort expression
-
-
-class _GooglePSEItemFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    title: str = ""
-    link: str = ""
-    snippet: str = ""
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class GooglePSESearchConfig(BaseSearchConfig):
@@ -253,16 +239,15 @@ class GooglePSESearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
         results: Final = []
-        for item in _JSON_OBJECTS.validate_python(response_json.get("items", [])):
-            fields = _GooglePSEItemFields.model_validate(item)
+        for item in response_json.get("items", []):
             search_result = SearchResult(
-                title=fields.title,
-                url=fields.link,
-                snippet=fields.snippet,
+                title=item.get("title", ""),
+                url=item.get("link", ""),
+                snippet=item.get("snippet", ""),
                 date=None,  # Google PSE doesn't provide date in standard response
                 last_updated=None,  # Google PSE doesn't provide last_updated in response
             )

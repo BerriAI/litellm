@@ -4,11 +4,9 @@ Calls Tavily's /search endpoint to search the web.
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
 
-from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -45,18 +43,6 @@ class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
     start_date: str  # Optional - start date filter (YYYY-MM-DD)
     end_date: str  # Optional - end date filter (YYYY-MM-DD)
     country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
-
-
-class _TavilyResultFields(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    title: str = ""
-    url: str = ""
-    content: str = ""
-
-
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class TavilySearchConfig(BaseSearchConfig):
@@ -188,16 +174,15 @@ class TavilySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
         results: Final = []
-        for result in _JSON_OBJECTS.validate_python(response_json.get("results", [])):
-            fields = _TavilyResultFields.model_validate(result)
+        for result in response_json.get("results", []):
             search_result = SearchResult(
-                title=fields.title,
-                url=fields.url,
-                snippet=fields.content,  # Tavily uses "content" instead of "snippet"
+                title=result.get("title", ""),
+                url=result.get("url", ""),
+                snippet=result.get("content", ""),  # Tavily uses "content" instead of "snippet"
                 date=None,  # Tavily doesn't provide date in response
                 last_updated=None,  # Tavily doesn't provide last_updated in response
             )
