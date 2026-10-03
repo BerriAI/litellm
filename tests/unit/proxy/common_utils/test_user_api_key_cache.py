@@ -524,7 +524,7 @@ class _ClusterRecordingRedis(RedisClusterCache):
     def __init__(self) -> None:  # noqa: super().__init__ skipped intentionally
         self.ttls: dict[str, float | None] = {}
 
-    async def async_set_cache_pipeline_with_ttls(self, cache_list, **kwargs):  # type: ignore[override]
+    async def async_set_cache_pipeline_with_ttls(self, cache_list, **kwargs):  # pyright: ignore[reportIncompatibleMethodOverride]  # test double records the ttl
         for key, _, ttl in cache_list:
             self.ttls[key] = ttl
 

@@ -216,7 +216,7 @@ class _TtlRecordingMemory(InMemoryCache):
         super().__init__()
         self.ttls: dict[str, object] = {}
 
-    def set_cache(self, key, value, **kwargs):  # type: ignore[override]
+    def set_cache(self, key, value, **kwargs):  # pyright: ignore[reportIncompatibleMethodOverride]  # test double records the write
         self.ttls[key] = kwargs.get("ttl")
         super().set_cache(key, value, **kwargs)
 
