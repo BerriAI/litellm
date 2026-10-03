@@ -51,6 +51,9 @@ class Tenant:
     user_id: str = ""
 
 
+_EMPTY_TENANT: Final = Tenant("", "")
+
+
 class NativeStore(Protocol):
     def __init__(self, config: "NativeConfig") -> None: ...
 
@@ -97,9 +100,9 @@ QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | float | list[str]])
 _SQL_RESPONSE: Final = TypeAdapter(TraceSQLResponse)
 _HELP_RESPONSE: Final = TypeAdapter(TraceQueryHelp)
 _TRACE_PAGE: Final = TypeAdapter(TracePage)
-_TRACE: Final = TypeAdapter(Trace | None)
-_SPAN_DETAIL: Final = TypeAdapter(SpanDetail | None)
-_SPAN_ERROR_PAGE: Final = TypeAdapter(SpanErrorPage | None)
+_TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
+_SPAN_DETAIL: Final[TypeAdapter[SpanDetail | None]] = TypeAdapter(SpanDetail | None)
+_SPAN_ERROR_PAGE: Final[TypeAdapter[SpanErrorPage | None]] = TypeAdapter(SpanErrorPage | None)
 _ResponseT: Final = TypeVar("_ResponseT")
 _NATIVE_ADAPTER: Final[TypeAdapter[NativeTraces]] = TypeAdapter(
     NativeTraces, config=ConfigDict(arbitrary_types_allowed=True)
@@ -128,7 +131,7 @@ def _native() -> NativeTraces:
 def span_rows(
     body: bytes,
     content_type: str | None,
-    tenant: Tenant = Tenant("", ""),
+    tenant: Tenant = _EMPTY_TENANT,
     max_attribute_value_bytes: int = OTLP_MAX_ATTRIBUTE_VALUE_BYTES,
 ) -> list[dict[str, JsonValue]]:
     """The `otel_traces` rows an OTLP export would be stored as, without writing them."""

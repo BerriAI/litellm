@@ -20,11 +20,13 @@ from .generated.types import ReadQueryName
 
 _RESPONSE_CONFIG: Final = ConfigDict(frozen=True, extra="allow")
 
+
 class TraceQueryStatistics(BaseModel):
     model_config = _RESPONSE_CONFIG
     elapsed: float
     rows_read: int | str
     bytes_read: int | str
+
 
 class TraceSQLResponse(BaseModel):
     model_config = _RESPONSE_CONFIG
@@ -32,6 +34,7 @@ class TraceSQLResponse(BaseModel):
     data: tuple[Mapping[str, JsonValue], ...]
     rows: int | str
     statistics: TraceQueryStatistics
+
 
 ParamsT: Final = TypeVar("ParamsT", bound=BaseModel)
 RowT: Final = TypeVar("RowT")
