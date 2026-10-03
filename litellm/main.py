@@ -6635,9 +6635,6 @@ def embedding(
             if api_key is None:
                 api_key = api_key or litellm.api_key or litellm.openai_like_key or get_secret_str("OPENAI_LIKE_API_KEY")
 
-            if headers is not None and headers != {}:
-                optional_params["extra_headers"] = headers
-
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
                 model=model,
@@ -6650,6 +6647,7 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                headers=headers,
             )
         elif custom_llm_provider == "oci":
             if headers is None:
