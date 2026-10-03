@@ -29,6 +29,7 @@ export interface SSOSettingsValues {
   saml_sp_entity_id: string | null;
   saml_allow_unsolicited: string | null;
   generic_scope: string | null;
+  generic_authorization_params: string | null;
   proxy_base_url: string | null;
   user_email: string | null;
   ui_access_mode: string | null;

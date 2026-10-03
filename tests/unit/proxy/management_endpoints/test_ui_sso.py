@@ -5,6 +5,7 @@ import os
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -4728,6 +4729,132 @@ class TestGenericResponseConvertorUserRole:
 
             assert isinstance(result, CustomOpenID)
             assert result.user_role is None
+
+
+class TestGenericSSOAuthorizationParams:
+    """GENERIC_AUTHORIZATION_PARAMS adds extra query parameters (AD FS ``resource``) to the authorize redirect."""
+
+    @staticmethod
+    def _generic_sso(scope: list[str]) -> object:
+        from fastapi_sso.sso.generic import create_provider
+
+        provider = create_provider(
+            name="oidc",
+            discovery_document={
+                "authorization_endpoint": "https://idp.example.com/adfs/oauth2/authorize",
+                "token_endpoint": "https://idp.example.com/adfs/oauth2/token",
+                "userinfo_endpoint": "https://idp.example.com/adfs/userinfo",
+            },
+        )
+        return provider(
+            client_id="litellm-client",
+            client_secret="secret",
+            redirect_uri="http://localhost:4000/sso/callback",
+            allow_insecure_http=True,
+            scope=scope,
+        )
+
+    def test_parse_is_empty_when_unset(self, monkeypatch):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _parse_generic_sso_authorization_params,
+        )
+
+        monkeypatch.delenv("GENERIC_AUTHORIZATION_PARAMS", raising=False)
+        assert _parse_generic_sso_authorization_params() == {}
+        monkeypatch.setenv("GENERIC_AUTHORIZATION_PARAMS", "  ")
+        assert _parse_generic_sso_authorization_params() == {}
+
+    def test_parse_reads_query_string_form(self, monkeypatch):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _parse_generic_sso_authorization_params,
+        )
+
+        monkeypatch.setenv(
+            "GENERIC_AUTHORIZATION_PARAMS",
+            "resource=https://litellm.example.com/api&prompt=login",
+        )
+        assert _parse_generic_sso_authorization_params() == {
+            "resource": "https://litellm.example.com/api",
+            "prompt": "login",
+        }
+
+    def test_parse_drops_keys_the_flow_sets_itself(self, monkeypatch):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _parse_generic_sso_authorization_params,
+        )
+
+        monkeypatch.setenv(
+            "GENERIC_AUTHORIZATION_PARAMS",
+            "resource=https://litellm.example.com/api&state=attacker&redirect_uri=https://evil.example"
+            "&client_id=other&scope=openid&response_type=token&code_challenge=x&code_challenge_method=plain",
+        )
+        assert _parse_generic_sso_authorization_params() == {"resource": "https://litellm.example.com/api"}
+
+    @pytest.mark.asyncio
+    async def test_redirect_location_carries_resource(self, monkeypatch):
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        monkeypatch.delenv("GENERIC_CLIENT_USE_PKCE", raising=False)
+        monkeypatch.setenv("GENERIC_AUTHORIZATION_PARAMS", "resource=https://litellm.example.com/api")
+        response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+            generic_sso=self._generic_sso(["openid", "profile", "email", "allatclaims"]),
+            state="cli-state-123",
+            generic_authorization_endpoint="https://idp.example.com/adfs/oauth2/authorize",
+        )
+
+        assert response is not None
+        location = urlparse(str(response.headers["location"]))
+        query = parse_qs(location.query)
+        assert location.path == "/adfs/oauth2/authorize"
+        assert query["resource"] == ["https://litellm.example.com/api"]
+        assert query["state"] == ["cli-state-123"]
+        assert query["client_id"] == ["litellm-client"]
+        assert query["redirect_uri"] == ["http://localhost:4000/sso/callback"]
+        assert query["scope"] == ["openid profile email allatclaims"]
+        assert query["response_type"] == ["code"]
+
+    @pytest.mark.asyncio
+    async def test_redirect_location_unchanged_when_unset(self, monkeypatch):
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        monkeypatch.delenv("GENERIC_CLIENT_USE_PKCE", raising=False)
+        monkeypatch.delenv("GENERIC_AUTHORIZATION_PARAMS", raising=False)
+        response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+            generic_sso=self._generic_sso(["openid"]),
+            state="cli-state-123",
+            generic_authorization_endpoint="https://idp.example.com/adfs/oauth2/authorize",
+        )
+
+        assert response is not None
+        query = parse_qs(urlparse(str(response.headers["location"])).query)
+        assert "resource" not in query
+        assert set(query) == {"response_type", "client_id", "redirect_uri", "scope", "state"}
+
+    @pytest.mark.asyncio
+    async def test_redirect_location_keeps_pkce_alongside_resource(self, monkeypatch):
+        from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+        monkeypatch.setenv("GENERIC_CLIENT_USE_PKCE", "true")
+        monkeypatch.setenv("GENERIC_AUTHORIZATION_PARAMS", "resource=https://litellm.example.com/api")
+        mock_cache = MagicMock(redis_cache=None)
+        mock_cache.async_set_cache = AsyncMock()
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=self._generic_sso(["openid"]),
+                state="cli-state-123",
+                generic_authorization_endpoint="https://idp.example.com/adfs/oauth2/authorize",
+            )
+
+        assert response is not None
+        query = parse_qs(urlparse(str(response.headers["location"])).query)
+        assert query["resource"] == ["https://litellm.example.com/api"]
+        assert query["code_challenge_method"] == ["S256"]
+        assert len(query["code_challenge"]) == 1
+        assert query["state"] == ["cli-state-123"]
+        mock_cache.async_set_cache.assert_called_once()
 
 
 class TestGetGenericSSORedirectParams:
