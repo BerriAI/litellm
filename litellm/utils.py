@@ -938,14 +938,6 @@ class _SupportedOpenAIParamsGetter(Protocol):
     ) -> list[str] | None: ...
 
 
-class _NestedPathChecker(Protocol):
-    def __call__(self, path: str) -> bool: ...
-
-
-class _NestedValueDeleter(Protocol):
-    def __call__(self, data: dict[str, object], path: str) -> dict[str, object]: ...
-
-
 class _BaseModelFromMetadataGetter(Protocol):
     def __call__(self, metadata: Mapping[str, object] | None) -> str | None: ...
 
@@ -5019,13 +5011,12 @@ def get_optional_params(
         allowed_openai_params=allowed_openai_params,
     )
 
-    # Apply nested drops from additional_drop_params
     if additional_drop_params:
-        is_nested_path: Final[_NestedPathChecker] = litellm_utils.is_nested_path
-        delete_nested_value: Final[_NestedValueDeleter] = litellm_utils.delete_nested_value
-        nested_paths: Final = [p for p in additional_drop_params if is_nested_path(p)]
-        for path in nested_paths:
-            optional_params = delete_nested_value(optional_params, path)
+        from litellm.litellm_core_utils.dot_notation_indexing import apply_additional_drop_params
+
+        optional_params = dict(  # rebind-ok: replace params with a filtered copy
+            apply_additional_drop_params(optional_params, additional_drop_params)
+        )
 
     return optional_params
 

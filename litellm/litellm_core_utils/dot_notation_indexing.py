@@ -23,7 +23,8 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from functools import reduce
 from typing import Any, Final, TypeVar
 
 T = TypeVar("T")
@@ -240,3 +241,24 @@ def is_nested_path(path: str) -> bool:
     Returns True if path contains '.' or '[' (array notation).
     """
     return "." in path or "[" in path
+
+
+_PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP: Final = frozenset({"messages", "input"})
+
+
+def apply_additional_drop_params(
+    data: Mapping[str, object],
+    paths: Sequence[str],
+) -> Mapping[str, object]:
+    """Drop bare request keys at the top level and honor explicit nested paths."""
+    import copy
+
+    def drop_path(current: Mapping[str, object], path: str) -> Mapping[str, object]:
+        if is_nested_path(path):
+            return delete_nested_value(dict(current), path)
+        return {
+            key: value for key, value in current.items() if key != path or key in _PAYLOAD_KEYS_EXCLUDED_FROM_BARE_DROP
+        }
+
+    cloned: Final = copy.deepcopy(dict(data))
+    return reduce(drop_path, (path for path in paths if isinstance(path, str)), cloned)

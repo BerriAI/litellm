@@ -164,15 +164,9 @@ class TestComplexNestedPatterns:
         assert "input_examples" not in result["tools"][1]
 
         # Verify deeply nested field removed from all array elements
-        assert (
-            "remove_this_field" not in result["tools"][0]["some_arr"][0]["some_struct"]
-        )
-        assert (
-            "remove_this_field" not in result["tools"][0]["some_arr"][1]["some_struct"]
-        )
-        assert (
-            "remove_this_field" not in result["tools"][1]["some_arr"][0]["some_struct"]
-        )
+        assert "remove_this_field" not in result["tools"][0]["some_arr"][0]["some_struct"]
+        assert "remove_this_field" not in result["tools"][0]["some_arr"][1]["some_struct"]
+        assert "remove_this_field" not in result["tools"][1]["some_arr"][0]["some_struct"]
 
         # Verify other fields preserved
         assert result["tools"][0]["some_arr"][0]["some_struct"]["keep_this"] == "val2"
@@ -314,16 +308,10 @@ class TestComplexNestedPatterns:
 
         # Verify: tools[*].configs[1].remove_me removed from second config of all tools (that have one)
         assert "remove_me" in result["tools"][0]["configs"][0]  # First config untouched
-        assert (
-            "remove_me" not in result["tools"][0]["configs"][1]
-        )  # Second config removed
+        assert "remove_me" not in result["tools"][0]["configs"][1]  # Second config removed
         assert "remove_me" in result["tools"][1]["configs"][0]  # First config untouched
-        assert (
-            "remove_me" not in result["tools"][1]["configs"][1]
-        )  # Second config removed
-        assert (
-            "remove_me" in result["tools"][2]["configs"][0]
-        )  # Only has [0], unaffected
+        assert "remove_me" not in result["tools"][1]["configs"][1]  # Second config removed
+        assert "remove_me" in result["tools"][2]["configs"][0]  # Only has [0], unaffected
 
         # Verify: tools[1].metadata.drop_this removed only from second tool
         assert "drop_this" in result["tools"][0]["metadata"]
@@ -346,6 +334,109 @@ class TestComplexNestedPatterns:
 
         # Verify original unchanged
         assert "remove_me" in data["tools"][0]["configs"][1]
+
+
+class TestBareDropDoesNotStripMessagePayload:
+    """Regression for GitHub #37479.
+
+    ``additional_drop_params=["thinking"]`` must drop the top-level request
+    param only. Conversation history that already contains thinking content
+    blocks must keep the ``thinking`` field, otherwise Anthropic rejects the
+    fallback request with "each thinking block must contain thinking".
+    """
+
+    _HISTORY_WITH_THINKING = {
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "temperature": 0.2,
+        "messages": [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "keep me",
+                        "signature": "abc",
+                    },
+                    {"type": "text", "text": "4"},
+                ],
+            },
+        ],
+        "tools": [{"name": "search", "input_examples": [{"q": "x"}]}],
+    }
+
+    def test_bare_thinking_keeps_message_content_thinking(self):
+        from litellm.litellm_core_utils.dot_notation_indexing import (
+            apply_additional_drop_params,
+        )
+
+        result = apply_additional_drop_params(self._HISTORY_WITH_THINKING, ["thinking"])
+
+        assert "thinking" not in result
+        assert result["temperature"] == 0.2
+        assert result["messages"][1]["content"][0]["thinking"] == "keep me"
+        assert result["messages"][1]["content"][0]["type"] == "thinking"
+
+    def test_bare_thinking_does_not_strip_tool_payload_fields_named_thinking(self):
+        from litellm.litellm_core_utils.dot_notation_indexing import (
+            apply_additional_drop_params,
+        )
+
+        payload = {
+            "thinking": {"type": "enabled"},
+            "tools": [{"name": "t", "thinking": "keep tool field"}],
+        }
+        result = apply_additional_drop_params(payload, ["thinking"])
+        assert "thinking" not in result
+        assert result["tools"][0]["thinking"] == "keep tool field"
+
+    def test_explicit_nested_path_still_drops(self):
+        from litellm.litellm_core_utils.dot_notation_indexing import (
+            apply_additional_drop_params,
+        )
+
+        result = apply_additional_drop_params(self._HISTORY_WITH_THINKING, ["tools[*].input_examples"])
+        assert "input_examples" not in result["tools"][0]
+        assert result["thinking"]["type"] == "enabled"
+        assert result["messages"][1]["content"][0]["thinking"] == "keep me"
+
+    def test_explicit_messages_path_can_still_drop_nested_field(self):
+        from litellm.litellm_core_utils.dot_notation_indexing import (
+            apply_additional_drop_params,
+        )
+
+        result = apply_additional_drop_params(self._HISTORY_WITH_THINKING, ["messages[*].content[*].thinking"])
+        assert "thinking" in result
+        assert "thinking" not in result["messages"][1]["content"][0]
+        assert result["messages"][1]["content"][0]["type"] == "thinking"
+
+    def test_get_optional_params_does_not_strip_history_thinking(self):
+        from litellm.utils import get_optional_params
+
+        messages = [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "keep me",
+                        "signature": "abc",
+                    },
+                    {"type": "text", "text": "4"},
+                ],
+            },
+        ]
+        optional_params = get_optional_params(
+            model="claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            messages=messages,
+            thinking={"type": "enabled", "budget_tokens": 1024},
+            additional_drop_params=["thinking"],
+            max_tokens=100,
+        )
+        assert "thinking" not in optional_params
+        assert messages[1]["content"][0]["thinking"] == "keep me"
 
 
 # Phase 1 tests - validates core functionality and complex patterns
