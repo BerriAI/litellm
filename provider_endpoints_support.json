@@ -1150,6 +1150,23 @@
         "interactions": true
       }
     },
+    "futureinfra": {
+      "display_name": "FutureInfra (`futureinfra`)",
+      "url": "https://docs.litellm.ai/docs/providers/futureinfra",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "galadriel": {
       "display_name": "Galadriel (`galadriel`)",
       "url": "https://docs.litellm.ai/docs/providers/galadriel",
