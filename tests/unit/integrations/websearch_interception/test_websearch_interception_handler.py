@@ -899,3 +899,251 @@ async def test_pre_request_hook_syncs_forced_tool_choice():
         "type": "tool",
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
     }
+
+
+_DOMAIN_FILTER_URLS = ("https://www.example.com/a", "https://docs.example.org/b", "https://example.net/c")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain_field", "expected_urls", "expected_provider_filter"),
+    [
+        ("allowed_domains", ["https://docs.example.org/b"], ["example.org"]),
+        ("blocked_domains", ["https://www.example.com/a", "https://docs.example.org/b"], None),
+    ],
+)
+async def test_messages_web_search_honors_the_native_tool_domain_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    domain_field: str,
+    expected_urls: list[str],
+    expected_provider_filter: list[str] | None,
+):
+    import litellm
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+    from litellm.llms.base_llm.search.transformation import SearchResult
+    from litellm.proxy import proxy_server
+
+    domain = {"allowed_domains": "example.org", "blocked_domains": "example.net"}[domain_field]
+    mock_asearch = AsyncMock(
+        return_value=SearchResponse(
+            object="search",
+            results=[SearchResult(title=url, url=url, snippet="snippet") for url in _DOMAIN_FILTER_URLS],
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])])
+
+    response = await anthropic_messages(
+        max_tokens=512,
+        messages=[{"role": "user", "content": "litellm"}],
+        model="bedrock/converse/test-model",
+        custom_llm_provider="bedrock",
+        tools=[{"type": "web_search_20250305", "name": "web_search", domain_field: [domain]}],
+    )
+
+    text = next(block["text"] for block in response["content"] if block["type"] == "text")
+    returned_urls = [url for url in _DOMAIN_FILTER_URLS if url in text]
+    assert returned_urls == expected_urls
+    assert mock_asearch.await_args.kwargs.get("search_domain_filter") == expected_provider_filter
+
+
+_PATH_RULE_URLS = (
+    "https://example.com/docs/intro",
+    "https://example.com/docs-private/x",
+    "https://example.com/other/y",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain_field", "rule", "expected_urls"),
+    [
+        ("allowed_domains", "example.com/docs/", ["https://example.com/docs/intro"]),
+        ("allowed_domains", "example.com/docs", ["https://example.com/docs/intro"]),
+        ("blocked_domains", "example.com/docs/", ["https://example.com/docs-private/x", "https://example.com/other/y"]),
+    ],
+)
+async def test_messages_web_search_domain_path_rules_match_whole_path_segments(
+    monkeypatch: pytest.MonkeyPatch,
+    domain_field: str,
+    rule: str,
+    expected_urls: list[str],
+):
+    import litellm
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+    from litellm.llms.base_llm.search.transformation import SearchResult
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(
+        litellm,
+        "asearch",
+        AsyncMock(
+            return_value=SearchResponse(
+                object="search",
+                results=[SearchResult(title=url, url=url, snippet="snippet") for url in _PATH_RULE_URLS],
+            )
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])])
+
+    response = await anthropic_messages(
+        max_tokens=512,
+        messages=[{"role": "user", "content": "litellm"}],
+        model="bedrock/converse/test-model",
+        custom_llm_provider="bedrock",
+        tools=[{"type": "web_search_20250305", "name": "web_search", domain_field: [rule]}],
+    )
+
+    text = next(block["text"] for block in response["content"] if block["type"] == "text")
+    assert [url for url in _PATH_RULE_URLS if url in text] == expected_urls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain_field", "expected_urls", "expected_provider_filter"),
+    [
+        ("allowed_domains", ["https://docs.example.org/b"], ["example.org"]),
+        ("blocked_domains", ["https://www.example.com/a", "https://docs.example.org/b"], None),
+    ],
+)
+async def test_router_chat_completion_web_search_honors_the_native_tool_domain_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    domain_field: str,
+    expected_urls: list[str],
+    expected_provider_filter: list[str] | None,
+):
+    import litellm
+    from litellm import Router
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.base_llm.search.transformation import SearchResult
+    from litellm.proxy import proxy_server
+
+    sent_messages: list[list[dict]] = []
+
+    class _SentMessages(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            sent_messages.append(messages)
+
+    domain = {"allowed_domains": "example.org", "blocked_domains": "example.net"}[domain_field]
+    mock_asearch = AsyncMock(
+        return_value=SearchResponse(
+            object="search",
+            results=[SearchResult(title=url, url=url, snippet="snippet") for url in _DOMAIN_FILTER_URLS],
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    monkeypatch.setattr(
+        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), _SentMessages()]
+    )
+    router = Router(
+        model_list=[{"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"}}]
+    )
+
+    await router.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "litellm"}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", domain_field: [domain]}],
+        mock_tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "arguments": '{"query": "litellm"}'},
+            }
+        ],
+    )
+
+    search_result = next(m["content"] for messages in sent_messages for m in messages if m["role"] == "tool")
+    assert [url for url in _DOMAIN_FILTER_URLS if url in search_result] == expected_urls
+    assert mock_asearch.await_args.kwargs.get("search_domain_filter") == expected_provider_filter
+
+
+_PROVIDER_DOMAIN_FIELDS = ("includeDomains", "domain", "siteSearch", "siteSearchFilter")
+
+
+def _sent_domain_fields(request) -> dict:
+    import json
+
+    sent = dict(request.url.params) if request.method == "GET" else json.loads(request.content)
+    task = sent[0] if isinstance(sent, list) else sent
+    return {field: task[field] for field in _PROVIDER_DOMAIN_FIELDS if field in task}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("search_tool_params", "allowed_domains", "expected_sent"),
+    [
+        pytest.param(
+            {"search_provider": "exa_ai", "includeDomains": ["trusted.example"]},
+            ["attacker.example"],
+            {"includeDomains": ["trusted.example"]},
+            id="exa-keeps-operator-includeDomains",
+        ),
+        pytest.param(
+            {"search_provider": "linkup", "includeDomains": ["trusted.example"]},
+            ["attacker.example"],
+            {"includeDomains": ["trusted.example"]},
+            id="linkup-keeps-operator-includeDomains",
+        ),
+        pytest.param(
+            {"search_provider": "exa_ai"},
+            ["example.org", "https://www.example.com/docs"],
+            {"includeDomains": ["example.org", "www.example.com"]},
+            id="exa-takes-every-allowed-domain",
+        ),
+        pytest.param(
+            {"search_provider": "dataforseo", "api_key": "login:password"},
+            ["example.org", "example.com"],
+            {},
+            id="dataforseo-single-domain-gets-no-list",
+        ),
+        pytest.param(
+            {"search_provider": "google_pse"},
+            ["example.org", "example.com"],
+            {},
+            id="google-pse-not-narrowed-to-first-domain",
+        ),
+        pytest.param(
+            {"search_provider": "google_pse"},
+            ["example.org"],
+            {"siteSearch": "example.org", "siteSearchFilter": "i"},
+            id="google-pse-takes-one-allowed-domain",
+        ),
+    ],
+)
+async def test_messages_web_search_forwards_allowed_domains_only_where_the_provider_applies_them(
+    monkeypatch: pytest.MonkeyPatch,
+    search_tool_params: dict,
+    allowed_domains: list[str],
+    expected_sent: dict,
+):
+    import httpx
+    import respx
+
+    import litellm
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+    from litellm.proxy import proxy_server
+
+    router = MagicMock()
+    router.search_tools = [
+        {"search_tool_name": "operator-search", "litellm_params": {"api_key": "fake-key", **search_tool_params}}
+    ]
+    monkeypatch.setenv("GOOGLE_PSE_ENGINE_ID", "fake-engine")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])])
+
+    with respx.mock(assert_all_called=False) as provider:
+        provider.route().mock(return_value=httpx.Response(200, json={"results": [], "tasks": []}))
+        await anthropic_messages(
+            max_tokens=512,
+            messages=[{"role": "user", "content": "litellm"}],
+            model="bedrock/converse/test-model",
+            custom_llm_provider="bedrock",
+            tools=[{"type": "web_search_20250305", "name": "web_search", "allowed_domains": allowed_domains}],
+        )
+        sent = _sent_domain_fields(provider.calls.last.request)
+
+    assert sent == expected_sent
