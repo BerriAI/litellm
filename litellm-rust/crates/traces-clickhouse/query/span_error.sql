@@ -6,8 +6,7 @@ FROM otel_traces
 WHERE TraceId = {trace_id:String} AND SpanId = {span_id:String}
   AND ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND UserId = {user_id:String})
-       OR has({team_ids:Array(String)}, TeamId)
-       OR ({api_key_hash:String} != '' AND ApiKeyHash = {api_key_hash:String}))
+       OR has({team_ids:Array(String)}, TeamId))
   AND ({trace_ref:String} = '' OR
        hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) = {trace_ref:String})
   AND ({error_version:String} = '' OR hex(SHA256(StatusMessage)) = {error_version:String})

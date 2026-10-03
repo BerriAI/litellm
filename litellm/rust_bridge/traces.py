@@ -77,29 +77,17 @@ class DecodedSpan(TypedDict):
     consumed_attributes: ReadOnly[tuple[str, str]]
 
 
-class AdminQueryScope(TypedDict):
-    kind: ReadOnly[Literal["admin"]]
+class AllQueryScope(TypedDict):
+    kind: ReadOnly[Literal["all"]]
 
 
-class TeamQueryScope(TypedDict):
-    kind: ReadOnly[Literal["team"]]
-    team_id: ReadOnly[str]
-
-
-class KeyQueryScope(TypedDict):
-    kind: ReadOnly[Literal["key"]]
-    team_id: ReadOnly[str]
-    api_key_hash: ReadOnly[str]
-
-
-class LogQueryScope(TypedDict):
-    kind: ReadOnly[Literal["logs"]]
+class OwnedQueryScope(TypedDict):
+    kind: ReadOnly[Literal["owned"]]
     user_id: ReadOnly[str]
     team_ids: ReadOnly[tuple[str, ...]]
-    api_key_hash: ReadOnly[str]
 
 
-QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope | LogQueryScope
+QueryScope = AllQueryScope | OwnedQueryScope
 
 
 class NativeStore(Protocol):

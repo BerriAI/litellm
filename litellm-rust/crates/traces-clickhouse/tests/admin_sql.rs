@@ -41,7 +41,7 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
     }
     let readers = QueryReaders::new(Connection::writer(&admin_url)?, "litellm".into());
     let connection = readers
-        .connection(&client, &QueryScope::Admin, "test-secret")
+        .connection(&client, &QueryScope::All, "test-secret")
         .await?;
     let url = connection.url().to_string();
     Ok(Database {

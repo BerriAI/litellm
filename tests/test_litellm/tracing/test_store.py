@@ -354,7 +354,7 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     }
     client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "trace_ref": "ref1", "start_ms": 900}])
     store = TraceStore(client)
-    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",)}
 
     page = await store.list_traces(scope, 0, 2000, limit=2)
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
@@ -373,7 +373,7 @@ async def test_get_span_not_found_and_found():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
     store = TraceStore(client)
-    scope: TraceScope = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": ()}
     assert await store.get_span("t", "s", scope, "ref") is None
     stored_input = '[{"role": "user", "content": "hi"}]'
     client.query = AsyncMock(
@@ -425,7 +425,7 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
     ]
     client.query = AsyncMock(side_effect=[spans, tuple(SpendRow.model_validate({**row, "user": ""}) for row in spend)])
     store = TraceStore(client)
-    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",)}
 
     trace = await store.get_trace("trace-1", scope, "ref")
 
@@ -473,7 +473,7 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
         }
     ]
     client.query = AsyncMock(side_effect=[rows, tuple(SpendRow.model_validate({**row, "user": ""}) for row in spend)])
-    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",)}
 
     page = await TraceStore(client).list_traces(scope, 0, 2000)
 
@@ -484,7 +484,7 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
 @pytest.mark.asyncio
 async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
     client = MagicMock()
-    span = _llm_row("llm-1", "", "agent", "response-1", team_id="", api_key_hash="key-a")
+    span: Final = _llm_row("llm-1", "", "agent", "response-1", team_id="", user_id="user", api_key_hash="key-a")
     spend = [
         {
             "request_id": request_id,
@@ -496,9 +496,11 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
         }
         for request_id, cost in (("response-1", 0.25), ("response-1_cache_hit123", 0.0))
     ]
-    client.query = AsyncMock(side_effect=[[span], tuple(SpendRow.model_validate({**row, "user": ""}) for row in spend)])
+    client.query = AsyncMock(
+        side_effect=[[span], tuple(SpendRow.model_validate({**row, "user": "user"}) for row in spend)]
+    )
     store = TraceStore(client)
-    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "key-a"}
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "user", "team_ids": ()}
 
     trace = await store.get_trace("trace-1", scope, "ref")
 
@@ -521,7 +523,7 @@ async def test_diagnostic_continuation_preserves_content_version_scope_and_unico
         ]
     )
     store = TraceStore(client)
-    scope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",)}
     first = await store.get_span_error("trace-1", "span-1", scope, "scoped-run")
     assert first is not None and first["next_cursor"] is not None
     last = await store.get_span_error("trace-1", "span-1", scope, "scoped-run", first["next_cursor"])
@@ -548,7 +550,7 @@ async def test_malformed_diagnostic_cursor_never_reaches_storage(cursor):
     client.query = AsyncMock()
     with pytest.raises(ValueError, match="Invalid diagnostic cursor"):
         await TraceStore(client).get_span_error(
-            "trace", "span", {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}, cursor=cursor
+            "trace", "span", {"all_teams": 1, "user_id": "", "team_ids": ()}, cursor=cursor
         )
     client.query.assert_not_awaited()
 
@@ -660,7 +662,7 @@ async def test_trace_id_collision_requires_a_visible_reference_before_reading_co
     storage: Final = MagicMock()
     storage.query = AsyncMock(return_value=(TraceIdentityRow(trace_ref="first"), TraceIdentityRow(trace_ref="second")))
     store: Final = TraceStore(storage)
-    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": ()}
     with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):
         await store.get_trace("shared-id", scope)
     with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):

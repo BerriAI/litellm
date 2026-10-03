@@ -1,12 +1,15 @@
 """`/management/v1/spend_logs` facets."""
 
 from datetime import datetime, timezone
+from functools import partial
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import resolve_owned_read_scope
+from litellm.proxy.auth.authorization_dependencies import LogTeamLookup, LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
@@ -16,7 +19,6 @@ from litellm.proxy.list_api.common import (
     reject_unknown_query_params,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
-from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
     FacetListResponse,
     PageMeta,
@@ -37,49 +39,29 @@ def _as_utc(value: datetime) -> datetime:
 
 async def _spend_log_scope_clause(
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
+    log_team_lookup: LogTeamLookup,
     next_param_index: int,
-) -> tuple[str | None, tuple[str | list[str], ...]]:
+) -> tuple[str | None, tuple[object, ...]]:
     """SQL predicate restricting the facet to spend logs this caller may read.
 
     Returns ``(None, ())`` for a proxy admin. Mirrors the scoping ``/spend/logs/ui``
     applies, so a dropdown can never offer a value from a row the caller could
     not open.
     """
-    from litellm.proxy.spend_tracking.spend_management_endpoints import (
-        _get_permitted_team_ids_for_spend_logs,
-        _is_admin_view_safe,
-    )
+    from litellm.proxy.spend_tracking.spend_management_endpoints import _is_admin_view_safe, read_scope_sql
 
     if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
         return None, ()
-
-    try:
-        permitted_team_ids = await _get_permitted_team_ids_for_spend_logs(
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-        )
-    except Exception:
-        permitted_team_ids = []
-
-    caller_user_id: Final = user_api_key_dict.user_id
-    # = ANY(::text[]) rather than an expanded IN list, matching the clause
-    # ui_view_spend_logs builds: one parameter whatever the team count.
-    templates: Final = (('"user" = ${}',) if caller_user_id is not None else ()) + (
-        ("team_id = ANY(${}::text[])",) if permitted_team_ids else ()
+    scope: Final = await resolve_owned_read_scope(
+        user_api_key_dict.user_id, partial(log_team_lookup, user_api_key_dict)
     )
-    params: Final = ((caller_user_id,) if caller_user_id is not None else ()) + (
-        (permitted_team_ids,) if permitted_team_ids else ()
-    )
-    if not templates:
-        return "FALSE", ()
-    clauses: Final = tuple(template.format(next_param_index + offset) for offset, template in enumerate(templates))
-    return f"({' OR '.join(clauses)})", params
+    return read_scope_sql(scope, next_param_index)
 
 
 async def _list_spend_log_facet(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
+    log_team_lookup: LogTeamLookup,
     start_time: datetime,
     end_time: datetime,
     q: str | None,
@@ -107,7 +89,7 @@ async def _list_spend_log_facet(
 
         scope_clause, scope_params = await _spend_log_scope_clause(
             user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
+            log_team_lookup=log_team_lookup,
             next_param_index=len(window_params) + len(search_params) + 1,
         )
 
@@ -178,6 +160,7 @@ async def _list_spend_log_facet(
 async def list_spend_log_end_users(
     request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    log_team_lookup: LogTeamLookupDependency,
     start_time: Annotated[
         datetime,
         Query(alias="filter[startTime][gte]", description="Window start (UTC when no offset is given)"),
@@ -211,6 +194,7 @@ async def list_spend_log_end_users(
     return await _list_spend_log_facet(
         request=request,
         user_api_key_dict=user_api_key_dict,
+        log_team_lookup=log_team_lookup,
         start_time=start_time,
         end_time=end_time,
         q=q,
@@ -229,6 +213,7 @@ async def list_spend_log_end_users(
 async def list_spend_log_users(
     request: Request,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    log_team_lookup: LogTeamLookupDependency,
     start_time: Annotated[
         datetime,
         Query(alias="filter[startTime][gte]", description="Window start (UTC when no offset is given)"),
@@ -245,6 +230,7 @@ async def list_spend_log_users(
     return await _list_spend_log_facet(
         request=request,
         user_api_key_dict=user_api_key_dict,
+        log_team_lookup=log_team_lookup,
         start_time=start_time,
         end_time=end_time,
         q=q,

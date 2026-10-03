@@ -106,7 +106,7 @@ async def test_empty_export_writes_nothing():
 async def test_reads_delegate_to_store():
     store = _fake_store()
     tracing = TraceReceiver(store)
-    scope: TraceScope = {"team_ids": ("team-research",), "api_key_hash": ""}
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-research",)}
     assert await tracing.get_trace("t1", scope) is None
     store.get_trace.assert_awaited_once_with("t1", scope, "")
 

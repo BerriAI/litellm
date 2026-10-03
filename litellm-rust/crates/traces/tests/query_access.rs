@@ -3,18 +3,12 @@ use rstest::rstest;
 use serde_json::{Value, json};
 
 #[rstest]
-#[case::admin(json!({"kind": "admin"}), true)]
-#[case::team(json!({"kind": "team", "team_id": "team"}), true)]
-#[case::empty_team(json!({"kind": "team", "team_id": ""}), false)]
-#[case::key(json!({"kind": "key", "team_id": "team", "api_key_hash": "key"}), true)]
-#[case::teamless_key(json!({"kind": "key", "team_id": "", "api_key_hash": "key"}), true)]
-#[case::empty_key(json!({"kind": "key", "team_id": "team", "api_key_hash": ""}), false)]
-#[case::user_logs(json!({"kind": "logs", "user_id": "user", "team_ids": [], "api_key_hash": ""}), true)]
-#[case::permitted_teams(json!({"kind": "logs", "user_id": "", "team_ids": ["team"], "api_key_hash": ""}), true)]
-#[case::key_logs(json!({"kind": "logs", "user_id": "", "team_ids": [], "api_key_hash": "key"}), true)]
-#[case::anonymous_logs(json!({"kind": "logs", "user_id": "", "team_ids": [], "api_key_hash": ""}), false)]
-#[case::empty_permitted_team(json!({"kind": "logs", "user_id": "user", "team_ids": [""], "api_key_hash": ""}), false)]
-#[case::empty_teamless_key(json!({"kind": "key", "team_id": "", "api_key_hash": ""}), false)]
+#[case::all(json!({"kind": "all"}), true)]
+#[case::own_user(json!({"kind": "owned", "user_id": "user", "team_ids": []}), true)]
+#[case::permitted_teams(json!({"kind": "owned", "user_id": "", "team_ids": ["team"]}), true)]
+#[case::own_user_and_permitted_teams(json!({"kind": "owned", "user_id": "user", "team_ids": ["team"]}), true)]
+#[case::no_identity(json!({"kind": "owned", "user_id": "", "team_ids": []}), false)]
+#[case::empty_permitted_team(json!({"kind": "owned", "user_id": "user", "team_ids": [""]}), false)]
 fn scope_validation_preserves_authorization_and_wire_shape(
     #[case] wire: Value,
     #[case] valid: bool,
@@ -28,22 +22,22 @@ fn scope_validation_preserves_authorization_and_wire_shape(
 }
 
 #[rstest]
-#[case::unknown_kind(json!({"kind": "all"}))]
-#[case::unknown_field(json!({"kind": "team", "team_id": "team", "extra": true}))]
-#[case::missing_team(json!({"kind": "key", "api_key_hash": "key"}))]
-#[case::missing_key(json!({"kind": "key", "team_id": "team"}))]
+#[case::unknown_kind(json!({"kind": "unknown"}))]
+#[case::unknown_field(json!({"kind": "owned", "user_id": "user", "team_ids": [], "extra": true}))]
+#[case::legacy_admin(json!({"kind": "admin"}))]
+#[case::legacy_logs(json!({"kind": "logs", "user_id": "user", "team_ids": []}))]
+#[case::legacy_team(json!({"kind": "team", "team_id": "team"}))]
+#[case::key_scope(json!({"kind": "key", "team_id": "team", "api_key_hash": "key"}))]
+#[case::key_grant(json!({"kind": "owned", "user_id": "user", "team_ids": [], "api_key_hash": "key"}))]
 fn scope_rejects_invalid_wire_shape(#[case] wire: Value) {
     assert!(serde_json::from_value::<QueryScope>(wire).is_err());
 }
 
 #[rstest]
-fn admin_preserves_existing_extra_field_handling() {
+fn all_preserves_existing_extra_field_handling() {
     let scope: QueryScope =
-        serde_json::from_value(json!({"kind": "admin", "team_id": "ignored"})).unwrap();
-    assert!(matches!(scope, QueryScope::Admin));
+        serde_json::from_value(json!({"kind": "all", "team_id": "ignored"})).unwrap();
+    assert!(matches!(scope, QueryScope::All));
     assert!(scope.validate().is_ok());
-    assert_eq!(
-        serde_json::to_value(scope).unwrap(),
-        json!({"kind": "admin"})
-    );
+    assert_eq!(serde_json::to_value(scope).unwrap(), json!({"kind": "all"}));
 }

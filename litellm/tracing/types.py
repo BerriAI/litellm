@@ -108,7 +108,6 @@ class TraceScope(TypedDict):
     all_teams: ReadOnly[Literal[0, 1]]
     user_id: ReadOnly[str]
     team_ids: ReadOnly[tuple[str, ...]]
-    api_key_hash: ReadOnly[str]
 
 
 class SpanRow(TypedDict):

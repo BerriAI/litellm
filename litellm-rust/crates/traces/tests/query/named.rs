@@ -9,12 +9,16 @@ fn round_trip<T: DeserializeOwned + Serialize>(wire: Value) {
 }
 
 #[rstest]
-#[case::admin(vec![], "")]
-#[case::multiple_teams(vec!["team-a", "team-b"], "")]
-#[case::key(vec!["team-a"], "key")]
-#[case::teamless_key(vec![], "key")]
-fn named_requests_preserve_all_access_cases(#[case] teams: Vec<&str>, #[case] key: &str) {
-    let access = json!({"all_teams": u8::from(teams.is_empty() && key.is_empty()), "user_id": "", "team_ids": teams, "api_key_hash": key});
+#[case::admin(1, "", vec![])]
+#[case::own_user(0, "user", vec![])]
+#[case::multiple_teams(0, "user", vec!["team-a", "team-b"])]
+#[case::no_identity(0, "", vec![])]
+fn named_requests_preserve_all_access_cases(
+    #[case] all_teams: u8,
+    #[case] user: &str,
+    #[case] teams: Vec<&str>,
+) {
+    let access = json!({"all_teams": all_teams, "user_id": user, "team_ids": teams});
     round_trip::<ReadAccessParams>(access.clone());
     let request = |specific: Value| {
         Value::Object(

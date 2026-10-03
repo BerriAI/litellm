@@ -25,8 +25,8 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
     let writer = Connection::parse(&url)?;
     ensure_schema(&client, &writer, "trace_test", 7).await?;
     for sql in [
-        "INSERT INTO trace_test.otel_traces (TeamId, ApiKeyHash, TraceId, SpanId, Timestamp, SpanAttributes, UserId) VALUES ('team-a', 'key-a1', 'shared-trace', 'a1', now(), map('visible', 'a'), 'owner'), ('team-a', 'key-a2', 'shared-trace', 'a2', now(), map('visible', 'a'), 'other'), ('team-b', 'key-b', 'shared-trace', 'b', now(), map('secret-b', 'b'), 'owner'), ('', 'key-teamless', 'shared-trace', 'teamless', now(), map('visible', 'teamless'), ''), ('', 'key-other', 'shared-trace', 'other-teamless', now(), map('visible', 'other'), '')",
-        "INSERT INTO trace_test.spend_logs (team_id, api_key, request_id, start_time, end_time, metadata, user) VALUES ('team-a', 'key-a1', 'a1', now(), now(), '{\"visible\":1}', 'owner'), ('team-a', 'key-a2', 'a2', now(), now(), '{\"visible\":1}', 'other'), ('team-b', 'key-b', 'b', now(), now(), '{\"secret_b\":1}', 'owner'), ('', 'key-teamless', 'teamless', now(), now(), '{}', ''), ('', 'key-other', 'other-teamless', now(), now(), '{}', '')",
+        "INSERT INTO trace_test.otel_traces (TeamId, ApiKeyHash, TraceId, SpanId, Timestamp, SpanAttributes, UserId) VALUES ('team-a', 'key-a1', 'shared-trace', 'a1', now(), map('visible', 'a'), 'owner'), ('team-a', 'key-a2', 'shared-trace', 'a2', now(), map('visible', 'a'), 'other'), ('team-b', 'key-b', 'shared-trace', 'b', now(), map('secret-b', 'b'), 'owner'), ('team-c', 'key-a1', 'shared-trace', 'same-key-foreign', now(), map('visible', 'foreign'), 'other'), ('', 'key-teamless', 'shared-trace', 'teamless', now(), map('visible', 'teamless'), ''), ('', 'key-other', 'shared-trace', 'other-teamless', now(), map('visible', 'other'), '')",
+        "INSERT INTO trace_test.spend_logs (team_id, api_key, request_id, start_time, end_time, metadata, user) VALUES ('team-a', 'key-a1', 'a1', now(), now(), '{\"visible\":1}', 'owner'), ('team-a', 'key-a2', 'a2', now(), now(), '{\"visible\":1}', 'other'), ('team-b', 'key-b', 'b', now(), now(), '{\"secret_b\":1}', 'owner'), ('team-c', 'key-a1', 'same-key-foreign', now(), now(), '{}', 'other'), ('', 'key-teamless', 'teamless', now(), now(), '{}', ''), ('', 'key-other', 'other-teamless', now(), now(), '{}', '')",
         "CREATE TABLE trace_test.private_data (secret String) ENGINE = Memory",
         "INSERT INTO trace_test.private_data VALUES ('hidden')",
     ] {
@@ -43,15 +43,12 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
 }
 
 #[rstest]
-#[case::own_user(QueryScope::Logs { user_id: "owner".into(), team_ids: vec![], api_key_hash: "".into() }, vec!["a1", "b"])]
-#[case::own_user_and_permitted_team(QueryScope::Logs { user_id: "owner".into(), team_ids: vec!["team-a".into()], api_key_hash: "".into() }, vec!["a1", "a2", "b"])]
-#[case::key_only_logs(QueryScope::Logs { user_id: "".into(), team_ids: vec![], api_key_hash: "key-teamless".into() }, vec!["teamless"])]
-#[case::quoted_user(QueryScope::Logs { user_id: "owner' OR 1=1 --".into(), team_ids: vec![], api_key_hash: "".into() }, vec![])]
-#[case::team(QueryScope::Team { team_id: "team-a".to_owned() }, vec!["a1", "a2"])]
-#[case::project_key(QueryScope::Key { team_id: "team-a".to_owned(), api_key_hash: "key-a1".to_owned() }, vec!["a1"])]
-#[case::teamless_key(QueryScope::Key { team_id: "".to_owned(), api_key_hash: "key-teamless".to_owned() }, vec!["teamless"])]
-#[case::admin(QueryScope::Admin, vec!["a1", "a2", "b", "other-teamless", "teamless"])]
-#[case::quoted_team(QueryScope::Team { team_id: "team-a' OR 1=1 --\\".to_owned() }, vec![])]
+#[case::own_user(QueryScope::Owned { user_id: "owner".into(), team_ids: vec![] }, vec!["a1", "b"])]
+#[case::own_user_and_permitted_team(QueryScope::Owned { user_id: "owner".into(), team_ids: vec!["team-a".into()] }, vec!["a1", "a2", "b"])]
+#[case::quoted_user(QueryScope::Owned { user_id: "owner' OR 1=1 --".into(), team_ids: vec![] }, vec![])]
+#[case::team(QueryScope::Owned { user_id: String::new(), team_ids: vec!["team-a".to_owned() ] }, vec!["a1", "a2"])]
+#[case::admin(QueryScope::All, vec!["a1", "a2", "b", "other-teamless", "same-key-foreign", "teamless"])]
+#[case::quoted_team(QueryScope::Owned { user_id: String::new(), team_ids: vec!["team-a' OR 1=1 --\\".to_owned() ] }, vec![])]
 #[tokio::test]
 async fn queries_and_help_are_scoped_by_the_database(
     #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
@@ -111,8 +108,9 @@ async fn rotating_master_secret_revokes_previous_reader_credentials(
     #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database = database?;
-    let scope = QueryScope::Team {
-        team_id: "team-a".to_owned(),
+    let scope = QueryScope::Owned {
+        user_id: String::new(),
+        team_ids: vec!["team-a".to_owned()],
     };
     let old_reader = database
         .readers
@@ -159,8 +157,9 @@ async fn managed_reader_rejects_privilege_and_scope_bypasses(
     #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database = database?;
-    let scope = QueryScope::Team {
-        team_id: "team-a".to_owned(),
+    let scope = QueryScope::Owned {
+        user_id: String::new(),
+        team_ids: vec!["team-a".to_owned()],
     };
     let reader = database
         .readers
@@ -213,14 +212,15 @@ async fn provisioning_failure_never_returns_a_writer_connection(
     let database = database?;
     let reader = database
         .readers
-        .connection(&database.client, &QueryScope::Admin, "test-master-secret")
+        .connection(&database.client, &QueryScope::All, "test-master-secret")
         .await?;
     let no_provision_privileges = QueryReaders::new(reader, "trace_test".to_owned());
     let result = no_provision_privileges
         .connection(
             &database.client,
-            &QueryScope::Team {
-                team_id: "team-a".to_owned(),
+            &QueryScope::Owned {
+                user_id: String::new(),
+                team_ids: vec!["team-a".to_owned()],
             },
             "other-secret",
         )
@@ -232,7 +232,7 @@ async fn provisioning_failure_never_returns_a_writer_connection(
     assert!(matches!(
         database
             .readers
-            .connection(&database.client, &QueryScope::Admin, "")
+            .connection(&database.client, &QueryScope::All, "")
             .await,
         Err(Error::MissingSecret)
     ));
@@ -241,8 +241,9 @@ async fn provisioning_failure_never_returns_a_writer_connection(
             .readers
             .connection(
                 &database.client,
-                &QueryScope::Team {
-                    team_id: String::new()
+                &QueryScope::Owned {
+                    user_id: String::new(),
+                    team_ids: vec![String::new()]
                 },
                 "test-master-secret"
             )
@@ -263,6 +264,6 @@ async fn provisioning_failure_never_returns_a_writer_connection(
     )
     .await?;
     let rows: Value = serde_json::from_str(&rows)?;
-    assert_eq!(rows["data"][0]["count"], 5);
+    assert_eq!(rows["data"][0]["count"], 6);
     Ok(())
 }

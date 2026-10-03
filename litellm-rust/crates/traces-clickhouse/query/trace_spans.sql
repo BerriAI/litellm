@@ -12,8 +12,7 @@ FROM otel_traces AS o
 WHERE o.TraceId = {trace_id:String}
   AND ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND o.UserId = {user_id:String})
-       OR has({team_ids:Array(String)}, o.TeamId)
-       OR ({api_key_hash:String} != '' AND o.ApiKeyHash = {api_key_hash:String}))
+       OR has({team_ids:Array(String)}, o.TeamId))
   AND ({trace_ref:String} = '' OR
        hex(SHA256(concat(o.TeamId, char(0), o.ApiKeyHash, char(0), o.TraceId))) = {trace_ref:String})
 ORDER BY o.Timestamp, o.EngineReceivedMs, o.StatusMessage

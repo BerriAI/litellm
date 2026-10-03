@@ -18,8 +18,7 @@ SELECT TraceId AS trace_id,
 FROM agent_traces_by_key
 WHERE ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
-       OR has({team_ids:Array(String)}, TeamId)
-       OR ({api_key_hash:String} != '' AND ApiKeyHash = {api_key_hash:String}))
+       OR has({team_ids:Array(String)}, TeamId))
 GROUP BY TeamId, ApiKeyHash, TraceId
 HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
    AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})
