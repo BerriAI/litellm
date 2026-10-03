@@ -574,10 +574,14 @@ def _model_call_attempt(
     fallbacks: object,
     logging_obj: LiteLLMLoggingObject,
 ) -> AbstractContextManager[object]:
-    is_fallback_orchestrator: Final = call_type in (
-        CallTypes.completion.value,
-        CallTypes.acompletion.value,
-    ) and (fallbacks or litellm.model_fallbacks) is not None
+    is_fallback_orchestrator: Final = (
+        call_type
+        in (
+            CallTypes.completion.value,
+            CallTypes.acompletion.value,
+        )
+        and (fallbacks or litellm.model_fallbacks) is not None
+    )
     if is_fallback_orchestrator:
         return suppress_upstream_capture()
     return upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id)
@@ -2269,7 +2273,8 @@ def client(original_function):
                             kwargs["retry_strategy"] = "exponential_backoff_retry"
                         elif isinstance(e, openai.APIError):  # generic api error
                             kwargs["retry_strategy"] = "constant_retry"
-                        result = await litellm.acompletion_with_retries(*args, **kwargs)
+                        with _model_call_attempt(capture_call_type, kwargs.get("fallbacks"), logging_obj):
+                            result = await litellm.acompletion_with_retries(*args, **kwargs)
                     except Exception:
                         pass
                     else:

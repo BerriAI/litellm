@@ -1,9 +1,10 @@
 import asyncio
-
+from datetime import datetime, timezone
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
@@ -11,12 +12,17 @@ from litellm.realtime_api import main as realtime_main
 from litellm.types.router import GenericLiteLLMParams
 
 
-class FakeLogging:
-    def __init__(self) -> None:
-        self.litellm_params: dict = {}
-
-    def update_from_kwargs(self, **kwargs):
-        pass
+@pytest.fixture
+def logging_obj() -> Logging:
+    return Logging(
+        model="xai/realtime-probe",
+        messages=[],
+        stream=True,
+        call_type="_arealtime",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="realtime-probe",
+        function_id="realtime-probe",
+    )
 
 
 def test_get_api_key_prefers_xai_key_over_environment_and_generic_key(monkeypatch):
@@ -186,7 +192,9 @@ def test_responses_config_prefers_xai_key_over_generic_key(monkeypatch):
     assert headers["Authorization"] == "Bearer xai_key_value"
 
 
-def test_realtime_config_uses_xai_key_through_provider_resolution(monkeypatch):
+def test_realtime_config_uses_xai_key_through_provider_resolution(
+    monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> None:
     captured_kwargs = {}
 
     async def mock_async_realtime(**kwargs):
@@ -203,14 +211,16 @@ def test_realtime_config_uses_xai_key_through_provider_resolution(monkeypatch):
         realtime_main._arealtime(
             model="xai/grok-4-1-fast-non-reasoning",
             websocket=object(),
-            litellm_logging_obj=FakeLogging(),
+            litellm_logging_obj=logging_obj,
         )
     )
 
     assert captured_kwargs["api_key"] == "xai_key_value"
 
 
-def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(monkeypatch):
+def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(
+    monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> None:
     captured_kwargs = {}
 
     async def mock_async_realtime(**kwargs):
@@ -231,7 +241,7 @@ def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(monkeyp
         realtime_main._arealtime(
             model="xai/grok-4-1-fast-non-reasoning",
             websocket=object(),
-            litellm_logging_obj=FakeLogging(),
+            litellm_logging_obj=logging_obj,
         )
     )
 
@@ -239,8 +249,8 @@ def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(monkeyp
 
 
 def test_realtime_config_uses_generic_key_when_provider_does_not_resolve_key(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> None:
     captured_kwargs = {}
 
     async def mock_async_realtime(**kwargs):
@@ -261,7 +271,7 @@ def test_realtime_config_uses_generic_key_when_provider_does_not_resolve_key(
         realtime_main._arealtime(
             model="xai/grok-4-1-fast-non-reasoning",
             websocket=object(),
-            litellm_logging_obj=FakeLogging(),
+            litellm_logging_obj=logging_obj,
         )
     )
 

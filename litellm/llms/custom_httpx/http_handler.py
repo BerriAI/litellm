@@ -19,9 +19,8 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._types import CertTypes, RequestFiles
+from httpx._types import CertTypes, HeaderTypes, RequestFiles
 from httpx._utils import get_environment_proxies
-from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -70,16 +69,6 @@ def _logging_attempt(logging_obj: LiteLLMLoggingObject | None) -> Generator[None
         return
     with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
         yield
-
-
-_HTTP_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
-
-
-def _httpx_request_headers(headers: object | None) -> httpx.Headers:
-    if headers is None:
-        return httpx.Headers()
-    validated_headers: Final = _HTTP_HEADERS_ADAPTER.validate_python(headers)
-    return httpx.Headers(validated_headers)
 
 
 try:
@@ -742,7 +731,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | None = None,
+        headers: HeaderTypes | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         max_response_bytes: int | None = None,
@@ -753,49 +742,23 @@ class AsyncHTTPHandler:
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
-        request_params: Final = httpx.QueryParams(params)
-        request_headers: Final = _httpx_request_headers(headers)
-
-        if max_response_bytes is not None:
-            if logging_obj is None:
+        with _logging_attempt(logging_obj):
+            if max_response_bytes is not None:
                 return await self._get_with_response_limit(
                     url,
-                    params=request_params,
-                    headers=request_headers,
+                    params=httpx.QueryParams(params),
+                    headers=httpx.Headers(headers),
                     max_bytes=max_response_bytes,
                     follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
                     timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
                 )
-            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
-                return await self._get_with_response_limit(
-                    url,
-                    params=request_params,
-                    headers=request_headers,
-                    max_bytes=max_response_bytes,
-                    follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
-                    timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
-                    logging_obj=logging_obj,
-                )
-
-        if logging_obj is not None:
-            request: Final = self.client.build_request(
-                "GET",
+            return await self.client.get(
                 url,
-                params=request_params,
-                headers=request_headers,
+                params=params,
+                headers=headers,
+                follow_redirects=_follow_redirects,
                 timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
             )
-            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
-                return await self.client.send(request, follow_redirects=_follow_redirects)
-
-        response: Final = await self.client.get(
-            url,
-            params=request_params,
-            headers=request_headers,
-            follow_redirects=_follow_redirects,
-            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
-        )
-        return response
 
     async def _get_with_response_limit(
         self,
@@ -806,12 +769,12 @@ class AsyncHTTPHandler:
         timeout: httpx.Timeout,
         max_bytes: int,
         follow_redirects: bool,
-        logging_obj: LiteLLMLoggingObject | None = None,
     ) -> httpx.Response:
         request: Final = self.client.build_request(
             "GET",
             url,
-            headers=MappingProxyType({**headers, "accept-encoding": "identity"}),
+            headers=tuple((name, value) for name, value in headers.raw if name.lower() != b"accept-encoding")
+            + ((b"accept-encoding", b"identity"),),
             params=params,
             timeout=timeout,
         )
@@ -820,7 +783,6 @@ class AsyncHTTPHandler:
             response,
             max_bytes=max_bytes,
             follow_redirects=follow_redirects,
-            logging_obj=logging_obj,
         )
 
     async def _read_with_response_limit(
@@ -830,7 +792,6 @@ class AsyncHTTPHandler:
         max_bytes: int,
         follow_redirects: bool,
         redirects_remaining: int = 10,
-        logging_obj: LiteLLMLoggingObject | None = None,
     ) -> httpx.Response:
         try:
             if response.next_request is not None and follow_redirects:
@@ -848,7 +809,6 @@ class AsyncHTTPHandler:
                     max_bytes=max_bytes,
                     follow_redirects=True,
                     redirects_remaining=redirects_remaining - 1,
-                    logging_obj=logging_obj,
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
@@ -1531,7 +1491,7 @@ class HTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | None = None,
+        headers: HeaderTypes | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         logging_obj: LiteLLMLoggingObject | None = None,
@@ -1540,29 +1500,14 @@ class HTTPHandler:
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         params = params or {}
         params.update(self.extract_query_params(url))
-        request_params: Final = httpx.QueryParams(params)
-        request_headers: Final = _httpx_request_headers(headers)
-
-        if logging_obj is not None:
-            request: Final = self.client.build_request(
-                "GET",
+        with _logging_attempt(logging_obj):
+            return self.client.get(
                 url,
-                params=request_params,
-                headers=request_headers,
+                params=params,
+                headers=headers,
+                follow_redirects=_follow_redirects,
                 timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
             )
-            with upstream_attempt(logging_obj.upstream_response_capture, logging_obj.litellm_call_id):
-                return self.client.send(request, follow_redirects=_follow_redirects)
-
-        response: Final = self.client.get(
-            url,
-            params=request_params,
-            headers=request_headers,
-            follow_redirects=_follow_redirects,
-            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
-        )
-
-        return response
 
     @staticmethod
     def extract_query_params(url: str) -> dict[str, str]:

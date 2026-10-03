@@ -362,6 +362,7 @@ class BaseOpenAILLM:
             event_hooks=with_capture_hooks(None, is_async=False),
         )
 
+
 class OpenAICredentials(NamedTuple):
     api_base: str
     api_key: str | None

@@ -8,6 +8,8 @@ from typing import Final
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.secret_redaction import redact_string
+
 
 class UpstreamResponseMetadata(TypedDict):
     attempt_id: ReadOnly[str]
@@ -32,6 +34,7 @@ _SECRET_HEADERS: Final = frozenset(
         "x-auth-token",
         "x-amz-security-token",
         "x-goog-api-key",
+        "ocp-apim-subscription-key",
     )
 )
 
@@ -41,7 +44,7 @@ def _safe_header(name: str, value: str) -> tuple[str, str]:
     secret: Final = normalized in _SECRET_HEADERS or normalized.endswith(
         ("-api-key", "-secret", "-token", "-authorization", "-cookie")
     )
-    return normalized[:_MAX_NAME], "[REDACTED]" if secret else value[:_MAX_VALUE]
+    return normalized[:_MAX_NAME], "[REDACTED]" if secret else redact_string(value)[:_MAX_VALUE]
 
 
 def response_metadata(
@@ -73,7 +76,9 @@ class UpstreamResponseCapture:
 
     def __deepcopy__(self, memo: dict[int, object]) -> "UpstreamResponseCapture":
         with self._lock:
-            return UpstreamResponseCapture(self._responses, self._dropped_responses)
+            copied: Final = UpstreamResponseCapture(self._responses, self._dropped_responses)
+            copied._attempt_counts.update(self._attempt_counts)
+            return copied
 
     def allocate_attempt_id(self, call_id: str) -> str:
         with self._lock:

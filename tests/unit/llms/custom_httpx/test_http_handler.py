@@ -8,6 +8,7 @@ import threading
 import weakref
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +18,7 @@ import pytest
 from aiohttp import ClientSession, TCPConnector
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
@@ -27,6 +29,50 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
 )
 from litellm.types.llms.custom_http import VerifyTypes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sync", "max_response_bytes"), ((True, None), (False, None), (False, 2)))
+@pytest.mark.parametrize("capture", (False, True))
+async def test_get_preserves_byte_headers_with_and_without_capture(
+    sync: bool, max_response_bytes: int | None, capture: bool
+) -> None:
+    logging: Final = Logging(
+        model="header-probe",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="header-probe",
+        function_id="header-probe",
+    )
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert (b"x-octet", b"\xff") in request.headers.raw
+        return httpx.Response(200, headers={"x-request-id": "received"}, content=b"ok")
+
+    if sync:
+        with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
+            response: Final = HTTPHandler(client=client).get(
+                "https://upstream.invalid/", headers={b"x-octet": b"\xff"}, logging_obj=logging if capture else None
+            )
+            assert response.content == b"ok"
+    else:
+        handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+        try:
+            async_response: Final = await handler.get(
+                "https://upstream.invalid/",
+                headers={b"x-octet": b"\xff"},
+                max_response_bytes=max_response_bytes,
+                logging_obj=logging if capture else None,
+            )
+            assert async_response.content == b"ok"
+        finally:
+            await handler.close()
+
+    assert tuple(dict(item.headers)["x-request-id"] for item in logging.upstream_response_capture.responses) == (
+        ("received",) if capture else ()
+    )
 
 
 @pytest.mark.asyncio

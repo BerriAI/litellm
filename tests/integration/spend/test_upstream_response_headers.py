@@ -32,6 +32,9 @@ MISSING_DISCONNECT_LOG: Final = pytest.mark.xfail(
 
 
 def _provider_response(request: Request) -> Reply:
+    if request.method == "GET":
+        assert request.target.endswith("/models")
+        return Reply(body=b'{"object":"list","data":[]}')
     body: Final = json.loads(request.body)
     assert not any("capture" in name for name in request.headers)
     marker: Final = body["model"]

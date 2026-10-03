@@ -2,6 +2,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Final, Literal
 
@@ -27,6 +28,7 @@ from litellm.llms.custom_httpx.http_handler import (
     MaskedHTTPStatusError,
 )
 from litellm.llms.custom_httpx.upstream_response import install_capture_hook
+from litellm.types.router import RetryPolicy
 from litellm.types.utils import ModelResponse
 
 HEADERS: Final = (("x-request-id", "upstream-probe"), ("x-probe", "first"), ("x-probe", "second"))
@@ -223,6 +225,41 @@ def test_capture_redacts_bounds_and_snapshots_do_not_alias() -> None:
     assert len(capture.snapshot()) == 8
     assert capture.snapshot()[-1]["attempt_id"] == "19"
     assert all(item["truncated"] for item in capture.snapshot())
+
+
+@pytest.mark.parametrize("header", ("AUTHORIZATION", "Ocp-Apim-Subscription-Key", "X-Custom-Api-Key", "Set-Cookie"))
+def test_capture_redacts_credential_headers_without_hiding_request_ids(header: str) -> None:
+    capture: Final = UpstreamResponseCapture()
+    capture.record("attempt", httpx.Response(200, headers=((header, "synthetic-secret"), ("x-request-id", "visible"))))
+    assert capture.snapshot()[0]["headers"] == ((header.lower(), "[REDACTED]"), ("x-request-id", "visible"))
+
+
+@pytest.mark.parametrize("parameter", ("api_key", "access_token", "sig"))
+def test_capture_redacts_credentials_in_redirect_urls(parameter: str) -> None:
+    capture: Final = UpstreamResponseCapture()
+    secret: Final = "syntheticcredential"
+    url: Final = f"https://upstream.invalid/next?{parameter}={secret}&debug=visible"
+    capture.record("attempt", httpx.Response(302, headers=(("location", url), ("x-request-id", "request-123"))))
+    headers: Final = dict(capture.snapshot()[0]["headers"])
+    assert secret not in headers["location"]
+    assert "https://upstream.invalid/next?" in headers["location"]
+    assert "&debug=visible" in headers["location"]
+    assert headers["x-request-id"] == "request-123"
+
+
+def test_copied_capture_advances_attempt_ids_without_changing_original() -> None:
+    original: Final = UpstreamResponseCapture()
+    with upstream_attempt(original, "call"):
+        record_current_upstream(503, HEADERS)
+
+    copied: Final = deepcopy(original)
+    with upstream_attempt(copied, "call"):
+        record_current_upstream(200, HEADERS)
+    with upstream_attempt(original, "call"):
+        record_current_upstream(201, HEADERS)
+
+    assert tuple((item.attempt_id, item.status_code) for item in copied.responses) == (("call", 503), ("call.1", 200))
+    assert tuple((item.attempt_id, item.status_code) for item in original.responses) == (("call", 503), ("call.1", 201))
 
 
 @pytest.mark.asyncio
@@ -690,6 +727,191 @@ async def test_sequential_chat_calls_allocate_attempt_ids_and_nested_scopes_reus
     with upstream_attempt(capture, "outer") as outer:
         with upstream_attempt(capture, "inner") as inner:
             assert inner is outer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (False, True), ids=("sync", "async"))
+async def test_context_window_fallback_preserves_received_headers_and_attempts(use_async: bool) -> None:
+    primary: Final = "header-probe-short-context"
+    fallback: Final = "header-probe-wide-context"
+    logging: Final = make_logging(attempt="context-probe", call_type="acompletion" if use_async else "completion")
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        model: Final = json.loads(request.content)["model"]
+        assert request.url.path == "/v1/chat/completions"
+        if model == primary:
+            return httpx.Response(
+                400,
+                headers={"x-request-id": "context-rejected", "x-should-retry": "false"},
+                json={"error": {"message": "This model's maximum context length is exceeded"}},
+            )
+        assert model == fallback
+        return httpx.Response(
+            200,
+            headers={"x-request-id": "context-served"},
+            json={
+                "id": "chatcmpl-context-fallback",
+                "object": "chat.completion",
+                "created": 1,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "captured"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    if use_async:
+        async with openai.AsyncOpenAI(
+            api_key="synthetic",
+            base_url="https://upstream.invalid/v1",
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+        ) as async_client:
+            async_response: Final = await litellm.acompletion(
+                model=f"openai/{primary}",
+                messages=[{"role": "user", "content": "probe"}],
+                client=async_client,
+                litellm_logging_obj=logging,
+                context_window_fallback_dict={f"openai/{primary}": f"openai/{fallback}"},
+                num_retries=0,
+                max_retries=0,
+            )
+            assert async_response.choices[0].message.content == "captured"
+    else:
+        with openai.OpenAI(
+            api_key="synthetic",
+            base_url="https://upstream.invalid/v1",
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(upstream)),
+        ) as sync_client:
+            sync_response: Final = litellm.completion(
+                model=f"openai/{primary}",
+                messages=[{"role": "user", "content": "probe"}],
+                client=sync_client,
+                litellm_logging_obj=logging,
+                context_window_fallback_dict={f"openai/{primary}": f"openai/{fallback}"},
+                num_retries=0,
+                max_retries=0,
+            )
+            assert sync_response.choices[0].message.content == "captured"
+
+    received: Final = logging.upstream_response_capture.responses
+    assert tuple(item.status_code for item in received) == (400, 200)
+    assert tuple(dict(item.headers)["x-request-id"] for item in received) == ("context-rejected", "context-served")
+    assert tuple(item.attempt_id for item in received) == ("context-probe", "context-probe.1")
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_retry_captures_headers_from_the_successful_sdk_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", None)
+    logging: Final = make_logging(attempt="call_id")
+    statuses: Final = iter((503, 200))
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        status: Final = next(statuses)
+        payload: Final = (
+            {"error": {"message": "retry"}}
+            if status == 503
+            else {
+                "id": "chatcmpl-retry-probe",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "header-probe-retry",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "captured"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        )
+        return httpx.Response(status, headers={"x-request-id": f"attempt-{status}"}, json=payload)
+
+    async with openai.AsyncOpenAI(
+        api_key="synthetic",
+        base_url="https://upstream.invalid/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+    ) as client:
+        response: Final = await litellm.acompletion(
+            model="openai/header-probe-retry",
+            messages=[{"role": "user", "content": "probe"}],
+            client=client,
+            litellm_logging_obj=logging,
+            num_retries=0,
+            max_retries=0,
+            retry_policy=RetryPolicy(ServiceUnavailableErrorRetries=1),
+        )
+    assert response.choices[0].message.content == "captured"
+    assert tuple(item.status_code for item in logging.upstream_response_capture.responses) == (503, 200)
+    assert tuple(item.attempt_id for item in logging.upstream_response_capture.responses) == ("call_id", "call_id.1")
+    assert tuple(dict(item.headers)["x-request-id"] for item in logging.upstream_response_capture.responses) == (
+        "attempt-503",
+        "attempt-200",
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
+@pytest.mark.asyncio
+async def test_async_responses_wrapper_retry_preserves_received_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "num_retries", None)
+    logging: Final = make_logging(attempt="call_id", call_type="aresponses")
+    statuses: Final = iter((503, 200))
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/responses"
+        status: Final = next(statuses)
+        payload: Final = (
+            {"error": {"message": "retry"}}
+            if status == 503
+            else {
+                "id": "resp_retry_probe",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "header-probe-retry",
+                "output": [],
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+        )
+        return httpx.Response(status, headers={"x-request-id": f"attempt-{status}"}, json=payload)
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    try:
+        response: Final = await litellm.aresponses(
+            model="openai/header-probe-retry",
+            input="probe",
+            api_key="synthetic",
+            api_base="https://upstream.invalid/v1",
+            client=handler,
+            litellm_logging_obj=logging,
+            num_retries=1,
+            max_retries=0,
+        )
+    finally:
+        await handler.close()
+    assert response.status == "completed"
+    assert tuple(item.status_code for item in logging.upstream_response_capture.responses) == (503, 200)
+    assert tuple(item.attempt_id for item in logging.upstream_response_capture.responses) == ("call_id", "call_id.1")
+    assert tuple(dict(item.headers)["x-request-id"] for item in logging.upstream_response_capture.responses) == (
+        "attempt-503",
+        "attempt-200",
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
 
 
 @pytest.mark.asyncio

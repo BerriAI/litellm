@@ -3,6 +3,7 @@ from collections.abc import Callable
 from typing import Final
 
 from openai import AsyncOpenAI, OpenAI
+from openai.types.completion_create_params import CompletionCreateParamsNonStreaming, CompletionCreateParamsStreaming
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -171,7 +172,7 @@ class OpenAITextCompletion(BaseLLM):
         self,
         logging_obj,
         api_base: str,
-        data: dict,
+        data: CompletionCreateParamsNonStreaming,
         headers: dict,
         model_response: ModelResponse,
         api_key: str,
@@ -226,7 +227,7 @@ class OpenAITextCompletion(BaseLLM):
         self,
         logging_obj: LiteLLMLoggingObj,
         api_key: str,
-        data: dict,
+        data: CompletionCreateParamsStreaming,
         headers: dict,
         model_response: ModelResponse,
         model: str,
@@ -285,7 +286,7 @@ class OpenAITextCompletion(BaseLLM):
         self,
         logging_obj: LiteLLMLoggingObj,
         api_key: str,
-        data: dict,
+        data: CompletionCreateParamsStreaming,
         headers: dict,
         model_response: ModelResponse,
         model: str,

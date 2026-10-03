@@ -699,7 +699,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
         self.upstream_response_capture: Final = UpstreamResponseCapture()
-        self.response_timing_metrics: Mapping[str, float] = {}  # mutable-ok: kept deep-copyable
+        self.response_timing_metrics: Mapping[str, float] = {}
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None

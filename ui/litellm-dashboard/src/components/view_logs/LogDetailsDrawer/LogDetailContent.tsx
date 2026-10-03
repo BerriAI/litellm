@@ -87,8 +87,8 @@ export function LogDetailContent({
 
   const hasMessages = checkHasMessages(logEntry.messages);
   const hasResponse = checkHasResponse(logEntry.response);
-  // Don't show "missing data" warning while details are still loading
-  const missingData = !hasMessages && !hasResponse && !hasError && !isLoadingDetails;
+  const hasLoggedContent = hasMessages || hasResponse;
+  const missingData = !hasLoggedContent && !hasError && !isLoadingDetails;
 
   // Guardrail data
   const guardrailInfo = metadata?.guardrail_information;
