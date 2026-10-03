@@ -18,9 +18,8 @@ SIGNATURE_1: Final = (
 THINKING_BUDGET: Final = replace(
     BASE,
     scenario="thinking_budget",
-    regressions=("LIT-4957",),
-    client_request={
-        **BASE.client_request,
+    litellm_request={
+        **BASE.litellm_request,
         "max_tokens": 2048,
         "thinking": {"type": "enabled", "budget_tokens": 1024},
     },
@@ -47,8 +46,8 @@ THINKING_BUDGET: Final = replace(
             "inference_geo": "global",
         },
     },
-    client_response={
-        **BASE.client_response,
+    litellm_response={
+        **BASE.litellm_response,
         "id": "msg_011CffzUREgTzMm1dXRqP2LR",
         "content": [
             {"type": "thinking", "thinking": "Hello!", "signature": SIGNATURE_1},

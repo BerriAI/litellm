@@ -4,15 +4,15 @@ from integration.translation.case import TranslationTestCase
 
 CLAUDE_SONNET_4_6: Final = TranslationTestCase(
     scenario="basic",
-    client_path="/v1/messages",
-    client_request={
+    litellm_endpoint="/v1/messages",
+    litellm_request={
         "model": "anthropic/claude-sonnet-4-6",
         "max_tokens": 64,
         "system": "You are a terse assistant.",
         "messages": [{"role": "user", "content": "Say hello."}],
         "cache": {"no-cache": True},
     },
-    provider_path="/v1/messages",
+    provider_endpoint="/v1/messages",
     provider_headers={
         "x-api-key": "synthetic-anthropic-key",
         "anthropic-version": "2023-06-01",
@@ -46,7 +46,7 @@ CLAUDE_SONNET_4_6: Final = TranslationTestCase(
         },
         "diagnostics": None,
     },
-    client_response={
+    litellm_response={
         "model": "anthropic/claude-sonnet-4-6",
         "id": "msg_011CffzUNHaEfzVxCh5hskBG",
         "type": "message",
