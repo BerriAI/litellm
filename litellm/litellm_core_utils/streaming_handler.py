@@ -58,7 +58,7 @@ _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
-def _next_sync_or_exhausted(it: Any) -> object:
+def _next_sync_or_exhausted(it: Iterator[object]) -> object:
     """
     Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
 
