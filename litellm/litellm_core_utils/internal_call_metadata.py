@@ -1,9 +1,8 @@
 """Metadata a request forwards to the internal LLM sub-calls it triggers.
 
-Internal features (the auto-router's classifier and embeddings, shadow eval's shadow and
-judge calls) bill real provider spend that nobody typed a prompt for. That spend must land
-on the same key/team/org/user as the request that caused it, so the sub-call carries the
-caller's identity metadata, minus two things that must never be forwarded as-is:
+Internal calls retain the caller's routing identity. Ordinary classifier and embedding
+calls also retain its billing identity; shadow evaluations project billing receipts onto
+the evaluation creator without changing routing metadata. Two fields need special handling:
 
 * ``user_api_key_budget_reservation`` (and the reservation nested inside
   ``user_api_key_auth``) belongs to the parent completion. If a sub-call's cost callback
@@ -17,15 +16,153 @@ caller's identity metadata, minus two things that must never be forwarded as-is:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationBillingOwner:
+    user_id: str
+    user_model_max_budget: Mapping[str, object] | None = None
+    max_budget: float | None = None
+    spend: float = 0.0
+
+
+EVALUATION_BILLING_OWNER_KEY: Final = "_evaluation_billing_owner"
+EVALUATION_BUDGET_RESERVATION_KEY: Final = "_evaluation_budget_reservation"
+_EVALUATION_BILLING_OWNER: Final[ContextVar[EvaluationBillingOwner | None]] = ContextVar(
+    "evaluation_billing_owner", default=None
+)
+_BILLING_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_EMPTY_BILLING_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_BILLING_IDENTITY_FIELDS: Final = frozenset(
+    {"user_api_key", "user_api_end_user_max_budget", "team_id", "team_alias", "agent_id", "billing_agent_id"}
+)
+
+
+def get_evaluation_billing_owner() -> EvaluationBillingOwner | None:
+    return _EVALUATION_BILLING_OWNER.get()
+
+
+@contextmanager
+def evaluation_billing_context(owner: EvaluationBillingOwner | None) -> Generator[None]:
+    token: Final = _EVALUATION_BILLING_OWNER.set(owner)
+    try:
+        yield
+    finally:
+        _EVALUATION_BILLING_OWNER.reset(token)
+
+
+def get_evaluation_billing_owner_from_kwargs(kwargs: Mapping[str, object]) -> EvaluationBillingOwner | None:
+    owner: Final = kwargs.get(EVALUATION_BILLING_OWNER_KEY)
+    return owner if isinstance(owner, EvaluationBillingOwner) else None
+
+
+def _billing_mapping(value: object) -> Mapping[str, object] | None:
+    return _BILLING_MAPPING.validate_python(value) if isinstance(value, Mapping) else None
+
+
+def _evaluation_budget_reservation(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+    handle: Final = kwargs.get(EVALUATION_BUDGET_RESERVATION_KEY)
+    if handle is None:
+        return None
+    from litellm.proxy.spend_tracking.evaluation_budget import EvaluationBudgetReservation
+
+    return handle.total if isinstance(handle, EvaluationBudgetReservation) else None
+
+
+def _billing_metadata(
+    metadata: Mapping[str, object] | None, owner: EvaluationBillingOwner, reservation: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    return {
+        **{
+            key: None if key.startswith("user_api_key_") or key in _BILLING_IDENTITY_FIELDS else item
+            for key, item in (metadata or _EMPTY_BILLING_FIELDS).items()
+        },
+        "user_api_key_user_id": owner.user_id,
+        "user_api_key_user_model_max_budget": owner.user_model_max_budget,
+        "user_api_key_budget_reservation": reservation,
+        "tags": [],
+    }
+
+
+def _billing_request(value: object) -> object:
+    request: Final = _billing_mapping(value)
+    if request is None:
+        return value
+    body: Final = _billing_mapping(request.get("body"))
+    if body is None:
+        return dict(request)
+    return {**request, "body": {**body, "user": None}}
+
+
+def _billing_fields(
+    fields: Mapping[str, object], owner: EvaluationBillingOwner, reservation: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    alternate: Final = _billing_mapping(fields.get("litellm_metadata"))
+    return {
+        **fields,
+        "agent_id": None,
+        "billing_agent_id": None,
+        **({"user": owner.user_id} if "user" in fields else {}),
+        "metadata": _billing_metadata(_billing_mapping(fields.get("metadata")), owner, reservation),
+        **({"litellm_metadata": _billing_metadata(alternate, owner, reservation)} if alternate else {}),
+        **(
+            {"proxy_server_request": _billing_request(fields["proxy_server_request"])}
+            if "proxy_server_request" in fields
+            else {}
+        ),
+    }
+
+
+def project_evaluation_billing_kwargs(
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: existing SDK receipt consumers require dictionaries
+    """Copy an evaluation's receipt onto its creator without changing request state."""
+    owner: Final = get_evaluation_billing_owner_from_kwargs(kwargs)
+    if owner is None:
+        return kwargs if isinstance(kwargs, dict) else dict(kwargs)
+    reservation: Final = _evaluation_budget_reservation(kwargs)
+    params: Final = _billing_mapping(kwargs.get("litellm_params")) or _EMPTY_BILLING_FIELDS
+    payload: Final = _billing_mapping(kwargs.get("standard_logging_object"))
+    receipt_fields: Final[Mapping[str, object]] = {
+        "user": owner.user_id,
+        "end_user": None,
+        "request_tags": [],
+        "request_model_access_groups": (),
+    }
+    return {
+        **_billing_fields(kwargs, owner, reservation),
+        **receipt_fields,
+        "user_api_key_end_user_id": None,
+        "litellm_params": {
+            **_billing_fields(params, owner, reservation),
+            "user_api_key_end_user_id": None,
+        },
+        **(
+            {
+                "standard_logging_object": {
+                    **_billing_fields(payload, owner, reservation),
+                    **receipt_fields,
+                }
+            }
+            if payload is not None
+            else {}
+        ),
+    }
+
 
 MODEL_ACCESS_GROUP_METADATA_KEY: Final = "user_api_key_matched_model_access_groups"
 """Where auth records the model access groups that authorized the request, for the spend writer.

@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final, cast
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
@@ -14,6 +16,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_service,
     normalize_datadog_tag_value,
 )
+from litellm.litellm_core_utils.internal_call_metadata import project_evaluation_billing_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -43,6 +46,7 @@ _RESERVED_TAG_KEYS: Final[frozenset] = frozenset(
         "model_group",
     }
 )
+_COST_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class DatadogCostManagementLogger(CustomBatchLogger):
@@ -71,15 +75,23 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
         super().__init__(**kwargs)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float,
+        end_time: datetime | float,
+    ) -> None:
         try:
-            standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
-
-            if standard_logging_object is None:
+            receipt: Final = project_evaluation_billing_kwargs(kwargs)
+            payload: Final = receipt.get("standard_logging_object")
+            if not isinstance(payload, Mapping):
                 return
+            standard_logging_object: Final = _COST_PAYLOAD_ADAPTER.validate_python(payload)
+            response_cost: Final = standard_logging_object.get("response_cost")
 
             # Only log if there is a cost associated
-            if standard_logging_object.get("response_cost", 0) > 0:
+            if isinstance(response_cost, (int, float)) and response_cost > 0:
                 self.log_queue.append(standard_logging_object)
 
                 if len(self.log_queue) >= self.batch_size:
@@ -185,8 +197,9 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         metadata: Final[Mapping[str, object]] = cast(dict[str, Any], log.get("metadata") or {})
 
         # Backwards-compat: team/user/model_group preserved regardless of allowlist.
-        if metadata.get("user_api_key_alias"):
-            tags["user"] = normalize_datadog_tag_value(metadata["user_api_key_alias"])
+        user_tag: Final = metadata.get("user_api_key_alias") or metadata.get("user_api_key_user_id")
+        if user_tag:
+            tags["user"] = normalize_datadog_tag_value(user_tag)
         team_tag: Final = (
             metadata.get("user_api_key_team_alias")
             or metadata.get("team_alias")

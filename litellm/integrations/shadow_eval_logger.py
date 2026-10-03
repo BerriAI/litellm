@@ -30,7 +30,11 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, independent_snapshot
-from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
+from litellm.litellm_core_utils.internal_call_metadata import (
+    EvaluationBillingOwner,
+    evaluation_billing_context,
+    sanitized_forwardable_call_metadata,
+)
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
     extract_text_from_content,
@@ -76,6 +80,7 @@ _EMPTY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _CHAT_REQUEST_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _CHAT_MESSAGES_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _MESSAGE_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_CREATOR_MODEL_BUDGET: Final = TypeAdapter(Mapping[str, object] | None)
 
 
 def _chat_messages(kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
@@ -747,6 +752,7 @@ class ActiveShadowEvalJob(BaseModel):
     baseline_model: str | None = None
     shadow_percentage: float
     judge_model: str
+    created_by: str | None = None
     max_turns: int
     max_budget: float | None = None
     ends_at: datetime
@@ -1082,22 +1088,27 @@ class ShadowEvalLogger(CustomLogger):
             if spend >= job.max_budget:
                 self._record_funnel(job.id, "withheld")
                 return
-        for arm_router in job.arm_router_names:
-            await self._run_shadow_arm(
-                prisma=prisma,
-                job=job,
-                arm_router=arm_router,
-                request_id=request_id,
-                messages=messages,
-                real_text=real_text,
-                real_model=real_model,
-                real_cost=real_cost,
-                real_classifier_cost=real_classifier_cost,
-                real_cache_hit=real_cache_hit,
-                control_tier=control_tier,
-                shadow_params=shadow_params,
-                parent_metadata=parent_metadata,
-            )
+        owner: Final = await _evaluation_billing_owner(prisma, job.created_by)
+        if owner is None:
+            self._record_funnel(job.id, "withheld")
+            return
+        with evaluation_billing_context(owner):
+            for arm_router in job.arm_router_names:
+                await self._run_shadow_arm(
+                    prisma=prisma,
+                    job=job,
+                    arm_router=arm_router,
+                    request_id=request_id,
+                    messages=messages,
+                    real_text=real_text,
+                    real_model=real_model,
+                    real_cost=real_cost,
+                    real_classifier_cost=real_classifier_cost,
+                    real_cache_hit=real_cache_hit,
+                    control_tier=control_tier,
+                    shadow_params=shadow_params,
+                    parent_metadata=parent_metadata,
+                )
 
     async def _run_shadow_arm(
         self,
@@ -1380,3 +1391,32 @@ def _default_prisma_provider() -> "PrismaClient | None":
     except ImportError:
         return None
     return prisma_client
+
+
+async def _evaluation_billing_owner(prisma: "PrismaClient", created_by: str | None) -> EvaluationBillingOwner | None:
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, proxy_logging_obj, user_api_key_cache
+    from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+
+    creator_id: Final = created_by or litellm_proxy_admin_name
+    try:
+        creator: Final = await get_user_object(
+            user_id=creator_id,
+            prisma_client=prisma,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except UserNotFoundError:
+        return EvaluationBillingOwner(creator_id) if creator_id == litellm_proxy_admin_name else None
+    except Exception as e:  # noqa: BLE001  # optional evaluation work must not spend against unverifiable limits
+        verbose_logger.warning("shadow_eval: creator budget unavailable for %s: %s", creator_id, e)
+        return None
+    if creator is None:
+        return None
+    return EvaluationBillingOwner(
+        creator_id,
+        _CREATOR_MODEL_BUDGET.validate_python(creator.model_max_budget),
+        creator.max_budget,
+        creator.spend or 0.0,
+    )
