@@ -192,7 +192,7 @@ async def analyze(
             current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
         ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
 
-    def settle(e: Lens, cost: float, step: Step | None = None) -> Lens:
+    def settle(e: Lens, cost: float, step: Step | None) -> Lens:
         charged: Final = next((j for j in e.jobs if j.id == job.id), None)
         adjusted: Final = (
             e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
@@ -201,11 +201,8 @@ async def analyze(
         )
         if charged is None:
             return adjusted
-        settled: Final = charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
-        return replace_job(
-            adjusted,
-            add_step(settled, step) if step else settled,
-        )
+        refunded: Final = charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
+        return replace_job(adjusted, add_step(refunded, step) if step is not None else refunded)
 
     @asynccontextmanager
     async def reserve_budget() -> AsyncIterator[None]:
@@ -214,7 +211,7 @@ async def analyze(
         try:
             yield
         except BaseException:
-            await repo.update(lens.id, lambda e: settle(e, 0))
+            await repo.update(lens.id, lambda e: settle(e, 0, None))
             raise
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
