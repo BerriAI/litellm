@@ -12,8 +12,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm import Router
 import litellm.caching.dual_cache as dual_cache_module
+from litellm import Router
+from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
@@ -27,8 +28,13 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
-from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.router_utils.routing_read_batch import RoutingPrefetch
+from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
+from litellm.router_utils.routing_read_batch import (
+    ROUTER_COOLDOWNS_USAGE_TARGET,
+    ROUTER_USAGE_TARGET,
+    RoutingPrefetch,
+    _routing_read_target,  # pyright: ignore[reportPrivateUsage]  # the family rule under test
+)
 
 from .test_redis_batch import FakeClient, FakeRedisCache, replies
 
@@ -420,6 +426,30 @@ async def test_a_failed_prefetch_falls_back_to_the_shared_read():
         keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_keys.issubset(keys)
     )
     assert len(fallback_cooldown_mgets) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_armed_routing_read_is_declared_under_the_router_cooldowns_family():
+    """The prefetch is declared before routing runs under a target of its own, so the pipeline that
+    carries it renders ``redis.pipeline router_cooldowns`` instead of a bare ``redis.pipeline``."""
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    pipeline_targets: list[str | None] = []  # mutable-ok: filled by the recording hook
+
+    async def record(**kwargs: object) -> None:
+        pipeline_targets.append(current_service_target())
+
+    redis_cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+    assert pipeline_targets == [ROUTER_COOLDOWNS_TARGET]
 
 
 @pytest.mark.asyncio
@@ -1037,3 +1067,19 @@ async def test_identity_prefetch_is_one_mget_after_which_hits_and_misses_alike_c
         assert await cache.async_get_cache("end_user_id:eu-miss") is None
     assert len(client.pipelines) == 1 and redis_cache.alone == []
     assert cache.in_memory_cache.get_cache("end_user_id:eu-miss") is None
+
+
+@pytest.mark.parametrize(
+    ("cooldown_keys", "usage_keys", "expected"),
+    [
+        (("cooldown:a",), (), ROUTER_COOLDOWNS_TARGET),
+        ((), ("usage:a",), ROUTER_USAGE_TARGET),
+        (("cooldown:a",), ("usage:a",), ROUTER_COOLDOWNS_USAGE_TARGET),
+    ],
+)
+def test_the_routing_read_family_follows_the_keys_that_are_actually_due(
+    cooldown_keys: tuple[str, ...], usage_keys: tuple[str, ...], expected: str
+):
+    """A routing MGET is ``router_cooldowns`` when only cooldown keys go out, ``router_usage`` when the
+    cooldowns were already in memory and only usage counters go out, and the combined family otherwise."""
+    assert _routing_read_target(cooldown_keys, usage_keys) == expected

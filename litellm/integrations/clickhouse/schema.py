@@ -1,6 +1,6 @@
 from typing import Final
 
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
 
 OTEL_TRACES_TABLE: Final = "otel_traces"
 AGENT_TRACES_BY_KEY_TABLE: Final = "agent_traces_by_key"

@@ -10,6 +10,7 @@ import {
   buildVisibleTree,
   errorSource,
   firstErrorSpan,
+  findTraceSteps,
   fmtMs,
   GROUP_PAGE_SIZE,
   groupRowId,
@@ -45,6 +46,8 @@ const span = (overrides: SpanOverrides): Span => ({
   duration_ms: 1,
   status: "ok",
   error: null,
+  error_truncated: false,
+  framework: "",
   input_preview: "",
   model: null,
   input_tokens: 0,
@@ -320,5 +323,40 @@ describe("treeGuides", () => {
   it("drops a stem from a row only when the next row is its child", () => {
     const guides = treeGuides([0, 1, 2, 1, 1, 0]);
     expect(guides.map((g) => g.stem)).toEqual([true, true, false, false, false, false]);
+  });
+});
+
+describe("findTraceSteps", () => {
+  it("searches names, agents, models, IDs and inputs in time order without changing the trace", () => {
+    const spans = [
+      span({ span_id: "late", name: "Check", start_offset_ms: 20 }),
+      span({ span_id: "early", model: "check-model", start_offset_ms: 1 }),
+      span({ span_id: "agent", agent: "check-agent", start_offset_ms: 2 }),
+      span({ span_id: "check-id", start_offset_ms: 3 }),
+      span({ span_id: "input", input_preview: "Check this case", start_offset_ms: 4 }),
+    ];
+    expect(findTraceSteps(spans, " CHECK ", false, true).map((item) => item.span_id)).toEqual([
+      "early",
+      "agent",
+      "check-id",
+      "input",
+      "late",
+    ]);
+    expect(spans[0].span_id).toBe("late");
+  });
+
+  it("combines search and errors while respecting the framework display setting", () => {
+    const tool: SpanOverrides = { span_id: "tool", name: "check", type: "tool", status: "error" };
+    const framework: SpanOverrides = {
+      span_id: "framework",
+      parent_span_id: "root",
+      name: "check",
+      type: "framework",
+      status: "error",
+    };
+    const spans = [span(tool), span({ span_id: "ok", name: "check", type: "tool" }), span(framework)];
+    expect(findTraceSteps(spans, "check", true, true).map((item) => item.span_id)).toEqual(["tool"]);
+    expect(findTraceSteps(spans, "check", true, false).map((item) => item.span_id)).toEqual(["tool", "framework"]);
+    expect(findTraceSteps(spans, "missing", false, false)).toEqual([]);
   });
 });
