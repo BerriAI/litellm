@@ -41,6 +41,7 @@ describe("Lens interactive demo", () => {
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by status" }), "Failed");
     expect(within(screen.getByRole("table", { name: "Agent runs" })).getAllByRole("row")).toHaveLength(4);
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
+    await user.click(await screen.findByRole("tab", { name: /^Manage \(/ }));
     expect(await screen.findByRole("button", { name: /Support quality/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "New investigation" })).not.toBeInTheDocument();
     expect(network).not.toHaveBeenCalled();
@@ -60,6 +61,7 @@ describe("Lens interactive demo", () => {
     });
     await screen.findByRole("button", { name: "Preview sample" });
     await user.click(screen.getByRole("button", { name: "Preview sample" }));
+    await user.click(await screen.findByRole("tab", { name: /^Manage \(/ }));
     await user.click(await screen.findByRole("button", { name: /Support quality/ }));
     network.mockClear();
     await user.click(screen.getByRole("button", { name: /Repeated lookups leave customers without an answer/ }));
@@ -127,6 +129,7 @@ describe("Lens interactive demo", () => {
     expect(await screen.findByRole("button", { name: "Preview sample" })).toBeVisible();
     const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
     await user.click(tabs.getByRole("tab", { name: "Investigations" }));
+    await user.click(await screen.findByRole("tab", { name: /^Manage \(/ }));
     expect(await screen.findByRole("button", { name: new RegExp(saved.settings.name) })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     await user.click(tabs.getByRole("tab", { name: "Traces" }));
