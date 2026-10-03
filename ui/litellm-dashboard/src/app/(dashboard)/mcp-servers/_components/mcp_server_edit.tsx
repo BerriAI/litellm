@@ -725,6 +725,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     return () => subscription.unsubscribe();
   }, [form]);
 
+  const isOAuthPending = oauthStatus === "authorizing" || oauthStatus === "exchanging";
+
   const submitForm = async () => {
     const isValid = await form.trigger(mountedPaths(registry) as string[]);
     if (!isValid) {
@@ -734,7 +736,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   };
 
   const handleSave = async (values: EditServerFormValues) => {
-    if (!accessToken) return;
+    if (!accessToken || isOAuthPending) return;
     const duplicate = findDuplicateMcpServer(
       existingServers,
       values.server_name || mcpServer.server_name,
@@ -827,6 +829,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           <FormProvider {...form}>
             <MountedFormProvider value={{ control: form.control, registry }}>
               <form
+                aria-label="Edit MCP server"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void submitForm();
@@ -1318,7 +1321,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   <Button variant="outline" onClick={onCancel}>
                     Cancel
                   </Button>
-                  <Button type="submit">Save Changes</Button>
+                  <Button type="submit" disabled={isOAuthPending}>
+                    Save Changes
+                  </Button>
                 </div>
               </form>
             </MountedFormProvider>
@@ -1333,7 +1338,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               <Button variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button onClick={() => void submitForm()}>Save Changes</Button>
+              <Button onClick={() => void submitForm()} disabled={isOAuthPending}>
+                Save Changes
+              </Button>
             </div>
           </div>
         </TabsContent>

@@ -2043,9 +2043,11 @@ class MCPServerManager:
         resolved: Final = server.model_copy()
         resolved.scopes = server.scopes or metadata.scopes
         resolved.issuer = server.issuer or discovered_issuer
-        resolved.authorization_response_issuer = discovered_issuer
+        resolved.authorization_response_issuer = discovered_issuer or server.authorization_response_issuer
         resolved.authorization_response_iss_parameter_supported = (
             metadata.authorization_response_iss_parameter_supported
+            if discovered_issuer is not None
+            else server.authorization_response_iss_parameter_supported
         )
         resolved.authorization_url = server.authorization_url or metadata.authorization_url
         resolved.token_url = server.token_url or metadata.token_url

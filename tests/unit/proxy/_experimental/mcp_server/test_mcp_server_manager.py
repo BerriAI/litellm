@@ -8099,6 +8099,16 @@ class TestMCPServerTimestamps:
         assert blipped.issuer == "https://idp.example.com"
         assert blipped.authorization_response_issuer == "https://idp.example.com/"
         assert blipped.authorization_response_iss_parameter_supported is True
+        fallback = MCPServerManager._merge_discovered_oauth_metadata(
+            blipped, MCPOAuthMetadata(from_origin_fallback=True),
+        )
+        assert fallback.authorization_response_issuer == "https://idp.example.com/"
+        assert fallback.authorization_response_iss_parameter_supported is True
+        refreshed = MCPServerManager._merge_discovered_oauth_metadata(
+            fallback, MCPOAuthMetadata(discovered_issuer="https://idp.example.com"),
+        )
+        assert refreshed.authorization_response_issuer == "https://idp.example.com"
+        assert refreshed.authorization_response_iss_parameter_supported is False
 
         same_authorize = MCPServer(
             server_id="s1",

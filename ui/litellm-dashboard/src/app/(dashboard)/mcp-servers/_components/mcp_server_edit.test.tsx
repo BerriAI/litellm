@@ -16,6 +16,7 @@ vi.mock("@/components/networking", () => ({
 }));
 
 const mockOauth: {
+  status: string;
   tokenResponse: any;
   getTemporaryPayload: (() => Record<string, unknown> | null) | null;
   onTokenReceived:
@@ -29,7 +30,7 @@ const mockOauth: {
       ) => void)
     | null;
   reset: ReturnType<typeof vi.fn>;
-} = { tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
+} = { status: "idle", tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
     getTemporaryPayload?: () => Record<string, unknown> | null;
@@ -46,7 +47,7 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
     mockOauth.onTokenReceived = opts?.onTokenReceived ?? null;
     return {
       startOAuthFlow: vi.fn(),
-      status: "idle",
+      status: mockOauth.status,
       error: null,
       tokenResponse: mockOauth.tokenResponse,
       reset: mockOauth.reset,
@@ -563,6 +564,7 @@ describe("MCPServerEdit (auth type switch)", () => {
 describe("MCPServerEdit OAuth token invalidation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockOauth.status = "idle";
   });
 
   const renderOAuthEdit = () =>
@@ -575,6 +577,50 @@ describe("MCPServerEdit OAuth token invalidation", () => {
         availableAccessGroups={[]}
       />,
     );
+
+  it.each(["authorizing", "exchanging"])("blocks Save while OAuth is %s", async (status) => {
+    mockOauth.status = status;
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+    const view = renderOAuthEdit();
+    const save = screen.getAllByRole("button", { name: "Save Changes" })[0];
+    expect(save).toBeDisabled();
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("form", { name: "Edit MCP server" }));
+    });
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    act(() => {
+      mockOauth.onTokenReceived?.(
+        { access_token: "new-token" },
+        {
+          clientId: "new-client",
+          dcrCredentials: {
+            client_id: "new-client",
+            dcr_issuer: "https://new.example",
+            dcr_server_url: "https://new.example/mcp",
+          },
+        },
+      );
+    });
+    mockOauth.status = "success";
+    view.rerender(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    expect(screen.getAllByRole("button", { name: "Save Changes" })[0]).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.updateMCPServer).mock.calls[0][1].credentials).toMatchObject({
+      client_id: "new-client",
+      dcr_issuer: "https://new.example",
+    });
+  });
 
   it.each(["Save Changes", "Cancel"])("keeps a newly registered client isolated until %s", async (action) => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
