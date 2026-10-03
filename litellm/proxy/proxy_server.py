@@ -412,7 +412,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
-from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
+from litellm.proxy.common_utils.debug_utils import freeze_startup_heap, init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -1581,6 +1581,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
     tracing_enabled: Final = is_clickhouse_tracing_enabled(tracing_settings)
+    freeze_startup_heap()
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
