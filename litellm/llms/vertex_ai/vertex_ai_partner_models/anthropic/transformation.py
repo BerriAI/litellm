@@ -120,6 +120,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
             custom_llm_provider="vertex_ai",
+            is_thinking_display_updates_used=self.is_thinking_display_updates_used(
+                data.get("thinking"),  # pyright: ignore[reportUnknownArgumentType]  # detector accepts unvalidated input
+            ),
         )
 
         beta_set: Final = set(auto_betas)
