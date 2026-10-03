@@ -39,7 +39,11 @@ from opentelemetry.util.types import Attributes, AttributeValue
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
-from litellm.integrations.otel.mappers.langfuse import LANGFUSE_TRACE_NAME
+from litellm.integrations.otel.mappers.langfuse import (
+    LANGFUSE_OBSERVATION_INPUT,
+    LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_TRACE_NAME,
+)
 from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.semconv import (
     DB,
@@ -384,6 +388,26 @@ _CAPTURED_HEADER_PREFIXES: Final = ("http.request.header.", "http.response.heade
 # ``?key=`` query parameter.
 _URL_KEYS: Final = frozenset({"http.url", "http.target", "url.full"})
 _URL_QUERY_KEY: Final = "url.query"
+# Prompt and response content, in every vocabulary the mappers write it in once the
+# global capture policy collects it: GenAI semconv (MCP tool-call arguments and results
+# included), Langfuse, OpenInference's blobs and per-index messages, Langtrace, Weave.
+_MESSAGE_CONTENT_KEYS: Final = frozenset(
+    {
+        GenAI.INPUT_MESSAGES,
+        GenAI.OUTPUT_MESSAGES,
+        GenAI.SYSTEM_INSTRUCTIONS,
+        GenAI.TOOL_CALL_ARGUMENTS,
+        GenAI.TOOL_CALL_RESULT,
+        LANGFUSE_OBSERVATION_INPUT,
+        LANGFUSE_OBSERVATION_OUTPUT,
+        "input.value",
+        "output.value",
+        "llm.prompts",
+        "llm.completions",
+        "weave.output",
+    }
+)
+_INDEXED_MESSAGE_PREFIXES: Final = ("llm.input_messages.", "llm.output_messages.")
 
 
 class _SpanView(ReadableSpan):
@@ -412,6 +436,19 @@ class _SpanView(ReadableSpan):
             end_time=inner.end_time,
             instrumentation_scope=inner.instrumentation_scope,
         )
+
+
+def _is_message_content(key: str) -> bool:
+    return key in _MESSAGE_CONTENT_KEYS or key.startswith(_INDEXED_MESSAGE_PREFIXES)
+
+
+def without_message_content(span: ReadableSpan) -> ReadableSpan:
+    """``span`` without its prompt and response content, everything else left as it was."""
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    if not any(_is_message_content(key) for key in attributes):
+        return span
+    kept: Final = MappingProxyType({key: value for key, value in attributes.items() if not _is_message_content(key)})
+    return _SpanView(span, span.resource, kept, span.events, span.status, parent=span.parent)
 
 
 def _is_database_span(attributes: Mapping[str, AttributeValue]) -> bool:
@@ -510,19 +547,21 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     exception it raised and names the operator's guardrail endpoint. Stack traces walk
     the operator's install and come off every span, as do the headers the operator
     captures on the server span, whose request side holds the caller's bearer token,
-    and the query string of the request URL, which can hold the same key. The span
-    itself stays, so the tenant still gets the whole trace tree.
+    and the query string of the request URL, which can hold the same key. A
+    destination set to ``no_content`` loses the prompt and response content too. The
+    span itself stays, so the tenant still gets the whole trace tree.
     """
     extra: Final = destination.resource_attributes
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
     owned: Final = _is_tenant_owned_span(attributes)
     unreachable: Final = _guardrail_unreachable(attributes)
+    redacted: Final = destination.redacts_message_content
     kept: Final = MappingProxyType(
         {
             key: _without_query(key, value)
             for key, value in attributes.items()
-            if _tenant_visible(key, database, owned, unreachable)
+            if _tenant_visible(key, database, owned, unreachable) and not (redacted and _is_message_content(key))
         }
     )
     recorded: Final = span.events
@@ -816,7 +855,8 @@ class _OverriddenBackendFilter(SpanProcessor):
     ``llm_only`` the model-call spans go through as trace roots and the rest of the
     tree is held back, unless a destination of the request names ``sink``, the account
     this exporter writes to, with a wider scope: the fan-out then delivers the rest of
-    the tree there and the model call keeps its place in it.
+    the tree there and the model call keeps its place in it. A destination naming
+    ``sink`` with ``no_content`` strips the content from this exporter's copy.
     """
 
     def __init__(
@@ -837,7 +877,19 @@ class _OverriddenBackendFilter(SpanProcessor):
     def on_end(self, span: ReadableSpan) -> None:
         if self._owner in suppressed_backends() or not _in_scope(span, self._scope):
             return
-        self._inner.on_end(_scoped(span, self._account_scope()))
+        scoped: Final = _scoped(span, self._account_scope())
+        self._inner.on_end(without_message_content(scoped) if self._account_redacts_content() else scoped)
+
+    def _account_redacts_content(self) -> bool:
+        """Whether a destination of this request that names ``sink`` asked for no content.
+
+        The fan-out skips a destination this exporter already writes to, so this copy is
+        the one that account gets and has to honor the destination's restriction.
+        """
+        return self._sink is not None and any(
+            destination.redacts_message_content and _sink_key(destination.endpoint, destination.headers) == self._sink
+            for destination in request_destinations()
+        )
 
     def _account_scope(self) -> "OtelSpanScope":
         if self._scope == "full" or self._sink is None:
@@ -848,6 +900,25 @@ class _OverriddenBackendFilter(SpanProcessor):
             if _sink_key(destination.endpoint, destination.headers) == self._sink
         )
         return _widest((self._scope, *shared))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
+class _MessageContentFilter(SpanProcessor):
+    """Strip prompt and response content from every span before ``inner`` exports it."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner: Final = inner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(without_message_content(span))
 
     def shutdown(self) -> None:
         self._inner.shutdown()
@@ -1107,12 +1178,26 @@ def build_resource(config: OpenTelemetryV2Config) -> Resource:
     return Resource.create(attributes)
 
 
+def _spec_processor(
+    spec: ExporterSpec, use_simple_processor: bool | None, content_redacted_owner: str | None
+) -> SpanProcessor:
+    exporting: Final = _processor_for(
+        _exporter_from_spec(spec),
+        (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
+    )
+    redacts: Final = (
+        content_redacted_owner is not None and spec.owner is not None and spec.owner.value == content_redacted_owner
+    )
+    return _MessageContentFilter(exporting) if redacts else exporting
+
+
 def build_tracer_provider(
     config: OpenTelemetryV2Config,
     exporter: SpanExporter | None = None,
     baggage_processor: SpanProcessor | None = None,
     use_simple_processor: bool | None = None,
     tenant_overrides: bool = False,
+    content_redacted_owner: str | None = None,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -1131,6 +1216,8 @@ def build_tracer_provider(
 
     ``config.langfuse_span_scope`` narrows the exporter owned by ``langfuse_otel``
     alone; a collector or any other backend in the same config keeps the full tree.
+    ``content_redacted_owner`` strips the prompt and response content from the exporter
+    that backend owns, again leaving every other exporter in the config alone.
     """
     provider: Final = TracerProvider(resource=build_resource(config))
     if baggage_processor is None:
@@ -1146,17 +1233,13 @@ def build_tracer_provider(
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
             continue
-        exp = _exporter_from_spec(spec)
-        processor = _processor_for(
-            exp,
-            (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
-        )
+        processor = _spec_processor(spec, use_simple_processor, content_redacted_owner)
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
         sink = _sink_key(spec.endpoint, parse_headers(spec.headers)) if _exports_to_the_wire(spec) else None
         provider.add_span_processor(
             _OverriddenBackendFilter(processor, owner, scope, sink)
-            if owner is not None or scope != "full"
+            if owner is not None or scope != "full" or sink is not None
             else processor
         )
     return provider

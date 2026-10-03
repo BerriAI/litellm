@@ -4,7 +4,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Final
 
-from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    OTEL_SPAN_SCOPES,
+    TEAM_CAPTURE_MESSAGE_CONTENT_VALUES,
+    TRUSTED_CALLBACK_VARS_FIELD,
+    StandardCallbackDynamicParams,
+)
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
 _inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
@@ -81,6 +86,13 @@ def validate_langfuse_span_scope_value(value: str) -> None:
         raise ValueError(f"Invalid langfuse_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
 
 
+def validate_capture_message_content_value(value: str) -> None:
+    if value not in TEAM_CAPTURE_MESSAGE_CONTENT_VALUES:
+        raise ValueError(
+            f"Invalid capture_message_content {value!r}: must be one of {sorted(TEAM_CAPTURE_MESSAGE_CONTENT_VALUES)}"
+        )
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",
@@ -133,10 +145,10 @@ _request_blocked_callback_params: Final = frozenset(
     }
 )
 
-# Request-blocked params that must still reach ``standard_callback_dynamic_params``
+# Params that must reach ``standard_callback_dynamic_params`` only
 # when the proxy itself stamped them from admin-configured team/key callback
 # settings (the trusted-vars channel). The OTel per-tenant tracer routing reads
-# ``standard_callback_dynamic_params``, so without this overlay a blocked param
+# ``standard_callback_dynamic_params``, so without this overlay such a param
 # could never drive routing at all.
 _trusted_overlay_callback_params: Final = frozenset(
     {
@@ -144,6 +156,7 @@ _trusted_overlay_callback_params: Final = frozenset(
         "newrelic_region",
         "signoz_ingestion_endpoint",
         "signoz_ingestion_key",
+        "capture_message_content",
     }
 )
 

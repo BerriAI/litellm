@@ -14,6 +14,8 @@ _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
+_CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+_SHARED_OPTION_VARS: Final = (_LANGFUSE_SPAN_SCOPE_VAR, _CAPTURE_MESSAGE_CONTENT_VAR)
 _ARIZE_CALLBACK: Final = "arize"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
@@ -31,6 +33,9 @@ def callback_config_error(callback_name: str | None, callback_vars: Mapping[str,
     )
     if langfuse_error is not None:
         return langfuse_error
+    capture_error: Final = _capture_message_content_error(callback_name, callback_vars)
+    if capture_error is not None:
+        return capture_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -75,6 +80,27 @@ def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping
     return None
 
 
+def _capture_message_content_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    value: Final = callback_vars.get(_CAPTURE_MESSAGE_CONTENT_VAR)
+    if value is None:
+        return None
+    from litellm.integrations.otel.presets.destinations import destination_capable_backends
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_capture_message_content_value,
+    )
+
+    supported: Final = sorted(destination_capable_backends())
+    if callback_name not in supported:
+        return (
+            f"{_CAPTURE_MESSAGE_CONTENT_VAR} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
+        )
+    try:
+        validate_capture_message_content_value(value)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
 # Which credential family a dynamic variable belongs to. The families are the
 # integrations that share one account: every langfuse_* variable configures the
 # same Langfuse project whether it rides the classic callback or the OTel one,
@@ -94,7 +120,7 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
-_FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset({_LANGFUSE_SPAN_SCOPE_VAR, *_ARIZE_SAMPLING_RATE_VARS})
+_FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset({*_SHARED_OPTION_VARS, *_ARIZE_SAMPLING_RATE_VARS})
 
 
 def _family_of(var: str) -> str | None:
@@ -165,19 +191,30 @@ def cross_entry_family_error(
     )
 
 
-def conflicting_span_scope_error(
+def _conflicting_option_error(var: str, incoming: str, stored_vars_by_entry: Sequence[Mapping[str, str]]) -> str | None:
+    return next(
+        (
+            f"{var} is already set to {stored!r} by another callback entry. "
+            f"Every entry shares one value: remove that entry or send the same value."
+            for entry in stored_vars_by_entry
+            if (stored := entry.get(var)) not in (None, incoming)
+        ),
+        None,
+    )
+
+
+def conflicting_shared_option_error(
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],
 ) -> str | None:
-    incoming: Final = None if callback_vars is None else callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
-    if incoming is None:
+    if not callback_vars:
         return None
+    incoming_by_var: Final = {var: callback_vars[var] for var in _SHARED_OPTION_VARS if var in callback_vars}
     return next(
         (
-            f"{_LANGFUSE_SPAN_SCOPE_VAR} is already set to {stored!r} by another callback entry. "
-            f"Every entry shares one scope: remove that entry or send the same value."
-            for entry in stored_vars_by_entry
-            if (stored := entry.get(_LANGFUSE_SPAN_SCOPE_VAR)) not in (None, incoming)
+            error
+            for var, incoming in incoming_by_var.items()
+            if (error := _conflicting_option_error(var, incoming, stored_vars_by_entry)) is not None
         ),
         None,
     )
@@ -196,7 +233,7 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
             error
             for error in (
                 *(_logging_entry_error(entry) for entry in entries),
-                *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
+                *(conflicting_shared_option_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
             )
             if error is not None
         ),

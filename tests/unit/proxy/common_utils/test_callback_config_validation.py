@@ -2,7 +2,7 @@ import pytest
 
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
-    conflicting_span_scope_error,
+    conflicting_shared_option_error,
     cross_entry_family_error,
     logging_metadata_config_error,
 )
@@ -59,7 +59,7 @@ def test_a_bad_span_scope_is_reported_even_when_the_environment_is_fine():
 def test_one_span_scope_per_team(new_vars, stored, rejected):
     """The entries flatten last-wins, so a second scope would export whichever entry
     was stored last. An entry that names no scope leaves the stored one in charge."""
-    error = conflicting_span_scope_error(new_vars, stored)
+    error = conflicting_shared_option_error(new_vars, stored)
     assert (error is not None) is rejected
     if rejected:
         assert "langfuse_span_scope" in error and stored[-1]["langfuse_span_scope"] in error
@@ -128,3 +128,53 @@ def test_arize_sampling_rates_are_not_family_credentials():
     stored = [{"arize_api_key": "k1", "arize_success_sampling_rate": "0.5"}]
     assert cross_entry_family_error({"arize_success_sampling_rate": "0.1"}, stored) is None
     assert cross_entry_family_error({"arize_error_sampling_rate": "0.5"}, stored) is None
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
+@pytest.mark.parametrize("value", ["no_content", "span_only"])
+def test_capture_message_content_is_accepted_on_every_otel_v2_destination(callback_name, value):
+    assert callback_config_error(callback_name, {"capture_message_content": value}) is None
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", "arize_phoenix", None])
+def test_capture_message_content_is_rejected_where_it_would_never_take_effect(callback_name):
+    error = callback_config_error(callback_name, {"capture_message_content": "no_content"})
+    assert error is not None and "capture_message_content" in error and "langfuse_otel" in error
+
+
+def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metadata():
+    error = logging_metadata_config_error(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "callback_type": "success",
+                    "callback_vars": {"capture_message_content": "full"},
+                }
+            ]
+        }
+    )
+    assert error is not None and "Invalid capture_message_content" in error
+
+
+@pytest.mark.parametrize(
+    "new_vars, stored, rejected",
+    [
+        ({"capture_message_content": "no_content"}, [{"capture_message_content": "span_only"}], True),
+        (
+            {"capture_message_content": "span_only"},
+            [{"langfuse_public_key": "pk"}, {"capture_message_content": "no_content"}],
+            True,
+        ),
+        ({"capture_message_content": "no_content"}, [{"capture_message_content": "no_content"}], False),
+        ({"capture_message_content": "no_content"}, [{"langfuse_span_scope": "llm_only"}], False),
+        ({"langfuse_public_key": "pk"}, [{"capture_message_content": "no_content"}], False),
+    ],
+)
+def test_one_capture_message_content_per_team(new_vars, stored, rejected):
+    """The entries flatten last-wins on the routed path, so a second value would apply
+    whichever entry was stored last to the team's traffic."""
+    error = conflicting_shared_option_error(new_vars, stored)
+    assert (error is not None) is rejected
+    if rejected:
+        assert "capture_message_content" in error

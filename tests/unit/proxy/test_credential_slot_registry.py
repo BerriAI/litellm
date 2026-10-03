@@ -75,6 +75,7 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "langfuse_host": NotSecret("sink endpoint URL"),
         "langfuse_environment": NotSecret("environment label"),
         "langfuse_span_scope": NotSecret("span scope setting"),
+        "capture_message_content": NotSecret("content capture setting"),
         "langfuse_prompt_version": NotSecret("prompt version number"),
         "gcs_bucket_name": NotSecret("bucket name"),
         "gcs_path_service_account": Unplanted(),

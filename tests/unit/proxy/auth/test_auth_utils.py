@@ -3450,6 +3450,18 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
     assert "langfuse_host" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"model": "gpt-4", "capture_message_content": "span_only"},
+        {"model": "gpt-4", "metadata": {"capture_message_content": "span_only"}},
+    ],
+    ids=["top-level", "metadata"],
+)
+def test_client_capture_message_content_is_not_rejected_at_the_request_body_boundary(request_body):
+    assert is_request_body_safe(request_body=request_body, general_settings={}, llm_router=None, model="gpt-4")
+
+
 def test_observability_ban_covers_canonical_supported_callback_params():
     """Guard test: every entry in the canonical
     ``_supported_callback_params`` allow-list must end up either banned by

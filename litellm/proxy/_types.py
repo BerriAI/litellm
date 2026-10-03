@@ -25,6 +25,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_capture_message_content_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -2375,6 +2376,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_environment_value(callback_vars[key])
             if key == "langfuse_span_scope":
                 validate_langfuse_span_scope_value(callback_vars[key])
+            if key == "capture_message_content":
+                validate_capture_message_content_value(callback_vars[key])
         return values
 
 
@@ -2425,6 +2428,9 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
             for key in callback_vars:
                 if key not in valid_keys:
                     raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
+            capture_message_content: Final = callback_vars.get("capture_message_content")
+            if capture_message_content is not None:
+                validate_capture_message_content_value(str(capture_message_content))
         return values
 
 

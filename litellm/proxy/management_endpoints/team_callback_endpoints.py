@@ -31,7 +31,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
-    conflicting_span_scope_error,
+    conflicting_shared_option_error,
     cross_entry_family_error,
 )
 from litellm.proxy.common_utils.callback_utils import (
@@ -283,6 +283,7 @@ async def add_team_callbacks(
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+        - capture_message_content: For the OTel v2 callbacks (langfuse_otel, arize, weave_otel, newrelic), "no_content" strips prompt and response content from this team's exported spans, "span_only" keeps whatever the global capture policy collects. Omitted behaves like "span_only". It only narrows: a team gets content only when the proxy's global OTel v2 capture is enabled
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback
@@ -348,7 +349,7 @@ async def add_team_callbacks(
         decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
         stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
-        scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
+        scope_error: Final = conflicting_shared_option_error(data.callback_vars, stored_entry_vars)
         if scope_error is not None:
             raise _callback_config_error(scope_error)
         # One entry has to own a credential family end to end. The entries are

@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from litellm.types.utils import OtelSpanScope
+from litellm.types.utils import OtelSpanScope, TeamCaptureMessageContent
 
 
 class OtelDestination(BaseModel):
@@ -31,6 +31,17 @@ class OtelDestination(BaseModel):
         default="full",
         description="``llm_only`` keeps just the model-call spans; the rest of the request tree is not forwarded.",
     )
+    capture_message_content: TeamCaptureMessageContent | None = Field(
+        default=None,
+        description=(
+            "``no_content`` strips prompt and response content from this destination's copy. ``span_only`` "
+            "and ``None`` (omitted) forward whatever the global capture policy collected."
+        ),
+    )
+
+    @property
+    def redacts_message_content(self) -> bool:
+        return self.capture_message_content == "no_content"
 
     def header_string(self) -> str:
         """Render headers as the ``k=v,k2=v2`` form an ``ExporterSpec`` expects.
@@ -45,9 +56,9 @@ class OtelDestination(BaseModel):
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
         """Identity for processor reuse, so one destination means one exporter.
 
-        ``span_scope`` is left out on purpose: the scope decides which spans reach the
-        processor, not how the processor exports them, so a full and an ``llm_only``
-        view of the same account share one exporter.
+        ``span_scope`` and ``capture_message_content`` are left out on purpose: they
+        decide what reaches the processor, not how the processor exports it, so two
+        views of the same account share one exporter.
         """
         return (
             self.endpoint,
