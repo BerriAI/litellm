@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,6 +20,13 @@ from litellm.litellm_core_utils.get_blog_posts import (
 )
 from litellm.proxy._types import (
     CommonProxyErrors,
+)
+from litellm.proxy.public_endpoints.model_hub_rows import (
+    HubRow,
+    ModelGroupRow,
+    NoModelsConfigured,
+    PassThroughRow,
+    published_hub_rows,
 )
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
@@ -219,29 +226,17 @@ def _load_endpoints() -> list[_EndpointEntry]:
     response_model=list[ModelGroupInfoProxy],
 )
 async def public_model_hub():
-    import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
         _convert_health_check_to_dict,
     )
-    from litellm.proxy.proxy_server import (
-        _get_model_group_info,
-        llm_router,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
-    if llm_router is None:
+    rows: Final = published_hub_rows()
+    if isinstance(rows, NoModelsConfigured):
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
-    model_groups: list[ModelGroupInfoProxy] = []
-    if litellm.public_model_groups is not None:
-        model_groups = _get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=litellm.public_model_groups,
-            model_group=None,
-        )
-
     # Fetch health check information if available
-    health_checks_map: Final = {}
+    health_checks_map: Final[dict[str, Mapping[str, object]]] = {}
     if prisma_client is not None:
         try:
             latest_checks: Final = await prisma_client.get_all_latest_health_checks()
@@ -255,14 +250,26 @@ async def public_model_hub():
         except Exception:
             pass
 
-    for model_group in model_groups:
-        health_info = health_checks_map.get(model_group.model_group)
-        if health_info:
-            model_group.health_status = health_info.get("status")
-            model_group.health_response_time = health_info.get("response_time_ms")
-            model_group.health_checked_at = health_info.get("checked_at")
+    return [_with_legacy_health(row, health_checks_map) for row in rows]
 
-    return model_groups
+
+def _with_legacy_health(row: HubRow, health_checks_map: Mapping[str, Mapping[str, object]]) -> ModelGroupInfoProxy:
+    match row:
+        case PassThroughRow():
+            return row.info
+        case ModelGroupRow():
+            health_info: Final = health_checks_map.get(row.info.model_group)
+            if not health_info:
+                return row.info
+            return row.info.model_copy(
+                update={
+                    "health_status": health_info.get("status"),
+                    "health_response_time": health_info.get("response_time_ms"),
+                    "health_checked_at": health_info.get("checked_at"),
+                }
+            )
+        case _:
+            assert_never(row)
 
 
 @router.get(

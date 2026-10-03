@@ -85,6 +85,8 @@ const reopenedPayload = {
   auth: undefined,
   timeout: undefined,
   cost_per_request: undefined,
+  display_name: undefined,
+  show_in_model_hub: false,
 };
 
 describe("add_pass_through submit payload", () => {
@@ -117,7 +119,24 @@ describe("add_pass_through submit payload", () => {
       auth: undefined,
       timeout: "900",
       cost_per_request: "1.5",
+      display_name: undefined,
+      show_in_model_hub: false,
     });
+  });
+
+  it("sends the display name and the Model Hub opt-in when they are set", async () => {
+    const user = setup();
+    renderForm();
+    await openModal(user);
+    await fillRequiredFields(user);
+    fireEvent.change(screen.getByPlaceholderText("Clinical NER"), { target: { value: "Clinical NER" } });
+    await user.click(screen.getByRole("switch", { name: "Show on Model Hub" }));
+
+    await submit(user);
+
+    await waitFor(() => expect(createPassThroughEndpoint).toHaveBeenCalled());
+    expect(lastPayload().display_name).toBe("Clinical NER");
+    expect(lastPayload().show_in_model_hub).toBe(true);
   });
 
   it("submits numeric fields as strings, not numbers", async () => {
@@ -168,7 +187,7 @@ describe("add_pass_through submit payload", () => {
     await fillRequiredFields(user);
 
     const switches = screen.getAllByRole("switch");
-    expect(switches).toHaveLength(2);
+    expect(switches).toHaveLength(3);
     await user.click(switches[1]);
 
     await submit(user);

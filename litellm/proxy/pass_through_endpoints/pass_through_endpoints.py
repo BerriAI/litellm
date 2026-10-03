@@ -2365,6 +2365,8 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 
 
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("x-goog-user-project",))
+_PASS_THROUGH_CONFIG_WRITE: Final = asyncio.Lock()
+_CONFIG_ENTRIES: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _with_trace_context(headers: Mapping[str, str], parent_span: object) -> dict[str, str]:
@@ -3721,7 +3723,7 @@ async def update_pass_through_endpoints(
     # Find the index for updating the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3830,33 +3832,28 @@ async def create_pass_through_endpoints(
         update_config_general_settings,
     )
 
-    ## Get existing pass-through endpoint field value
-
-    try:
-        response: ConfigFieldInfo = await get_config_general_settings(
-            field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
-        )
-    except Exception:
-        response = ConfigFieldInfo(field_name="pass_through_endpoints", field_value=None)
-
     ## Auto-generate ID if not provided
     # Exclude is_from_config as it's a response-only field (computed at read time)
     data_dict: Final = data.model_dump(exclude={"is_from_config"})
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    if response.field_value is None:
-        response.field_value = [data_dict]
-    elif isinstance(response.field_value, list):
-        response.field_value.append(data_dict)
-
-    ## Update db
-    updated_data: Final = ConfigFieldUpdate(
-        field_name="pass_through_endpoints",
-        field_value=response.field_value,
-        config_type="general_settings",
-    )
-    await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
+    async with _PASS_THROUGH_CONFIG_WRITE:
+        try:
+            response: ConfigFieldInfo = await get_config_general_settings(
+                field_name="pass_through_endpoints", user_api_key_dict=user_api_key_dict
+            )
+        except Exception:
+            response = ConfigFieldInfo(field_name="pass_through_endpoints", field_value=None)
+        existing: Final = (
+            _CONFIG_ENTRIES.validate_python(response.field_value) if isinstance(response.field_value, list) else []
+        )
+        updated_data: Final = ConfigFieldUpdate(
+            field_name="pass_through_endpoints",
+            field_value=[*existing, data_dict],
+            config_type="general_settings",
+        )
+        await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
     # Return the created endpoint with the generated ID
     created_endpoint: Final = PassThroughGenericEndpoint.model_validate(data_dict)
@@ -3952,7 +3949,7 @@ async def delete_pass_through_endpoints(
     # Find the index for deleting from the list
     endpoint_index = None
     for idx, endpoint in enumerate(pass_through_endpoint_data):
-        _endpoint = PassThroughGenericEndpoint(**endpoint) if isinstance(endpoint, dict) else endpoint
+        _endpoint = PassThroughGenericEndpoint.model_validate(endpoint) if isinstance(endpoint, dict) else endpoint
         if _endpoint.id == endpoint_id:
             endpoint_index = idx
             break
@@ -3998,7 +3995,7 @@ def _find_endpoint_by_id(
     for endpoint in endpoints_data:
         _endpoint: PassThroughGenericEndpoint | None = None
         if isinstance(endpoint, dict):
-            _endpoint = PassThroughGenericEndpoint(**endpoint)
+            _endpoint = PassThroughGenericEndpoint.model_validate(endpoint)
         elif isinstance(endpoint, PassThroughGenericEndpoint):
             _endpoint = endpoint
 

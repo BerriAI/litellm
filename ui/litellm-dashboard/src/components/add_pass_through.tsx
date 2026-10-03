@@ -48,6 +48,8 @@ const passThroughFormSchema = z.object({
   auth: z.boolean().optional(),
   timeout: z.string().optional(),
   cost_per_request: z.string().optional(),
+  display_name: z.string().optional(),
+  show_in_model_hub: z.boolean().optional(),
 });
 
 type PassThroughFormValues = z.output<typeof passThroughFormSchema>;
@@ -62,6 +64,8 @@ const emptyFormValues = {
   auth: undefined,
   timeout: undefined,
   cost_per_request: undefined,
+  display_name: undefined,
+  show_in_model_hub: false,
 } as unknown as PassThroughFormValues;
 
 const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
@@ -126,6 +130,8 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         ...(premiumUser ? { auth: values.auth } : {}),
         timeout: values.timeout,
         cost_per_request: values.cost_per_request,
+        display_name: optionalText(values.display_name ?? ""),
+        show_in_model_hub: values.show_in_model_hub ?? false,
         ...(Object.keys(guardrails).length > 0 ? { guardrails } : {}),
       };
 
@@ -352,6 +358,43 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                       />
                     )}
                   </FormField>
+                </Card>
+
+                <Card className="block p-6">
+                  <h3 className="mb-2 text-lg font-semibold text-foreground">Model Hub</h3>
+                  <p className="mb-6 text-sm text-muted-foreground">
+                    Optionally list this endpoint on the public Model Hub page
+                  </p>
+
+                  <div className="space-y-5">
+                    <FormField
+                      control={form.control}
+                      name="display_name"
+                      label="Display Name"
+                      description="Shown on the Model Hub instead of the path. Example: Clinical NER"
+                    >
+                      {({ value, ...field }) => <Input {...field} placeholder="Clinical NER" value={value ?? ""} />}
+                    </FormField>
+
+                    <div className="flex items-center justify-between py-3">
+                      <div>
+                        <div className="text-sm font-medium text-foreground">Show on Model Hub</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">
+                          Publish this endpoint on the public Model Hub page
+                        </div>
+                      </div>
+                      <FormField control={form.control} name="show_in_model_hub">
+                        {({ value, onChange, ref: _ref, ...field }) => (
+                          <Switch
+                            {...field}
+                            aria-label="Show on Model Hub"
+                            checked={value ?? false}
+                            onCheckedChange={onChange}
+                          />
+                        )}
+                      </FormField>
+                    </div>
+                  </div>
                 </Card>
 
                 <Card className="block p-6">

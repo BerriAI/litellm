@@ -4625,6 +4625,30 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_get_config_reload_keeps_db_pass_through_endpoints_without_store_model_in_db(
+    tmp_path, monkeypatch
+):
+    from litellm.proxy import proxy_server
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        "general_settings:\n  pass_through_endpoints:\n    - path: /config\n      target: http://config.test\n"
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "initialize_pass_through_endpoints", AsyncMock())
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    pc: Final = ProxyConfig()
+    await pc.get_config(config_file_path=str(config_file))
+    await pc._update_general_settings({"pass_through_endpoints": [{"path": "/db", "target": "http://db.test"}]})
+
+    await pc.get_config(config_file_path=str(config_file))
+
+    assert [endpoint["path"] for endpoint in pc.settings["pass_through_endpoints"]] == ["/db", "/config"]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omits(monkeypatch):
     pc = ProxyConfig()
     config = {"general_settings": {"max_file_size_mb": 7}, "router_settings": {"num_retries": 1}}
