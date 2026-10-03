@@ -52,7 +52,6 @@ function FilterSelect<T extends string>({
   );
 }
 
-/** Every open problem across all investigations, one row per problem, highest priority first. */
 export function FindingsInbox({ lenses, onOpen }: { lenses: readonly Lens[]; onOpen: (row: InboxRow) => void }) {
   const [agent, setAgent] = useState(ALL_AGENTS);
   const [priority, setPriority] = useState<Priority | "all">("all");
