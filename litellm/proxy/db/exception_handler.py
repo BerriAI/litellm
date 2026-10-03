@@ -30,6 +30,7 @@ _CONNECTION_CAPACITY_PHRASES: Final = (
     "too many connections for database",
     "remaining connection slots are reserved",
 )
+_PRISMA_POOL_TIMEOUT_CODE: Final = "P2024"
 
 
 def _exception_chain(e: BaseException) -> Iterator[BaseException]:
@@ -115,6 +116,8 @@ class PrismaDBExceptionHandler:
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
+        if PrismaDBExceptionHandler.is_database_capacity_error(e):
+            return True
         return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection
 
     @staticmethod
@@ -198,6 +201,8 @@ class PrismaDBExceptionHandler:
             ),
         ):
             return True
+        if PrismaDBExceptionHandler.is_database_capacity_error(e):
+            return False
         if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             error_message: Final = str(e).lower()
             connection_keywords: Final = (
@@ -245,14 +250,17 @@ class PrismaDBExceptionHandler:
     @staticmethod
     def is_database_capacity_error(e: Exception) -> bool:
         """True iff Postgres refused the pool a new connection (SQLSTATE 53300:
-        ``too many clients already``, a reserved slot, or a per-role limit). The
-        server is up but full, so the failure is neither a transport error (which
-        would tear the engine down and open yet more connections against it) nor
-        a rejection of the rows being written."""
+        ``too many clients already``, a reserved slot, or a per-role limit) or
+        prisma's own pool timed out handing one over (P2024). The server is up
+        but full, so the failure is neither a transport error (which would tear
+        the engine down and open yet more connections against it) nor a
+        rejection of the rows being written."""
         import prisma
 
         if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
+        if isinstance(e, prisma.errors.DataError) and e.code == _PRISMA_POOL_TIMEOUT_CODE:
+            return True
         if PrismaDBExceptionHandler.postgres_sqlstate(e) == "53300":
             return True
         error_message: Final = str(e).lower()

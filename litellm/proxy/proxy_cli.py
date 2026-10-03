@@ -108,12 +108,14 @@ class DatabaseTimeoutSettings(BaseModel):
 
     database_statement_timeout: float | None = None
     database_lock_timeout: float | None = None
+    database_idle_in_transaction_session_timeout: float | None = None
 
 
 def _pg_options_with_timeouts(
     existing_options: str,
     statement_timeout: float | None,
     lock_timeout: float | None,
+    idle_in_transaction_session_timeout: float | None = None,
 ) -> str:
     """Return the Postgres ``options`` value carrying the configured timeouts.
 
@@ -143,6 +145,7 @@ def _pg_options_with_timeouts(
         for name, seconds in (
             ("statement_timeout", statement_timeout),
             ("lock_timeout", lock_timeout),
+            ("idle_in_transaction_session_timeout", idle_in_transaction_session_timeout),
         )
         if seconds is not None and not re.search(rf"(?:-c\s*|--){re.escape(name)}=", existing_options)
     )
@@ -1160,6 +1163,7 @@ def run_server(
         db_extra_connection_params: dict | None = None
         db_statement_timeout: float | None = None
         db_lock_timeout: float | None = None
+        db_idle_in_transaction_timeout: float | None = None
         general_settings = {}
         ### GET DB TOKEN FOR RDS IAM / AZURE ENTRA AUTH ###
 
@@ -1270,6 +1274,7 @@ def run_server(
             db_timeouts: Final = DatabaseTimeoutSettings.model_validate(general_settings)
             db_statement_timeout = db_timeouts.database_statement_timeout
             db_lock_timeout = db_timeouts.database_lock_timeout
+            db_idle_in_transaction_timeout = db_timeouts.database_idle_in_transaction_session_timeout
             if database_url and database_url.startswith("os.environ/"):
                 original_dir: Final = os.getcwd()
                 # set the working directory to where this script is
@@ -1303,6 +1308,7 @@ def run_server(
                 DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
+                postgres_connection_budget_message,
                 reader_shareable_params,
                 translate_libpq_ssl_params,
                 unsupported_db_scheme,
@@ -1343,6 +1349,7 @@ def run_server(
                     _url_query_value(resolved_url, "options"),
                     db_statement_timeout,
                     db_lock_timeout,
+                    db_idle_in_transaction_timeout,
                 )
                 writer_url: Final = (
                     _with_query_value(resolved_url, "options", pg_options)
@@ -1373,6 +1380,7 @@ def run_server(
                     _url_query_value(read_replica_url, "options"),
                     db_statement_timeout,
                     db_lock_timeout,
+                    db_idle_in_transaction_timeout,
                 )
                 os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
                     add_missing_query_params(
@@ -1385,6 +1393,19 @@ def run_server(
                         lifetime_params,
                     )
                 )
+            print(
+                postgres_connection_budget_message(
+                    writer_limit=_url_query_value(os.getenv("DATABASE_URL"), "connection_limit")
+                    or f"{db_connection_pool_limit}",
+                    reader_limit=(
+                        _url_query_value(os.getenv("DATABASE_URL_READ_REPLICA"), "connection_limit")
+                        or f"{db_connection_pool_limit}"
+                    )
+                    if read_replica_url
+                    else None,
+                    num_workers=f"{1 if run_hypercorn else num_workers}",
+                )
+            )
             from litellm_proxy_extras.prisma_toolchain import prisma_cli_available
 
             is_prisma_runnable: Final = prisma_cli_available()

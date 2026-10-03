@@ -888,6 +888,17 @@ def test_token_refresh_params_keep_the_prisma_tls_dialect_but_not_the_schema():
     }
 
 
+def test_token_refresh_params_keep_the_options_carrying_the_server_timeouts() -> None:
+    kept: Final = token_refresh_params_from_url(
+        "postgresql://u:TOKEN@db.example.com:5432/litellm_db"
+        "?schema=tenant&connection_limit=5&options=-c%20statement_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000"
+    )
+    assert dict(kept) == {
+        "connection_limit": "5",
+        "options": "-c statement_timeout=5000 -c idle_in_transaction_session_timeout=60000",
+    }
+
+
 def _issue_cert(
     subject: str, issuer: x509.Certificate | None, issuer_key: ec.EllipticCurvePrivateKey | None, ca: bool
 ) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
@@ -1199,3 +1210,42 @@ def test_reader_keeps_its_own_pinned_idle_lifetime(monkeypatch):
     assert os.environ["DATABASE_URL_READ_REPLICA"] == (
         "postgresql://u:p@reader.example.com:5432/db?max_idle_connection_lifetime=120"
     )
+
+
+@pytest.mark.parametrize(
+    "writer_limit, reader_limit, num_workers, expected",
+    [
+        ("10", None, "4", "4 worker(s) x writer connection_limit 10 = up to 40 connections"),
+        (
+            "10",
+            "10",
+            "4",
+            "4 worker(s) x (writer connection_limit 10 + reader connection_limit 10) = up to 80 connections",
+        ),
+        (
+            "10",
+            "50",
+            "4",
+            "4 worker(s) x (writer connection_limit 10 + reader connection_limit 50) = up to 240 connections",
+        ),
+        ("10", None, "0", "1 worker(s) x writer connection_limit 10 = up to 10 connections"),
+    ],
+    ids=["writer_only", "reader_doubles_engines", "reader_pins_its_own_limit", "worker_floor"],
+)
+def test_connection_budget_message_sums_the_engines_each_worker_owns(
+    writer_limit: str, reader_limit: str | None, num_workers: str, expected: str
+) -> None:
+    from litellm.proxy.db.db_url_settings import postgres_connection_budget_message
+
+    message: Final = postgres_connection_budget_message(
+        writer_limit=writer_limit, reader_limit=reader_limit, num_workers=num_workers
+    )
+    assert expected in message
+    assert "max_connections minus superuser_reserved_connections" in message
+
+
+def test_connection_budget_message_survives_an_unparseable_limit() -> None:
+    from litellm.proxy.db.db_url_settings import postgres_connection_budget_message
+
+    message: Final = postgres_connection_budget_message(writer_limit="ten", reader_limit=None, num_workers="2")
+    assert "writer='ten'" in message
