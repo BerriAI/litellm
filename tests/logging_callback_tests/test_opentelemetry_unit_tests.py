@@ -87,20 +87,16 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
             detected_context, detected_span = otel_integration._get_span_context(kwargs)
 
             # Assert: Should detect the active span
-            assert (
-                detected_span is not None
-            ), "Should detect active span from global context"
-            assert (
-                detected_span is parent_span
-            ), "Detected span should be the active parent span"
+            assert detected_span is not None, "Should detect active span from global context"
+            assert detected_span is parent_span, "Detected span should be the active parent span"
 
             detected_span_context = detected_span.get_span_context()
-            assert (
-                detected_span_context.trace_id == parent_span_context.trace_id
-            ), "Detected span should have same trace_id as parent"
-            assert (
-                detected_span_context.span_id == parent_span_context.span_id
-            ), "Detected span should have same span_id as parent"
+            assert detected_span_context.trace_id == parent_span_context.trace_id, (
+                "Detected span should have same trace_id as parent"
+            )
+            assert detected_span_context.span_id == parent_span_context.span_id, (
+                "Detected span should have same span_id as parent"
+            )
 
     def test_record_exception_on_span(self):
         """
@@ -162,9 +158,9 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         actual_calls = [call.args for call in mock_span.set_attribute.call_args_list]
 
         for expected_call in expected_calls:
-            assert (
-                expected_call in actual_calls
-            ), f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
+            assert expected_call in actual_calls, (
+                f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
+            )
 
     def test_record_exception_on_span_with_fallback(self):
         """
@@ -205,6 +201,42 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         mock_span.record_exception.assert_called_once_with(test_exception)
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
-        mock_span.set_attribute.assert_called_with(
-            ErrorAttributes.ERROR_MESSAGE, "Fallback error message"
-        )
+        mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+
+    def test_get_error_status_description_from_error_information(self):
+        """The ERROR status description mirrors the error_message attribute
+        text, so backends that render the span status show the actual error
+        (issue #44184)."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel_integration = OpenTelemetry()
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": {
+                    "error_code": "500",
+                    "error_class": "ValueError",
+                    "error_message": "Test error message",
+                },
+                "error_str": "Test error message",
+            },
+        }
+        assert otel_integration._get_error_status_description(kwargs) == "Test error message"
+
+    def test_get_error_status_description_falls_back_to_error_str(self):
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel_integration = OpenTelemetry()
+        kwargs = {
+            "standard_logging_object": {
+                "error_information": None,
+                "error_str": "Fallback error message",
+            },
+        }
+        assert otel_integration._get_error_status_description(kwargs) == "Fallback error message"
+
+    def test_get_error_status_description_none_when_no_error(self):
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel_integration = OpenTelemetry()
+        assert otel_integration._get_error_status_description({"standard_logging_object": None}) is None
+        assert otel_integration._get_error_status_description({}) is None
