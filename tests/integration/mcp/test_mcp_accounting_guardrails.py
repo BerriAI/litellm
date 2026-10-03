@@ -348,7 +348,7 @@ def hooks_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[HooksRig]:
         path.write_text(yaml.safe_dump(config))
         with (
             gateway_from_environment() as gateway,
-            owned_proxy(gateway, directory, {}, config=path, workers=2) as candidate,
+            owned_proxy(gateway, directory, {"KEEPALIVE_TIMEOUT": "120"}, config=path, workers=2) as candidate,
             owned_proxy(gateway, directory, {}, config=path) as sibling,
         ):
             yield HooksRig(candidate, sibling, sink, guardrail)
@@ -364,7 +364,7 @@ def _worker(gateway: Gateway) -> int:
 
 @contextmanager
 def _pinned(gateway: Gateway) -> Generator[tuple[Gateway, int], None, None]:
-    limits: Final = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    limits: Final = httpx.Limits(max_connections=1, max_keepalive_connections=1, keepalive_expiry=120)
     with httpx.Client(base_url=gateway.client.base_url, timeout=15, trust_env=False, limits=limits) as client:
         pinned: Final = Gateway(client, gateway.key, gateway.upstream_url)
         yield pinned, _worker(pinned)
