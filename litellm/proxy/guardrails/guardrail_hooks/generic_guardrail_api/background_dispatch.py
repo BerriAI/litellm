@@ -74,7 +74,7 @@ class BackgroundDispatcher:
     def dropped_count(self) -> int:
         return self._dropped
 
-    def dispatch(self, run: Callable[[], Awaitable[None]], *, context: str) -> bool:
+    def dispatch(self, prepare: Callable[[], Callable[[], Awaitable[object]]], *, context: str) -> bool:
         if len(self._pending) >= self._max_inflight:
             self._dropped += 1
             if self._dropped % _DROP_LOG_INTERVAL == 1:
@@ -89,12 +89,13 @@ class BackgroundDispatcher:
                 )
             return False
 
+        run: Final = prepare()
         task: Final = contextvars.Context().run(asyncio.create_task, self._run_logging_failures(run, context=context))
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
         return True
 
-    async def _run_logging_failures(self, run: Callable[[], Awaitable[None]], *, context: str) -> None:
+    async def _run_logging_failures(self, run: Callable[[], Awaitable[object]], *, context: str) -> None:
         try:
             await run()
         except Exception as e:  # noqa: BLE001  # a detached task has no caller to raise into

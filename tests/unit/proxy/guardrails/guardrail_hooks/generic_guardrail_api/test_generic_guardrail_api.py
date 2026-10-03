@@ -268,6 +268,22 @@ async def test_a_payload_that_cannot_be_serialized_is_recorded_as_not_dispatched
     assert _recorded_outcomes(request) == [("not_run", FIRE_AND_FORGET_NOT_DISPATCHED_REASON)]
 
 
+async def test_a_call_dropped_by_the_cap_never_builds_its_payload() -> None:
+    endpoint: Final = _Endpoint()
+    guardrail, dispatcher = _fire_and_forget(
+        endpoint, max_inflight=1, additional_provider_specific_params={"bad": object()}
+    )
+    gate: Final = asyncio.Event()
+    dispatcher.dispatch(lambda: gate.wait, context="occupies the only slot")
+    request: Final = _request_data()
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request, input_type="request")
+    gate.set()
+    await dispatcher.wait_for_pending()
+
+    assert _recorded_outcomes(request) == [("not_run", FIRE_AND_FORGET_DROPPED_REASON)]
+
+
 async def test_dispatched_calls_are_recorded_as_success_and_dropped_ones_as_not_run() -> None:
     endpoint: Final = _Endpoint(gate_open=False)
     guardrail, dispatcher = _fire_and_forget(endpoint, max_inflight=1)

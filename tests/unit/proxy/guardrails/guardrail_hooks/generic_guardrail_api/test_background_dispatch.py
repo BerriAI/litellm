@@ -1,6 +1,7 @@
 import asyncio
 import contextvars
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import Final
 
 import pytest
@@ -49,15 +50,21 @@ def test_a_dispatcher_needs_room_for_at_least_one_call() -> None:
         BackgroundDispatcher(guardrail_name="g", max_inflight=0)
 
 
-async def test_calls_beyond_the_cap_are_dropped_counted_and_warned_once(
+async def test_calls_beyond_the_cap_are_dropped_unprepared_counted_and_warned_once(
     warning_messages: Callable[[str], list[str]],
 ) -> None:
     gate: Final = asyncio.Event()
     dispatcher: Final = BackgroundDispatcher(guardrail_name="g", max_inflight=2)
+    prepared: Final[list[int]] = []  # mutable-ok: records which calls were prepared
 
-    dispatched: Final = [dispatcher.dispatch(gate.wait, context=f"call {i}") for i in range(5)]
+    def prepare(call: int) -> Callable[[], Awaitable[bool]]:
+        prepared.append(call)
+        return gate.wait
+
+    dispatched: Final = [dispatcher.dispatch(partial(prepare, i), context=f"call {i}") for i in range(5)]
 
     assert (dispatched, dispatcher.pending_count, dispatcher.dropped_count) == ([True, True, False, False, False], 2, 3)
+    assert prepared == [0, 1]
     assert len(warning_messages("dropped")) == 1
     gate.set()
     await dispatcher.wait_for_pending()
@@ -70,7 +77,7 @@ async def test_a_finished_call_frees_its_slot() -> None:
         return None
 
     for _ in range(3):
-        assert dispatcher.dispatch(finish, context="call") is True
+        assert dispatcher.dispatch(lambda: finish, context="call") is True
         await dispatcher.wait_for_pending()
 
     assert (dispatcher.pending_count, dispatcher.dropped_count) == (0, 0)
@@ -84,7 +91,7 @@ async def test_a_failing_call_is_logged_with_its_context_and_not_raised(
     async def fail() -> None:
         raise ConnectionError("refused")
 
-    dispatcher.dispatch(fail, context="input_type=response litellm_call_id=call-1")
+    dispatcher.dispatch(lambda: fail, context="input_type=response litellm_call_id=call-1")
     await dispatcher.wait_for_pending()
 
     assert warning_messages("call failed") == [
@@ -102,7 +109,7 @@ async def test_a_dispatched_call_does_not_see_the_request_context() -> None:
 
     token: Final = _request_scoped.set("request-1")
     try:
-        dispatcher.dispatch(record, context="call")
+        dispatcher.dispatch(lambda: record, context="call")
     finally:
         _request_scoped.reset(token)
     await dispatcher.wait_for_pending()

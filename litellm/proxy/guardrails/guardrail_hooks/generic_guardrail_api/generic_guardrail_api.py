@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
@@ -442,14 +442,18 @@ class GenericGuardrailAPI(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
     ) -> bool:
-        payload: Final = guardrail_request.model_dump(mode="json")
-        headers: Final = self._build_request_headers()
         timeout: Final = FIRE_AND_FORGET_POST_TIMEOUT_SECONDS if self.timeout is None else self.timeout
 
-        async def _post() -> None:
-            await self.async_handler.post(url=self.api_base, json=payload, headers=headers, timeout=timeout)
+        def _prepare() -> Callable[[], Awaitable[None]]:
+            payload: Final = guardrail_request.model_dump(mode="json")
+            headers: Final = self._build_request_headers()
 
-        return self._dispatcher.dispatch(_post, context=_call_context(input_type, logging_obj))
+            async def _post() -> None:
+                await self.async_handler.post(url=self.api_base, json=payload, headers=headers, timeout=timeout)
+
+            return _post
+
+        return self._dispatcher.dispatch(_prepare, context=_call_context(input_type, logging_obj))
 
     @log_guardrail_information
     async def apply_guardrail(
