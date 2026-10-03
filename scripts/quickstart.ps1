@@ -66,7 +66,8 @@ function Invoke-LiteLLMQuickstart {
   function Say {
     param([string]$Text, [switch]$Err, [switch]$NoNewline)
     $parts = [regex]::Split($Text, '(\{[abdgyru]:[^}]*\})')
-    if (-not $style) {
+    # Errors go out plain when stderr is redirected, so a log file gets no escape codes.
+    if (-not $style -or ($Err -and [Console]::IsErrorRedirected)) {
       $plain = ($parts | ForEach-Object { if ($_ -match '^\{[abdgyru]:(.*)\}$') { $Matches[1] } else { $_ } }) -join ''
       $stream = if ($Err) { [Console]::Error } else { [Console]::Out }
       if ($NoNewline) { $stream.Write($plain) } else { $stream.WriteLine($plain) }
@@ -129,6 +130,24 @@ function Invoke-LiteLLMQuickstart {
   function Write-PlainText([string]$Path, [string]$Text, [switch]$Append) {
     $enc = New-Object System.Text.UTF8Encoding $false
     if ($Append) { [IO.File]::AppendAllText($Path, $Text, $enc) } else { [IO.File]::WriteAllText($Path, $Text, $enc) }
+  }
+
+  # The POSIX cksum of a string's UTF-8 bytes: CRC-32 over the bytes and then
+  # their length. quickstart.sh names projects with the same number, so both
+  # scripts find the same database for a folder. Int64 keeps the arithmetic
+  # unsigned; hex literals with the top bit set would be negative here.
+  function Get-Cksum([string]$Text) {
+    $bytes = New-Object System.Collections.Generic.List[byte]
+    $bytes.AddRange([Text.Encoding]::UTF8.GetBytes($Text))
+    for ($n = [int64]$bytes.Count; $n -gt 0; $n = $n -shr 8) { $bytes.Add([byte]($n -band 255)) }
+    [int64]$crc = 0
+    foreach ($b in $bytes) {
+      $crc = $crc -bxor ([int64]$b -shl 24)
+      for ($i = 0; $i -lt 8; $i++) {
+        $crc = if ($crc -band 2147483648) { (($crc -shl 1) -bxor 79764919) -band 4294967295 } else { ($crc -shl 1) -band 4294967295 }
+      }
+    }
+    return (-bnot $crc) -band 4294967295
   }
 
   # ------------------------------------------------------------ questions
@@ -220,30 +239,34 @@ function Invoke-LiteLLMQuickstart {
       return $code
     }
     $out = [IO.Path]::GetTempFileName(); $err = [IO.Path]::GetTempFileName()
-    $p = Start-Process -FilePath $File -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-    $null = $p.Handle  # keeps ExitCode available after exit in Windows PowerShell
-    $start = Get-Date
-    $n = 0
-    Show-Cursor $false
     try {
-      while (-not $p.HasExited) {
-        $s = [int]((Get-Date) - $start).TotalSeconds
-        $clock = '{0}:{1:00}' -f [math]::Floor($s / 60), ($s % 60)
-        $extra = if ($Detail) { "$Detail $($sym.Dot) " } else { '' }
+      $p = Start-Process -FilePath $File -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+      $null = $p.Handle  # keeps ExitCode available after exit in Windows PowerShell
+      $start = Get-Date
+      $n = 0
+      Show-Cursor $false
+      try {
+        while (-not $p.HasExited) {
+          $s = [int]((Get-Date) - $start).TotalSeconds
+          $clock = '{0}:{1:00}' -f [math]::Floor($s / 60), ($s % 60)
+          $extra = if ($Detail) { "$Detail $($sym.Dot) " } else { '' }
+          Clear-Line
+          Say ("{a:$($sym.Frames[$n % $sym.Frames.Count])} $Label {d:$($sym.Dot) $extra$clock}") -NoNewline
+          $n++
+          Start-Sleep -Milliseconds 100
+        }
+        $p.WaitForExit()
         Clear-Line
-        Say ("{a:$($sym.Frames[$n % $sym.Frames.Count])} $Label {d:$($sym.Dot) $extra$clock}") -NoNewline
-        $n++
-        Start-Sleep -Milliseconds 100
+      } finally { Show-Cursor $true }
+      $code = $p.ExitCode
+      if ($code -ne 0) {
+        Get-Content $out, $err -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Error.WriteLine($_) }
       }
-      $p.WaitForExit()
-      Clear-Line
-    } finally { Show-Cursor $true }
-    $code = $p.ExitCode
-    if ($code -ne 0) {
-      Get-Content $out, $err -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Error.WriteLine($_) }
+      return $code
+    } finally {
+      # Also on Ctrl+C, so a cancelled run leaves no temporary files.
+      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
     }
-    Remove-Item $out, $err -Force -ErrorAction SilentlyContinue
-    return $code
   }
 
   function Wait-Ready([int]$Port) {
@@ -378,6 +401,16 @@ function Invoke-LiteLLMQuickstart {
 
     $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     $inRepo = $git -and (Invoke-Native $git.Source @('rev-parse', '--is-inside-work-tree')).Code -eq 0
+    if ($inRepo -and -not (Test-Path -LiteralPath (Join-Path $dir '.env')) -and
+      (Invoke-Native $git.Source @('ls-files', '--error-unmatch', '.env')).Code -eq 0) {
+      # An ignore rule does not cover a tracked file, so new keys written here
+      # would show up as a change to commit.
+      Fail 'Git tracks a .env file in this folder,' 'so your keys could be committed.'
+      Say '' -Err
+      Say '  Install into another folder (set LITELLM_DIR), or stop tracking the file' -Err
+      Say '  first with:  git rm --cached .env' -Err
+      return 1
+    }
     if ($created) {
       # A folder this script made holds only its own files, so keep all of it out of git.
       Write-PlainText (Join-Path $dir '.gitignore') "*`n"
@@ -403,15 +436,15 @@ function Invoke-LiteLLMQuickstart {
       }
     }
 
-    # Docker names containers and the database volume after the project, so an
-    # install outside the home folder gets its own name and never shares a
-    # database with another litellm-gateway folder.
+    # The engine names containers and the database volume after the project, so
+    # an install outside the home folder gets its own name and never shares a
+    # database with another litellm-gateway folder. Windows paths ignore case,
+    # so there the name does too.
     $envFile = Join-Path $dir '.env'
     $project = 'litellm-gateway'
     if ($dir -ne $homeDir) {
-      $sha = [Security.Cryptography.SHA256]::Create()
-      $hash = -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($dir.ToLowerInvariant()))[0..3] | ForEach-Object { $_.ToString('x2') })
-      $project = "litellm-gateway-$hash"
+      $key = if ($onWindows) { $dir.ToLowerInvariant() } else { $dir }
+      $project = "litellm-gateway-$(Get-Cksum $key)"
     }
     if (-not (Test-Path -LiteralPath $envFile)) {
       # Postgres keeps the password it was created with, so a new password over an
@@ -465,19 +498,28 @@ function Invoke-LiteLLMQuickstart {
         $rng.GetBytes($bytes)
         -join ($bytes | ForEach-Object { $_.ToString('x2') })
       }
-      # Lock the file down before anything secret goes into it.
-      Write-PlainText $envFile ''
-      if ($onWindows) {
-        $acl = New-Object System.Security.AccessControl.FileSecurity
-        $acl.SetAccessRuleProtection($true, $false)
-        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
-        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
-        Set-Acl -LiteralPath $envFile -AclObject $acl
-      } else {
-        & chmod 600 $envFile
+      # Lock a temporary file down before anything secret goes into it, then
+      # rename it, so a failed write never leaves a partial .env that a rerun
+      # would mistake for a finished install.
+      $tmp = "$envFile.tmp"
+      try {
+        Write-PlainText $tmp ''
+        if ($onWindows) {
+          $acl = New-Object System.Security.AccessControl.FileSecurity
+          $acl.SetAccessRuleProtection($true, $false)
+          $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+          $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
+          Set-Acl -LiteralPath $tmp -AclObject $acl
+        } else {
+          & chmod 600 $tmp
+          if ($LASTEXITCODE -ne 0) { throw "Could not restrict the permissions of $tmp." }
+        }
+        Write-PlainText $tmp (("LITELLM_MASTER_KEY=sk-{0}`nLITELLM_SALT_KEY=sk-{1}`nPOSTGRES_PASSWORD={2}`n" +
+          "LITELLM_PORT={3}`nLITELLM_BIND=127.0.0.1:`nCOMPOSE_PROJECT_NAME={4}`n") -f (& $hex 32), (& $hex 32), (& $hex 24), $port, $project)
+        [IO.File]::Move($tmp, $envFile)
+      } finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
       }
-      Write-PlainText $envFile (("LITELLM_MASTER_KEY=sk-{0}`nLITELLM_SALT_KEY=sk-{1}`nPOSTGRES_PASSWORD={2}`n" +
-        "LITELLM_PORT={3}`nLITELLM_BIND=127.0.0.1:`nCOMPOSE_PROJECT_NAME={4}`n") -f (& $hex 32), (& $hex 32), (& $hex 24), $port, $project)
       Step 'Generated .env with your master key, salt key, and database password {d:(keep this file; only you can read it)}'
     }
 

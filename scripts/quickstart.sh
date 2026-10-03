@@ -33,12 +33,14 @@ COMPOSE_URL="${LITELLM_COMPOSE_URL:-https://raw.githubusercontent.com/BerriAI/li
 # A person watching a terminal gets colors, step marks, and a spinner. Agents,
 # CI, log files, and NO_COLOR get the same lines as plain text.
 STYLE=0
+ERR_STYLE=0 # stderr is styled only when it is a terminal too
 C_ACC='' C_OK='' C_WARN='' C_ERR='' C_DIM='' C_BOLD='' C_OFF=''
 POINTER='>' S_OK='+' S_WARN='!' S_ERR='x' S_HEAD='*' S_ASK='?'
+# shellcheck disable=SC1003 # the last frame is a backslash
 SPIN_FRAMES='| / - \'
 HINT='Up/Down to move, Enter to choose'
 BOX_TL='+' BOX_TR='+' BOX_BL='+' BOX_BR='+' BOX_H='-' BOX_V='|'
-SPIN_PID=''
+SPIN_PID='' SPIN_LOG=''
 
 setup_output() {
   case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
@@ -59,6 +61,7 @@ setup_output() {
       *) C_ACC="${e}[94m" ;;
     esac
     C_OK="${e}[32m" C_WARN="${e}[33m" C_ERR="${e}[31m" C_DIM="${e}[90m" C_BOLD="${e}[1m" C_OFF="${e}[0m"
+    if [ -t 2 ]; then ERR_STYLE=1; fi
   fi
 }
 
@@ -82,7 +85,7 @@ warn() {
 
 # fail "headline" ["rest of the line"]: the first line of an error, on stderr.
 fail() {
-  if [ "$STYLE" = 1 ]; then
+  if [ "$ERR_STYLE" = 1 ]; then
     printf '%s%s %s%s%s\n' "${C_ERR}${C_BOLD}" "$S_ERR" "$1" "${C_OFF}" "${2:+ $2}" >&2
   else
     printf '%s%s\n' "$1" "${2:+ $2}" >&2
@@ -113,16 +116,18 @@ spin() {
     "$@"
     return
   fi
-  log="$(mktemp)"
-  "$@" >"$log" 2>&1 &
+  SPIN_LOG="$(mktemp)"
+  "$@" >"$SPIN_LOG" 2>&1 &
   SPIN_PID=$!
-  start="$(date +%s)"
-  frames="$(printf '%s\n' $SPIN_FRAMES | wc -l | tr -d ' ')"
-  n=0
+  start="$(date +%s)" s=0 n=0
+  frames="$SPIN_FRAMES "
   printf '\033[?25l'
   while kill -0 "$SPIN_PID" 2>/dev/null; do
-    frame="$(printf '%s\n' $SPIN_FRAMES | sed -n "$((n % frames + 1))p")"
-    s=$(($(date +%s) - start))
+    # Rotate the frames in the shell and read the clock once a second, so a
+    # redraw starts no process besides sleep.
+    frame="${frames%% *}"
+    frames="${frames#* }$frame "
+    if [ $((n % 10)) = 0 ]; then s=$(($(date +%s) - start)); fi
     printf '\r\033[2K%s%s%s %s %s· %s%d:%02d%s' "${C_ACC}" "$frame" "${C_OFF}" "$label" "${C_DIM}" \
       "${detail:+$detail · }" "$((s / 60))" "$((s % 60))" "${C_OFF}"
     n=$((n + 1))
@@ -132,8 +137,9 @@ spin() {
   wait "$SPIN_PID" || rc=$?
   SPIN_PID=''
   printf '\r\033[2K\033[?25h'
-  if [ "$rc" != 0 ]; then cat "$log" >&2; fi
-  rm -f "$log"
+  if [ "$rc" != 0 ]; then cat "$SPIN_LOG" >&2; fi
+  rm -f "$SPIN_LOG"
+  SPIN_LOG=''
   return "$rc"
 }
 
@@ -196,6 +202,7 @@ restore_terminal() {
 
 on_interrupt() {
   if [ -n "$SPIN_PID" ]; then kill "$SPIN_PID" 2>/dev/null || true; fi
+  if [ -n "$SPIN_LOG" ]; then rm -f "$SPIN_LOG"; fi
   if [ "$STYLE" = 1 ]; then printf '\r\033[2K'; fi
   restore_terminal
   printf '\nCancelled.\n' >&2
@@ -326,6 +333,18 @@ pick_folder() {
     step "Found your install in ${C_BOLD}$(tildify "$DIR")${C_OFF}"
   else
     step "Files go in ${C_BOLD}$(tildify "$DIR")${C_OFF}"
+  fi
+  if [ ! -f .env ] && command -v git >/dev/null 2>&1 &&
+    git ls-files --error-unmatch .env >/dev/null 2>&1; then
+    # An ignore rule does not cover a tracked file, so new keys written here
+    # would show up as a change to commit.
+    fail "Git tracks a .env file in this folder," "so your keys could be committed."
+    cat >&2 <<'EOF'
+
+  Install into another folder (set LITELLM_DIR), or stop tracking the file
+  first with:  git rm --cached .env
+EOF
+    exit 1
   fi
   if [ "$created" = 1 ]; then
     # A folder this script made holds only its own files, so keep all of it out of git.
@@ -499,8 +518,18 @@ EOF
   if [ -f .env ]; then
     step "Reusing .env, so existing keys and data keep working"
   else
-    (umask 077 && printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1:\nCOMPOSE_PROJECT_NAME=%s\n' \
-      "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" "$(openssl rand -hex 24)" "$PORT" "$project" >.env)
+    master="$(openssl rand -hex 32)"
+    salt="$(openssl rand -hex 32)"
+    db_password="$(openssl rand -hex 24)"
+    # Write a temporary file and rename it, so a failed write never leaves a
+    # partial .env that a rerun would mistake for a finished install.
+    if ! (umask 077 && printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1:\nCOMPOSE_PROJECT_NAME=%s\n' \
+      "$master" "$salt" "$db_password" "$PORT" "$project" >.env.tmp) || ! mv -f .env.tmp .env; then
+      rm -f .env.tmp
+      fail "Could not write $(tildify "$DIR")/.env."
+      exit 1
+    fi
+    unset master salt db_password
     step "Generated .env with your master key, salt key, and database password ${C_DIM}(keep this file; only you can read it)"
   fi
 
