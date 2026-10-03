@@ -1089,7 +1089,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
-    extra_body_reasoning_effort: str | Mapping[str, object] | None = None,
+    extra_body_reasoning_effort: str | None = None,
 ) -> tuple[dict, str]:
     model_info: dict[str, object] = {}
 
@@ -1182,8 +1182,14 @@ def responses_api_bridge_check(
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
                 and (
-                    wire_reasoning_effort is not None
-                    or (on_constraint_enforcing_endpoint and OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model))
+                    (reasoning_effort is not None and extra_body_reasoning_effort is None)
+                    or (
+                        on_constraint_enforcing_endpoint
+                        and (
+                            extra_body_reasoning_effort is not None
+                            or OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model)
+                        )
+                    )
                 )
             )
         )
