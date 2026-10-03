@@ -157,6 +157,12 @@ def test_branch_costs_are_independent_of_identity_and_never_count_reused_branche
         {**base, "number": 3, "source_repo": "gitlab.com/group/repo", "source_branch": "reused"},
         {**base, "number": 4, "source_repo": "gitlab.com/group/repo", "source_branch": "missing"},
         {**base, "number": 5, "source_repo": "gitlab.com/group/repo", "source_branch": "free"},
+        {
+            **_pull(emails=(), estimate_status="error", hours=None),
+            "number": 6,
+            "source_repo": "gitlab.com/group/repo",
+            "source_branch": "pending",
+        },
     )
     report: Final[ROIReport] = {
         **_report(pulls),
@@ -164,6 +170,7 @@ def test_branch_costs_are_independent_of_identity_and_never_count_reused_branche
             ROIBranchSpend(repo="gitlab.com/group/repo", branch="feature", spend=12, requests=2),
             ROIBranchSpend(repo="gitlab.com/group/repo", branch="reused", spend=7, requests=1),
             ROIBranchSpend(repo="gitlab.com/group/repo", branch="free", spend=0, requests=1),
+            ROIBranchSpend(repo="gitlab.com/group/repo", branch="pending", spend=9, requests=1),
         ),
     }
     result: Final = summarize(report, EMPTY_IDENTITY_MAP)
@@ -174,7 +181,9 @@ def test_branch_costs_are_independent_of_identity_and_never_count_reused_branche
     assert costs[4].spend is None and costs[4].status == "unattributed"
     assert costs[5].spend == 0 and costs[5].status == "matched"
     assert result["branch_metrics"].cost_per_hour == 12 / 8
-    assert result["branch_metrics"].unlinked_spend == 7
+    assert result["branch_metrics"].unlinked_spend == 16
+    assert result["branch_metrics"].matched_pulls == 3
+    assert result["branch_metrics"].spend == 12
     assert result["metrics"]["matched_spend"] == 0
     incomplete: Final = summarize({**report, "unavailable_repos": ("other/repo",)}, EMPTY_IDENTITY_MAP)
     assert incomplete["branch_metrics"].cost_per_hour is None

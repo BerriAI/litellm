@@ -222,7 +222,7 @@ def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
             spend=branch_spend,
             hours=branch_hours,
             cost_per_hour=branch_spend / branch_hours if complete_scope and branch_hours else None,
-            matched_pulls=len(branch_cohort),
+            matched_pulls=sum(pull["branch_cost"].status == "matched" for pull in pull_summaries),
             total_tagged_spend=sum(row.spend for row in report.get("branch_spend", ())),
             unlinked_spend=sum(row.spend for row in unlinked),
         ),
