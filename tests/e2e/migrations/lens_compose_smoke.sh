@@ -28,6 +28,28 @@ for attempt in $(seq 1 90); do
   sleep 2
 done
 if [[ "$ready" != true ]]; then "${compose[@]}" logs litellm; exit 1; fi
+trace_id=$(openssl rand -hex 16)
+span_id=$(openssl rand -hex 8)
+start_ns="$(date +%s)000000000"
+jq -n --arg trace "$trace_id" --arg span "$span_id" --arg at "$start_ns" \
+  '{resourceSpans:[{resource:{attributes:[{key:"service.name",value:{stringValue:"lens-compose-ci"}}]},
+    scopeSpans:[{scope:{name:"lens-compose-ci"},spans:[{traceId:$trace,spanId:$span,name:"Compose trace",
+      kind:1,startTimeUnixNano:$at,endTimeUnixNano:$at,
+      attributes:[{key:"openinference.span.kind",value:{stringValue:"AGENT"}}],status:{code:1}}]}]}]}' \
+  > "$qa_dir/trace.json"
+api /v1/traces -d "@$qa_dir/trace.json" > /dev/null
+trace_saved() {
+  for attempt in $(seq 1 60); do
+    if api "/v1/traces/$trace_id" > "$qa_dir/saved-trace.json" 2>/dev/null && \
+      jq -e --arg trace "$trace_id" --arg span "$span_id" \
+        '.summary.trace_id == $trace and any(.spans[]; .span_id == $span)' "$qa_dir/saved-trace.json" > /dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+trace_saved
 api /key/generate -d '{"key_alias":"Lens Compose CI","models":["lens-compose-ci"],"max_budget":1}' > "$qa_dir/key.json"
 key_id=$(jq -r '.token_id // empty' "$qa_dir/key.json")
 if [[ -z "$key_id" ]]; then
@@ -65,7 +87,8 @@ jq -e '.detail | contains("Upgrade the Lens worker")' "$qa_dir/mismatch.json" > 
 "${compose[@]}" --profile lens restart litellm lens-worker
 heartbeat_after=$(date -u +'%Y-%m-%dT%H:%M:%S')
 connected
+trace_saved
 api /lens > "$qa_dir/restarted.json"
 jq -e --arg id "$worker_id" --arg key "$key_id" \
   '.workers[] | select(.id == $id and .analysis_key_id == $key)' "$qa_dir/restarted.json" > /dev/null
-printf 'Compose restart: worker identity, token and billing assignment preserved; wrong release rejected\n'
+printf 'Compose restart: trace, worker identity, token and billing assignment preserved; wrong release rejected\n'
