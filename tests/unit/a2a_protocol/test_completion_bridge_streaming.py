@@ -356,6 +356,7 @@ async def test_handle_streaming_keeps_agent_card_path_out_of_the_completion_call
                     "custom_llm_provider": "langgraph",
                     "model": "agent",
                     "agent_card_path": "agentCard/v1.0",
+                    "a2a_protocol_version": "0.3",
                 },
                 api_base="http://localhost:2024",
             )
@@ -363,3 +364,4 @@ async def test_handle_streaming_keeps_agent_card_path_out_of_the_completion_call
 
     assert len(events) == 4
     assert "agent_card_path" not in mock_acompletion.call_args.kwargs
+    assert "a2a_protocol_version" not in mock_acompletion.call_args.kwargs
