@@ -33,7 +33,6 @@ const PRESETS = [
 const localInput = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 
-/** Builds the one-off run request; returns an error message instead of throwing for an invalid custom window. */
 export interface RunChoice {
   preset: (typeof PRESETS)[number]["hours"];
   agent: string;
