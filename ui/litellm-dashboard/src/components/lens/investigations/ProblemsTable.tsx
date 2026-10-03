@@ -5,6 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { problemsOverview, type AgentSummary, type Problem } from "../model/problems";
 import { runTime } from "../model/format";
 import type { Lens } from "../model/types";
+import { DotFlow, dotColors } from "../DotFlow";
 
 function AgentTile({
   label,
@@ -100,8 +101,11 @@ export function ProblemsTable({
   ];
   const scope = agent ? overview.agents.find((a) => a.agent === agent) : undefined;
   const clean = (scope?.runs ?? overview.runs) - (scope?.affected ?? overview.affected);
+  const agentColors = overview.agents.map((a, i) => ({ agent: a.agent, color: dotColors[i % dotColors.length] }));
+  const flowColors = agentColors.filter((a) => !agent || a.agent === agent).map((a) => a.color);
   return (
     <section aria-labelledby="lens-problems" className="space-y-5">
+      <DotFlow active={flowColors} />
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="lens-problems" className="text-lg font-semibold">
           Problems
