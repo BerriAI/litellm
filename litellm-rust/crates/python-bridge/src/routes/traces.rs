@@ -520,6 +520,18 @@ mod tests {
     ) {
         Python::initialize();
         Python::attach(|py| {
+            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(3)
+                .unwrap()
+                .to_str()
+                .unwrap();
+            pyo3::types::PyModule::import(py, "sys")
+                .unwrap()
+                .getattr("path")
+                .unwrap()
+                .call_method1("insert", (0, repository))
+                .unwrap();
             let message = error.to_string();
             let exception = map_read_error(error);
             assert_eq!(exception.get_type(py).name().unwrap(), exception_name);
