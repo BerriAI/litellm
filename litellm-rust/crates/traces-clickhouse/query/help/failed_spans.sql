@@ -3,5 +3,5 @@ SELECT TeamId AS team, ApiKeyHash AS api_key, TraceId AS trace_id,
 FROM otel_traces
 WHERE Timestamp >= now() - INTERVAL 1 DAY
     AND StatusCode = 'STATUS_CODE_ERROR'
-ORDER BY team, api_key, trace_id, span_id
+ORDER BY Timestamp DESC, team, api_key, trace_id, span_id
 LIMIT 100
