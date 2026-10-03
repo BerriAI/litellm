@@ -5,6 +5,7 @@ from typing import Final
 from types import SimpleNamespace
 import json
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import litellm
 import pytest
@@ -7146,7 +7147,10 @@ _BULK_UPDATE_TEAM: Final = LiteLLM_TeamTableCachedObj(team_id="team-1")
 
 
 async def _run_bulk_update_on_one_key(
-    monkeypatch, item_payload: Mapping[str, object], team: LiteLLM_TeamTableCachedObj = _BULK_UPDATE_TEAM
+    monkeypatch: pytest.MonkeyPatch,
+    item_payload: Mapping[str, object],
+    team: LiteLLM_TeamTableCachedObj = _BULK_UPDATE_TEAM,
+    user_api_key_cache: UserApiKeyCache | None = None,
 ) -> tuple[BulkUpdateKeyResponse, AsyncMock]:
     from litellm.proxy.management_endpoints.key_management_endpoints import bulk_update_keys
 
@@ -7162,6 +7166,8 @@ async def _run_bulk_update_on_one_key(
     )
     mock_prisma_client.update_data = AsyncMock(return_value={"data": {"token": _BULK_UPDATE_TOKEN}})
     _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+    if user_api_key_cache is not None:
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache)
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object", AsyncMock(return_value=team)
     )
@@ -7231,6 +7237,47 @@ async def test_bulk_update_keys_object_permission_is_granted_not_dropped(monkeyp
     written = _written_key_row(prisma)
     assert written["object_permission_id"] == upserted["object_permission_id"]
     assert not {"max_budget", "team_id", "budget_id"} & written.keys()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_keys_invalidates_cache_for_new_object_permission(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.common_utils.user_api_key_cache import object_permission_cache_key
+
+    permission_id = str(UUID("00000000-0000-0000-0000-000000000001"))
+    permission_cache_key = object_permission_cache_key(permission_id)
+    user_api_key_cache = UserApiKeyCache()
+    user_api_key_cache.set_cache(
+        key=permission_cache_key,
+        value=LiteLLM_ObjectPermissionTable(object_permission_id=permission_id, vector_stores=["stale"]),
+        model_type=LiteLLM_ObjectPermissionTable,
+    )
+    assert (
+        user_api_key_cache.get_cache(
+            key=permission_cache_key,
+            model_type=LiteLLM_ObjectPermissionTable,
+        )
+        is not None
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.object_permission_utils.uuid.uuid4",
+        lambda: UUID(permission_id),
+    )
+
+    response, prisma = await _run_bulk_update_on_one_key(
+        monkeypatch,
+        {"object_permission": {"vector_stores": ["vs-1"]}},
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    assert response.failed_updates == []
+    assert _written_key_row(prisma)["object_permission_id"] == permission_id
+    assert (
+        user_api_key_cache.get_cache(
+            key=permission_cache_key,
+            model_type=LiteLLM_ObjectPermissionTable,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -21634,16 +21681,16 @@ async def test_key_update_invalidates_cached_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_key_regeneration_invalidates_cached_object_permission(monkeypatch):
+async def test_key_regeneration_invalidates_cached_object_permission(monkeypatch: pytest.MonkeyPatch):
     """Regression: regenerating a key with new permissions must not keep serving the old grants."""
     from litellm.proxy._types import LiteLLM_ObjectPermissionBase, RegenerateKeyRequest
     from litellm.proxy.auth.auth_checks import get_object_permission
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _execute_virtual_key_regeneration,
     )
 
-    permission_id = "objperm-regenerate"
+    permission_id = str(UUID("00000000-0000-0000-0000-000000000002"))
     grants = {"served": ["tool_a"]}
 
     def _row(**kwargs):
@@ -21660,9 +21707,12 @@ async def test_key_regeneration_invalidates_cached_object_permission(monkeypatch
         return_value=MagicMock(object_permission_id=permission_id)
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.object_permission_utils.uuid.uuid4",
+        lambda: UUID(permission_id),
+    )
 
     existing_key = _make_regenerate_existing_key()
-    existing_key.object_permission_id = permission_id
     user_api_key_cache = UserApiKeyCache()
     assert (
         await get_object_permission(
@@ -21696,9 +21746,7 @@ async def test_key_regeneration_invalidates_cached_object_permission(monkeypatch
             hashed_api_key="abc123",
             key="abc123",
             data=RegenerateKeyRequest(
-                object_permission=LiteLLM_ObjectPermissionBase(
-                    mcp_tool_permissions={"server-1": ["tool_a", "tool_b"]}
-                )
+                object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_permissions={"server-1": ["tool_a", "tool_b"]})
             ),
             user_api_key_dict=_make_regenerate_user_api_key_dict(),
             litellm_changed_by=None,
@@ -21706,6 +21754,13 @@ async def test_key_regeneration_invalidates_cached_object_permission(monkeypatch
             proxy_logging_obj=AsyncMock(),
         )
 
+    assert (
+        user_api_key_cache.get_cache(
+            key=object_permission_cache_key(permission_id),
+            model_type=LiteLLM_ObjectPermissionTable,
+        )
+        is None
+    )
     grants["served"] = ["tool_a", "tool_b"]
     reread = await get_object_permission(
         object_permission_id=permission_id,

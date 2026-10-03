@@ -2982,7 +2982,7 @@ async def _process_single_key_update(
     await invalidate_cached_object_permissions(
         object_permission_ids=(
             existing_key_row.object_permission_id,
-            non_default_values.get("object_permission_id"),
+            update_values.get("object_permission_id"),
         ),
         user_api_key_cache=user_api_key_cache,
     )
@@ -5817,7 +5817,7 @@ async def _execute_virtual_key_regeneration(
     await invalidate_cached_object_permissions(
         object_permission_ids=(
             key_in_db.object_permission_id,
-            non_default_values.get("object_permission_id"),
+            update_values.get("object_permission_id"),
         ),
         user_api_key_cache=user_api_key_cache,
     )
