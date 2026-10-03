@@ -3950,6 +3950,27 @@ def test_stored_reasoning_items_win_over_thinking_blocks():
     assert reasoning_items[0]["id"] == "rs_real"
 
 
+@pytest.mark.parametrize("missing_id", [None, ""])
+def test_a_stored_reasoning_item_without_an_id_is_replayed_without_inventing_one(missing_id):
+    """The Responses API rejects every id it did not mint, so no id beats a made-up one."""
+    handler = LiteLLMResponsesTransformationHandler()
+    stored_item = {"type": "reasoning", "summary": [], "encrypted_content": "enc_abc"}
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Denver is sunny.",
+            "reasoning_items": [stored_item if missing_id is None else {**stored_item, "id": missing_id}],
+        },
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    (reasoning_item,) = [item for item in input_items if item.get("type") == "reasoning"]
+    assert "id" not in reasoning_item
+    assert reasoning_item["encrypted_content"] == "enc_abc"
+    assert reasoning_item["summary"] == []
+
+
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool_reference():
     """Tool-search tool_reference blocks have no Responses API equivalent: skip them, never stringify them."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (

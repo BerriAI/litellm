@@ -271,16 +271,20 @@ def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFuncti
 def _reasoning_item_to_response_input(
     r_item: ChatCompletionReasoningItem,
 ) -> dict[str, object]:
-    """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
-    r_input: Final[dict[str, object]] = {
+    """Convert a stored ChatCompletionReasoningItem back to a Responses API input item.
+
+    An item without an id is sent without one: the Responses API accepts that and
+    verifies the encrypted content on its own, while it rejects any id it did not mint.
+    """
+    item_id: Final = r_item.get("id")
+    encrypted_content: Final = r_item.get("encrypted_content")
+    return {
         "type": "reasoning",
-        "id": r_item.get("id") or f"rs_{id(r_item)}",
+        **({"id": item_id} if item_id else {}),
         # summary is always required by the Responses API, even when empty
         "summary": r_item.get("summary") or [],
+        **({"encrypted_content": encrypted_content} if encrypted_content else {}),
     }
-    if r_item.get("encrypted_content"):
-        r_input["encrypted_content"] = r_item["encrypted_content"]
-    return r_input
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):

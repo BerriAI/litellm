@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
+from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -46,6 +47,7 @@ _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
+_PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
 
 
 class _ReasoningSupportEntry(BaseModel):
@@ -317,7 +319,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
         litellm_params: GenericLiteLLMParams,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
-        validated_input: Final = self._validate_input_param(input)
+        validated_input: Final = self._validate_input_param(self._drop_bridge_minted_reasoning_items(input))
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
             model=model, input=validated_input, tools=tools
         )
@@ -389,6 +391,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     filter_value_from_dict(cast(dict, tool), "cache_control")
 
         return input, tools
+
+    def _drop_bridge_minted_reasoning_items(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+        if self.custom_llm_provider not in _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING or not isinstance(input, list):
+            return input
+        replayable_items: Final = [item for item in input if not is_litellm_minted_reasoning_item(item)]
+        return cast("ResponseInputParam", replayable_items)  # cast-ok: the surviving items keep their shape
 
     def _drop_foreign_tool_call_item_ids(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         if self.custom_llm_provider not in _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS or not isinstance(input, list):
