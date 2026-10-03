@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::{Connection, Error, query::named::TraceSpansRow};
 
 const PAGE_SIZE: u32 = 256;
-const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
 const MAX_GRAPH_SPANS: usize = 100_000;
 
 #[derive(Default)]
@@ -79,6 +79,75 @@ pub(crate) async fn read_spans(
         let complete = page.len() < parameters.page_size as usize;
         if let Some(last) = page.last() {
             parameters.after_span_id.clone_from(&last.0.span_id);
+        }
+        for row in page {
+            budget.record(&row)?;
+            spans.push(row.0);
+        }
+        if complete {
+            spans.sort_by_key(|row| row.start_ns);
+            return Ok(spans);
+        }
+        parameters.page_size = (parameters.page_size * 2).min(PAGE_SIZE);
+    }
+}
+
+#[derive(Serialize)]
+struct ListParameters {
+    #[serde(flatten)]
+    runs: crate::query::named::TracePageSpansParams,
+    after_team: String,
+    after_key: String,
+    after_trace: String,
+    after_span: String,
+    page_size: u32,
+    snapshot_ms: u64,
+}
+
+struct ListSpanBatch;
+
+impl Query for ListSpanBatch {
+    type Params = ListParameters;
+    type Row = TraceSpansRow;
+
+    const SQL: &'static str = include_str!("../query/trace_list_span_batch.sql");
+}
+
+pub(crate) async fn read_list_spans(
+    client: &Client,
+    connection: &Connection,
+    runs: crate::query::named::TracePageSpansParams,
+) -> Result<Vec<contracts::TraceSpansRow>, Error> {
+    let mut parameters = ListParameters {
+        runs,
+        after_team: String::new(),
+        after_key: String::new(),
+        after_trace: String::new(),
+        after_span: String::new(),
+        page_size: PAGE_SIZE,
+        snapshot_ms: (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64,
+    };
+    let mut spans = Vec::new();
+    let mut budget = ReadBudget::default();
+    loop {
+        let page = match fetch::<ListSpanBatch>(client, connection, &parameters).await {
+            Err(litellm_storage_clickhouse::Error::ResponseTooLarge)
+                if parameters.page_size > 1 =>
+            {
+                parameters.page_size /= 2;
+                continue;
+            }
+            Err(litellm_storage_clickhouse::Error::ResponseTooLarge) => {
+                return Err(Error::ReadTooLarge);
+            }
+            result => result?,
+        };
+        let complete = page.len() < parameters.page_size as usize;
+        if let Some(last) = page.last() {
+            parameters.after_team.clone_from(&last.0.team_id);
+            parameters.after_key.clone_from(&last.0.api_key_hash);
+            parameters.after_trace.clone_from(&last.0.trace_id);
+            parameters.after_span.clone_from(&last.0.span_id);
         }
         for row in page {
             budget.record(&row)?;

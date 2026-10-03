@@ -1,5 +1,6 @@
 //! Scoped trace reads: the trace list, one trace resolved with its spend, and span payloads.
 
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -19,7 +20,7 @@ use crate::{
     query::named::{
         ListTracesParams, ListTracesRow, ReadAccessParams, SpanDetail as SpanDetailQuery,
         SpanDetailParams, SpanError, SpanErrorParams, SpendByResponseIdsParams, TraceIdentity,
-        TraceIdentityParams, TraceSpansParams,
+        TraceIdentityParams, TracePageSpansParams, TraceSpansParams,
     },
 };
 
@@ -38,7 +39,7 @@ impl Query for RunCandidates {
 // Cursor pages share a bounded snapshot so advancing does not resolve the whole graph again.
 static TRACE_SNAPSHOTS: LazyLock<Cache<String, Arc<Trace>>> = LazyLock::new(|| {
     Cache::builder()
-        .max_capacity(64 * 1024 * 1024)
+        .max_capacity((2 * crate::span_batches::MAX_GRAPH_BYTES) as u64)
         .weigher(|_: &String, trace: &Arc<Trace>| {
             serde_json::to_vec(trace.as_ref())
                 .ok()
@@ -195,16 +196,76 @@ pub async fn list_traces(
         .filter(|_| page.len() == params.0.limit as usize)
         .map(|last| encode_cursor(&(last.start_ms, &last.trace_ref)));
     let mut data = Vec::with_capacity(page.len());
-    for row in &page {
-        let summary =
-            match get_trace(client, connection, access, &row.trace_id, &row.trace_ref).await {
-                Ok(trace) => trace.map_or_else(|| listed_summary(row), |trace| trace.summary),
-                Err(Error::ReadTooLarge) => listed_summary(row),
-                Err(error) => return Err(error),
-            };
-        data.push(summary);
+    for batch in page.chunks(16) {
+        match list_summaries(client, connection, access, batch).await {
+            Ok(summaries) => data.extend(summaries),
+            Err(Error::ReadTooLarge) => {
+                for row in batch {
+                    let summary =
+                        match get_trace(client, connection, access, &row.trace_id, &row.trace_ref)
+                            .await
+                        {
+                            Ok(trace) => {
+                                trace.map_or_else(|| listed_summary(row), |trace| trace.summary)
+                            }
+                            Err(Error::ReadTooLarge) => listed_summary(row),
+                            Err(error) => return Err(error),
+                        };
+                    data.push(summary);
+                }
+            }
+            Err(error) => return Err(error),
+        }
     }
     Ok(TracePage { data, next_cursor })
+}
+
+async fn list_summaries(
+    client: &Client,
+    connection: &Connection,
+    access: &ReadAccessParams,
+    runs: &[contracts::ListTracesRow],
+) -> Result<Vec<litellm_traces::TraceSummary>, Error> {
+    let (Some(start_ms), Some(end_ms)) = (
+        runs.iter().map(|row| row.start_ms).min(),
+        runs.iter()
+            .map(|row| row.start_ms.saturating_add(row.duration_ms))
+            .max(),
+    ) else {
+        return Ok(Vec::new());
+    };
+    let params = TracePageSpansParams::from(contracts::TracePageSpansParams {
+        access: access.clone(),
+        trace_refs: runs.iter().map(|row| row.trace_ref.clone()).collect(),
+        start_ms,
+        end_ms: end_ms.saturating_add(1),
+    });
+    let spans = crate::span_batches::read_list_spans(client, connection, params).await?;
+    let spend_rows = spend(client, connection, access, &spans).await;
+    let mut by_trace: HashMap<_, Vec<_>> = HashMap::new();
+    for span in spans {
+        let key = (
+            span.team_id.clone(),
+            span.api_key_hash.clone(),
+            span.trace_id.clone(),
+        );
+        by_trace.entry(key).or_default().push(span);
+    }
+    Ok(runs
+        .iter()
+        .map(|row| {
+            let spans = by_trace
+                .get(&(
+                    row.team_id.clone(),
+                    row.api_key_hash.clone(),
+                    row.trace_id.clone(),
+                ))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            resolve_trace(&row.trace_id, &row.trace_ref, spans, &spend_rows)
+                .map_or_else(|| listed_summary(row), |trace| trace.summary)
+        })
+        .collect())
 }
 
 pub async fn get_trace(
@@ -293,6 +354,13 @@ pub async fn get_trace_page(
         let Some(trace) = resolve_trace(trace_id, &trace_ref, &rows, &spend_rows) else {
             return Ok(None);
         };
+        if serde_json::to_vec(&trace)
+            .map_err(|_| Error::InvalidResponse)?
+            .len()
+            > crate::span_batches::MAX_GRAPH_BYTES
+        {
+            return Err(Error::ReadTooLarge);
+        }
         let trace = Arc::new(trace);
         TRACE_SNAPSHOTS.insert(key, Arc::clone(&trace)).await;
         trace

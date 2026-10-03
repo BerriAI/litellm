@@ -18,6 +18,7 @@ use support::TestResult;
 #[case::many_runs(50, 21, 0, false)]
 #[case::one_large_run(1, 1100, 0, false)]
 #[case::large_rows(1, 280, 20_000, false)]
+#[case::large_cached_snapshot(1, 280, 140_000, false)]
 #[case::many_costs(1, 1101, 0, true)]
 #[tokio::test]
 async fn large_runs_remain_complete_under_default_reader_limits(
@@ -114,6 +115,22 @@ async fn large_runs_remain_complete_under_default_reader_limits(
     };
     let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
     assert_eq!(page.data.len(), runs);
+    if runs > 1 {
+        client
+            .post(writer.url().clone())
+            .body("SYSTEM FLUSH LOGS")
+            .send()
+            .await?
+            .error_for_status()?;
+        let read_queries = client.post(writer.url().clone()).body(format!(
+            "SELECT count() FROM system.query_log WHERE type = 'QueryFinish' AND current_database = '{DATABASE}' AND query LIKE '%FROM otel_traces AS o%' AND query NOT LIKE '%system.query_log%'"
+        )).send().await?.error_for_status()?.text().await?;
+        let read_queries = read_queries.trim().parse::<usize>()?;
+        assert!(
+            read_queries > 0 && read_queries < runs,
+            "{read_queries} span queries for {runs} runs"
+        );
+    }
     for summary in &page.data {
         assert_eq!(summary.span_count, steps as u64);
         assert_eq!(
@@ -171,6 +188,14 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             serde_json::to_vec(&page)?.len()
                 <= litellm_storage_clickhouse::READ_LIMITS.response_bytes
         );
+        if ids.is_empty() {
+            client
+                .post(writer.url().clone())
+                .body(format!("TRUNCATE TABLE {DATABASE}.otel_traces"))
+                .send()
+                .await?
+                .error_for_status()?;
+        }
         ids.extend(page.spans.into_iter().map(|span| span.span_id));
         cursor = page.next_cursor;
         if cursor.is_none() {
