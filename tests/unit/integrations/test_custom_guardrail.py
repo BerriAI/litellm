@@ -1,5 +1,6 @@
 import asyncio
 import datetime as dt
+import json
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,7 @@ import pytest
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    _content_fingerprint,
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -2997,6 +2999,82 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         data = self._request()
         await PassthroughGuardrail(guardrail_name="g").async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="aresponses"
+        )
+
+        assert self._logged_response(data) == "allow"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_baseline_does_not_deep_copy_request_content(self):
+        """The allow/mask baseline must not deep-copy the prompt: on a 600 KB Claude Code body that copy
+        was most of the guardrail span even when the hook never called the vendor."""
+
+        class NoDeepCopy(dict):
+            def __deepcopy__(self, memo: dict[int, object]) -> "NoDeepCopy":
+                raise AssertionError("guardrail baseline deep-copied the request content")
+
+        class PassthroughGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                return data
+
+        class InPlaceMaskingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                messages = data["messages"]
+                assert isinstance(messages, list)
+                messages[0]["content"] = "[MASKED]"
+                return data
+
+        untouched = {**self._request(), "messages": [NoDeepCopy(role="user", content="SECRET_PROMPT")]}
+        await PassthroughGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=untouched, call_type="acompletion"
+        )
+        assert self._logged_response(untouched) == "allow"
+
+        masked = {**self._request(), "messages": [NoDeepCopy(role="user", content="SECRET_PROMPT")]}
+        await InPlaceMaskingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=masked, call_type="acompletion"
+        )
+        assert self._logged_response(masked) == "mask"
+
+    def test_content_fingerprint_copies_circular_content_the_stdlib_serializer_rejects(self):
+        circular: dict[str, object] = {"role": "user"}
+        circular["self"] = circular
+
+        baseline = _content_fingerprint(circular, lambda value: json.dumps(value).encode())
+
+        assert isinstance(baseline, dict) and baseline is not circular and baseline["self"] is baseline
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_rebuilding_messages_with_same_content_logs_allow(self):
+        class ReorderingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                messages = data["messages"]
+                assert isinstance(messages, list)
+                return {**data, "messages": [{"content": m["content"], "role": m["role"]} for m in messages]}
+
+        data = self._request()
+        await ReorderingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
         )
 
         assert self._logged_response(data) == "allow"

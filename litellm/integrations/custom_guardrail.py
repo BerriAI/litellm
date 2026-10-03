@@ -1,9 +1,10 @@
 import contextvars
 import copy
 import hashlib
+import json
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
@@ -1390,7 +1391,7 @@ class CustomGuardrail(CustomLogger):
         returns the (possibly modified) request payload. Neither is a provider verdict, and
         logging them verbatim ships the user's prompt to every logging sink (OTEL spans,
         Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"`` by comparing
-        against ``original_inputs``, a copy taken before the hook ran. A pre_call baseline only
+        against ``original_inputs``, a fingerprint taken before the hook ran. A pre_call baseline only
         holds the prompt-bearing keys, so the returned request is narrowed to those same keys
         before the comparison. A string result is the hook's own rejection message (the proxy
         turns it into a 400), not user input, so it is logged as is.
@@ -1448,7 +1449,10 @@ class CustomGuardrail(CustomLogger):
     def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
         """True when any content key of either mapping differs between them (mask), False otherwise (allow)."""
         compared_keys: Final = (original_inputs.keys() | response.keys()) - _STREAM_CONTROL_KEYS
-        return any(original_inputs.get(key) != response.get(key) for key in compared_keys)
+        return any(
+            original_inputs.get(key, _NONE_FINGERPRINT) != _content_fingerprint(response.get(key))
+            for key in compared_keys
+        )
 
     def mask_content_in_string(
         self,
@@ -1562,6 +1566,29 @@ _PRE_CALL_CONTENT_KEYS: Final = frozenset(
 _STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
 
 
+def _canonical_json_dumps() -> Callable[[object], bytes]:
+    try:
+        import orjson
+    except ImportError:
+        return lambda value: json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return lambda value: orjson.dumps(value, option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS)
+
+
+_canonical_json: Final = _canonical_json_dumps()
+
+
+def _content_fingerprint(value: object, dumps: Callable[[object], bytes] = _canonical_json) -> object:
+    """Serialized form of a JSON-shaped value so the allow/mask baseline costs one JSON pass, not a
+    deep copy of the whole prompt. Anything the serializer rejects falls back to a deep copy."""
+    try:
+        return dumps(value)
+    except (TypeError, ValueError):
+        return copy.deepcopy(value)
+
+
+_NONE_FINGERPRINT: Final = _content_fingerprint(None)
+
+
 def _original_inputs_for(
     func_name: str,
     kwargs: Mapping[str, object],
@@ -1570,16 +1597,16 @@ def _original_inputs_for(
 ) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
-    Hooks may edit their argument in place and return it, so the baseline is always a deep
-    copy taken before the hook runs: the whole ``inputs`` dict for ``apply_guardrail``, the
+    Hooks may edit their argument in place and return it, so the baseline is always taken before
+    the hook runs, as a per-key fingerprint: the whole ``inputs`` dict for ``apply_guardrail``, the
     prompt-bearing request keys for pre-call hooks.
     """
     if func_name == "apply_guardrail":
         inputs: Final = kwargs.get("inputs")
-        return copy.deepcopy(inputs) if isinstance(inputs, dict) else None
+        return {key: _content_fingerprint(value) for key, value in inputs.items()} if isinstance(inputs, dict) else None
     if event_type != GuardrailEventHooks.pre_call:
         return None
-    return {key: copy.deepcopy(value) for key, value in request_data.items() if key in _PRE_CALL_CONTENT_KEYS}
+    return {key: _content_fingerprint(value) for key, value in request_data.items() if key in _PRE_CALL_CONTENT_KEYS}
 
 
 def log_guardrail_information(func):
