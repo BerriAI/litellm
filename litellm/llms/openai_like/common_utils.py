@@ -40,10 +40,8 @@ class OpenAILikeBase:
             headers = {
                 "Content-Type": "application/json",
             }
-        else:
-            headers = dict(headers)
-            if "Content-Type" not in headers:
-                headers["Content-Type"] = "application/json"
+        elif "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
 
         if (
             api_key is not None and "Authorization" not in headers
