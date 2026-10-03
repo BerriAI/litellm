@@ -354,7 +354,7 @@ class ProxyExtrasDBManager:
 
     @staticmethod
     def _read_migration_ledger(query: str, params: tuple[str, ...]) -> "tuple[object, ...] | None":
-        database_url = os.getenv("DATABASE_URL")
+        database_url: Final = os.getenv("DATABASE_URL")
         if not database_url:
             return None
 
@@ -363,14 +363,14 @@ class ProxyExtrasDBManager:
         except ImportError:
             return None
 
-        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
-        ledger_table = psycopg.sql.SQL("{}.{}").format(
+        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        ledger_table: Final = psycopg.sql.SQL("{}.{}").format(
             psycopg.sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
             psycopg.sql.Identifier("_prisma_migrations"),
         )
         try:
             with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
-                row = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
+                row: Final = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return None
         return tuple(row) if row is not None else ()
