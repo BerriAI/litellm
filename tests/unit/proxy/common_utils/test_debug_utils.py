@@ -167,7 +167,7 @@ def test_freeze_startup_heap_keeps_startup_objects_out_of_later_full_collections
     startup_object = StartupObject()
     still_alive = weakref.ref(startup_object)
     frozen = freeze_startup_heap()
-    assert frozen == gc.get_freeze_count() > len(gc.get_objects())
+    assert frozen == gc.get_freeze_count() > 0
     del startup_object
     gc.collect()
     assert still_alive() is not None

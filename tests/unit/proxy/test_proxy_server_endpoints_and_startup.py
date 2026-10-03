@@ -10,6 +10,7 @@ import socket
 import subprocess
 import time
 import types
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -15552,9 +15553,18 @@ async def test_proxy_startup_freezes_the_startup_heap_before_serving(mock_prisma
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.dump({"general_settings": {"master_key": "sk-12345"}}))
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+
+    class StartupCycle:
+        def __init__(self) -> None:
+            self.cycle = self
+
+    startup_object = StartupCycle()
+    still_alive = weakref.ref(startup_object)
     gc.unfreeze()
     try:
         async with proxy_startup_event(FastAPI()):
-            assert gc.get_freeze_count() > len(gc.get_objects())
+            del startup_object
+            gc.collect()
+            assert still_alive() is not None, "an object allocated before startup finished was collected after it"
     finally:
         gc.unfreeze()
