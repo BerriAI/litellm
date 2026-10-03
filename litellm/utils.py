@@ -3208,11 +3208,24 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     return None
 
 
+def _positive_cost_value(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int | float):
+        return value > 0
+    if isinstance(value, str):
+        try:
+            return float(value) > 0
+        except ValueError:
+            return False
+    return bool(value)
+
+
 def _model_cost_entry_has_pricing(entry: Mapping[str, object] | None) -> bool:
     """Whether a raw ``litellm.model_cost`` row carries a non-zero rate under any cost field."""
     if entry is None:
         return False
-    return any(bool(price) and not isinstance(price, str) for name, price in entry.items() if "cost" in name)
+    return any(_positive_cost_value(price) for name, price in entry.items() if "cost" in name)
 
 
 def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
@@ -3228,10 +3241,10 @@ def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     key: Final = cast("Mapping[str, object]", model_info).get("key")  # cast-ok: partial dicts may omit "key"
     if not isinstance(key, str):
         return False
-    if match_capability_generalizations(key) is None:
-        return False
     raw_entry: Final = cast("Mapping[str, object] | None", litellm.model_cost.get(key))
-    return not _model_cost_entry_has_pricing(raw_entry)
+    if _model_cost_entry_has_pricing(raw_entry):
+        return False
+    return match_capability_generalizations(key) is not None
 
 
 def get_priced_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo:

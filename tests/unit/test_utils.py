@@ -80,6 +80,7 @@ from litellm.utils import (
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
     is_cached_message,
+    is_generalized_model_info,
     is_prompt_caching_valid_prompt,
 )
 
@@ -264,6 +265,42 @@ def test_get_priced_model_info_returns_priced_entries(
     info: Final = litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
     assert info == expected
     assert info["input_cost_per_token"] is not None and info["input_cost_per_token"] > 0
+
+
+@pytest.mark.parametrize(
+    "input_rate,output_rate,expect_priced",
+    [
+        (0.000003, 0.000015, True),
+        ("3e-06", "1.5e-05", True),
+        (0, 0, False),
+        (None, None, False),
+    ],
+    ids=["float-rates", "string-rates", "zero-rates", "absent-rates"],
+)
+def test_is_generalized_model_info_reads_registered_rule_matching_rows(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    input_rate: object,
+    output_rate: object,
+    expect_priced: bool,
+) -> None:
+    """Router registration persists base_model info into litellm.model_cost. A rule-matching row
+    counts as priced only when a cost field carries a positive rate, numeric or string."""
+    registered: Final = {"key": "anthropic/claude-opus-9", "litellm_provider": "anthropic", "mode": "chat"}
+    if input_rate is not None:
+        registered["input_cost_per_token"] = input_rate
+    if output_rate is not None:
+        registered["output_cost_per_token"] = output_rate
+    monkeypatch.setitem(litellm.model_cost, "anthropic/claude-opus-9", registered)
+
+    if expect_priced:
+        assert is_generalized_model_info(registered) is False
+        info: Final = litellm.get_priced_model_info(model="claude-opus-9", custom_llm_provider="anthropic")
+        assert info["key"] == "anthropic/claude-opus-9"
+    else:
+        assert is_generalized_model_info(registered) is True
+        with pytest.raises(litellm.ModelNotMappedError):
+            litellm.get_priced_model_info(model="claude-opus-9", custom_llm_provider="anthropic")
 
 
 def test_get_model_info_internal_failure_is_not_reported_as_unmapped() -> None:
