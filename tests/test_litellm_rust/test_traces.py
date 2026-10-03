@@ -9,30 +9,19 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from pydantic import JsonValue
 
-from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage, trace_decode_otlp
-from litellm.rust_bridge.trace_queries import (
-    TRACE_SPANS,
-    ActivityAvailability,
-    LensAccessParams,
-    TraceSpansParams,
-)
-from litellm.rust_bridge.traces import (
-    ClickHouseStorage,
-    NormalizedSpan,
-    TraceStorageConfig,
-    normalized_field_definitions,
-)
+from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage
+from litellm.rust_bridge.trace.generated.models import ActivityAvailability, LensAccessParams
+from litellm.rust_bridge.trace.generated.types import TraceScope
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
-from litellm.tracing.decode import decode_otlp
-from litellm.tracing.store import TraceStore
-from litellm.tracing.types import TraceScope
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
 
 def _native_storage(database: str, url: str, retention_days: int = 14) -> NativeTraceStorage:
-    return NativeTraceStorage(NativeTraceConfig(database, url, retention_days))
+    return NativeTraceStorage(NativeTraceConfig(database, url, retention_days, OTLP_MAX_ATTRIBUTE_VALUE_BYTES))
 
 
 @pytest.fixture
@@ -107,18 +96,18 @@ async def test_reader_rejects_arbitrary_sql_before_sending(recording_server: Rec
 @pytest.mark.asyncio
 async def test_schema_binding_rejects_invalid_database() -> None:
     with pytest.raises(ValueError, match=r"database.*retention"):
-        NativeTraceConfig("db; DROP DATABASE default", "http://localhost:8123", 14)
+        NativeTraceConfig("db; DROP DATABASE default", "http://localhost:8123", 14, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
 
 
 @pytest.mark.asyncio
 async def test_schema_binding_rejects_non_positive_retention() -> None:
     with pytest.raises(ValueError, match=r"database.*retention"):
-        NativeTraceConfig("traces", "http://localhost:8123", 0)
+        NativeTraceConfig("traces", "http://localhost:8123", 0, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
 
 
 def test_invalid_url_error_does_not_expose_credentials() -> None:
     with pytest.raises(RuntimeError, match="invalid ClickHouse HTTP URL") as error:
-        NativeTraceConfig("traces", "secret://writer:password@example.com", 7)
+        NativeTraceConfig("traces", "secret://writer:password@example.com", 7, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
     assert "password" not in str(error.value)
 
 
@@ -214,52 +203,15 @@ def _resource_export(attribute_bytes: int, span_count: int, groups: int = 1) -> 
     return json.dumps({"resourceSpans": [resource] * groups}).encode()
 
 
-def test_decode_and_tenant_stamping_share_resources_without_crossing_groups() -> None:
-    body: Final = _resource_export(128, 2, 2)
-    native: Final = trace_decode_otlp(body, "application/json")
-    assert native[0]["scope_name"] is native[1]["scope_name"]
-    assert native[0]["scope_version"] is native[1]["scope_version"]
-    assert native[0]["resource_attributes"] is native[1]["resource_attributes"]
-    assert native[2]["resource_attributes"] is native[3]["resource_attributes"]
-    assert native[0]["resource_attributes"] is not native[2]["resource_attributes"]
-    rows: Final = decode_otlp(body, "application/json")
-    first: Final = Tenant("team-a", "key-a", "org-a").stamp_rows(rows)
-    second: Final = Tenant("team-b", "key-b", "org-b").stamp_rows(rows)
-    assert first[0]["ResourceAttributes"] is first[1]["ResourceAttributes"]
-    assert first[2]["ResourceAttributes"] is first[3]["ResourceAttributes"]
-    assert first[0]["ResourceAttributes"] is not first[2]["ResourceAttributes"]
-    assert first[0]["ResourceAttributes"] is not second[0]["ResourceAttributes"]
-    assert first[0]["ResourceAttributes"] == {
-        "shared": "x" * 128,
-        "litellm.team_id": "team-a",
-        "litellm.api_key_hash": "key-a",
-        "litellm.org_id": "org-a",
-        "litellm.user_id": "",
-    }
-    assert second[0]["ResourceAttributes"]["litellm.team_id"] == "team-b"
-    assert rows[0]["ResourceAttributes"] == {"shared": "x" * 128, "litellm.team_id": "spoofed"}
-
-
-def test_normalized_field_contract_matches_decoded_rust_span() -> None:
-    body: Final = _resource_export(8, 1)
-    spans: Final = trace_decode_otlp(body, "application/json")
-    fields: Final = normalized_field_definitions()
-    assert len(spans) == 1
-    assert {field.name for field in fields} == set(spans[0]["normalized"]) == set(NormalizedSpan.model_fields)
-    assert len({field.clickhouse_column for field in fields}) == len(fields)
-
-
 @pytest.mark.asyncio
 async def test_resource_fanout_reaches_insert_with_identical_values(recording_server: RecordingServer) -> None:
     body: Final = _resource_export(16 * 1024, 1024)
-    receiver: Final = TraceReceiver(
-        TraceStore(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
-    )
+    receiver: Final = TraceReceiver(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
     tenant: Final = Tenant("team-a", "key-a", "org-a")
     assert await receiver.ingest(body, "application/json", None, tenant) == 1024
     encoded: Final = gzip.decompress(recording_server.requests[0].raw_body)
     actual: Final = tuple(json.loads(line) for line in encoded.splitlines())
-    expected: Final = tenant.stamp_rows(decode_otlp(body, "application/json"))
+    expected: Final = span_rows(body, "application/json", tenant)
     assert len(encoded) < 64 * 1024 * 1024
     assert tuple({key: value for key, value in row.items() if key != "EngineReceivedMs"} for row in actual) == tuple(
         {**row, "Timestamp": "1970-01-01T00:00:00.000000001Z"} for row in expected
@@ -271,9 +223,7 @@ async def test_resource_fanout_reaches_insert_with_identical_values(recording_se
 async def test_shared_resource_still_hits_insert_limit_before_transport(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = 0
     body: Final = _resource_export(64 * 1024, 1024)
-    receiver: Final = TraceReceiver(
-        TraceStore(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
-    )
+    receiver: Final = TraceReceiver(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
     with pytest.raises(TracingPayloadTooLargeError, match="encoded size limit"):
         await receiver.ingest(body, "application/json", None, Tenant("team-a", "key-a"))
     assert recording_server.requests == []
@@ -332,7 +282,7 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role, user_id=user_id, token="test")
-    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(storage)
 
     async def permitted_teams(auth: UserAPIKeyAuth) -> tuple[str, ...]:
         return ()
@@ -350,7 +300,10 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         assert client.post("/v1/traces/query", json={}).status_code == 422
 
 
-def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording_server: RecordingServer) -> None:
+@pytest.mark.parametrize("discovery_fails", (False, True))
+def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(
+    recording_server: RecordingServer, discovery_fails: bool
+) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -365,29 +318,38 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
         {"data": [{"name": "Model", "type": "String"}]},
         {"data": []},
         {"data": []},
-        {"data": [{"metadata": '{"custom": {"label": "hello"}}'}]},
-        {"data": [{"key": "custom.span"}]},
-        {"data": [{"key": "custom.resource"}]},
     ):
         recording_server.enqueue(ResponseSpec(body=response))
+    metadata: Final = (
+        ResponseSpec(status=503, body="discovery failed")
+        if discovery_fails
+        else ResponseSpec(body={"data": [{"metadata": '{"custom": {"label": "hello"}}'}]})
+    )
+    recording_server.enqueue(metadata)
+    recording_server.enqueue(ResponseSpec(body={"data": [{"key": "custom.span"}]}))
+    recording_server.enqueue(ResponseSpec(body={"data": [{"key": "custom.resource"}]}))
     storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role="proxy_admin", token="test")
-    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(storage)
     with TestClient(app) as client:
         result: Final = client.get("/v1/traces/query/help")
     assert result.status_code == 200, result.text
     body: Final = result.json()
     assert body["guide"].startswith("Trace SQL query guide")
-    assert "JSONExtractRaw(metadata, 'custom', 'label')" in body["guide"]
     assert body["tables"][0]["columns"] == [{"name": "Model", "type": "String"}]
-    assert body["metadata"]["fields"][1] == {
-        "path": ["custom", "label"],
-        "types": ["string"],
-        "expression": "JSONExtractRaw(metadata, 'custom', 'label')",
-    }
+    if discovery_fails:
+        assert body["metadata"]["fields"] == []
+        assert "503" in body["metadata"]["error"]
+    else:
+        assert "JSONExtractRaw(metadata, 'custom', 'label')" in body["guide"]
+        assert body["metadata"]["fields"][1] == {
+            "path": ["custom", "label"],
+            "types": ["string"],
+            "expression": "JSONExtractRaw(metadata, 'custom', 'label')",
+        }
     assert body["attributes"][0]["fields"][0]["expression"] == "SpanAttributes['custom.span']"
     assert body["attributes"][1]["fields"][0]["expression"] == "ResourceAttributes['custom.resource']"
 
@@ -428,7 +390,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role="proxy_admin", token="test")
-    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(storage)
     with TestClient(app) as client:
         failed: Final = client.post("/v1/traces/query", json={"sql": "SELEC 42"})
         assert failed.status_code == expected_status, failed.text
@@ -450,15 +412,10 @@ async def test_trace_receiver_reads_with_only_one_clickhouse_url(
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
     recording_server.enqueue(ResponseSpec(body={"data": [span_row]}))
     receiver: Final = TraceReceiver.from_env()
-    rows: Final = await receiver.store.storage.query(TRACE_SPANS, TraceSpansParams.model_validate(span_params))
-    assert rows == (
-        {
-            **span_row,
-            "start_ns": int(str(span_row["start_ns"])),
-            "duration_ns": int(str(span_row["duration_ns"])),
-            "error_truncated": False,
-        },
-    )
+    trace: Final = await receiver.get_trace("trace-1", {"all_teams": 1, "user_id": "", "team_ids": ()}, "ref")
+    assert trace is not None
+    assert trace["spans"][0]["span_id"] == span_row["span_id"]
+    assert trace["spans"][0]["duration_ms"] == int(str(span_row["duration_ns"])) / 1_000_000
     parameters: Final = parse_qs(urlsplit(recording_server.requests[0].path).query)
     assert parameters["database"] == ["trace_test"]
     assert parameters["readonly"] == ["1"]

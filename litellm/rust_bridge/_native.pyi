@@ -374,9 +374,8 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
-    "trace_decode_otlp",
     "trace_encode_error",
-    "trace_normalized_field_definitions",
+    "trace_span_rows",
     "transcription",
 ]
 

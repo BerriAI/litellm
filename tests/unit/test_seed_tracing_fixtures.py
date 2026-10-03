@@ -7,7 +7,7 @@ import pytest
 from prisma import Json
 from pydantic import InstanceOf, TypeAdapter
 
-from litellm.tracing.decode import decode_otlp
+from litellm.rust_bridge.trace.storage import span_rows
 from scripts.seed_tracing_fixtures import (
     JSON,
     SPEND_FIXTURE,
@@ -28,14 +28,14 @@ JSON_FIELDS: Final[TypeAdapter[tuple[Json, Json, Json]]] = TypeAdapter(
 @pytest.mark.requires_rust_extension
 def test_replay_preserves_trace_topology_usage_and_event_timing() -> None:
     export: Final = JSON.validate_json((TRACE_FIXTURES / "deeplite_swarm.json").read_bytes())
-    original: Final = decode_otlp(json.dumps(export).encode(), "application/json")
+    original: Final = span_rows(json.dumps(export).encode(), "application/json")
     spend_rows: Final = SPEND_ROWS.validate_python(
         tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
     )
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spend_rows))
     shifted: Final = rebase(export, 123_000_000, "first-run", pattern)
-    replayed: Final = decode_otlp(json.dumps(shifted).encode(), "application/json")
-    other_run: Final = decode_otlp(
+    replayed: Final = span_rows(json.dumps(shifted).encode(), "application/json")
+    other_run: Final = span_rows(
         json.dumps(rebase(export, 123_000_000, "second-run", pattern)).encode(), "application/json"
     )
     span_ids: Final = {before["SpanId"]: after["SpanId"] for before, after in zip(original, replayed, strict=True)}
@@ -63,7 +63,7 @@ def test_paired_fixture_joins_every_successful_llm_span_after_replay() -> None:
     )
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
     rebased_spends: Final = rebase_spend(spends, 123, "paired-run", pattern)
-    spans: Final = decode_otlp(
+    spans: Final = span_rows(
         json.dumps(rebase(export, 123_000_000, "paired-run", pattern)).encode(), "application/json"
     )
     llm_spans: Final = tuple(span for span in spans if span["ObservationType"] == "llm")
