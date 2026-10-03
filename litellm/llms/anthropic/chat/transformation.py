@@ -1690,6 +1690,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         return False
 
+    def should_strip_claude_code_identity(self) -> bool:
+        """
+        Whether to drop Claude Code's self-identification from the system prompt.
+
+        Distinct from ``should_strip_billing_metadata``: that drops the billing header on
+        every provider whose request shape rejects it, including Bedrock/Vertex/Azure, which
+        still serve *Claude* models. This only trips on providers whose
+        Anthropic-compatible endpoint serves a *different* model, where "You are Claude
+        Code" is a false self-description. The first-party config and the Claude-serving
+        providers keep it, so this stays False here.
+        """
+        return False
+
     def translate_system_message(self, messages: list[AllMessageValues]) -> list[AnthropicSystemMessageContent]:
         """
         Translate system message to anthropic format.
