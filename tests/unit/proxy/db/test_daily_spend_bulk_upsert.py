@@ -72,6 +72,15 @@ def test_null_and_empty_provider_merge_into_one_row(order):
     assert folded["api_requests"] == 4
 
 
+def test_unknown_timed_tokens_remain_unknown_when_rows_merge():
+    legacy = tag_txn()
+    del legacy["timed_completion_tokens"]
+
+    merged = merge_by_conflict_key(TAG_TABLE, (legacy, tag_txn(timed_completion_tokens=7)))
+
+    assert merged[0][1]["timed_completion_tokens"] is None
+
+
 def test_distinct_keys_are_not_merged_and_are_ordered_deterministically():
     unordered = (tag_txn(tag="z-team"), tag_txn(tag="a-team"), tag_txn(tag="m-team"))
 

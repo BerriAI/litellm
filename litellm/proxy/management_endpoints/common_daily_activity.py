@@ -162,7 +162,7 @@ class DailySpendRecord(Protocol):
     def timed_requests(self) -> int: ...
 
     @property
-    def timed_completion_tokens(self) -> int: ...
+    def timed_completion_tokens(self) -> int | None: ...
 
 
 class _KeyMetadataDict(TypedDict, total=False):
@@ -241,13 +241,13 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
 
 
 def _provider_throughput(
-    timed_completion_tokens: int,
+    timed_completion_tokens: int | None,
     total_response_time_ms: int,
     timed_requests: int,
 ) -> ProviderThroughputMetrics:
     output_tokens_per_second: Final = (
         timed_completion_tokens * 1000 / total_response_time_ms
-        if timed_requests > 0 and total_response_time_ms > 0
+        if timed_completion_tokens is not None and timed_requests > 0 and total_response_time_ms > 0
         else None
     )
     return ProviderThroughputMetrics(
@@ -258,18 +258,34 @@ def _provider_throughput(
     )
 
 
+def _combined_timed_completion_tokens(
+    existing: ProviderThroughputMetrics | None,
+    current: int | None,
+) -> int | None:
+    if existing is None:
+        return current
+    if existing.timed_completion_tokens is None or current is None:
+        return None
+    return existing.timed_completion_tokens + current
+
+
 def _update_provider_throughput(
     target: MetricWithMetadata,
     provider: str,
     record: DailySpendRecord,
 ) -> None:
-    existing: Final = target.provider_breakdown.get(provider, ProviderThroughputMetrics())
+    existing: Final = target.provider_breakdown.get(provider)
+    timed_completion_tokens: Final = _combined_timed_completion_tokens(
+        existing,
+        record.timed_completion_tokens,
+    )
     target.provider_breakdown = {
         **target.provider_breakdown,
         provider: _provider_throughput(
-            timed_completion_tokens=existing.timed_completion_tokens + (record.timed_completion_tokens or 0),
-            total_response_time_ms=existing.total_response_time_ms + (record.total_response_time_ms or 0),
-            timed_requests=existing.timed_requests + (record.timed_requests or 0),
+            timed_completion_tokens=timed_completion_tokens,
+            total_response_time_ms=(existing.total_response_time_ms if existing is not None else 0)
+            + (record.total_response_time_ms or 0),
+            timed_requests=(existing.timed_requests if existing is not None else 0) + (record.timed_requests or 0),
         ),
     }
 
@@ -844,7 +860,7 @@ def _aggregate_grouping_sets_records_sync(
                 metadata={},
                 provider_breakdown={
                     provider: _provider_throughput(
-                        record.timed_completion_tokens or 0,
+                        record.timed_completion_tokens,
                         record.total_response_time_ms or 0,
                         record.timed_requests or 0,
                     )
@@ -854,7 +870,7 @@ def _aggregate_grouping_sets_records_sync(
         parent.provider_breakdown = {
             **parent.provider_breakdown,
             provider: _provider_throughput(
-                record.timed_completion_tokens or 0,
+                record.timed_completion_tokens,
                 record.total_response_time_ms or 0,
                 record.timed_requests or 0,
             ),

@@ -125,6 +125,20 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+def _counter_total(column: str, group: Sequence[SpendRow]) -> int | None:
+    values: Final = tuple(row.get(column) for row in group)
+    if column == "timed_completion_tokens" and any(value is None for value in values):
+        return None
+    return sum(_as_int(value) for value in values)
+
+
+def _counter_value(column: str, transaction: SpendRow) -> int | None:
+    value: Final = transaction.get(column)
+    if column == "timed_completion_tokens" and value is None:
+        return None
+    return _as_int(value)
+
+
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
     return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
@@ -135,7 +149,7 @@ def _merge(group: Sequence[SpendRow]) -> SpendRow:
         return group[0]
     return {
         **group[0],
-        **{column: sum(_as_int(row.get(column)) for row in group) for column in _COUNTER_COLUMNS},
+        **{column: _counter_total(column, group) for column in _COUNTER_COLUMNS},
         **{column: sum(_as_float(row.get(column)) for row in group) for column in _SPEND_COLUMNS},
     }
 
@@ -166,7 +180,7 @@ def _row_params(
         str(uuid.uuid4()),
         *key,
         None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
-        *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
+        *(_counter_value(column, transaction) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
     )

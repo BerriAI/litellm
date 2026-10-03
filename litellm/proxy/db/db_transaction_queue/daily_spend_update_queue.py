@@ -22,6 +22,10 @@ def _daily_spend_updates(
         yield from update.items()
 
 
+def _sum_timed_completion_tokens(left: int | None, right: int | None) -> int | None:
+    return left + right if left is not None and right is not None else None
+
+
 def _merge_daily_spend_transactions(
     existing: BaseDailySpendTransaction,
     payload: BaseDailySpendTransaction,
@@ -51,8 +55,10 @@ def _merge_daily_spend_transactions(
         "total_response_time_ms": (existing.get("total_response_time_ms", 0) or 0)
         + (payload.get("total_response_time_ms", 0) or 0),
         "timed_requests": (existing.get("timed_requests", 0) or 0) + (payload.get("timed_requests", 0) or 0),
-        "timed_completion_tokens": (existing.get("timed_completion_tokens", 0) or 0)
-        + (payload.get("timed_completion_tokens", 0) or 0),
+        "timed_completion_tokens": _sum_timed_completion_tokens(
+            existing.get("timed_completion_tokens"),
+            payload.get("timed_completion_tokens"),
+        ),
     }
 
 

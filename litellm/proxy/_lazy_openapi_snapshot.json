@@ -4364,9 +4364,15 @@
               "title": "Output Tokens Per Second"
             },
             "timed_completion_tokens": {
-              "default": 0,
-              "title": "Timed Completion Tokens",
-              "type": "integer"
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Timed Completion Tokens"
             },
             "timed_requests": {
               "default": 0,

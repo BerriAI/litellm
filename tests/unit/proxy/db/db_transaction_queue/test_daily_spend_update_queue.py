@@ -575,7 +575,15 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
 
     await daily_spend_update_queue.add_update({test_key: dict(base)})
     await daily_spend_update_queue.add_update(
-        {test_key: {**base, "autorouter_savings_spend": 0.25, "total_response_time_ms": 900, "timed_requests": 1}}
+        {
+            test_key: {
+                **base,
+                "autorouter_savings_spend": 0.25,
+                "total_response_time_ms": 900,
+                "timed_requests": 1,
+                "timed_completion_tokens": 5,
+            }
+        }
     )
     await daily_spend_update_queue.aggregate_queue_updates()
     updates = await daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
@@ -583,3 +591,4 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
     assert updates[0][test_key]["autorouter_savings_spend"] == pytest.approx(0.25)
     assert updates[0][test_key]["total_response_time_ms"] == 900
     assert updates[0][test_key]["timed_requests"] == 1
+    assert updates[0][test_key]["timed_completion_tokens"] is None

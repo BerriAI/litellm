@@ -41076,11 +41076,8 @@ export interface components {
         ProviderThroughputMetrics: {
             /** Output Tokens Per Second */
             output_tokens_per_second?: number | null;
-            /**
-             * Timed Completion Tokens
-             * @default 0
-             */
-            timed_completion_tokens: number;
+            /** Timed Completion Tokens */
+            timed_completion_tokens?: number | null;
             /**
              * Timed Requests
              * @default 0

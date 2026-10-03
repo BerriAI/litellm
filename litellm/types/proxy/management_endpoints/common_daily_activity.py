@@ -57,7 +57,7 @@ class KeyMetricWithMetadata(MetricBase):
 
 
 class ProviderThroughputMetrics(BaseModel):
-    timed_completion_tokens: int = Field(default=0)
+    timed_completion_tokens: int | None = Field(default=None)
     total_response_time_ms: int = Field(default=0)
     timed_requests: int = Field(default=0)
     output_tokens_per_second: float | None = Field(default=None)

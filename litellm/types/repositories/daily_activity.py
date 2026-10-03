@@ -185,7 +185,7 @@ class DailyActivityRow(Protocol):
     failed_requests: int
     total_response_time_ms: int
     timed_requests: int
-    timed_completion_tokens: int
+    timed_completion_tokens: int | None
 
 
 @dataclass(frozen=True, slots=True)

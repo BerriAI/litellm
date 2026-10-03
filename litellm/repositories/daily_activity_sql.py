@@ -130,7 +130,10 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(failed_requests)::bigint AS failed_requests,
             SUM(total_response_time_ms)::bigint AS total_response_time_ms,
             SUM(timed_requests)::bigint AS timed_requests,
-            SUM(timed_completion_tokens)::bigint AS timed_completion_tokens"""
+            CASE
+                WHEN COUNT(timed_completion_tokens) = COUNT(*) THEN SUM(timed_completion_tokens)::bigint
+                ELSE NULL::bigint
+            END AS timed_completion_tokens"""
 
 
 def _validate_api_key_limit(api_key_limit: int) -> None:
