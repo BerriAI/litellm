@@ -1,4 +1,4 @@
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
@@ -42,6 +42,23 @@ describe("SemanticKeywordMatching", () => {
   it("shows a validation error when showValidationErrors is true and no embedding model is set", () => {
     renderWithProviders(<SemanticKeywordMatching {...baseProps} showValidationErrors={true} />);
     expect(screen.getByText("An embedding model is required")).toBeInTheDocument();
+  });
+
+  it("keeps the minimum match score empty while it is being edited, then commits the new score", () => {
+    const onMatchThresholdChange = vi.fn();
+    renderWithProviders(
+      <SemanticKeywordMatching {...baseProps} onMatchThresholdChange={onMatchThresholdChange} matchThreshold={0.5} />,
+    );
+
+    const input = screen.getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(input).toHaveValue(null);
+    expect(onMatchThresholdChange).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "0.8" } });
+
+    expect(onMatchThresholdChange).toHaveBeenCalledWith(0.8);
   });
 
   it("hides the validation error once an embedding model is set", () => {
