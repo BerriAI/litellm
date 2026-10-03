@@ -102,14 +102,8 @@ impl<'a> Resolution<'a> {
             .map(|source| self.requests(source))
             .collect();
         let transports: Vec<_> = self
-            .graph
-            .descendants(call)
+            .transports(call)
             .into_iter()
-            .filter(|descendant| {
-                self.row(*descendant)
-                    .call_keys
-                    .contains(&CallKey::Transport)
-            })
             .map(|transport| self.requests(transport))
             .collect();
         let transport_requests: Option<Vec<Requests<'a>>> = (!transports.is_empty())
@@ -138,6 +132,32 @@ impl<'a> Resolution<'a> {
                 .into_values()
                 .collect(),
         )
+    }
+
+    /// The request attempts a model call made: its transport descendants, or, for bridges that
+    /// emit the request beside the call instead of under it, the transport siblings when the call
+    /// is the only model call under that parent.
+    fn transports(&self, call: usize) -> Vec<usize> {
+        let is_transport = |index: &usize| self.row(*index).call_keys.contains(&CallKey::Transport);
+        let nested: Vec<usize> = self
+            .graph
+            .descendants(call)
+            .into_iter()
+            .filter(is_transport)
+            .collect();
+        let Some(parent) = self.graph.parent(call).filter(|_| nested.is_empty()) else {
+            return nested;
+        };
+        let siblings = self.graph.children(parent);
+        let lone_call = siblings
+            .iter()
+            .filter(|sibling| self.kind(**sibling) == ObservationType::Llm)
+            .count()
+            == 1;
+        if !lone_call {
+            return nested;
+        }
+        siblings.into_iter().filter(is_transport).collect()
     }
 
     pub(super) fn unique_tools(&self) -> Vec<usize> {

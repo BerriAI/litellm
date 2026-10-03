@@ -690,6 +690,36 @@ fn generic_ids_do_not_prove_call_completeness(
 }
 
 #[rstest]
+#[case::chat("chat", true)]
+#[case::text_completion("text_completion", true)]
+#[case::generate_content("generate_content", true)]
+#[case::agent("invoke_agent", false)]
+#[case::tool("execute_tool", false)]
+fn genai_model_operations_with_a_response_id_are_complete_calls(
+    span: Span,
+    #[case] operation: &str,
+    #[case] complete: bool,
+) {
+    let decoded = decode(
+        span,
+        "custom",
+        &[
+            ("gen_ai.operation.name", operation),
+            ("gen_ai.response.id", "chatcmpl-1"),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let keys = std::collections::BTreeSet::from([CallKey::ProviderResponse("chatcmpl-1".into())]);
+    let expected = if complete {
+        CallEvidence::Complete(keys)
+    } else {
+        CallEvidence::Partial(keys)
+    };
+    assert_eq!(decoded.normalized.calls, expected);
+}
+
+#[rstest]
 fn transport_contract_keeps_independent_call_ids(span: Span) {
     let decoded = decode(
         span,

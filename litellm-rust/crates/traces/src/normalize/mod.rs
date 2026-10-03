@@ -129,7 +129,7 @@ impl CallEvidence {
             .unwrap_or(if Self::row_keys(row).is_empty() {
                 CallEvidenceKind::Unknown
             } else {
-                CallEvidenceKind::Partial
+                CallEvidenceKind::Complete
             });
         match kind {
             CallEvidenceKind::Complete => Self::Complete(Self::row_keys(row)),

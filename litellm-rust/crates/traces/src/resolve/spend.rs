@@ -194,17 +194,34 @@ pub(super) fn requests<'a>(
     spend_rows: &'a [SpendRow],
 ) -> SpendEvidence<'a> {
     let evidence = CallEvidence::from_row(row);
-    let matches = evidence
+    let keyed: Vec<(&CallKey, Requests<'a>)> = evidence
         .key_set()
         .into_iter()
         .flatten()
         .map(|key| {
-            KeyMatch::new(
+            (
+                key,
                 matches(ownership, spend_rows, key, row)
                     .into_values()
                     .collect(),
             )
         })
+        .collect();
+    let anchored: Vec<&SpendRow> = keyed
+        .iter()
+        .filter(|(key, _)| !matches!(key, CallKey::LiteLlmRequest(_)))
+        .flat_map(|(_, requests)| requests.iter().copied())
+        .collect();
+    let legacy_rows = !anchored.is_empty()
+        && anchored
+            .iter()
+            .all(|request| request.litellm_call_id.is_empty());
+    let matches = keyed
+        .into_iter()
+        .filter(|(key, requests)| {
+            !(legacy_rows && requests.is_empty() && matches!(key, CallKey::LiteLlmRequest(_)))
+        })
+        .map(|(_, requests)| KeyMatch::new(requests))
         .collect();
     match evidence.kind() {
         CallEvidenceKind::Complete => SpendEvidence::Complete(matches),

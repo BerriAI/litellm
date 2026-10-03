@@ -567,6 +567,74 @@ fn transport_spans_complete_a_call_without_its_own_id() {
 }
 
 #[rstest]
+#[case::lone_call(1, Some(0.5))]
+#[case::two_calls(2, None)]
+fn sibling_transports_belong_to_the_only_model_call_under_their_parent(
+    #[case] calls: usize,
+    #[case] expected: Option<f64>,
+) {
+    let mut transport = row("http", "step", "gateway.request", "framework", "");
+    transport.trace_id = "trace".into();
+    transport.call_keys = vec!["transport:".parse().unwrap()];
+    transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
+    let mut rows = vec![
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(row("step", "agent", "step", "chain", ""), "team", "", "key"),
+        owned(transport, "team", "", "key"),
+    ];
+    for index in 0..calls {
+        let mut call = llm(&format!("chat-{index}"), "step", "agent", "");
+        call.call_evidence = None;
+        rows.push(owned(call, "team", "", "key"));
+    }
+    let mut logged = spend("request", "", "team", "", "key", 0.5);
+    logged.trace_id = "trace".into();
+    logged.span_id = "http".into();
+    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::legacy_row("", Some(0.5))]
+#[case::other_call("other-call", None)]
+fn gateway_id_miss_only_vetoes_rows_that_carry_a_call_id(
+    #[case] logged_call_id: &str,
+    #[case] expected: Option<f64>,
+) {
+    let mut transport = row("http", "llm", "gateway.request", "framework", "");
+    transport.trace_id = "trace".into();
+    transport.call_keys = vec![
+        "transport:".parse().unwrap(),
+        "litellm_request:gateway-call".parse().unwrap(),
+    ];
+    transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
+    let mut call = llm("llm", "agent", "agent", "");
+    call.trace_id = "trace".into();
+    let rows = [
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(call, "team", "", "key"),
+        owned(transport, "team", "", "key"),
+    ];
+    let mut logged = spend("chatcmpl-1", "chatcmpl-1", "team", "", "key", 0.5);
+    logged.trace_id = "trace".into();
+    logged.span_id = "http".into();
+    logged.litellm_call_id = logged_call_id.into();
+    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+}
+
+#[rstest]
 fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
     let summary = listed_summary(&ListTracesRow {
         trace_id: "t1".into(),
@@ -805,7 +873,7 @@ fn complete_wrapper_accounts_for_retries_missing_from_the_call_span() {
 }
 
 #[rstest]
-#[case::legacy(None, None)]
+#[case::legacy(None, Some(0.25))]
 #[case::unknown(Some(litellm_traces::CallEvidenceKind::Unknown), None)]
 #[case::partial(Some(litellm_traces::CallEvidenceKind::Partial), None)]
 #[case::complete(Some(litellm_traces::CallEvidenceKind::Complete), Some(0.25))]
