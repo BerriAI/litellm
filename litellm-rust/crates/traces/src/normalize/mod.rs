@@ -223,10 +223,24 @@ fn tokens(attributes: &BTreeMap<String, String>, key: &str) -> Result<u32, Error
     }
 }
 
+fn token_alias(attributes: &BTreeMap<String, String>, keys: &[&'static str]) -> Result<u32, Error> {
+    select_attribute(attributes, keys)
+        .map_or(Ok(0), |attribute| tokens(attributes, attribute.source))
+}
+
 fn usage_tokens(attributes: &BTreeMap<String, String>) -> Result<(u32, u32), Error> {
     Ok((
-        tokens(attributes, "gen_ai.usage.input_tokens")?,
-        tokens(attributes, "gen_ai.usage.output_tokens")?,
+        token_alias(
+            attributes,
+            &["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens"],
+        )?,
+        token_alias(
+            attributes,
+            &[
+                "gen_ai.usage.output_tokens",
+                "gen_ai.usage.completion_tokens",
+            ],
+        )?,
     ))
 }
 

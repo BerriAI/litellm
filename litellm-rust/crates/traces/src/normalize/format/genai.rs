@@ -17,9 +17,11 @@ pub(crate) enum Operation {
     InvokeAgent,
     InvokeWorkflow,
     Chat,
+    #[strum(serialize = "text_completion", serialize = "completion")]
     TextCompletion,
     GenerateContent,
     ExecuteTool,
+    #[strum(serialize = "embeddings", serialize = "embedding")]
     Embeddings,
     Retrieval,
 }
@@ -59,7 +61,31 @@ const OUTPUT_KEYS: [&str; 4] = [
 /// The messages key comes first and is put in the common format; other payloads stay as recorded.
 fn payload(context: &SpanContext<'_>, keys: &[&'static str]) -> Payload {
     let Some(attribute) = select_attribute(context.attributes, keys) else {
-        return Payload::default();
+        let prefix = if keys[0] == INPUT_KEYS[0] {
+            "gen_ai.prompt"
+        } else {
+            "gen_ai.completion"
+        };
+        let indexed = messages::indexed(context.attributes, prefix);
+        return Payload {
+            text: indexed
+                .or_else(|| {
+                    let events: Vec<_> = context
+                        .events
+                        .iter()
+                        .filter_map(|event| {
+                            let encoded = attr(&event.attributes, "gen_ai.event.content");
+                            let value = serde_json::from_str(encoded).unwrap_or_else(|_| {
+                                serde_json::to_value(&event.attributes).unwrap_or_default()
+                            });
+                            messages::event_message(&event.name, &value)
+                        })
+                        .collect();
+                    messages::event_payload(&events, keys[0] == OUTPUT_KEYS[0])
+                })
+                .unwrap_or_default(),
+            consumed: None,
+        };
     };
     Payload {
         text: if attribute.source == keys[0] {

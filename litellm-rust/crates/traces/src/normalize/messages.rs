@@ -251,6 +251,114 @@ pub(super) fn flattened(
     (!messages.is_empty()).then_some(messages)
 }
 
+pub(super) fn indexed(attributes: &BTreeMap<String, String>, prefix: &str) -> Option<String> {
+    let indices: BTreeSet<usize> = attributes
+        .keys()
+        .filter_map(|key| {
+            key.strip_prefix(prefix)?
+                .strip_prefix('.')?
+                .split('.')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .collect();
+    let values: Vec<Value> = indices
+        .into_iter()
+        .filter_map(|index| {
+            let base = format!("{prefix}.{index}.");
+            let fields = Value::Object(
+                attributes
+                    .range(base.clone()..)
+                    .take_while(|(key, _)| key.starts_with(&base))
+                    .filter_map(|(key, value)| {
+                        let suffix = key.strip_prefix(&base)?;
+                        Some((
+                            suffix.strip_prefix("message.").unwrap_or(suffix).to_owned(),
+                            Value::from(value.clone()),
+                        ))
+                    })
+                    .collect(),
+            );
+            let content = fields.get("content");
+            let calls = event_tool_calls(&fields);
+            if content.is_none() && calls.is_none() {
+                return None;
+            }
+            Some(serde_json::json!({
+                "role": fields.get("role")?,
+                "content": content.cloned().unwrap_or(Value::from("")),
+                "tool_calls": calls,
+            }))
+        })
+        .collect();
+    (!values.is_empty()).then(|| canonical(&encode(&values)))
+}
+
+fn event_tool_calls(value: &Value) -> Option<Value> {
+    if let Some(calls) = value.get("tool_calls") {
+        return Some(calls.clone());
+    }
+    let indices: BTreeSet<usize> = value
+        .as_object()?
+        .keys()
+        .filter_map(|key| {
+            key.strip_prefix("tool_calls.")?
+                .split('.')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .collect();
+    let calls: Vec<Value> = indices
+        .into_iter()
+        .filter_map(|index| {
+            let prefix = format!("tool_calls.{index}");
+            Some(serde_json::json!({
+                "id": value.get(format!("{prefix}.id")),
+                "name": value.get(format!("{prefix}.function.name"))?,
+                "arguments": value.get(format!("{prefix}.function.arguments")),
+            }))
+        })
+        .collect();
+    (!calls.is_empty()).then_some(Value::Array(calls))
+}
+
+pub(super) fn event_message(name: &str, value: &Value) -> Option<(bool, Value)> {
+    let (output, role) = match name {
+        "gen_ai.system.message" => (false, "system"),
+        "gen_ai.user.message" | "gen_ai.content.prompt" => (false, "user"),
+        "gen_ai.assistant.message" | "gen_ai.choice" | "gen_ai.content.completion" => {
+            (true, "assistant")
+        }
+        "gen_ai.tool.message" => (true, "tool"),
+        _ => return None,
+    };
+    let body = value.get("message").unwrap_or(value);
+    let content = body.get("content").or_else(|| value.get("message.content"));
+    let calls = event_tool_calls(body);
+    if content.is_none() && calls.is_none() {
+        return None;
+    }
+    Some((
+        output,
+        serde_json::json!({
+            "role": body.get("role").or_else(|| value.get("message.role")).cloned().unwrap_or(Value::from(role)),
+            "content": content.cloned().unwrap_or(Value::from("")),
+            "tool_calls": calls,
+        }),
+    ))
+}
+
+pub(super) fn event_payload(events: &[(bool, Value)], output: bool) -> Option<String> {
+    let values: Vec<&Value> = events
+        .iter()
+        .filter(|(direction, _)| *direction == output)
+        .map(|(_, value)| value)
+        .collect();
+    (!values.is_empty()).then(|| canonical(&encode(&values)))
+}
+
 /// The latest user message with text.
 pub(super) fn preview(messages: &[Message]) -> String {
     messages

@@ -6,7 +6,10 @@ use crate::Error;
 pub(crate) mod claude_code;
 pub(crate) mod genai;
 pub(crate) mod langsmith;
+pub(crate) mod logfire;
 pub(crate) mod openinference;
+pub(crate) mod traceloop;
+pub(crate) mod vercel;
 
 /// What a span records, read in its convention's format.
 #[derive(Debug, Default)]
@@ -63,10 +66,13 @@ pub(crate) trait Format {
 }
 
 /// In precedence order. `gen_ai` accepts every span, so it is last.
-const FORMATS: [&dyn Format; 4] = [
+const FORMATS: [&dyn Format; 7] = [
     &claude_code::ClaudeCode,
     &langsmith::LangSmith,
     &openinference::OpenInference,
+    &traceloop::Traceloop,
+    &vercel::Vercel,
+    &logfire::Logfire,
     &genai::GenAi,
 ];
 

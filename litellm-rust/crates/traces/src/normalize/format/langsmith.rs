@@ -3,13 +3,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::Value;
 
-use super::{Extraction, Format, SpanFacts};
+use super::{Extraction, Format, SpanFacts, genai::GenAi};
 use crate::{
     Error,
     normalize::{
         CallEvidence, ObservationType, RoleEvidence, SpanContext, attr,
         messages::{RawMessage, encode, langchain_result},
-        present, usage_tokens,
+        present,
     },
 };
 
@@ -227,26 +227,28 @@ impl Format for LangSmith {
 
     fn extract(&self, context: &SpanContext<'_>) -> Result<Extraction, Error> {
         let attributes = context.attributes;
-        let (input_tokens, output_tokens) = usage_tokens(attributes)?;
+        let base = GenAi.extract(context)?;
         let observation_type = span_type(context.name, context.parent_span_id, attributes);
         let io = span_io(observation_type, attributes);
         Ok(Extraction {
             facts: SpanFacts {
                 role: Some(RoleEvidence::Declared(observation_type)),
                 agent_name: present(attributes, &["langsmith.metadata.lc_agent_name"]),
-                model: present(attributes, &["gen_ai.request.model"]),
-                input_tokens,
-                output_tokens,
-                input: io.input,
-                output: io.output,
+                input: if attr(attributes, "gen_ai.prompt").is_empty() {
+                    base.facts.input
+                } else {
+                    io.input
+                },
+                output: if attr(attributes, "gen_ai.completion").is_empty() {
+                    base.facts.output
+                } else {
+                    io.output
+                },
                 calls: io.calls,
-                ..SpanFacts::default()
+                ..base.facts
             },
             display_name: None,
-            consumed_attributes: ["gen_ai.prompt", "gen_ai.completion"]
-                .into_iter()
-                .filter(|key| attributes.contains_key(*key))
-                .collect(),
+            consumed_attributes: base.consumed_attributes,
         })
     }
 }
