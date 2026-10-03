@@ -3,11 +3,11 @@ import {
   analysisModel,
   conclusions,
   liveStats,
-  modelName,
   outcome,
   playbackPhase,
   playbackReducer,
   providerOf,
+  queueRows,
   rateLabel,
   reviewKey,
   shownCount,
@@ -55,10 +55,6 @@ describe("provider from model", () => {
     expect(analysisModel([])).toBe("");
   });
 
-  it("drops only the provider prefix from the model name", () => {
-    expect(modelName("openrouter/meta/llama")).toBe("meta/llama");
-    expect(modelName("analysis")).toBe("analysis");
-  });
 });
 
 describe("review outcome", () => {
@@ -109,11 +105,16 @@ describe("conclusions", () => {
 
 describe("playback pacing", () => {
   it("slows to a full window for one review and speeds up as the backlog grows", () => {
-    expect(stepDuration(1)).toBe(4200);
-    expect(stepDuration(4)).toBe(1050);
-    expect(stepDuration(10)).toBeLessThan(stepDuration(4));
-    expect(stepDuration(10_000)).toBe(140);
-    expect(stepDuration(0)).toBe(4200);
+    expect(stepDuration(1)).toBe(2400);
+    expect(stepDuration(2)).toBe(1200);
+    expect(stepDuration(10)).toBeLessThan(stepDuration(2));
+    expect(stepDuration(0)).toBe(2400);
+  });
+
+  it("streams a large backlog at 150ms per review or faster", () => {
+    expect(stepDuration(16)).toBeLessThanOrEqual(150);
+    expect(stepDuration(60)).toBeLessThanOrEqual(150);
+    expect(stepDuration(10_000)).toBe(60);
   });
 
   it("highlights spans one at a time, then types reasoning, then shows the verdict", () => {
@@ -178,6 +179,13 @@ describe("playback queue", () => {
     expect(settled.current?.execution_id).toBe("e");
     expect(settled.played.map((r) => r.execution_id)).toEqual(["a", "b", "c", "d"]);
     expect(settled.pending).toEqual([]);
+  });
+
+  it("lists the newest review first, starting with the one being read", () => {
+    const start = startPlayback(reviews, false);
+    expect(queueRows(start, 3).map((r) => r.execution_id)).toEqual(["e", "d", "c"]);
+    const live = playbackReducer(startPlayback(reviews, true), { type: "tick", now: 0 });
+    expect(queueRows(live, 10).map((r) => r.execution_id)).toEqual(["c", "b", "a"]);
   });
 
   it("counts reviews beyond the capped list without counting the unplayed backlog", () => {

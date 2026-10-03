@@ -23,14 +23,12 @@ export interface LiveStats {
   elapsedSeconds: number;
 }
 
-const PACE_WINDOW_MS = 4200;
-const MIN_STEP_MS = 140;
-const COMPACT_STEP_MS = 700;
+const PACE_WINDOW_MS = 2400;
+const MIN_STEP_MS = 60;
+const COMPACT_STEP_MS = 500;
 const READ_SHARE = 0.35;
 const TYPE_SHARE = 0.45;
 const REPLAY_ON_OPEN = 3;
-
-const PROVIDER_ACCENT: Readonly<Record<string, string>> = { cerebras: "#f05a28" };
 
 export function reviewKey(review: Pick<Review, "execution_id" | "at">): string {
   return `${review.execution_id}@${review.at}`;
@@ -39,14 +37,6 @@ export function reviewKey(review: Pick<Review, "execution_id" | "at">): string {
 export function providerOf(model: string): string {
   const slash = model.indexOf("/");
   return slash > 0 ? model.slice(0, slash).toLowerCase() : "";
-}
-
-export function modelName(model: string): string {
-  return model.slice(model.indexOf("/") + 1);
-}
-
-export function providerAccent(provider: string): string | undefined {
-  return PROVIDER_ACCENT[provider];
 }
 
 export function outcome(review: Pick<Review, "cannot_assess" | "verdicts">): Outcome {
@@ -205,6 +195,11 @@ export function playbackReducer(state: Playback, action: PlaybackAction): Playba
     case "settle":
       return settle(state);
   }
+}
+
+export function queueRows(playback: Pick<Playback, "played" | "current">, limit: number): Review[] {
+  const newest = playback.current ? [playback.current] : [];
+  return [...newest, ...[...playback.played].reverse()].slice(0, limit);
 }
 
 export function shownCount(reviewed: number, playback: Pick<Playback, "played" | "current" | "pending">): number {
