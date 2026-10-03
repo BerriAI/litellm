@@ -132,6 +132,45 @@ ingress:
   #    hosts:
   #      - chart-example.local
 
+# Gateway API route, as an alternative to ingress.* on clusters served by a
+# Gateway rather than an ingress controller. Independent of ingress.enabled:
+# both can be on during a migration. The Gateway itself is not created here;
+# it is usually owned by the platform team and shared across namespaces, so
+# this chart only attaches a route to it. Needs the Gateway API CRDs installed
+# in the cluster.
+httpRoute:
+  enabled: false
+  labels: {}
+  annotations: {}
+  # The Gateway(s) this route attaches to. Required when enabled: a route with
+  # no parent is never attached to a listener, so it accepts no traffic. Set
+  # `namespace` for a Gateway outside the release namespace, whose listener
+  # must also allow routes from this namespace.
+  parentRefs: []
+  #  - name: example-gateway
+  #    namespace: example-gateway-namespace
+  #    sectionName: https
+  # Hostnames this route answers on. Each has to match a hostname the parent
+  # listener serves. Leave empty to inherit every hostname of the listener.
+  hostnames: []
+  #  - api.example.local
+  # Routing rules. Every rule is backed by this chart's Service on
+  # service.port; matches, filters, and timeouts are passed through as written.
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      # filters:
+      #   - type: RequestHeaderModifier
+      #     requestHeaderModifier:
+      #       add:
+      #         - name: X-Custom-Header
+      #           value: custom-value
+      # timeouts:
+      #   request: 10s
+      #   backendRequest: 2s
+
 # masterkey: changeit
 
 # if set, use this secret for the master key; otherwise, autogenerate a new one
