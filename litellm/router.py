@@ -196,6 +196,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     _get_cooldown_deployments,
     _set_cooldown_deployments,
+    deployment_ids,
     is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
@@ -7212,7 +7213,17 @@ class Router:
         # that fails with RouterRateLimitError whenever the "remaining" entries
         # are all in cooldown — the inner async_get_healthy_deployments call
         # would find an empty list and raise immediately.
-        cooldown_ids = set(await _async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=None))
+        cooldown_ids = set(
+            await _async_get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=None,
+                model_ids=list(
+                    cast(  # cast-ok: all_ids holds the non-None ids built above
+                        "set[str]", all_ids
+                    )
+                ),
+            )
+        )
         remaining: Final = (all_ids - cooldown_ids) - excluded
         if not remaining:
             return None
@@ -8572,7 +8583,13 @@ class Router:
             pass
 
         unhealthy_deployments: Final = _get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", _all_deployments
+                )
+            ),
         )
         unhealthy_set: Final = set(unhealthy_deployments)
         healthy_deployments: list = [d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set]
@@ -8600,7 +8617,13 @@ class Router:
             pass
 
         unhealthy_deployments: Final = await _async_get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", _all_deployments
+                )
+            ),
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set: Final = set(unhealthy_deployments)
@@ -11487,12 +11510,7 @@ class Router:
 
     @staticmethod
     def _deployment_ids(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
-        return frozenset(
-            str(model_info["id"])
-            for deployment in deployments
-            for model_info in (deployment.get("model_info"),)
-            if isinstance(model_info, Mapping) and model_info.get("id") is not None
-        )
+        return frozenset(deployment_ids(deployments))
 
     def has_model_id(self, candidate_id: str) -> bool:
         """
@@ -13037,7 +13055,15 @@ class Router:
 
         routing_read_batch: Final = RoutingReadBatch.active()
         cooldown_deployments: Final = (
-            await _async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            await _async_get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=parent_otel_span,
+                model_ids=deployment_ids(
+                    cast(  # cast-ok: router deployments are dicts carrying model_info
+                        "list[dict[str, object]]", healthy_deployments
+                    )
+                ),
+            )
             if routing_read_batch is None
             else await routing_read_batch.async_get_cooldown_deployments(
                 litellm_router_instance=self,
@@ -14186,7 +14212,13 @@ class Router:
         )
 
         cooldown_deployments: Final = _get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", healthy_deployments
+                )
+            ),
         )
         _pre_cooldown_deployments: Final = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
@@ -14374,7 +14406,13 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
         cooldown_deployments: Final = _get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", pass_through_deployments
+                )
+            ),
         )
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,

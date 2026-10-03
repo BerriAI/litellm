@@ -632,6 +632,35 @@ async def test_arming_outside_a_request_scope_is_a_no_op():
 
 
 @pytest.mark.asyncio
+async def test_the_armed_prefetch_reads_cooldowns_only_for_the_requests_model_group():
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    other_group = {**_deployment("dep-x"), "model_name": "other"}
+    router = Router(
+        model_list=[_deployment("dep-a"), _deployment("dep-b"), other_group], routing_strategy="simple-shuffle"
+    )
+    router._update_redis_cache(cache=redis_cache)
+    limiter = _limiter(redis_cache)
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await limiter.atomic_check_and_increment_by_n(
+            descriptors=[_descriptor("api_key", "k1", 10)],
+            increments=[{"requests": 1}],
+        )
+        deployment = await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    assert set(client.pipelines[0].commands[0][1:]) == {
+        CooldownCache.get_cooldown_cache_key("dep-a"),
+        CooldownCache.get_cooldown_cache_key("dep-b"),
+    }
+    assert redis_cache.alone == []
+
+
+@pytest.mark.asyncio
 async def test_simple_shuffle_prefetches_only_its_cooldown_read_into_the_admission_pipeline():
     client = FakeClient(_lua_ok_replies)
     redis_cache = FakeRedisCache(client)
