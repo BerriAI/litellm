@@ -30,6 +30,7 @@ import {
   traceAgentNames,
   traceDisplayName,
 } from "./traceUtils";
+import { ignoresLetterShortcut } from "../letterShortcut";
 
 /** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
 export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
@@ -212,7 +213,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement | null)?.matches("input, textarea, [role='combobox']")) return;
+      if (ignoresLetterShortcut(event)) return;
       const index = rows.findIndex((row) => row.id === selectedRow?.id);
       const row = rows[index];
       if (event.key === "Escape" && detailOpen) {

@@ -7,6 +7,7 @@ import { cn } from "@/lib/cva.config";
 
 import { RunView } from "./TraceDrawer";
 import type { TraceSummary } from "./traceTypes";
+import { ignoresLetterShortcut } from "../letterShortcut";
 
 const WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 const MIN_WIDTH = 700;
@@ -42,10 +43,6 @@ const storeWidth = (width: number): void => {
     return;
   }
 };
-
-const isTypingTarget = (target: EventTarget | null): boolean =>
-  target instanceof HTMLElement &&
-  target.matches("input, textarea, select, [contenteditable='true'], [role='combobox']");
 
 function useDrawerWidth() {
   const [width, setWidth] = useState(() =>
@@ -165,8 +162,7 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
   useEffect(() => {
     if (trace === null) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const modified = event.metaKey || event.ctrlKey || event.altKey;
-      if (modified || isTypingTarget(event.target)) return;
+      if (ignoresLetterShortcut(event)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onSelect(null);
