@@ -116,6 +116,7 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
+from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
@@ -2626,6 +2627,9 @@ def _complete_custom_openai(
     )
 
     headers = headers or litellm.headers
+    # Here, not in validate_environment: the default OpenAI SDK path below never calls it
+    if provider_config is not None:
+        headers = with_attribution_headers(provider_config.get_attribution_headers(), headers)
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
