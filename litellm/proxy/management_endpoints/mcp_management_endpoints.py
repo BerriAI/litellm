@@ -161,9 +161,11 @@ if MCP_AVAILABLE:
         list_user_oauth_credentials,
         mcp_oauth_token_identity,
         merge_user_env_vars,
+        oauth_credentials_for_upstream_edit,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         set_mcp_server_pinned_tools,
+        stale_mcp_auth_fields,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
@@ -181,6 +183,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.oauth_utils import issuer_identities_match
     from litellm.proxy._experimental.mcp_server.server_resolution import (
         MCPServerTargetCatalog,
         authorize_mcp_server,
@@ -870,6 +873,9 @@ if MCP_AVAILABLE:
         ("authentication_token", "auth_value"),
         ("client_id", "client_id"),
         ("client_secret", "client_secret"),
+        ("token_endpoint_auth_method", "token_endpoint_auth_method"),
+        ("dcr_issuer", "dcr_issuer"),
+        ("dcr_server_url", "dcr_server_url"),
         ("scopes", "scopes"),
         ("aws_access_key_id", "aws_access_key_id"),
         ("aws_secret_access_key", "aws_secret_access_key"),
@@ -890,14 +896,40 @@ if MCP_AVAILABLE:
             value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS and key != "scopes"
         )
 
+    def _oauth_session_changes_upstream(
+        payload: NewMCPServerRequest, existing: MCPServer | LiteLLM_MCPServerTable
+    ) -> bool:
+        return existing.auth_type == MCPAuth.oauth2 and (
+            payload.url != existing.url
+            or (
+                "issuer" in payload.model_fields_set
+                and not issuer_identities_match(payload.issuer or "", existing.issuer or "")
+            )
+            or (payload.auth_type is not None and payload.auth_type != existing.auth_type)
+        )
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
-        if not payload.server_id or _has_non_admin_config_credentials(payload.credentials):
+        if not payload.server_id:
             return payload
 
         existing_server: Final = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
         if existing_server is None:
+            return payload
+        upstream_changed: Final = _oauth_session_changes_upstream(payload, existing_server)
+        issuer_changed: Final = "issuer" in payload.model_fields_set and not issuer_identities_match(
+            payload.issuer or "", existing_server.issuer or ""
+        )
+        if upstream_changed:
+            cleared: Final = stale_mcp_auth_fields(
+                payload.model_dump(exclude_unset=True),
+                lambda field: (
+                    getattr(existing_server, f"configured_{field}", None) or getattr(existing_server, field, None)
+                ),
+            )
+            payload = payload.model_copy(update={**cleared, "oauth2_flow": payload.oauth2_flow})
+        if _has_non_admin_config_credentials(payload.credentials):
             return payload
 
         inherited_credentials: dict[str, object] = {
@@ -905,6 +937,14 @@ if MCP_AVAILABLE:
             for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
             if (value := getattr(existing_server, server_attr, None))
         }
+        if upstream_changed:
+            inherited_credentials = oauth_credentials_for_upstream_edit(
+                inherited_credentials,
+                existing_server.issuer,
+                existing_server.url,
+                issuer_changed=issuer_changed
+                or (payload.auth_type or existing_server.auth_type) != existing_server.auth_type,
+            )
         # The gate above guarantees anything still supplied is admin config, which the admin just
         # typed, so it wins over the stored value.
         inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
@@ -937,15 +977,20 @@ if MCP_AVAILABLE:
         supplied: Final = payload.server_id
         if not supplied:
             return str(uuid.uuid4())
-        if global_mcp_server_manager.get_mcp_server_by_id(supplied) is not None:
-            return supplied
+        registered: Final = global_mcp_server_manager.get_mcp_server_by_id(supplied)
+        if registered is not None:
+            return str(uuid.uuid4()) if _oauth_session_changes_upstream(payload, registered) else supplied
         prisma_client: Final = _get_prisma_client_or_none()
         if prisma_client is None:
             return supplied
         # A draft is another session's row, not a saved server, so re-supplying an id this
         # endpoint previously handed back must not let a later session adopt its configuration.
         existing: Final = await get_mcp_server(prisma_client, supplied)
-        if existing is None or existing.approval_status == MCPApprovalStatus.draft:
+        if (
+            existing is None
+            or existing.approval_status == MCPApprovalStatus.draft
+            or _oauth_session_changes_upstream(payload, existing)
+        ):
             return str(uuid.uuid4())
         return supplied
 

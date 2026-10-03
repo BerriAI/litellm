@@ -20,7 +20,10 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     credential_binding_matches,
     enforce_oauth_identity_binding,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    build_upstream_oauth2_token_request,
+    issuer_identities_match,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPApprovalStatus,
@@ -105,7 +108,31 @@ _AUTH_FLOW_SCOPED_FIELDS: Final["frozenset[str]"] = frozenset(
 )
 
 
-def _blank_to_none(value: str | None) -> str | None:
+_OAUTH_CLIENT_CREDENTIAL_FIELDS: Final = frozenset(
+    {
+        "client_id",
+        "client_secret",
+        "token_endpoint_auth_method",
+        "redirect_uris",
+        "dcr_issuer",
+        "dcr_server_url",
+        "access_token",
+        "refresh_token",
+        "expires_in",
+        "scope",
+    }
+)
+
+
+def stale_mcp_auth_fields(submitted: Mapping[str, object], previous_value: Callable[[str], object]) -> dict[str, None]:
+    return {
+        field: None
+        for field in _AUTH_FLOW_SCOPED_FIELDS
+        if field not in submitted or submitted[field] == previous_value(field)
+    }
+
+
+def _blank_to_none(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
@@ -135,6 +162,31 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 
 # Minted token material that must never survive a client rotation on a persisted row.
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
+
+
+def oauth_credentials_for_upstream_edit(
+    credentials: Mapping[str, object],
+    previous_issuer: str | None,
+    previous_url: str | None,
+    *,
+    issuer_changed: bool,
+) -> dict[str, object]:
+    """Bind an existing client on an explicit edit, so discovery can verify reuse at the new URL.
+
+    No first-use backfill: unchanged legacy rows never enter this path. Without a known previous
+    issuer, or after a known issuer change, the old client cannot be carried to the new resource.
+    """
+    registered_issuer: Final = _blank_to_none(credentials.get("dcr_issuer")) or previous_issuer
+    keep_client: Final = bool(registered_issuer and credentials.get("client_id") and not issuer_changed)
+    removed: Final = (
+        _MINTED_TOKEN_CREDENTIAL_FIELDS | {"auth_value"}
+        if keep_client
+        else _OAUTH_CLIENT_CREDENTIAL_FIELDS | {"auth_value"}
+    )
+    retained: Final = {key: value for key, value in credentials.items() if key not in removed}
+    if keep_client:
+        retained.update(dcr_issuer=registered_issuer, dcr_server_url=credentials.get("dcr_server_url") or previous_url)
+    return retained
 
 
 class _OAuthCredentialAccessToken(TypedDict):
@@ -1132,6 +1184,7 @@ async def _update_mcp_server_row(
     *,
     server_id: str,
     data_dict: Mapping[str, object],
+    expected_updated_at: datetime | None = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
     protocol_write: Final = bool({"transport", "mcp_info"}.intersection(data_dict))
@@ -1144,6 +1197,11 @@ async def _update_mcp_server_row(
             if stored is None:
                 return None
             _validate_mcp_protocol_write(stored, data_dict)
+        if expected_updated_at is not None:
+            changed: Final = await table.update_many(
+                where={"server_id": server_id, "updated_at": expected_updated_at}, data=data_dict
+            )
+            return await table.find_unique(where={"server_id": server_id}) if changed else None
         return await table.update(
             where={"server_id": server_id},
             data=data_dict,
@@ -1180,6 +1238,7 @@ async def update_mcp_server(
     data: UpdateMCPServerRequest,
     touched_by: str,
     fields_set: set[str] | None = None,
+    expected_updated_at: datetime | None = None,
 ) -> LiteLLM_MCPServerTable | McpIdentifierConflict | None:
     """
     Update a new mcp server record in the db
@@ -1216,8 +1275,25 @@ async def update_mcp_server(
     url_changed: Final = bool(url_provided and existing and existing.url != data_dict["url"])
     old_issuer: Final = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
     issuer_changed: Final = bool(
-        issuer_provided and old_issuer is not None and _blank_to_none(data_dict.get("issuer")) != old_issuer
+        issuer_provided
+        and existing is not None
+        and not issuer_identities_match(_blank_to_none(data_dict.get("issuer")) or "", old_issuer or "")
     )
+
+    oauth_upstream_edited: Final = bool(existing and existing.auth_type == "oauth2" and (url_changed or issuer_changed))
+    existing_credentials: Final = _credentials_blob_to_mutable_dict((existing.credentials or {}) if existing else {})
+    retained_credentials: Final = (
+        oauth_credentials_for_upstream_edit(
+            existing_credentials,
+            old_issuer,
+            existing.url if existing else None,
+            issuer_changed=issuer_changed or auth_type_changed,
+        )
+        if oauth_upstream_edited
+        else existing_credentials
+    )
+    edited_credentials: Final = {"credentials": safe_dumps(retained_credentials)} if oauth_upstream_edited else {}
+    data_dict.update({**edited_credentials, **data_dict})
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
@@ -1228,13 +1304,7 @@ async def update_mcp_server(
         # resubmitted unchanged. The edit form re-sends every field, so a stale issuer/endpoint
         # belonging to the old upstream would otherwise survive a url/auth_type change and win in the
         # resolution merge; only a genuinely new submitted value is kept.
-        data_dict.update(
-            {
-                field: None
-                for field in _AUTH_FLOW_SCOPED_FIELDS
-                if field not in data_dict or data_dict[field] == getattr(existing, field, None)
-            }
-        )
+        data_dict.update(stale_mcp_auth_fields(data_dict, lambda field: getattr(existing, field, None)))
 
     # An explicit column write that does not touch credentials must still migrate
     # the row's legacy blob copies: lift values for columns the caller left
@@ -1263,7 +1333,7 @@ async def update_mcp_server(
             # within the client-forwarded class (true_passthrough ↔ oauth_delegate) keeps
             # the same declared app and so must merge, not replace.
             if not auth_type_changed:
-                existing_creds = _credentials_blob_to_mutable_dict(existing.credentials)
+                existing_creds = retained_credentials
                 new_creds: Final = _credentials_blob_to_mutable_dict(data_dict["credentials"])
                 # New values override existing; existing keys not in update are preserved. A client
                 # rotation additionally drops the previous app's stale minted token keys.
@@ -1298,6 +1368,7 @@ async def update_mcp_server(
         prisma_client,
         server_id=data.server_id,
         data_dict=data_dict,
+        expected_updated_at=expected_updated_at,
     )
 
     if isinstance(updated_mcp_server, McpIdentifierConflict):

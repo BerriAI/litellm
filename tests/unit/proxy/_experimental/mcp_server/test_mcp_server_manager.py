@@ -8079,6 +8079,9 @@ class TestMCPServerTimestamps:
                 authorization_url="https://idp.example.com/authorize",
                 token_url="https://idp.example.com/token",
                 registration_url="https://idp.example.com/register",
+                issuer="https://idp.example.com",
+                authorization_response_issuer="https://idp.example.com/",
+                authorization_response_iss_parameter_supported=True,
             )
 
         blipped = MCPServer(
@@ -8093,6 +8096,9 @@ class TestMCPServerTimestamps:
         assert blipped.authorization_url == "https://idp.example.com/authorize"
         assert blipped.token_url == "https://idp.example.com/token"
         assert blipped.registration_url == "https://idp.example.com/register"
+        assert blipped.issuer == "https://idp.example.com"
+        assert blipped.authorization_response_issuer == "https://idp.example.com/"
+        assert blipped.authorization_response_iss_parameter_supported is True
 
         same_authorize = MCPServer(
             server_id="s1",

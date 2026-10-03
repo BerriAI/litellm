@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import HiddenParams
 
@@ -36,6 +36,9 @@ class MCPSpecVersion(str, enum.Enum):
     jun_2025 = "2025-06-18"
     nov_2025 = "2025-11-25"
     jul_2026 = "2026-07-28"
+
+
+MCP_LATEST_HANDSHAKE_SPEC_VERSION: Final = MCPSpecVersion.nov_2025
 
 
 class MCPAuth(str, enum.Enum):
@@ -161,6 +164,9 @@ MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"
 
 
 class MCPCredentials(TypedDict, total=False):
+    dcr_issuer: ReadOnly[str | None]
+    dcr_server_url: ReadOnly[str | None]
+
     auth_value: str | None
     """
     Authentication value

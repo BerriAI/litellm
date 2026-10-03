@@ -1181,3 +1181,92 @@ async def test_protocol_update_preserves_missing_server_without_writing(clear_al
     result = await update_mcp_server(prisma, payload, "admin")
     assert result is None
     table.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed,previous_issuer", [
+    ({"url": "https://new.example/mcp"}, None),
+    ({"issuer": "https://new.example"}, "https://old.example"),
+    ({"url": "https://new.example/mcp", "auth_type": "api_key"}, "https://old.example"),
+])
+async def test_upstream_identity_edit_drops_previous_oauth_client(changed, previous_issuer):
+    prisma = _mock_prisma()
+    existing = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="test-server", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer=previous_issuer,
+        credentials=json.dumps({"client_id": "old-client", "client_secret": "old-secret", "upstream_resource": "api://resource"}),
+    )
+    prisma.db.litellm_mcpservertable.find_unique.return_value = existing
+    await update_mcp_server(prisma, UpdateMCPServerRequest(server_id="test-server", **changed), "test-user")
+    written = prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]
+    assert "credentials" in written
+    credentials = json.loads(written["credentials"])
+    assert "client_id" not in credentials
+    assert "client_secret" not in credentials
+    assert credentials["upstream_resource"] == "api://resource"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("issuer", ["https://old.example/", "https://OLD.example:443"])
+async def test_issuer_formatting_edit_preserves_registered_client(issuer):
+    prisma = _mock_prisma()
+    existing = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="test-server", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer="https://old.example",
+        credentials=json.dumps({"client_id": "old-client", "dcr_issuer": "https://old.example"}),
+    )
+    prisma.db.litellm_mcpservertable.find_unique.return_value = existing
+    await update_mcp_server(prisma, UpdateMCPServerRequest(server_id="test-server", issuer=issuer), "test-user")
+    written = prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]
+    assert "credentials" not in written
+    assert written["issuer"] == issuer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_issuer,binding", [("https://idp.example", None), (None, "https://idp.example")])
+async def test_url_edit_preserves_client_bound_to_previous_known_issuer_without_old_tokens(previous_issuer, binding):
+    prisma = _mock_prisma()
+    existing = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="test-server", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer=previous_issuer,
+        credentials=json.dumps({"client_id": "static-client", "client_secret": "static-secret", "dcr_issuer": binding,
+                                "access_token": "old-token", "refresh_token": "old-refresh", "expires_in": 3600,
+                                "token_endpoint_auth_method": "client_secret_basic"}),
+    )
+    prisma.db.litellm_mcpservertable.find_unique.return_value = existing
+    await update_mcp_server(prisma, UpdateMCPServerRequest(server_id="test-server", url=existing.url + "?v=2"), "test-user")
+    written = prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]
+    credentials = json.loads(written["credentials"])
+    assert credentials["client_id"] == "static-client"
+    assert credentials["client_secret"] == "static-secret"
+    assert credentials["dcr_issuer"] == "https://idp.example"
+    assert credentials["dcr_server_url"] == existing.url
+    assert "access_token" not in credentials
+    assert "refresh_token" not in credentials
+    assert "expires_in" not in credentials
+    assert credentials["token_endpoint_auth_method"] == "client_secret_basic"
+    assert written["issuer"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", [0, 1])
+async def test_registration_write_requires_unchanged_server_revision(changed):
+    from datetime import datetime, timezone
+    from litellm.proxy._experimental.mcp_server.db import _update_mcp_server_row
+
+    prisma = _mock_prisma()
+    table = prisma.db.litellm_mcpservertable
+    revision = datetime.now(timezone.utc)
+    table.update_many.return_value = changed
+    result = await _update_mcp_server_row(
+        prisma, server_id="test-server", data_dict={"credentials": "{}"}, expected_updated_at=revision,
+    )
+    table.update_many.assert_awaited_once_with(
+        where={"server_id": "test-server", "updated_at": revision}, data={"credentials": "{}"},
+    )
+    table.update.assert_not_awaited()
+    assert (result is not None) is bool(changed)
+    if changed:
+        assert result.server_id == "test-server"
+    else:
+        table.find_unique.assert_not_awaited()

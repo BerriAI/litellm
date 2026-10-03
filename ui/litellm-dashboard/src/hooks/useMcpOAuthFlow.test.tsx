@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
-import { setSecureItem } from "@/utils/secureStorage";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 import { useMcpOAuthFlow } from "./useMcpOAuthFlow";
 
 vi.mock("@/components/networking", () => ({
@@ -196,13 +196,27 @@ describe("useMcpOAuthFlow reset", () => {
     );
   });
 
-  it("registers a fresh client when no client_id is present (new URL after the derived client is cleared)", async () => {
-    vi.mocked(networking.cacheTemporaryMcpServer).mockResolvedValue({ server_id: "server-2" });
-    vi.mocked(networking.registerMcpOAuthClient).mockResolvedValue({ client_id: "fresh-client" });
-    vi.mocked(networking.buildMcpOAuthAuthorizeUrl).mockReturnValue("https://idp.example.com/authorize");
+  it.each([
+    { method: "none", secret: undefined, issuer: "https://idp.example.com", bound: true },
+    { method: "client_secret_basic", secret: "registered-secret", issuer: "https://idp.example.com", bound: true },
+    { method: "none", secret: undefined, issuer: undefined, bound: true },
+    { method: "none", secret: undefined, issuer: undefined, bound: false },
+  ])(
+    "retains a fresh $method client with issuer $issuer and binding $bound",
+    async ({ method, secret, issuer, bound }) => {
+      vi.mocked(networking.cacheTemporaryMcpServer).mockResolvedValue({ server_id: "server-2" });
+      const registration = {
+        client_id: "fresh-client",
+        client_secret: secret,
+        token_endpoint_auth_method: method,
+        dcr_issuer: issuer,
+        dcr_server_url: bound ? "https://server-2.example.com/mcp" : undefined,
+        dcr_redirect_uris: ["https://gateway.example.com/callback"],
+      };
+      vi.mocked(networking.registerMcpOAuthClient).mockResolvedValue(registration);
+      vi.mocked(networking.buildMcpOAuthAuthorizeUrl).mockReturnValue("https://idp.example.com/authorize");
 
-    const { result } = renderHook(() =>
-      useMcpOAuthFlow({
+      const options = {
         accessToken: "admin-token",
         getCredentials: () => ({}),
         getTemporaryPayload: () => ({
@@ -212,16 +226,35 @@ describe("useMcpOAuthFlow reset", () => {
         }),
         onTokenReceived: vi.fn(),
         flowSource: "create",
-      }),
-    );
+      };
+      const { result } = renderHook(() => useMcpOAuthFlow(options));
 
-    await act(async () => {
-      await result.current.startOAuthFlow();
-    });
+      await act(async () => {
+        await result.current.startOAuthFlow();
+      });
 
-    expect(networking.registerMcpOAuthClient).toHaveBeenCalledTimes(1);
-    expect(networking.buildMcpOAuthAuthorizeUrl).toHaveBeenCalledWith(
-      expect.objectContaining({ clientId: "fresh-client" }),
-    );
-  });
+      expect(JSON.parse(getSecureItem(FLOW_STATE_KEY)!)).toEqual(
+        expect.objectContaining({
+          clientId: "fresh-client",
+          ...(bound
+            ? {
+                dcrCredentials: {
+                  client_id: "fresh-client",
+                  client_secret: secret ?? null,
+                  token_endpoint_auth_method: method === "client_secret_basic" ? method : null,
+                  dcr_issuer: issuer ?? null,
+                  dcr_server_url: "https://server-2.example.com/mcp",
+                  redirect_uris: ["https://gateway.example.com/callback"],
+                },
+              }
+            : {}),
+        }),
+      );
+      if (!bound) expect(JSON.parse(getSecureItem(FLOW_STATE_KEY)!)).not.toHaveProperty("dcrCredentials");
+      expect(networking.registerMcpOAuthClient).toHaveBeenCalledTimes(1);
+      expect(networking.buildMcpOAuthAuthorizeUrl).toHaveBeenCalledWith(
+        expect.objectContaining({ clientId: "fresh-client" }),
+      );
+    },
+  );
 });

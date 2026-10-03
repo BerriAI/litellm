@@ -658,6 +658,32 @@ def canonicalize_url_identity(url: str) -> str:
     return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
+def issuer_identities_match(claimed_issuer: str, expected_issuer: str) -> bool:
+    """Issuer equality tolerant only of URL-insignificant differences (scheme/host case, the default
+    port, a trailing slash), through the shared canonicalizer. Used for RFC 8414 §3.3 metadata
+    anchoring and persisted OAuth client bindings. RFC 9207 callbacks compare exact strings.
+
+    An RFC 8414 issuer identifier carries no params, query or fragment, and the canonicalizer drops
+    all three, so two issuers differing only there would compare equal. That difference is compared
+    on the raw URLs first, keeping a tenant that a deployment encoded outside the path distinct."""
+    claimed: Final = urlparse(claimed_issuer)
+    expected: Final = urlparse(expected_issuer)
+    if (claimed.params, claimed.query, claimed.fragment) != (expected.params, expected.query, expected.fragment):
+        return False
+    return canonicalize_url_identity(claimed_issuer) == canonicalize_url_identity(expected_issuer)
+
+
+def oauth_client_registration_matches(
+    registered_issuer: str | None,
+    registered_url: str | None,
+    current_issuer: str | None,
+    current_url: str | None,
+) -> bool:
+    if registered_issuer and current_issuer:
+        return issuer_identities_match(registered_issuer, current_issuer)
+    return not registered_url or registered_url == current_url
+
+
 def canonical_resource_uri(url: str) -> str | None:
     """Canonicalize an upstream MCP server URL into an RFC 8707 resource identifier.
 
