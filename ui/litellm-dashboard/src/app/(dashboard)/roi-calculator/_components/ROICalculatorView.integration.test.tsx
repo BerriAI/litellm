@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiClient } from "@/components/networking";
@@ -322,6 +322,49 @@ describe("ROICalculatorView", () => {
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
     expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "failure"])("ignores an old report refresh %s after switching sources", async (outcome) => {
+    const gitlabSettings = { ...settings, source_provider: "gitlab", repos: [], ready: false };
+    const oldRequest = Promise.withResolvers<{ report: typeof summary }>();
+    const complete = { ...idleStatus, phase: "complete", finished_at: "2026-09-30T12:00:00Z" };
+    vi.mocked(apiClient.put).mockResolvedValue(gitlabSettings);
+    render(<ROICalculatorView accessToken="token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    vi.mocked(apiClient.get)
+      .mockClear()
+      .mockImplementation((path: string) =>
+        path === "/roi-calculator/report" ? oldRequest.promise : Promise.resolve(complete),
+      );
+    await waitFor(
+      () => expect(apiClient.get).toHaveBeenCalledWith("/roi-calculator/report", { accessToken: "token" }),
+      {
+        timeout: 3000,
+      },
+    );
+    fireEvent.change(screen.getByLabelText("Repository source"), { target: { value: "gitlab" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(await screen.findByRole("heading", { name: "Connect your repositories" })).toBeVisible();
+
+    await act(async () => {
+      if (outcome === "success") oldRequest.resolve({ report: summary });
+      else oldRequest.reject(new Error("The old source is unavailable"));
+    });
+    expect(screen.getByRole("heading", { name: "Connect your repositories" })).toBeVisible();
+    expect(screen.getByLabelText("Repository source")).toHaveValue("gitlab");
+    expect(screen.queryByText("Improve request routing")).not.toBeInTheDocument();
+    expect(screen.queryByText("The old source is unavailable")).not.toBeInTheDocument();
+
+    const nextReport = { ...summary, pulls: [{ ...summary.pulls[0], title: "New source merge request" }] };
+    vi.mocked(apiClient.get).mockImplementation((path: string) =>
+      Promise.resolve(
+        path === "/roi-calculator/report"
+          ? { report: nextReport }
+          : { ...complete, finished_at: "2026-09-30T13:00:00Z" },
+      ),
+    );
+    expect(await screen.findByText("New source merge request", {}, { timeout: 3000 })).toBeVisible();
+    expect(screen.queryByText("Improve request routing")).not.toBeInTheDocument();
   });
 
   it("clearly identifies the sample report and returns to setup when exiting", async () => {

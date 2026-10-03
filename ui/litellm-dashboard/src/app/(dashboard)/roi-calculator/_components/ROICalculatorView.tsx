@@ -79,6 +79,7 @@ export default function ROICalculatorView({
   const [loadingLiveData, setLoadingLiveData] = React.useState(true);
   const statusRef = React.useRef<ROISyncStatus>(IDLE_STATUS);
   const reportNeedsRefresh = React.useRef(false);
+  const sourceRevision = React.useRef(0);
   const settingsLoaded = settings !== null && !loadingInitialData && !loadingLiveData;
   const requestError = [error, demoError, reportError, syncError].filter(Boolean).join(" ");
   const [query, setQuery] = React.useState("");
@@ -162,10 +163,12 @@ export default function ROICalculatorView({
     const interval = window.setInterval(() => {
       if (requestInFlight) return;
       requestInFlight = true;
+      const revision = sourceRevision.current;
+      const isCurrent = () => !cancelled && revision === sourceRevision.current;
       apiClient
         .get<ROISyncStatus>("/roi-calculator/sync", { accessToken })
         .then(async (nextStatus) => {
-          if (cancelled) return;
+          if (!isCurrent()) return;
           const previousStatus = statusRef.current;
           statusRef.current = nextStatus;
           setStatus(nextStatus);
@@ -176,17 +179,17 @@ export default function ROICalculatorView({
             reportNeedsRefresh.current = true;
             try {
               const report = await loadReport();
-              if (cancelled) return;
+              if (!isCurrent()) return;
               setSummary(report);
               setReportError(null);
               reportNeedsRefresh.current = false;
             } catch (reason: unknown) {
-              if (!cancelled) setReportError(extractErrorMessage(reason));
+              if (isCurrent()) setReportError(extractErrorMessage(reason));
             }
           }
         })
         .catch((reason: unknown) => {
-          if (!cancelled) setSyncError(extractErrorMessage(reason));
+          if (isCurrent()) setSyncError(extractErrorMessage(reason));
         })
         .finally(() => {
           requestInFlight = false;
@@ -280,6 +283,7 @@ export default function ROICalculatorView({
     }
   };
   const resetView = (updated: ROISettings, resetSyncStatus = true) => {
+    sourceRevision.current += 1;
     setSettings(updated);
     setSummary(null);
     setReportError(null);
