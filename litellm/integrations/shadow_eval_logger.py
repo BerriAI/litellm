@@ -820,7 +820,9 @@ def shadow_eval_snapshot_needed(jobs_cache: InMemoryCache = _jobs_cache) -> bool
     """Whether pre-call must capture a guardrail snapshot: only a jobs cache proving that no
     shadow-eval job is active lets the copy be skipped; an unfilled cache fails open."""
     cached: Final = jobs_cache.get_cache(_JOBS_CACHE_KEY)
-    return cached is None or bool(cached)
+    if cached is None:
+        return True
+    return True if cached else False
 
 
 class ShadowEvalLogger(CustomLogger):
