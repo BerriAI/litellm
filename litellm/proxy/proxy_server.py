@@ -12270,6 +12270,8 @@ async def completion(
         )
         litellm_call_id: Final = request_litellm_call_id(data)
         log_llm_api_exception(e, litellm_call_id)
+        if isinstance(e, ProxyException):
+            raise with_litellm_call_id(e, litellm_call_id)
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
