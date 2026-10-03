@@ -8,16 +8,18 @@ Symbols pinned here:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+from litellm._service_logger import ServiceTypes
+from litellm.proxy.db.log_db_metrics import record_db_io
 from litellm.proxy.utils import PrismaClient
 
 
@@ -296,3 +298,32 @@ async def test_delete_data_logs_and_raises_on_error(
     )
     with pytest.raises(RuntimeError, match="delete fail"):
         await prisma_client.delete_data(tokens=["sk-x"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "table_name", "model", "prisma_method", "kwargs"),
+    [
+        ("insert_data", "key", "litellm_verificationtoken", "upsert", {"data": {"token": "sk-1"}}),
+        ("update_data", "team", "litellm_teamtable", "upsert", {"team_id": "t1", "data": {"spend": 1.0}}),
+        ("delete_data", "key", "litellm_verificationtoken", "delete_many", {"tokens": ["sk-1"]}),
+    ],
+)
+async def test_a_write_that_reaches_the_engine_reports_the_table_to_the_service_logger(
+    prisma_client: PrismaClient, method: str, table_name: str, model: str, prisma_method: str, kwargs: dict[str, object]
+) -> None:
+    async def _queried(*args: object, **kwds: object) -> SimpleNamespace:
+        record_db_io()
+        return SimpleNamespace(token="h", team_id="t1", spend=1.0)
+
+    setattr(getattr(prisma_client.db, model), prisma_method, AsyncMock(side_effect=_queried))
+    success_hook = AsyncMock()
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        MagicMock(service_logging_obj=MagicMock(async_service_success_hook=success_hook)),
+    ):
+        await getattr(prisma_client, method)(table_name=table_name, **kwargs)
+        await asyncio.sleep(0)
+
+    events = [c.kwargs for c in success_hook.await_args_list if c.kwargs["service"] == ServiceTypes.DB]
+    assert [(e["call_type"], e["event_metadata"]) for e in events] == [(method, {"table_name": table_name})]

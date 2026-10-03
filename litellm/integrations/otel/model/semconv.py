@@ -266,6 +266,8 @@ class DB:
     # still infers a span's database type from this key.
     SYSTEM_LEGACY: Final = "db.system"
     OPERATION_NAME: Final = "db.operation.name"
+    COLLECTION_NAME: Final = "db.collection.name"
+    QUERY_SUMMARY: Final = "db.query.summary"
     NAMESPACE: Final = "db.namespace"
 
 

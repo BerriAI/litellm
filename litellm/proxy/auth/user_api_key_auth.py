@@ -132,6 +132,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_auth_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
@@ -1035,16 +1036,17 @@ async def _auto_register_jwt_mapping(
         token_hash = hash_token(key_data["token"])
 
     try:
-        await prisma_client.db.litellm_jwtkeymapping.create(
-            data={
-                "jwt_issuer": jwt_issuer or "",
-                "jwt_claim_name": virtual_key_claim_field,
-                "jwt_claim_value": claim_value,
-                "token": token_hash,
-                "created_by": "auto_register",
-                "updated_by": "auto_register",
-            }
-        )
+        async with db_span("auto_register_jwt_mapping", "LiteLLM_JWTKeyMapping"):
+            await prisma_client.db.litellm_jwtkeymapping.create(
+                data={
+                    "jwt_issuer": jwt_issuer or "",
+                    "jwt_claim_name": virtual_key_claim_field,
+                    "jwt_claim_value": claim_value,
+                    "token": token_hash,
+                    "created_by": "auto_register",
+                    "updated_by": "auto_register",
+                }
+            )
     except Exception as e:
         error_str: Final = str(e).lower()
         if "unique" in error_str or "p2002" in error_str:
@@ -1061,7 +1063,8 @@ async def _auto_register_jwt_mapping(
             )
             if minted:
                 try:
-                    await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
+                    async with db_span("delete_orphaned_jwt_key", "LiteLLM_VerificationToken"):
+                        await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
                 except Exception as delete_err:
                     # Don't fail the request if cleanup fails — the orphan is
                     # unmapped and inert. Log so an operator can prune it later.

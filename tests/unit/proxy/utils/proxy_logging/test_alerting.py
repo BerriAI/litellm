@@ -12,8 +12,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from prisma.errors import PrismaError
 
 import litellm
+from litellm._service_logger import ServiceTypes
 from litellm.proxy._types import AlertType, CallInfo
 
 
@@ -250,6 +252,40 @@ async def test_failure_handler_logs_db_error_and_calls_service_logging(proxy_log
         "duration": 1.5,
         "call_type": "db_write",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["get_data", "insert_data", "update_data", "delete_data"])
+async def test_failure_handler_alerts_but_leaves_prisma_error_event_to_log_db_metrics(
+    proxy_logging, monkeypatch, call_type
+):
+    proxy_logging.alert_types = [AlertType.db_exceptions]
+    proxy_logging.alerting_handler = AsyncMock()
+    proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
+    monkeypatch.setattr(litellm.utils, "capture_exception", None)
+    await proxy_logging.failure_handler(
+        original_exception=PrismaError("connection reset"), duration=1.0, call_type=call_type
+    )
+    snapshot = {
+        "alerting_handler_scheduled": proxy_logging.alerting_handler.called,
+        "service_failure_called": proxy_logging.service_logging_obj.async_service_failure_hook.called,
+    }
+    assert snapshot == {"alerting_handler_scheduled": True, "service_failure_called": False}
+
+
+@pytest.mark.asyncio
+async def test_failure_handler_still_emits_db_event_for_wrapped_insert_error(proxy_logging, monkeypatch):
+    proxy_logging.alert_types = [AlertType.db_exceptions]
+    proxy_logging.alerting_handler = AsyncMock()
+    proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock())
+    monkeypatch.setattr(litellm.utils, "capture_exception", None)
+    await proxy_logging.failure_handler(
+        original_exception=HTTPException(status_code=400, detail={"error": "Foreign Key Constraint failed"}),
+        duration=1.0,
+        call_type="insert_data",
+    )
+    call_kwargs = proxy_logging.service_logging_obj.async_service_failure_hook.call_args.kwargs
+    assert (call_kwargs["service"], call_kwargs["call_type"]) == (ServiceTypes.DB, "insert_data")
 
 
 @pytest.mark.asyncio

@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
 )
 from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
+from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
@@ -383,17 +384,19 @@ class _Lease(Enum):
 
 
 async def _write_key_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
-    await VerificationTokenRepository(prisma_client).table.update(
-        where={"token": row_id},
-        data={"budget_limits": payload},
-    )
+    async with db_span("write_budget_windows", "LiteLLM_VerificationToken"):
+        await VerificationTokenRepository(prisma_client).table.update(
+            where={"token": row_id},
+            data={"budget_limits": payload},
+        )
 
 
 async def _write_team_windows(prisma_client: PrismaClient, row_id: str, payload: str) -> None:
-    await TeamRepository(prisma_client).table.update(
-        where={"team_id": row_id},
-        data={"budget_limits": payload},
-    )
+    async with db_span("write_budget_windows", "LiteLLM_TeamTable"):
+        await TeamRepository(prisma_client).table.update(
+            where={"team_id": row_id},
+            data={"budget_limits": payload},
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,7 +841,10 @@ class ResetBudgetJob:
         )
 
     async def _commit_budget_cascade_once(self, cascade: _BudgetCascade) -> None:
-        async with budget_cascade_unit_of_work(self._new_batch) as uow:
+        async with (
+            db_span("reset_budget_cascade", "LiteLLM_BudgetTable"),
+            budget_cascade_unit_of_work(self._new_batch) as uow,
+        ):
             _queue_budget_linked_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
@@ -960,7 +966,10 @@ class ResetBudgetJob:
         )
 
     async def _write_key_reset_updates_once(self, updated_keys: Sequence[_RowReset[LiteLLM_VerificationToken]]) -> None:
-        async with spend_reset_unit_of_work(self._new_batch) as uow:
+        async with (
+            db_span("reset_spend_rows", "LiteLLM_VerificationToken"),
+            spend_reset_unit_of_work(self._new_batch) as uow,
+        ):
             for k in updated_keys:
                 if k.row.token is None:
                     continue
@@ -984,7 +993,10 @@ class ResetBudgetJob:
         )
 
     async def _write_user_reset_updates_once(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
-        async with spend_reset_unit_of_work(self._new_batch) as uow:
+        async with (
+            db_span("reset_spend_rows", "LiteLLM_UserTable"),
+            spend_reset_unit_of_work(self._new_batch) as uow,
+        ):
             for u in updated_users:
                 uow.users.queue_spend_reset(
                     user_id=u.row.user_id,
@@ -1006,7 +1018,10 @@ class ResetBudgetJob:
         )
 
     async def _write_team_reset_updates_once(self, updated_teams: Sequence[_RowReset[LiteLLM_TeamTable]]) -> None:
-        async with spend_reset_unit_of_work(self._new_batch) as uow:
+        async with (
+            db_span("reset_spend_rows", "LiteLLM_TeamTable"),
+            spend_reset_unit_of_work(self._new_batch) as uow,
+        ):
             for t in updated_teams:
                 uow.teams.queue_spend_reset(
                     team_id=t.row.team_id,
@@ -1532,7 +1547,11 @@ class ResetBudgetJob:
     ) -> str | None:
         """Reset one page of windows; return the next cursor, or None when drained."""
         rows: Final = await self._with_db_retry(
-            lambda: self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
+            lambda: db_spanned(
+                "reset_budget_windows",
+                source.table,
+                lambda: self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
+            ),
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
         for row in rows:

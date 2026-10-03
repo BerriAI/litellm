@@ -1,10 +1,15 @@
 """Tests for the one-time heal of issuer values a released version's discovery write-back stamped."""
 
+import asyncio
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm._service_logger import ServiceTypes
+from litellm.proxy import proxy_server
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from litellm.proxy._experimental.mcp_server.oauth_issuer_stamp_backfill import (
     backfill_discovery_stamped_issuers,
 )
@@ -127,3 +132,23 @@ async def test_a_failed_row_does_not_abort_the_rest():
 
     assert await backfill_discovery_stamped_issuers(prisma_client) == 1
     assert prisma_client.db.litellm_mcpservertable.update.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_each_healed_row_emits_a_postgres_update_event_for_the_mcp_server_table(monkeypatch):
+    prisma_client = _prisma([_row(server_id="a"), _row(server_id="b")])
+    prisma_client.db.litellm_mcpservertable.update = engine_call()
+    success: Final = AsyncMock()
+    service_logging: Final = MagicMock(async_service_success_hook=success, async_service_failure_hook=AsyncMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(service_logging_obj=service_logging))
+
+    assert await backfill_discovery_stamped_issuers(prisma_client) == 2
+    await asyncio.sleep(0)
+
+    assert success.await_count == 2
+    event: Final = success.await_args.kwargs
+    assert (event["service"], event["call_type"], event["event_metadata"]) == (
+        ServiceTypes.DB,
+        "backfill_mcp_oauth_issuer",
+        {"table_name": "LiteLLM_MCPServerTable"},
+    )

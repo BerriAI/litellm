@@ -6,17 +6,20 @@ import inspect
 import os
 import tempfile
 import warnings
-from collections.abc import Iterator
-from typing import Dict, Optional
+from collections.abc import Awaitable, Callable, Iterator
+from typing import Dict, Final, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
-
 import litellm
 import litellm.proxy.proxy_server
+from litellm._service_logger import ServiceTypes
+from litellm.integrations.otel.model.payloads import ServiceSpanData
+from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 
@@ -416,3 +419,28 @@ def fresh_agent_read_through(monkeypatch):
     )
     monkeypatch.setattr(registry_read_through, "agent_registry_read_through", read_through)
     return read_through
+
+
+@pytest.fixture
+def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
+    """The ``postgres.{verb} {table}`` names OTel would render for every DB service event
+    the code under test emits, in emission order, once the hook tasks have run."""
+    success: Final = AsyncMock()
+    service_logging: Final = MagicMock(async_service_success_hook=success, async_service_failure_hook=AsyncMock())
+
+    async def rendered() -> tuple[str, ...]:
+        await asyncio.sleep(0)
+        return tuple(
+            service_span_name(
+                ServiceSpanData(
+                    service_name="postgres",
+                    call_type=call.kwargs["call_type"],
+                    event_metadata=call.kwargs["event_metadata"] or {},
+                )
+            )
+            for call in success.await_args_list
+            if call.kwargs["service"] == ServiceTypes.DB
+        )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=service_logging)):
+        yield rendered

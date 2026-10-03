@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from functools import reduce
 from itertools import groupby
@@ -25,6 +26,7 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     build_bulk_upsert,
     merge_by_conflict_key,
 )
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.spend_tracking.baseline_accounting import (
     BaselineEstimate,
@@ -417,8 +419,13 @@ class BaselineAccountingStore:
 
     @classmethod
     def for_client(cls, client: PrismaClient) -> BaselineAccountingStore:
-        def transaction() -> _TransactionManager:
-            return _primary_transaction(client)
+        @asynccontextmanager
+        async def transaction() -> AsyncGenerator[SupportsRawQueries]:
+            async with (
+                db_span("baseline_accounting", "LiteLLM_AutoRouterBaselineComparison"),
+                _primary_transaction(client) as db,
+            ):
+                yield db
 
         return cls(transaction)
 

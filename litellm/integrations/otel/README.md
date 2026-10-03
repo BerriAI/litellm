@@ -11,15 +11,15 @@ A traced proxy request produces one trace with two kinds of spans:
 ```
 SERVER span  "POST /v1/chat/completions"        ← FastAPI instrumentation
 ├── INTERNAL span  "auth /v1/chat/completions"   ← auth phase     ┐
-│   ├── CLIENT span  "postgres get_key_object"    ← datastore call │
-│   └── CLIENT span  "postgres get_team_membership"                │
+│   ├── CLIENT span  "postgres.select LiteLLM_VerificationToken"  │
+│   └── CLIENT span  "postgres.select LiteLLM_TeamMembership"      │
 ├── INTERNAL span  "execute_guardrail …"         ← guardrail       │ this package
 ├── INTERNAL span  "cache.get llm_response"       ← response cache  │
 │   └── CLIENT span  "redis.get llm_response"                      │
 ├── INTERNAL span  "route gpt-4o"                 ← deployment pick │
 │   └── CLIENT span  "redis.mget router_cooldowns"                 │
 ├── CLIENT span    "chat gpt-4o"                  ← LLM call        │
-└── CLIENT span    "batch_write_to_db …"          ← spend write    ┘
+└── CLIENT span    "postgres.update LiteLLM_UserTable" ← spend flush┘
 ```
 
 The gen-ai spans are siblings under the server span. In particular the guardrail
@@ -107,13 +107,26 @@ batch op settles on its own and one write-back of three auth objects shows as th
 parallel `redis.set auth_objects` spans with the same caller, not one pipeline
 span. Every `call_type` the Redis cache layer emits maps to a verb,
 so the `{service} {call_type}` fallback is unreachable for Redis (a test asserts
-it). Postgres spans are `postgres.{verb} {table}`, see
-https://github.com/BerriAI/litellm/pull/44240; the other non-Redis services keep
-the `"{service} {call_type}"` name (`"batch_write_to_db _PROXY_track_cost_callback"`):
-one scheme, `{service}.{verb} {target}` when the method maps to a verb and
-`{service} {call_type}` otherwise, and never a count, key or id in the name. Either way
-the raw method name stays on `litellm.service.call_type` and `db.operation.name`
-(and the bare `call_type` the metrics are keyed by), the target lands on
+it). Postgres helpers are `postgres.{verb} {table}`
+(`"postgres.select LiteLLM_VerificationToken"`, `"postgres.update LiteLLM_TeamTable"`,
+`"postgres.insert LiteLLM_SpendLogs"`): the SQL verb comes from
+`_POSTGRES_OPERATION_BY_CALL_TYPE` in `model/spans.py`, the table from that map when
+the helper only touches one model and from the event's `table_name` metadata (the
+`PrismaClient` CRUD literals, or a `LiteLLM_*` model name from `db_span`)
+otherwise. A helper the map does not know, or one whose table did not resolve,
+keeps `"postgres {call_type}"`, so a half-named `"postgres.select"` never ships;
+every `PrismaClient` CRUD call site passes a literal `table_name` and a static scan
+in the unit tests holds that line. A raw statement no producer wraps is
+named by `_TrackedPrismaEngine` itself from the Prisma payload (`postgres.select
+LiteLLM_UserTable` for `query_raw`, `postgres.set statement_timeout`, `postgres.ping`
+for the health probes), see https://github.com/BerriAI/litellm/pull/44240. The verb
+lands on `db.operation.name`, the table on `db.collection.name` and `"{VERB} {table}"`
+on `db.query.summary`. Every other non-Redis service keeps `"{service} {call_type}"`
+(`"reset_budget_job reset_budget"`): one scheme, `{service}.{verb} {target}`
+when the method maps to a verb and `{service} {call_type}` otherwise, and never a
+count, key or id in the name. Either way the raw method name stays on
+`litellm.service.call_type` (and the bare `call_type` the metrics are keyed by; for
+Redis it is also `db.operation.name`), the target lands on
 `litellm.service.target`, and the litellm call chain that issued the call
 (`_retrieve_from_cache <- _async_get_cache`) travels as
 `ServiceLoggerPayload.caller` onto `litellm.service.caller`, with the forwarding

@@ -17,6 +17,7 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.db_span import db_span
 
 router = APIRouter()
 
@@ -94,16 +95,17 @@ async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
         json_settings = json.dumps(general_settings, default=str)
 
         # Save updated general settings
-        await prisma_client.db.litellm_config.upsert(
-            where={"param_name": "general_settings"},
-            data={
-                "create": {
-                    "param_name": "general_settings",
-                    "param_value": json_settings,
+        async with db_span("save_email_settings", "LiteLLM_Config"):
+            await prisma_client.db.litellm_config.upsert(
+                where={"param_name": "general_settings"},
+                data={
+                    "create": {
+                        "param_name": "general_settings",
+                        "param_value": json_settings,
+                    },
+                    "update": {"param_value": json_settings},
                 },
-                "update": {"param_value": json_settings},
-            },
-        )
+            )
     except Exception as e:
         raise HTTPException(
             status_code=500,

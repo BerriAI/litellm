@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final
@@ -24,6 +24,7 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
     recover_key_owner_from_daily_spend,
 )
 from litellm.proxy.utils import hash_token
+from litellm.proxy.db.log_db_metrics import record_db_io
 
 
 def _digest_row(digest: str, key_alias: str | None, team_id: str | None, user_id: str | None) -> dict[str, str | None]:
@@ -64,6 +65,7 @@ def _query_raw_by_table(
     deleted_rows: Sequence[dict[str, str | None]],
 ) -> AsyncMock:
     async def query_raw(sql: str, *params: object) -> list[dict[str, str | None]]:
+        record_db_io()
         if '"LiteLLM_VerificationToken"' in sql:
             return list(active_rows)
         if '"LiteLLM_DeletedVerificationToken"' in sql:
@@ -796,3 +798,19 @@ async def test_recover_key_owner_from_daily_spend_bounds_the_lookup_with_a_state
     assert mock_prisma.db.tx.call_args.kwargs["timeout"] == timedelta(
         milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
     )
+
+
+@pytest.mark.asyncio
+async def test_reverse_hash_recovery_renders_a_postgres_select_span_for_the_table_it_read(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    double_hashed = hash_token("a" * 64)
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = _query_raw_by_table(
+        active_rows=[_digest_row(double_hashed, "batch-worker", "team-1", "alice")],
+        deleted_rows=[],
+    )
+
+    await recover_double_hashed_key_metadata(mock_prisma, {double_hashed})
+
+    assert await postgres_span_names() == ("postgres.select LiteLLM_VerificationToken",)
