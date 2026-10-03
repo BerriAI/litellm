@@ -241,7 +241,6 @@ async fn list_summaries(
         end_ms: end_ms.saturating_add(1),
     });
     let spans = crate::span_batches::read_list_spans(client, connection, params).await?;
-    let spend_rows = spend(client, connection, access, &spans).await;
     let mut by_trace: HashMap<_, Vec<_>> = HashMap::new();
     for span in spans {
         let key = (
@@ -251,21 +250,23 @@ async fn list_summaries(
         );
         by_trace.entry(key).or_default().push(span);
     }
-    Ok(runs
-        .iter()
-        .map(|row| {
-            let spans = by_trace
-                .get(&(
-                    row.team_id.clone(),
-                    row.api_key_hash.clone(),
-                    row.trace_id.clone(),
-                ))
-                .map(Vec::as_slice)
-                .unwrap_or_default();
+    let mut summaries = Vec::with_capacity(runs.len());
+    for row in runs {
+        let spans = by_trace
+            .get(&(
+                row.team_id.clone(),
+                row.api_key_hash.clone(),
+                row.trace_id.clone(),
+            ))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let spend_rows = spend(client, connection, access, spans).await;
+        summaries.push(
             resolve_trace(&row.trace_id, &row.trace_ref, spans, &spend_rows)
-                .map_or_else(|| listed_summary(row), |trace| trace.summary)
-        })
-        .collect())
+                .map_or_else(|| listed_summary(row), |trace| trace.summary),
+        );
+    }
+    Ok(summaries)
 }
 
 pub async fn get_trace(

@@ -15,6 +15,91 @@ use fixtures::{DATABASE, SeededDatabase, migrated_database, seeded_database};
 use support::TestResult;
 
 #[rstest]
+#[case::api_key("key-a", "")]
+#[case::user("", "user-a")]
+#[tokio::test]
+async fn list_costs_match_each_run_when_response_ids_are_reused(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] api_key: &str,
+    #[case] user_id: &str,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let runs = [
+        ("earlier-run", 1_790_000_000_000_i64, 0.25),
+        ("later-run", 1_790_007_200_000_i64, 0.75),
+    ];
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        runs.iter()
+            .map(|(trace_id, start_ms, _)| {
+                BTreeMap::from([
+                    ("Timestamp".into(), json!(start_ms * 1_000_000)),
+                    ("TraceId".into(), json!(trace_id)),
+                    ("SpanId".into(), json!("llm-span")),
+                    ("ObservationType".into(), json!("llm")),
+                    ("TeamId".into(), json!("team-a")),
+                    ("ApiKeyHash".into(), json!(api_key)),
+                    ("UserId".into(), json!(user_id)),
+                    ("Duration".into(), json!(1_000_000)),
+                    ("LiteLLMRequestId".into(), json!("reused-response")),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::SpendLogs,
+        runs.iter()
+            .map(|(trace_id, start_ms, cost)| {
+                BTreeMap::from([
+                    ("request_id".into(), json!(format!("request-{trace_id}"))),
+                    ("response_id".into(), json!("reused-response")),
+                    ("team_id".into(), json!("team-a")),
+                    ("api_key".into(), json!(api_key)),
+                    ("user".into(), json!(user_id)),
+                    ("start_time".into(), json!(start_ms)),
+                    ("end_time".into(), json!(start_ms + 1)),
+                    ("spend".into(), json!(cost)),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
+    let reader = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let access = ReadAccessParams {
+        all_teams: false,
+        user_id: user_id.into(),
+        team_ids: vec!["team-a".into()],
+    };
+    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    assert_eq!(page.data.len(), runs.len());
+    for (trace_id, _, cost) in runs {
+        let summary = page
+            .data
+            .iter()
+            .find(|summary| summary.trace_id == trace_id)
+            .ok_or("missing run")?;
+        let detail = get_trace(client, &reader, &access, trace_id, &summary.trace_ref)
+            .await?
+            .ok_or("missing trace")?;
+        assert_eq!(detail.summary.spend, Some(cost));
+        assert_eq!(summary.spend, detail.summary.spend, "{trace_id}");
+    }
+    Ok(())
+}
+
+#[rstest]
 #[case::many_runs(50, 21, 0, false)]
 #[case::one_large_run(1, 1100, 0, false)]
 #[case::large_rows(1, 280, 20_000, false)]
@@ -168,6 +253,15 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         },
         (steps - 1) as u64
     );
+    let denied = ReadAccessParams {
+        team_ids: vec!["other-team".into()],
+        ..access.clone()
+    };
+    assert!(
+        get_trace(client, &reader, &denied, "trace-0000", trace_ref)
+            .await?
+            .is_none()
+    );
     let mut cursor = None;
     let mut ids = Vec::new();
     loop {
@@ -189,6 +283,19 @@ async fn large_runs_remain_complete_under_default_reader_limits(
                 <= litellm_storage_clickhouse::READ_LIMITS.response_bytes
         );
         if ids.is_empty() {
+            assert!(
+                get_trace_page(
+                    client,
+                    &reader,
+                    &denied,
+                    "trace-0000",
+                    trace_ref,
+                    page.next_cursor.as_deref(),
+                    200,
+                )
+                .await?
+                .is_none()
+            );
             client
                 .post(writer.url().clone())
                 .body(format!("TRUNCATE TABLE {DATABASE}.otel_traces"))
@@ -209,15 +316,6 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .iter()
             .map(|span| span.span_id.clone())
             .collect::<Vec<_>>()
-    );
-    let denied = ReadAccessParams {
-        team_ids: vec!["other-team".into()],
-        ..access
-    };
-    assert!(
-        get_trace(client, &reader, &denied, "trace-0000", trace_ref)
-            .await?
-            .is_none()
     );
     Ok(())
 }
