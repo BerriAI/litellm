@@ -1828,6 +1828,8 @@ _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"
 
 _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 
+_RESPONSES_WS_INJECT_RESULT_EVENT_TYPES: Final = frozenset({"response.inject.created", "response.inject.failed"})
+
 
 def _ws_event_error(event: Mapping[str, object]) -> object:
     if event.get("type") == "error":
@@ -1864,6 +1866,30 @@ def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> di
         {"response": {**nested, **nested_fields}} if _is_json_object(nested) and nested_fields else EMPTY_MAPPING
     )
     return {**msg_obj, **top_fields, **restored_nested}
+
+
+def _restore_wrapped_id_in_response_inject(msg_obj: Mapping[str, object]) -> dict[str, object] | None:
+    response_id: Final = msg_obj.get("response_id")
+    if not isinstance(response_id, str):
+        return None
+    original_id: Final = ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
+        response_id
+    )
+    return None if original_id == response_id else {**msg_obj, "response_id": original_id}
+
+
+def _wrap_inject_result_response_id(
+    event_obj: Mapping[str, object], custom_llm_provider: str | None, litellm_metadata: Mapping[str, object]
+) -> dict[str, object] | None:
+    response_id: Final = event_obj.get("response_id")
+    if not isinstance(response_id, str) or ResponsesAPIRequestUtils._is_litellm_encoded_response_id(response_id):  # pyright: ignore[reportPrivateUsage]  # same check the HTTP response id wrap applies
+        return None
+    wrapped_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(  # pyright: ignore[reportPrivateUsage]  # same wrap the HTTP response id path applies
+        custom_llm_provider=custom_llm_provider,
+        model_id=_model_id_from_metadata(litellm_metadata),
+        response_id=response_id,
+    )
+    return {**event_obj, "response_id": wrapped_id}
 
 
 def _wrap_output_item_encrypted_content(
@@ -2043,6 +2069,11 @@ class ResponsesWebSocketStreaming:
                 litellm_metadata=self.litellm_metadata,
             )
             return json.dumps({**event_obj, "response": wrapped_response})
+        if event_obj.get("type") in _RESPONSES_WS_INJECT_RESULT_EVENT_TYPES:
+            wrapped_inject: Final = _wrap_inject_result_response_id(
+                event_obj, self.custom_llm_provider, self.litellm_metadata
+            )
+            return response_str if wrapped_inject is None else json.dumps(wrapped_inject)
         if event_obj.get("type") not in _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES:
             return response_str
         wrapped_event: Final = _wrap_output_item_encrypted_content(event_obj, self.litellm_metadata)
@@ -2148,13 +2179,18 @@ class ResponsesWebSocketStreaming:
           on every text block, and stores the resulting ``pii_tokens`` map in
           ``self.request_data["metadata"]`` for later unmasking.
 
-        Non-``response.create`` messages are returned unchanged.
+        A ``response.inject`` message only gets its LiteLLM-wrapped
+        ``response_id`` restored to the upstream id. Other messages are
+        returned unchanged.
         """
         try:
             parsed: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
+        if parsed.get("type") == "response.inject":
+            restored_inject: Final = _restore_wrapped_id_in_response_inject(parsed)
+            return message if restored_inject is None else json.dumps(restored_inject)
         if parsed.get("type") != "response.create":
             return message
 
