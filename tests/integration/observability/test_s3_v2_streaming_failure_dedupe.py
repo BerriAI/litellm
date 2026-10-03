@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -330,7 +329,7 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
         ):
             openai_model, anthropic_model = _register_models(scenario, upstream.url)
             key: Final = scenario.key(models=[openai_model, anthropic_model])
-            sink.fail_until = time.time() + 10
+            sink.fail_until = float("inf")
 
             def call(job: tuple[Surface, bool, str]) -> httpx.Response:
                 surface, stream, marker = job
@@ -352,6 +351,18 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             assert route_counts == expected_route_counts, f"unexpected upstream routes: {route_counts}"
             assert all(not 200 <= response.status_code < 300 for response in responses)
             assert all("synthetic upstream failure" in response.text for response in responses)
+            eventually(
+                lambda: sink.attempts,
+                lambda attempts: attempts > len(sink.store),
+                seconds=30,
+            )
+            rejected: Final = sink.attempts - len(sink.store)
+            assert rejected >= 1, f"expected at least one rejected sink upload, rejected={rejected}"
+            assert len(sink.store) == 0, (
+                f"expected all sink uploads to fail before recovery, rejected={rejected}, "
+                f"attempts={sink.attempts}"
+            )
+            sink.fail_until = 0.0
             payloads: Final = eventually(
                 lambda: sink.payloads(),
                 lambda observed: len(observed) >= len(jobs),
@@ -373,8 +384,8 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
                 for payload in payloads_after_window
             )
             assert all(len(matches) == 1 for matches in payload_matches), (
-                f"payloads could not be matched to one request: matches={payload_matches}, "
-                f"payloads={payloads_after_window}"
+                f"payloads could not be matched to one request: rejected={rejected}, "
+                f"matches={payload_matches}, payloads={payloads_after_window}"
             )
             landed_keys: Final = tuple(
                 _request_key(payload, responses[matches[0]], jobs[matches[0]][2])
@@ -387,10 +398,11 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             missing_keys: Final = tuple(key for key in expected_keys if key not in landed_keys)
             assert not duplicate_keys, (
                 f"duplicate request ids landed: {duplicate_keys}; "
-                f"missing={missing_keys}; upstream_posts={len(upstream_requests)} "
+                f"missing={missing_keys}; rejected={rejected}; upstream_posts={len(upstream_requests)} "
                 f"sink_payloads={len(payloads_after_window)}"
             )
             assert not missing_keys, (
                 f"requests missing after sink recovery: {missing_keys}; "
-                f"upstream_posts={len(upstream_requests)} sink_payloads={len(payloads_after_window)}"
+                f"rejected={rejected}; upstream_posts={len(upstream_requests)} "
+                f"sink_payloads={len(payloads_after_window)}"
             )
