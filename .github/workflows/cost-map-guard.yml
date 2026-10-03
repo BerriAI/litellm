@@ -39,5 +39,6 @@ jobs:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          LITELLM_LOCAL_MODEL_COST_MAP: "True"
         run: |
           uv run --frozen python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"
