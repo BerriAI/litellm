@@ -8,6 +8,8 @@ from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
@@ -7515,6 +7517,96 @@ class TestTeamMemberAutoRouterWrites:
             "model_info": {"id": "allowed-id"},
         }])
 
+    @staticmethod
+    def _classifier_config(classifier: Mapping[str, object], legacy: bool) -> Mapping[str, object]:
+        return {
+            "classifier_type": "jev" if legacy else "oss_classifier",
+            "tiers": {"SIMPLE": "allowed"},
+            "jev_classifier_config" if legacy else "opensource_classifier_config": classifier,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("team_id", [None, "member-team"])
+    @pytest.mark.parametrize(
+        "legacy,provider,model",
+        [(True, "typesafe", "jev-latest"), (False, "jev", "jev-latest"), (True, "laya", "english"), (False, "laya", "english")],
+    )
+    async def test_classifier_create_stores_only_canonical_configuration(
+        self, team_id: str | None, legacy: bool, provider: str, model: str
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(), row)
+        classifier: Final = {
+            "provider": provider, "model": model,
+            "api_base": "https://decision.test", "api_key": "stored-secret",
+        }
+        deployment: Final = Deployment(
+            model_name="new-classifier-router",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_config=self._classifier_config(classifier, legacy),
+            ),
+            model_info=ModelInfo(id=row.model_id, team_id=team_id),
+        )
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with (
+            self._environment(database, row),
+            patch("litellm.proxy.proxy_server.proxy_config.add_deployment", new=AsyncMock(return_value=ReconcileOutcome(  # test-quality-ok: [TQ008] model reload I/O boundary
+                still_desired=frozenset((row.model_id,)), live_after=frozenset((row.model_id,))
+            ))),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.append_team_models", new=AsyncMock()),  # test-quality-ok: [TQ008] team allowlist persistence boundary
+        ):
+            await add_new_model(deployment, actor)
+        written: Final = database.db.litellm_proxymodeltable.create.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        assert saved == {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "allowed"},
+            "opensource_classifier_config": {**classifier, "provider": "laya" if provider == "laya" else "jev"},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["create", "patch", "legacy"])
+    @pytest.mark.parametrize("legacy_config", [None, {"provider": "laya", "model": "english"}])
+    async def test_ambiguous_classifier_blocks_are_rejected_before_persistence(
+        self, endpoint: str, legacy_config: Mapping[str, object] | None
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        row: Final = self._row()
+        database: Final = self._database(self._team(), row)
+        config: Final = {
+            **self._classifier_config({"provider": "laya", "model": "english"}, False),
+            "jev_classifier_config": legacy_config,
+        }
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config), model_info=ModelInfo(id=row.model_id),
+        )
+        operation: Final = (
+            add_new_model(
+                Deployment(
+                    model_name="ambiguous-classifier-router",
+                    litellm_params=LiteLLM_Params(model="auto_router/complexity_router", complexity_router_config=config),
+                    model_info=ModelInfo(id=row.model_id),
+                ),
+                actor,
+            )
+            if endpoint == "create"
+            else patch_model(row.model_id, request, actor)
+            if endpoint == "patch"
+            else update_model(request, actor)
+        )
+        with self._environment(database, row), pytest.raises(ProxyException) as denied:
+            await operation
+        assert denied.value.code == "400"
+        assert "opensource_classifier_config" in denied.value.message
+        assert "jev_classifier_config" in denied.value.message
+        database.db.litellm_proxymodeltable.create.assert_not_awaited()
+        database.db.litellm_proxymodeltable.update.assert_not_awaited()
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint,change", [("patch", "config"), ("legacy", "strategy"), ("patch", "unrelated")])
     async def test_admin_router_changes_release_member_scope(self, endpoint: str, change: str) -> None:
@@ -7546,15 +7638,16 @@ class TestTeamMemberAutoRouterWrites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("stored_legacy,supplied_legacy", [(True, True), (True, False), (False, True), (False, False)])
     @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
-    async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
+    async def test_jev_dashboard_save_preserves_server_transport(
+        self, endpoint: str, change: str, stored_legacy: bool, supplied_legacy: bool
+    ) -> None:
         original: Final = self._row()
         transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
-        stored_config: Final = {
-            "classifier_type": "jev",
-            "tiers": {"SIMPLE": "allowed"},
-            "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
-        }
+        stored_config: Final = self._classifier_config(
+            {**transport, "instructions": "Old instructions", "timeout_ms": 6100}, stored_legacy
+        )
         row: Final = original.model_copy(
             update={
                 "litellm_params": {
@@ -7572,11 +7665,11 @@ class TestTeamMemberAutoRouterWrites:
             "reset": {"api_key": None, "api_base": None},
             "heuristic": {},
         }[change]
-        config: Final = {
-            "tiers": {"SIMPLE": "allowed"},
-            "classifier_type": "heuristic" if change == "heuristic" else "jev",
-            **({} if change == "heuristic" else {"jev_classifier_config": {"timeout_ms": 8100, **overrides}}),
-        }
+        config: Final = (
+            {"tiers": {"SIMPLE": "allowed"}, "classifier_type": "heuristic"}
+            if change == "heuristic"
+            else self._classifier_config({"timeout_ms": 8100, **overrides}, supplied_legacy)
+        )
         request: Final = updateDeployment(
             litellm_params=updateLiteLLMParams(complexity_router_config=config),
             model_info=ModelInfo(id=row.model_id),
@@ -7597,11 +7690,182 @@ class TestTeamMemberAutoRouterWrites:
         expected: Final = (
             config
             if change == "heuristic"
-            else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
+            else {
+                "classifier_type": "oss_classifier",
+                "tiers": {"SIMPLE": "allowed"},
+                "opensource_classifier_config": {**transport, "timeout_ms": 8100, **overrides},
+            }
         )
         assert saved == expected
         assert row.litellm_params["complexity_router_config"] == stored_config
         assert request.litellm_params.complexity_router_config == config
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("stored_legacy,supplied_legacy", [(True, True), (True, False), (False, True), (False, False)])
+    @pytest.mark.parametrize(
+        "stored_provider,stored_base,supplied,expected_transport",
+        [
+            ("bespoke", "https://decision.test", {"provider": "bespoke", "model": "nimble-latest"}, {"api_base": "https://decision.test", "api_key": "stored-secret"}),
+            ("bespoke", "https://decision.test", {"provider": "bespoke", "model": "nimble-latest", "api_base": "https://new.test"}, {}),
+            ("bespoke", "https://decision.test", {"provider": "laya", "model": "english"}, {}),
+            ("laya", "https://decision.test", {"provider": "bespoke", "model": "nimble-latest"}, {}),
+            ("laya", "https://decision.test", {"provider": "laya", "model": "english"}, {"api_base": "https://decision.test", "api_key": "stored-secret"}),
+            ("laya", "https://decision.test", {"provider": "laya", "model": "english", "api_base": "https://decision.test"}, {"api_base": "https://decision.test", "api_key": "stored-secret"}),
+            (
+                "laya",
+                "https://decision.test",
+                {"provider": "laya", "model": "english", "api_key": None},
+                {"api_base": "https://decision.test"},
+            ),
+            ("laya", "https://decision.test", {"provider": "laya", "model": "english", "api_base": "https://new.test"}, {}),
+            ("laya", "https://decision.test", {"provider": "laya", "model": "english", "api_base": None}, {}),
+            ("laya", None, {"provider": "laya", "model": "english", "api_base": None}, {}),
+            ("laya", "https://decision.test", {"provider": "typesafe", "model": "jev-latest"}, {}),
+            (
+                "laya", "https://decision.test", {"model": "english", "timeout_ms": 8100},
+                {"provider": "laya", "api_base": "https://decision.test", "api_key": "stored-secret"},
+            ),
+            ("typesafe", "https://decision.test", {"provider": "laya", "model": "english"}, {}),
+            (
+                "typesafe", "https://decision.test", {"provider": "jev", "model": "jev-latest"},
+                {"api_base": "https://decision.test", "api_key": "stored-secret"},
+            ),
+            (
+                "jev", "https://decision.test", {"provider": "typesafe", "model": "jev-latest"},
+                {"api_base": "https://decision.test", "api_key": "stored-secret"},
+            ),
+        ],
+    )
+    async def test_decision_provider_changes_cannot_reuse_a_stored_key(
+        self, endpoint: str, stored_provider: str, stored_base: str | None,
+        supplied: Mapping[str, object], expected_transport: Mapping[str, object],
+        stored_legacy: bool, supplied_legacy: bool,
+    ) -> None:
+        original: Final = self._row()
+        row: Final = original.model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": self._classifier_config(
+                {
+                    "provider": stored_provider, "model": {"laya": "english", "bespoke": "nimble-latest"}.get(stored_provider, "jev-latest"),
+                    "api_base": stored_base, "api_key": "stored-secret",
+                },
+                stored_legacy,
+            ),
+        }})
+        database: Final = self._database(self._team(), row)
+        config: Final = self._classifier_config(supplied, supplied_legacy)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config), model_info=ModelInfo(id=row.model_id),
+        )
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with self._environment(database, row):
+            await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        expected_provider: Final = supplied.get("provider", stored_provider)
+        assert saved == {
+            "classifier_type": "oss_classifier",
+            "tiers": {"SIMPLE": "allowed"},
+            "opensource_classifier_config": {
+                **expected_transport, **supplied,
+                "provider": "jev" if expected_provider == "typesafe" else expected_provider,
+            },
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize(
+        "string_params,reset_field,config_shape",
+        [
+            (False, None, "full"), (True, None, "full"), (False, "api_key", "full"),
+            (False, "api_base", "full"), (False, None, "omit-provider"),
+            (False, None, "omit-config"), (False, None, "null-config"),
+        ],
+    )
+    async def test_member_save_protects_stored_classifier_connection(
+        self, endpoint: str, string_params: bool, reset_field: str | None, config_shape: str
+    ) -> None:
+        original: Final = self._row()
+        config: Final = {
+            "classifier_type": "jev", "tiers": {"SIMPLE": "allowed"},
+            "jev_classifier_config": {"provider": "laya", "model": "english"},
+        }
+        secret_params: Final = {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                **config, "jev_classifier_config": {
+                    **config["jev_classifier_config"], "api_key": "retained-laya-secret", "api_base": "https://laya.test",
+                },
+            },
+        }
+        row: Final = original.model_copy(update={"litellm_params": secret_params})
+        team: Final = self._team().model_copy(update={"models": ["allowed", "laya/english"]})
+        database: Final = self._database(team, row)
+        database.transaction.litellm_proxymodeltable.update.return_value = row.model_copy(
+            update={"litellm_params": json.dumps(secret_params) if string_params else secret_params}
+        )
+        supplied_config: Final = {
+            **config, "jev_classifier_config": {
+                **{
+                    key: value for key, value in config["jev_classifier_config"].items()
+                    if key != "provider" or config_shape != "omit-provider"
+                },
+                **({reset_field: None} if reset_field is not None else {}),
+            },
+        }
+        patch_params: Final = (
+            {"complexity_router_default_model": "allowed"}
+            if config_shape == "omit-config"
+            else {"complexity_router_config": None, "complexity_router_default_model": "allowed"}
+            if config_shape == "null-config"
+            else {"complexity_router_config": supplied_config}
+        )
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams.model_validate(patch_params),
+            model_info=ModelInfo(id=row.model_id, team_id="member-team"),
+        )
+        actor: Final = UserAPIKeyAuth(
+            user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, models=["allowed", "laya/english"], config={"timeout": 60},
+        )
+        with self._environment(database, row):
+            if reset_field is not None:
+                expected_error: Final = HTTPException if endpoint == "patch" else ProxyException
+                with pytest.raises(expected_error, match="Team members cannot change classifier connections") as denied:
+                    await (
+                        patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+                    )
+                assert (
+                    denied.value.status_code if isinstance(denied.value, HTTPException) else int(denied.value.code)
+                ) == 403
+                database.transaction.litellm_proxymodeltable.update.assert_not_awaited()
+                assert row.litellm_params == secret_params
+                return
+            response: Final = await (patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor))
+        written: Final = database.transaction.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved_config: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        untouched: Final = config_shape in ("omit-config", "null-config")
+        saved: Final = saved_config["jev_classifier_config" if untouched else "opensource_classifier_config"]
+        assert saved == secret_params["complexity_router_config"]["jev_classifier_config"]
+        assert saved_config["classifier_type"] == ("jev" if untouched else "oss_classifier")
+        if untouched:
+            from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+            assert decrypt_value_helper(
+                json.loads(written["litellm_params"])["complexity_router_default_model"],
+                key="complexity_router_default_model", return_original_value=True,
+            ) == "allowed"
+        response_payload: Final = jsonable_encoder(response)
+        assert "retained-laya-secret" not in json.dumps(response_payload)
+        response_params: Final = json.loads(response_payload["litellm_params"]) if string_params else response_payload["litellm_params"]
+        assert response_params == {
+            **secret_params, "complexity_router_config": {
+                **config, "jev_classifier_config": {
+                    **config["jev_classifier_config"], "api_key": "REDACTED", "api_base": "https://laya.test",
+                },
+            },
+        }
+        assert "retained-laya-secret" in row.model_dump_json()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])

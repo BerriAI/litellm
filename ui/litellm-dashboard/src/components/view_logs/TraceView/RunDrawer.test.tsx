@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../tests/test-utils";
@@ -19,12 +19,14 @@ const run = (trace_id: string): TraceSummary => ({
   status: "ok",
   span_count: 1,
   agent_count: 1,
+  agent_invocations: 1,
   llm_calls: 0,
   tool_calls: 0,
   error_count: 0,
   input_tokens: 0,
   output_tokens: 0,
   models: [],
+  spend: null,
 });
 
 const mockReducedMotion = (reduce: boolean) =>
@@ -51,6 +53,68 @@ describe("clampDrawerWidth", () => {
 describe("RunDrawer", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    window.localStorage.clear();
+  });
+
+  it("fills the page across trace navigation and restores the resized drawer width", () => {
+    const runs = [run("a"), run("b")];
+    const onSelect = vi.fn();
+    const { rerender } = renderWithProviders(
+      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />,
+    );
+    const drawer = screen.getByRole("complementary", { name: "Trace details" });
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize trace panel" }), { key: "ArrowLeft" });
+    const resizedWidth = drawer.style.width;
+    const storedWidth = window.localStorage.getItem("litellm.agentTraces.drawerWidth");
+
+    fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
+    expect(drawer).toHaveStyle({ width: "100%" });
+    expect(screen.queryByRole("separator", { name: "Resize trace panel" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
+    expect(onSelect).toHaveBeenCalledWith(runs[1]);
+    rerender(<RunDrawer trace={runs[1]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    expect(drawer).toHaveStyle({ width: "100%" });
+    expect(screen.getByTestId("run-view")).toHaveTextContent("run b");
+
+    fireEvent.click(screen.getByRole("button", { name: "Exit full screen" }));
+    expect(drawer).toHaveStyle({ width: resizedWidth });
+    expect(screen.getByRole("separator", { name: "Resize trace panel" })).toBeInTheDocument();
+    expect(window.localStorage.getItem("litellm.agentTraces.drawerWidth")).toBe(storedWidth);
+  });
+
+  it.each([false, true])("reopens at the saved width after closing full screen (reduced motion: %s)", (reduce) => {
+    mockReducedMotion(reduce);
+    const runs = [run("a"), run("b")];
+    const onSelect = vi.fn();
+    const { rerender } = renderWithProviders(
+      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />,
+    );
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize trace panel" }), { key: "ArrowLeft" });
+    const savedWidth = screen.getByRole("complementary", { name: "Trace details" }).style.width;
+    fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
+    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    rerender(<RunDrawer trace={runs[1]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    expect(screen.getByRole("complementary", { name: "Trace details" })).toHaveStyle({ width: savedWidth });
+    expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
+    expect(screen.getByRole("separator", { name: "Resize trace panel" })).toBeVisible();
+  });
+
+  it.each(["Close (Esc)", "Close trace (Esc)"])("closes a full-screen trace using %s", (name) => {
+    const runs = [run("a")];
+    const onSelect = vi.fn();
+    renderWithProviders(<RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
+  });
+
+  it("keeps Escape available to close a full-screen trace", () => {
+    const runs = [run("a")];
+    const onSelect = vi.fn();
+    renderWithProviders(<RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
   });
 
   it("unmounts right away on close when the user prefers reduced motion", () => {

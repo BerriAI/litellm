@@ -30,6 +30,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
@@ -82,7 +83,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
@@ -124,7 +125,9 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
     PrismaClient,
@@ -3574,7 +3577,8 @@ async def update_key_fn(
             spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
+                    with service_target(SPEND_COUNTERS_TARGET):
+                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to update spend counter %s in Redis after key spend update: %s. "
@@ -4963,6 +4967,7 @@ async def can_modify_verification_token(
     return False
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def delete_verification_tokens(
     tokens: list,
     user_api_key_cache: UserApiKeyCache,
@@ -5293,6 +5298,15 @@ async def _rotate_master_key(
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
 
+    try:
+        from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+
+        await GuardrailRegistry.rotate_guardrail_params_master_key(
+            prisma_client=prisma_client, new_master_key=new_master_key
+        )
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate guardrail params: %s", str(e))
+
     # 4. process MCP server table
     try:
         await rotate_mcp_server_credentials_master_key(
@@ -5329,6 +5343,11 @@ async def _rotate_master_key(
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
+
+    try:
+        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate search tool credentials: %s", str(e))
 
     # 5. process credentials table
     try:
@@ -6053,6 +6072,7 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
     return reset_to
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
     """
     Set a Redis-backed spend counter to `value`, mirror it into the short-lived

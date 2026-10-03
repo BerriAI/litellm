@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -49,15 +49,39 @@ describe("RunView", () => {
     vi.mocked(copyToClipboard).mockClear();
   });
 
-  it("shows a one-line run header: agent name, trace id, duration and steps", async () => {
+  it("shows the run name, copyable ID and run totals", async () => {
     renderRun(research);
 
     const header = await screen.findByRole("banner");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
-    expect(header).toHaveTextContent(research.summary.trace_id);
-    expect(header).toHaveTextContent("duration 40.20s");
-    expect(header).toHaveTextContent(`steps ${research.summary.span_count}`);
+    expect(within(header).getByRole("button", { name: "Copy trace ID" })).toHaveAttribute(
+      "title",
+      research.summary.trace_id,
+    );
+    expect(header).toHaveTextContent("Duration 40.20s");
+    expect(header).toHaveTextContent(`Steps ${research.summary.span_count}`);
     expect(header).not.toHaveTextContent("failed");
+  });
+
+  it("shows the agent name with the SDK logo in the run header instead of the generic agent icon", async () => {
+    renderRun({
+      ...research,
+      summary: { ...research.summary, agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
+    });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("run-framework")).toHaveTextContent(/^research-bot$/);
+    expect(within(header).getByTestId("run-framework")).toHaveAttribute("title", "Claude Agent SDK");
+    expect(within(header).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toBeInTheDocument();
+    expect(within(header).queryByTestId("span-icon")).not.toBeInTheDocument();
+  });
+
+  it("keeps the generic agent icon when the trace has no known SDK", async () => {
+    renderRun({ ...research, summary: { ...research.summary, frameworks: ["some-other-sdk"] } });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("span-icon")).toBeInTheDocument();
+    expect(within(header).queryByTestId("run-framework")).not.toBeInTheDocument();
   });
 
   it("folds researcher ×12 in the span tree", async () => {
@@ -65,7 +89,7 @@ describe("RunView", () => {
 
     const tree = await screen.findByRole("tree", { name: "Spans in time order" });
     expect(tree).toHaveTextContent("researcher×12");
-    expect(screen.getByRole("banner")).toHaveTextContent(`failed ${swarm.summary.error_count}`);
+    expect(screen.getByRole("banner")).toHaveTextContent(`Step errors ${swarm.summary.error_count}`);
   });
 
   it("opens a failed run on its first failed span", async () => {
@@ -106,12 +130,29 @@ describe("RunView", () => {
     const pane = await screen.findByTestId("detail-pane");
     const root = rootSpanId(research);
     expect(pane).toHaveAttribute("data-row-id", root);
+    await user.keyboard("{Meta>}j{/Meta}{Control>}j{/Control}");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
     await user.keyboard("j");
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     await user.keyboard("k");
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
+  });
+
+  it.each(["button", "Escape"])("reopens the selected step after closing details with %s", async (method) => {
+    const user = userEvent.setup();
+    renderRun(research);
+    await screen.findByTestId("detail-pane");
+    await user.keyboard("j");
+    const selectedId = screen.getByTestId("detail-pane").getAttribute("data-row-id");
+    expect(selectedId).not.toBe(rootSpanId(research));
+    if (method === "button") await user.click(screen.getByRole("button", { name: "close detail" }));
+    else await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selectedId);
+    expect(screen.queryByRole("button", { name: "Show details" })).not.toBeInTheDocument();
   });
 
   it("keeps a way back to the runs table when a run fails to load", async () => {
@@ -123,6 +164,57 @@ describe("RunView", () => {
     expect(await screen.findByText("trace exceeds the 1000 span read limit")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /back to traces/i }));
     expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds a step beyond a folded group's first page and reveals it after search clears", async () => {
+    const user = userEvent.setup();
+    const root = research.spans.find((span) => span.parent_span_id === null)!;
+    const children = Array.from(
+      { length: 45 },
+      (_, index): Span => ({
+        ...root,
+        span_id: `case-${index}`,
+        parent_span_id: root.span_id,
+        type: "tool",
+        name: "check_case",
+        input_preview: `Case ${index}`,
+        start_offset_ms: index + 1,
+        status: index === 44 ? "error" : "ok",
+      }),
+    );
+    renderRun({ ...research, spans: [root, ...children] });
+    const search = await screen.findByRole("textbox", { name: "Search steps" });
+    await user.type(search, "case 43");
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    await user.click(screen.getByRole("treeitem"));
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", "case-43");
+    await user.click(screen.getByRole("button", { name: "Clear step search" }));
+    expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "case-43");
+    await user.click(screen.getByRole("button", { name: /^Errors/ }));
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    expect(screen.getByRole("treeitem")).toHaveAttribute("data-row-id", "case-44");
+    await user.type(search, "not present");
+    expect(screen.getByText("No matching steps")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
+  });
+
+  it("does not navigate steps while typing or moving the search cursor", async () => {
+    const user = userEvent.setup();
+    renderRun(research);
+    const search = await screen.findByRole("textbox", { name: "Search steps" });
+    const selected = screen.getByTestId("detail-pane").getAttribute("data-row-id");
+    await user.type(search, "jk{ArrowDown}{ArrowUp}");
+    expect(search).toHaveValue("jk");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selected);
+  });
+
+  it("distinguishes a completed run with recovered step errors from a failed run", async () => {
+    renderRun({ ...research, summary: { ...research.summary, status: "ok", error_count: 2 } });
+    const header = await screen.findByRole("banner");
+    expect(header).toHaveTextContent("Completed");
+    expect(header).toHaveTextContent("Step errors 2");
+    expect(header).not.toHaveTextContent("Failed");
   });
 
   it("copies a curl one-liner for Claude / Codex", async () => {
@@ -150,6 +242,16 @@ describe("initialRunSelection", () => {
     const toolFailure = child(toolFields);
     const trace = { ...research, spans: [base, hiddenFailure, toolFailure] };
     expect(initialRunSelection(trace).selectedId).toBe("tool");
+  });
+
+  it("folds other agent branches while revealing the failed step", () => {
+    const first = child({ span_id: "first", type: "agent" });
+    const second = child({ span_id: "second", type: "agent" });
+    const failure = child({ span_id: "failed", parent_span_id: "second", type: "tool", status: "error" });
+    const { selectedId, state } = initialRunSelection({ ...research, spans: [base, first, second, failure] });
+    expect(selectedId).toBe("failed");
+    expect(state.collapsedSpanIds.has("first")).toBe(true);
+    expect(state.collapsedSpanIds.has("second")).toBe(false);
   });
 
   it("falls back to the nearest visible ancestor when only a hidden span failed", () => {

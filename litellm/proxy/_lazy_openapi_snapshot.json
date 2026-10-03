@@ -26318,6 +26318,30 @@
           ]
         }
       },
+      "/bespoke/v1/systemone": {
+        "post": {
+          "operationId": "bespoke_proxy_route_bespoke_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bespoke Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/cohere/{endpoint}": {
         "delete": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
@@ -27756,6 +27780,30 @@
             }
           ],
           "summary": "Gigachat Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/laya/v1/systemone": {
+        "post": {
+          "operationId": "laya_proxy_route_laya_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Laya Proxy Route",
           "tags": [
             "llm_passthrough"
           ]
@@ -48912,6 +48960,121 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "ROIBranchAttribution": {
+          "properties": {
+            "branch": {
+              "title": "Branch",
+              "type": "string"
+            },
+            "repo": {
+              "title": "Repo",
+              "type": "string"
+            },
+            "requests": {
+              "default": 0,
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spend"
+            },
+            "status": {
+              "default": "unattributed",
+              "enum": [
+                "matched",
+                "unattributed",
+                "ambiguous",
+                "unavailable"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repo",
+            "branch"
+          ],
+          "title": "ROIBranchAttribution",
+          "type": "object"
+        },
+        "ROIBranchMetrics": {
+          "properties": {
+            "cost_per_hour": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost Per Hour"
+            },
+            "hours": {
+              "default": 0,
+              "title": "Hours",
+              "type": "number"
+            },
+            "matched_pulls": {
+              "default": 0,
+              "title": "Matched Pulls",
+              "type": "integer"
+            },
+            "spend": {
+              "default": 0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "total_tagged_spend": {
+              "default": 0,
+              "title": "Total Tagged Spend",
+              "type": "number"
+            },
+            "unlinked_spend": {
+              "default": 0,
+              "title": "Unlinked Spend",
+              "type": "number"
+            }
+          },
+          "title": "ROIBranchMetrics",
+          "type": "object"
+        },
+        "ROIBranchSpend": {
+          "properties": {
+            "branch": {
+              "title": "Branch",
+              "type": "string"
+            },
+            "repo": {
+              "title": "Repo",
+              "type": "string"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "repo",
+            "branch",
+            "spend",
+            "requests"
+          ],
+          "title": "ROIBranchSpend",
+          "type": "object"
+        },
         "ROIEstimateResponse": {
           "properties": {
             "cached": {
@@ -48983,6 +49146,27 @@
             "reasoning"
           ],
           "title": "ROIEstimateResponse",
+          "type": "object"
+        },
+        "ROIEstimatorModel": {
+          "properties": {
+            "model_name": {
+              "title": "Model Name",
+              "type": "string"
+            },
+            "provider_models": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Provider Models",
+              "type": "array"
+            }
+          },
+          "required": [
+            "model_name",
+            "provider_models"
+          ],
+          "title": "ROIEstimatorModel",
           "type": "object"
         },
         "ROIIdentityMapResponse": {
@@ -49213,6 +49397,9 @@
               "title": "Additions",
               "type": "integer"
             },
+            "branch_cost": {
+              "$ref": "#/components/schemas/ROIBranchAttribution"
+            },
             "cache_key": {
               "anyOf": [
                 {
@@ -49284,6 +49471,16 @@
             },
             "repo": {
               "title": "Repo",
+              "type": "string"
+            },
+            "source_branch": {
+              "default": "",
+              "title": "Source Branch",
+              "type": "string"
+            },
+            "source_repo": {
+              "default": "",
+              "title": "Source Repo",
               "type": "string"
             },
             "title": {
@@ -49407,6 +49604,14 @@
               "title": "Estimator Model",
               "type": "string"
             },
+            "estimator_models": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ROIEstimatorModel"
+              },
+              "title": "Estimator Models",
+              "type": "array"
+            },
             "estimator_prompt": {
               "title": "Estimator Prompt",
               "type": "string"
@@ -49415,12 +49620,22 @@
               "title": "Github Api Url",
               "type": "string"
             },
+            "gitlab_api_url": {
+              "default": "https://gitlab.com/api/v4",
+              "title": "Gitlab Api Url",
+              "type": "string"
+            },
             "has_estimator_key": {
               "title": "Has Estimator Key",
               "type": "boolean"
             },
             "has_github_token": {
               "title": "Has Github Token",
+              "type": "boolean"
+            },
+            "has_gitlab_token": {
+              "default": false,
+              "title": "Has Gitlab Token",
               "type": "boolean"
             },
             "identity_map": {
@@ -49440,6 +49655,15 @@
               },
               "title": "Repos",
               "type": "array"
+            },
+            "source_provider": {
+              "default": "github",
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
             },
             "update_interval_minutes": {
               "title": "Update Interval Minutes",
@@ -49534,6 +49758,28 @@
               ],
               "title": "Github Token"
             },
+            "gitlab_api_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Gitlab Api Url"
+            },
+            "gitlab_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Gitlab Token"
+            },
             "repos": {
               "anyOf": [
                 {
@@ -49547,6 +49793,21 @@
                 }
               ],
               "title": "Repos"
+            },
+            "source_provider": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "github",
+                    "gitlab"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Provider"
             },
             "update_interval_minutes": {
               "anyOf": [
@@ -49567,6 +49828,9 @@
         },
         "ROISummaryResponse": {
           "properties": {
+            "branch_metrics": {
+              "$ref": "#/components/schemas/ROIBranchMetrics"
+            },
             "effort_basis": {
               "anyOf": [
                 {
@@ -49629,6 +49893,15 @@
               "title": "Repos",
               "type": "array"
             },
+            "source_provider": {
+              "default": "github",
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
+            },
             "start": {
               "title": "Start",
               "type": "string"
@@ -49642,6 +49915,14 @@
                 "$ref": "#/components/schemas/ROITrendResponse"
               },
               "title": "Trend",
+              "type": "array"
+            },
+            "unlinked_branches": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ROIBranchSpend"
+              },
+              "title": "Unlinked Branches",
               "type": "array"
             },
             "warnings": {

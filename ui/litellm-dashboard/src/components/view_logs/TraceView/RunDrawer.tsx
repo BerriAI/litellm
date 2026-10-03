@@ -1,12 +1,13 @@
 "use client";
 
-import { ChevronDown, ChevronsRight, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronsRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { cn } from "@/lib/cva.config";
 
 import { RunView } from "./TraceDrawer";
 import type { TraceSummary } from "./traceTypes";
+import { ignoresLetterShortcut } from "../letterShortcut";
 
 const WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 const MIN_WIDTH = 700;
@@ -42,10 +43,6 @@ const storeWidth = (width: number): void => {
     return;
   }
 };
-
-const isTypingTarget = (target: EventTarget | null): boolean =>
-  target instanceof HTMLElement &&
-  target.matches("input, textarea, select, [contenteditable='true'], [role='combobox']");
 
 function useDrawerWidth() {
   const [width, setWidth] = useState(() =>
@@ -100,7 +97,7 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (width: nu
     >
       <span
         className={cn(
-          "h-full w-[0.67px] bg-trace-line transition-[width,background-color] duration-150 group-hover/handle:w-0.5 group-focus-visible/handle:w-0.5 group-focus-visible/handle:bg-trace-brand motion-reduce:transition-none",
+          "h-full w-[0.67px] bg-border transition-[width,background-color] duration-150 group-hover/handle:w-0.5 group-focus-visible/handle:w-0.5 group-focus-visible/handle:bg-trace-brand motion-reduce:transition-none",
           dragging && "w-0.5 bg-trace-brand",
         )}
       />
@@ -126,10 +123,18 @@ function HeaderButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className="grid size-7 place-items-center rounded-[4px] text-trace-key transition-colors duration-150 hover:bg-trace-row-hover hover:text-trace-text disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none"
+      className="grid size-7 place-items-center rounded-[4px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none"
     >
       {children}
     </button>
+  );
+}
+
+function FullScreenButton({ fullScreen, onToggle }: { fullScreen: boolean; onToggle: () => void }) {
+  return (
+    <HeaderButton label={fullScreen ? "Exit full screen" : "Enter full screen"} onClick={onToggle}>
+      {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+    </HeaderButton>
   );
 }
 
@@ -145,6 +150,8 @@ const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 /** Right-side drawer over the runs list: resizable, keeps the list clickable, swaps runs in place. */
 export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps) {
   const [width, setWidth] = useDrawerWidth();
+  const [fullScreen, setFullScreen] = useState(false);
+  if (trace === null && fullScreen) setFullScreen(false);
   const [lastShown, setLastShown] = useState<TraceSummary | null>(trace);
   const [exitedKey, setExitedKey] = useState<string | null>(null);
   if (trace !== null && trace !== lastShown) setLastShown(trace);
@@ -165,8 +172,7 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
   useEffect(() => {
     if (trace === null) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const modified = event.metaKey || event.ctrlKey || event.altKey;
-      if (modified || isTypingTarget(event.target)) return;
+      if (ignoresLetterShortcut(event)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onSelect(null);
@@ -187,21 +193,21 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
     <aside
       aria-label="Trace details"
       data-testid="run-drawer"
-      style={{ width }}
+      style={{ width: fullScreen ? "100%" : width }}
       onAnimationEnd={(event) => {
         if (closing && event.target === event.currentTarget) setExitedKey(runKey(shown));
       }}
       className={cn(
-        "fixed inset-y-0 right-0 z-overlay flex origin-right flex-col bg-trace-surface shadow-[0_10px_15px_-3px_rgba(16,24,40,0.1),0_4px_6px_-4px_rgba(16,24,40,0.1)] motion-reduce:animate-none",
+        "fixed inset-y-0 right-0 z-overlay flex origin-right flex-col bg-background shadow-[0_10px_15px_-3px_rgba(16,24,40,0.1),0_4px_6px_-4px_rgba(16,24,40,0.1)] motion-reduce:animate-none",
         closing ? "animate-trace-drawer-out" : "animate-trace-drawer-in",
       )}
     >
-      <ResizeHandle width={width} onResize={setWidth} />
-      <div className="flex h-[37px] shrink-0 items-center gap-1 border-b border-trace-line px-2">
+      {!fullScreen && <ResizeHandle width={width} onResize={setWidth} />}
+      <div className="flex h-[37px] shrink-0 items-center gap-1 border-b border-border px-2">
         <HeaderButton label="Close (Esc)" onClick={() => onSelect(null)}>
           <ChevronsRight className="size-4" />
         </HeaderButton>
-        <span className="mx-1 h-4 w-px bg-trace-line" />
+        <span className="mx-1 h-4 w-px bg-border" />
         <HeaderButton label="Next trace (J)" disabled={index < 0 || index >= runs.length - 1} onClick={() => step(1)}>
           <ChevronDown className="size-4" />
         </HeaderButton>
@@ -209,10 +215,16 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
           <ChevronUp className="size-4" />
         </HeaderButton>
         {index >= 0 && (
-          <span className="ml-1 font-mono text-[11px] text-trace-key tabular-nums">
+          <span className="ml-1 font-mono text-[11px] text-muted-foreground tabular-nums">
             {index + 1} / {runs.length}
           </span>
         )}
+        <div className="ml-auto flex items-center gap-1">
+          <FullScreenButton fullScreen={fullScreen} onToggle={() => setFullScreen((current) => !current)} />
+          <HeaderButton label="Close trace (Esc)" onClick={() => onSelect(null)}>
+            <X className="size-4" />
+          </HeaderButton>
+        </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <RunView

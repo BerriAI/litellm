@@ -229,6 +229,8 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/tinyfish/",
             "/transcribe",
             "/typesafe/",
+            "/laya/",
+            "/bespoke/",
             "/openrouter/",
             "/vertex-ai/",
             "/vertex_ai/",
@@ -530,11 +532,11 @@ def _register_all_on_startup(inner: "Lifespan[FastAPI]", features: tuple[LazyFea
     (config pass-through endpoints), so the table is put back in lazy mode's order once it is up."""
 
     @asynccontextmanager
-    async def lifespan(app: "FastAPI") -> AsyncGenerator[None]:
+    async def lifespan(app: "FastAPI") -> AsyncGenerator[Mapping[str, object]]:
         register_all_features(app, features)
-        async with inner(app):
+        async with inner(app) as state:
             _restore_registry_order(app, features)
-            yield
+            yield state if state is not None else {}
 
     return lifespan
 
