@@ -63,11 +63,12 @@ class _Op(Generic[_T]):
     how to run on its own when the batch cannot pipeline (cluster client, or a reply the pipeline cannot
     settle, like NOSCRIPT)."""
 
-    __slots__ = ("caller", "future", "settled_hooks", "target")
+    __slots__ = ("caller", "future", "inflight", "settled_hooks", "target")
 
     def __init__(self) -> None:
         self.future: Final[asyncio.Future[_T]] = asyncio.get_running_loop().create_future()
         self.future.add_done_callback(_mark_retrieved)
+        self.inflight: asyncio.Task[None] | None = None
         self.settled_hooks: Final[list[SettledHook[_T]]] = []  # mutable-ok: append-only registry
         self.target: Final = current_service_target()
         self.caller: Final = _get_call_stack_info()
@@ -345,11 +346,15 @@ class RedisBatch:
 
     @property
     def pipelines(self) -> bool:
-        """Whether a flush is one pipeline round trip; a cluster client runs each operation on its own."""
+        """Whether a flush is one pipeline round trip; a cluster client runs each operation on its own, from the
+        moment it is declared."""
         return not isinstance(self.redis_cache, RedisClusterCache)
 
     def _declare(self, op: _Op[_T]) -> BatchResult[_T]:
         self._pending.append(op)  # pyright: ignore[reportArgumentType]  # heterogeneous ops share the flush loop
+        if not self.pipelines:
+            # Holding a cluster op buys no shared trip, so it leaves now and overlaps whatever runs before the flush.
+            op.inflight = asyncio.ensure_future(op._settle_alone())  # pyright: ignore[reportPrivateUsage]  # batch owns its ops
         return BatchResult(self, op)
 
     async def flush(self) -> None:
@@ -363,11 +368,13 @@ class RedisBatch:
             self.flushes += 1
             try:
                 if not self.pipelines:
-                    await asyncio.gather(*(op._settle_alone() for op in ops))  # pyright: ignore[reportPrivateUsage]  # batch owns its ops
+                    await asyncio.gather(*(op.inflight for op in ops if op.inflight is not None))
                 else:
                     await self._flush_pipeline(ops)
             finally:
                 for op in ops:
+                    if op.inflight is not None and not op.inflight.done():
+                        op.inflight.cancel()
                     if not op.future.done():
                         op.future.cancel()
                 await asyncio.gather(*(op.run_settled_hooks() for op in ops))

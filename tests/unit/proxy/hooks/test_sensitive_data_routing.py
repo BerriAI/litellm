@@ -1152,7 +1152,7 @@ class TestSensitiveRoutePinReadRidesTheRequestRedisBatch:
             await other_owner
 
         assert routed == "on-prem-model"
-        assert redis_cache.alone == [("GET", pin_key), ("MGET", ("other-owner:key",))]
+        assert sorted(redis_cache.alone) == [("GET", pin_key), ("MGET", ("other-owner:key",))]
         assert not settled_by_the_pin
 
     @pytest.mark.asyncio

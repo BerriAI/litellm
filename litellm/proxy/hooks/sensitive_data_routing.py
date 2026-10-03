@@ -101,7 +101,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
                 result = await self._read_pin_from_redis(redis_cache, cache_key)
                 if result is not None:
                     routed_model: Final = str(result)
-                    remaining_ttl = await self.internal_usage_cache.dual_cache.redis_cache.async_get_ttl(key=cache_key)
+                    remaining_ttl = await redis_cache.async_get_ttl(key=cache_key)
                     await self.internal_usage_cache.async_set_cache(
                         key=cache_key,
                         value=routed_model,
