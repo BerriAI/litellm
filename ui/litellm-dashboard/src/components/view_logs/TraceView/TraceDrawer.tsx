@@ -144,7 +144,7 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
   const { summary } = trace;
   const failed = summary.status === "error";
   return (
-    <header className="shrink-0 border-b bg-background px-4 pt-3">
+    <header className="shrink-0 border-b bg-background px-4 py-3">
       <div className="flex min-w-0 items-center gap-2">
         {!embedded && (
           <Button variant="ghost" size="icon-xs" onClick={onBack} aria-label="Back to runs">
@@ -154,7 +154,15 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
         <RunIcon summary={summary} failed={failed} />
         <h1 className="min-w-0 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
         <IdChip value={summary.trace_id} label="Copy trace ID" />
-        <div className="ml-auto shrink-0">
+        <TabsList aria-label="Trace view" className="ml-auto shrink-0 group-data-horizontal/tabs:h-8">
+          <TabsTrigger value="steps" className="text-xs">
+            Steps
+          </TabsTrigger>
+          <TabsTrigger value="conversation" className="text-xs">
+            Conversation
+          </TabsTrigger>
+        </TabsList>
+        <div className="shrink-0">
           <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
         </div>
       </div>
@@ -168,14 +176,6 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
         <Stat label="Cost" value={summary.spend == null ? "Not reported" : formatCost(summary.spend)} />
         {summary.error_count > 0 && <Stat label="Step errors" value={summary.error_count.toLocaleString()} error />}
       </div>
-      <TabsList variant="line" aria-label="Trace view" className="mt-2 h-9 gap-4 p-0">
-        <TabsTrigger value="steps" className="rounded-none px-1 after:bottom-0">
-          Steps
-        </TabsTrigger>
-        <TabsTrigger value="conversation" className="rounded-none px-1 after:bottom-0">
-          Conversation
-        </TabsTrigger>
-      </TabsList>
     </header>
   );
 }
