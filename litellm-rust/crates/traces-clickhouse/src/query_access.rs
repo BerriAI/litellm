@@ -2,6 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use hmac::{Hmac, Mac};
 use litellm_http::Client;
+use litellm_storage_clickhouse::READ_LIMITS;
 use litellm_traces::QueryScope;
 use moka::future::Cache;
 use strum::IntoEnumIterator;
@@ -10,6 +11,33 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{Connection, Error, TraceTable};
+
+const MIB: u64 = 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReaderLimits {
+    pub result_rows: u64,
+    pub result_bytes: u64,
+    pub memory_bytes: u64,
+    pub execution_seconds: u64,
+}
+
+impl ReaderLimits {
+    pub fn result_mib(&self) -> u64 {
+        self.result_bytes / MIB
+    }
+
+    pub fn memory_mib(&self) -> u64 {
+        self.memory_bytes / MIB
+    }
+}
+
+pub(crate) const READER_LIMITS: ReaderLimits = ReaderLimits {
+    result_rows: READ_LIMITS.result_rows,
+    result_bytes: READ_LIMITS.response_bytes as u64,
+    memory_bytes: 256 * MIB,
+    execution_seconds: READ_LIMITS.execution_seconds,
+};
 
 #[derive(Clone)]
 pub struct QueryReaders {
@@ -75,13 +103,19 @@ impl QueryReaders {
             return Err(Error::InvalidScope);
         }
         let password_hash = format!("{:x}", Sha256::digest(password));
+        let ReaderLimits {
+            result_rows,
+            result_bytes,
+            memory_bytes,
+            execution_seconds,
+        } = READER_LIMITS;
         self.execute(
             client,
             format!(
                 "CREATE USER IF NOT EXISTS {user} IDENTIFIED WITH sha256_hash BY '{password_hash}' \
-             SETTINGS readonly = 1 CONST, max_execution_time = 10 CONST, \
-             max_result_rows = 1000 CONST, max_result_bytes = 4194304 CONST, \
-             result_overflow_mode = 'throw' CONST, max_memory_usage = 268435456 CONST, \
+             SETTINGS readonly = 1 CONST, max_execution_time = {execution_seconds} CONST, \
+             max_result_rows = {result_rows} CONST, max_result_bytes = {result_bytes} CONST, \
+             result_overflow_mode = 'throw' CONST, max_memory_usage = {memory_bytes} CONST, \
              max_threads = 2 CONST, max_concurrent_queries_for_user = 8 CONST"
             ),
         )

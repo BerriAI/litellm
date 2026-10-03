@@ -2,8 +2,9 @@
 Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from types import ModuleType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,9 +18,10 @@ from litellm.proxy.auth.authorization import OwnedRows, ReadScope
 from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
+from litellm.rust_bridge import loader
 from litellm.rust_bridge.trace_queries import SPAN_DETAIL, SpanDetailParams
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.traces import AllQueryScope, ClickHouseStorage, TraceStorageConfig
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.store import TraceStore
 from litellm.tracing.types import TraceScope
@@ -31,14 +33,14 @@ SQL_ENVELOPE: Final = {
     "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 8},
     "rows_before_limit_at_least": 1,
 }
-QUERY_HELP: Final = {
+QUERY_HELP: Final[Mapping[str, object]] = {
     "dialect": "test SQL",
     "access": "authenticated scope",
     "response": "JSON envelope",
-    "tables": [{"name": "traces", "columns": [{"name": "value", "type": "String", "comment": "label"}]}],
+    "tables": [{"name": "otel_traces", "columns": [{"name": "value", "type": "String", "comment": "label"}]}],
     "normalized_fields": [],
     "metadata": {
-        "table": "traces",
+        "table": "spend_logs",
         "column": "metadata",
         "fields": [],
         "sampled_rows": 0,
@@ -791,3 +793,60 @@ def test_trace_storage_permissions_map_owned_rows(
         "user_id": expected[0],
         "team_ids": expected[1],
     }
+
+
+class _NativeConfig:
+    def __init__(self, database: str, url: str, retention_days: int) -> None:
+        pass
+
+
+class _NativeReturningHelp(ModuleType):
+    def __init__(self, help_payload: Mapping[str, object]) -> None:
+        super().__init__("native_traces")
+
+        class Storage:
+            def __init__(self, config: _NativeConfig) -> None:
+                pass
+
+            async def query_help(self, scope: AllQueryScope, secret: str) -> Mapping[str, object]:
+                return help_payload
+
+        self.NativeTraceConfig: Final = _NativeConfig
+        self.NativeTraceStorage: Final = Storage
+        self.trace_decode_otlp: Final = list
+        self.trace_encode_error: Final = bytes
+        self.trace_normalized_field_definitions: Final = list
+
+
+async def test_storage_validates_the_native_query_help_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(loader, "_cached_bridge", _NativeReturningHelp(QUERY_HELP))
+    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
+    assert await storage.query_help({"kind": "all"}, "secret") == TraceQueryHelp.model_validate(QUERY_HELP)
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        {
+            "metadata": {
+                "table": "spend_logs",
+                "column": "metadata",
+                "fields": [{"path": ["a"], "types": ["boolen"], "expression": "a"}],
+                "sampled_rows": 1,
+                "invalid_json_rows": 0,
+                "truncated": False,
+                "sample_sql": "SELECT metadata FROM spend_logs",
+                "scope": "bounded sample",
+            }
+        },
+        {"tables": [{"name": "traces", "columns": [{"name": "value", "type": "String"}]}]},
+        {"unexpected": True},
+    ),
+)
+async def test_storage_rejects_native_query_help_that_drifts_from_the_contract(
+    monkeypatch: pytest.MonkeyPatch, drift: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(loader, "_cached_bridge", _NativeReturningHelp({**QUERY_HELP, **drift}))
+    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
+    with pytest.raises(RuntimeError, match="invalid response"):
+        await storage.query_help({"kind": "all"}, "secret")
