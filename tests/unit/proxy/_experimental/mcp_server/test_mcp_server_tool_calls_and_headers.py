@@ -8819,8 +8819,8 @@ async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
     tool_error = logging_obj.async_failure_handler.await_args.args[0]
     assert isinstance(tool_error, MCPToolResultError)
     assert str(tool_error) == "upstream exploded"
-    logging_obj.has_run_logging.assert_any_call(event_type="sync_success")
-    logging_obj.has_run_logging.assert_any_call(event_type="async_success")
+    logging_obj.mark_logging_complete.assert_any_call(event_type="sync_success")
+    logging_obj.mark_logging_complete.assert_any_call(event_type="async_success")
     proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
     hook_kwargs = proxy_logging_mock.post_call_failure_hook.await_args.kwargs
     assert hook_kwargs["route"] == "/mcp/call_tool"
@@ -9396,7 +9396,7 @@ async def test_call_mcp_tool_modern_interim_result_passes_through_without_comple
     logging_obj.async_post_mcp_tool_call_hook.assert_not_awaited()
     proxy_logging_mock.post_mcp_call_hook.assert_not_awaited()
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
-    assert sorted(c.kwargs["event_type"] for c in logging_obj.has_run_logging.call_args_list) == [
+    assert sorted(c.kwargs["event_type"] for c in logging_obj.mark_logging_complete.call_args_list) == [
         "async_success",
         "sync_success",
     ], "the @client wrapper would otherwise log the interim result as a completed success on return"
