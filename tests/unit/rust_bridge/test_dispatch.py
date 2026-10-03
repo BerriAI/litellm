@@ -6,7 +6,7 @@ import pytest
 
 from litellm.rust_bridge import configuration
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import CacheRule, Route, RouteContext, RouteRule, Rules, SecretManagerRule
+from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules, SecretManagerRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
@@ -23,7 +23,7 @@ def binding() -> NativeBinding[object]:
     return bound
 
 
-@pytest.mark.parametrize("rules", ((), (CacheRule(Rollout.RUST_REQUIRED), SecretManagerRule(Rollout.RUST_REQUIRED))))
+@pytest.mark.parametrize("rules", ((), (SecretManagerRule(Rollout.RUST_REQUIRED),)))
 def test_route_without_rules_forwards_before_request_projection(rules: Rules) -> None:
     stream: Final[Iterator[int]] = iter((1, 2))
 
@@ -97,7 +97,6 @@ def test_native_stream_result_is_not_consumed_or_wrapped() -> None:
     request: Final = Request(model="streaming-model")
     stream: Final[Iterator[int]] = iter((1, 2))
     rules: Final[Rules] = (
-        CacheRule(Rollout.PYTHON_ONLY),
         SecretManagerRule(Rollout.PYTHON_ONLY),
         RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),
     )
@@ -126,7 +125,7 @@ def test_native_stream_result_is_not_consumed_or_wrapped() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rules", ((), (CacheRule(Rollout.RUST_REQUIRED), SecretManagerRule(Rollout.RUST_REQUIRED))))
+@pytest.mark.parametrize("rules", ((), (SecretManagerRule(Rollout.RUST_REQUIRED),)))
 async def test_async_route_without_rules_preserves_async_iterator_result(rules: Rules) -> None:
     async def chunks() -> AsyncGenerator[int, None]:
         yield 1
