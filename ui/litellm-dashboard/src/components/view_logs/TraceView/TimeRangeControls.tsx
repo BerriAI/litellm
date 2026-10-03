@@ -34,6 +34,7 @@ interface TimeRangeControlsProps {
   rangeHours: number;
   onRangeHoursChange: (hours: number) => void;
   live: boolean;
+  showLive?: boolean;
   onLiveChange: (live: boolean) => void;
   onRefresh: () => void;
   refreshing: boolean;
@@ -45,6 +46,7 @@ export function TimeRangeControls({
   rangeHours,
   onRangeHoursChange,
   live,
+  showLive = true,
   onLiveChange,
   onRefresh,
   refreshing,
@@ -84,18 +86,20 @@ export function TimeRangeControls({
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <button
-          type="button"
-          aria-pressed={live}
-          onClick={() => onLiveChange(!live)}
-          className={cn(
-            SEGMENT,
-            live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-          Live
-        </button>
+        {showLive && (
+          <button
+            type="button"
+            aria-pressed={live}
+            onClick={() => onLiveChange(!live)}
+            className={cn(
+              SEGMENT,
+              live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+            Live
+          </button>
+        )}
       </div>
     </div>
   );

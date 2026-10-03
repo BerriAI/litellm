@@ -67,64 +67,6 @@ export function InvestigationList({
   );
 }
 
-export function InvestigationExample({ onClose }: { onClose: () => void }) {
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent className="max-h-[90dvh] gap-5 overflow-y-auto sm:max-w-xl">
-        <DialogHeader className="gap-1.5 pr-6">
-          <DialogTitle className="text-base">Example investigation</DialogTitle>
-        </DialogHeader>
-        <section className="border-t pt-5" aria-labelledby="example-finding">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-400">
-              <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-              Needs attention
-            </span>
-            <span className="text-muted-foreground">3 of 20 conversations</span>
-          </div>
-          <h3 id="example-finding" className="mt-2 text-lg font-semibold leading-6 tracking-tight">
-            Failed lookups leave customers without answers
-          </h3>
-          <DialogDescription className="mt-2 leading-5">
-            The agent retries the same failed order lookup, then ends the conversation without an answer or a handoff.
-          </DialogDescription>
-        </section>
-        <div className="overflow-hidden rounded-lg border">
-          <div className="space-y-1.5 bg-muted/30 px-4 py-3">
-            <p className="text-xs text-muted-foreground">After three failed lookups, the agent replies:</p>
-            <blockquote className="text-sm leading-5">“I will check that for you.”</blockquote>
-          </div>
-          <details className="group border-t">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-2.5 text-sm font-medium hover:bg-muted/30 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
-              See the trace <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-            </summary>
-            <ol className="space-y-3 border-t px-4 py-3 text-sm leading-5 text-muted-foreground">
-              <li>
-                <span className="font-medium text-foreground">Customer</span> · Where is my order?
-              </li>
-              <li>
-                <span className="font-medium text-foreground">Order lookup</span> · Service unavailable
-              </li>
-              <li>
-                <span className="font-medium text-foreground">Two retries</span> · Same error, no new information
-              </li>
-              <li>
-                <span className="font-medium text-foreground">Agent</span> · I will check that for you. Conversation
-                ends.
-              </li>
-            </ol>
-          </details>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 export function MonitoringSetup({
   settings,
   ready,

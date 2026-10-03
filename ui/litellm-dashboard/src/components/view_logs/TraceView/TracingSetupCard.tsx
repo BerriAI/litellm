@@ -4,31 +4,23 @@ import { ArrowRight, ArrowUpRight, Check, Copy, KeyRound, Loader2, Send } from "
 import { useState } from "react";
 
 import { cn } from "@/lib/cva.config";
+import { LensPreviewButton } from "@/components/lens/LensPreviewButton";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 import anthropicLogo from "../../../../public/assets/logos/anthropic.svg";
-import crewaiLogo from "../../../../public/assets/logos/crewai-color.svg";
-import langchainLogo from "../../../../public/assets/logos/langchain.svg";
-import langgraphLogo from "../../../../public/assets/logos/langgraph-color.svg";
-import llamaindexLogo from "../../../../public/assets/logos/llamaindex-color.svg";
-import openaiAgentsLogo from "../../../../public/assets/logos/openai-agents.svg";
 import openaiLogo from "../../../../public/assets/logos/openai_small.svg";
 import otelLogo from "../../../../public/assets/logos/opentelemetry.svg";
-import pydanticAiLogo from "../../../../public/assets/logos/pydantic-ai-color.svg";
-import vercelLogo from "../../../../public/assets/logos/vercel.svg";
 import { agentTraceCall, apiClient, getProxyBaseUrl, sendOtlpTraceCall } from "../../networking";
 import { ActiveDot } from "./ActiveDot";
 import { sampleTraceExport } from "./sampleTrace";
-import { TracePreview } from "./TracePreview";
+import { FRAMEWORKS, frameworkSnippet, type FrameworkGuide } from "./tracingSetupGuides";
 import type { TraceSummary } from "./traceTypes";
 
 const COPIED_RESET_MS = 1500;
 const DOCS_URL = "https://docs.litellm.ai/docs/proxy/lens";
-const OTEL_BASE_PACKAGES = "opentelemetry-distro opentelemetry-exporter-otlp-proto-http";
-const PY_RUN_SNIPPET = "opentelemetry-instrument python my_agent.py";
-const TS_RUN_SNIPPET = "npx tsx my_agent.ts";
+const EXAMPLE_MODEL = "openai/gpt-6-sol";
 const SAMPLE_TRACE_POLL_MS = 1000;
 export const TRACING_KEY_REQUEST = {
   key_alias: "Agent tracing",
@@ -41,177 +33,36 @@ type Installer = "pip" | "uv";
 type CodingAgent = "Claude Code" | "Codex";
 
 const PY_INSTALL: Record<Installer, (packages: string) => string> = {
-  pip: (packages) => `pip install -U ${packages}`,
+  pip: (packages) => `pip install ${packages}`,
   uv: (packages) => `uv add ${packages}`,
 };
 
-interface FrameworkGuide {
-  id: string;
-  label: string;
-  logo: string;
-  packages: string;
-  quickstart: string;
-  typescript?: boolean;
-}
-
-const FRAMEWORKS: readonly FrameworkGuide[] = [
-  {
-    id: "deep-agents",
-    label: "Deep Agents",
-    logo: langgraphLogo.src,
-    packages: "deepagents langchain-openai openinference-instrumentation-langchain",
-    quickstart: `from deepagents import create_deep_agent
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(model="claude-sonnet-4-5", base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
-agent = create_deep_agent(model=llm, tools=[], system_prompt="You are a careful researcher.")
-agent.invoke({"messages": [{"role": "user", "content": "What is LiteLLM?"}]})`,
-  },
-  {
-    id: "vercel-ai-sdk",
-    label: "Vercel AI SDK",
-    logo: vercelLogo.src,
-    typescript: true,
-    packages: "ai @ai-sdk/openai-compatible @vercel/otel @opentelemetry/api",
-    quickstart: `import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { registerOTel } from "@vercel/otel";
-import { generateText } from "ai";
-
-registerOTel({ serviceName: process.env.OTEL_SERVICE_NAME ?? "my-agent" });
-
-const litellm = createOpenAICompatible({ name: "litellm", baseURL: "{PROXY}/v1", apiKey: process.env.LITELLM_API_KEY });
-
-async function main() {
-  const { text } = await generateText({
-    model: litellm("claude-sonnet-4-5"),
-    prompt: "What is LiteLLM?",
-    experimental_telemetry: { isEnabled: true, functionId: "my_agent" },
-  });
-  console.log(text);
-}
-
-main();`,
-  },
-  {
-    id: "langgraph",
-    label: "LangGraph",
-    logo: langgraphLogo.src,
-    packages: "langgraph langchain-openai openinference-instrumentation-langchain",
-    quickstart: `from langchain.agents import create_agent
-from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(model="claude-sonnet-4-5", base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
-agent = create_agent(model=llm, tools=[], name="my_agent")
-agent.invoke({"messages": [{"role": "user", "content": "What is LiteLLM?"}]})`,
-  },
-  {
-    id: "langchain",
-    label: "LangChain",
-    logo: langchainLogo.src,
-    packages: "langchain langchain-openai openinference-instrumentation-langchain",
-    quickstart: `from langchain_openai import ChatOpenAI
-
-llm = ChatOpenAI(model="claude-sonnet-4-5", base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
-llm.invoke("What is LiteLLM?")`,
-  },
-  {
-    id: "openai-agents",
-    label: "OpenAI Agents SDK",
-    logo: openaiAgentsLogo.src,
-    packages: "openai-agents openinference-instrumentation-openai-agents",
-    quickstart: `from agents import Agent, OpenAIChatCompletionsModel, Runner
-from openai import AsyncOpenAI
-
-client = AsyncOpenAI(base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
-agent = Agent(name="my_agent", model=OpenAIChatCompletionsModel(model="claude-sonnet-4-5", openai_client=client))
-print(Runner.run_sync(agent, "What is LiteLLM?").final_output)`,
-  },
-  {
-    id: "crewai",
-    label: "CrewAI",
-    logo: crewaiLogo.src,
-    packages: "crewai openinference-instrumentation-crewai",
-    quickstart: `from crewai import LLM, Agent, Crew, Task
-
-llm = LLM(model="openai/claude-sonnet-4-5", base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
-agent = Agent(role="Researcher", goal="Answer questions", backstory="", llm=llm)
-task = Task(description="What is LiteLLM?", expected_output="A short answer", agent=agent)
-Crew(agents=[agent], tasks=[task]).kickoff()`,
-  },
-  {
-    id: "pydantic-ai",
-    label: "Pydantic AI",
-    logo: pydanticAiLogo.src,
-    packages: "pydantic-ai openinference-instrumentation-pydantic-ai",
-    quickstart: `from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.providers.openai import OpenAIProvider
-
-provider = OpenAIProvider(base_url="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"])
-agent = Agent(OpenAIModel("claude-sonnet-4-5", provider=provider), name="my_agent", instrument=True)
-print(agent.run_sync("What is LiteLLM?").output)`,
-  },
-  {
-    id: "llamaindex",
-    label: "LlamaIndex",
-    logo: llamaindexLogo.src,
-    packages: "llama-index llama-index-llms-openai-like openinference-instrumentation-llama-index",
-    quickstart: `from llama_index.llms.openai_like import OpenAILike
-
-llm = OpenAILike(model="claude-sonnet-4-5", api_base="{PROXY}/v1", api_key=os.environ["LITELLM_API_KEY"], is_chat_model=True)
-print(llm.complete("What is LiteLLM?"))`,
-  },
-  {
-    id: "otel",
-    label: "OpenTelemetry",
-    logo: otelLogo.src,
-    packages: "",
-    quickstart: `# Any OTEL SDK works. Use the gen_ai.* semantic conventions:
-# gen_ai.operation.name, gen_ai.agent.name, gen_ai.response.id, gen_ai.usage.*
-from opentelemetry import trace
-
-tracer = trace.get_tracer("my-agent")
-attrs = {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "my_agent"}
-with tracer.start_as_current_span("my_agent", attributes=attrs):
-    ...`,
-  },
-];
-
-const installPackages = (guide: Pick<FrameworkGuide, "packages" | "typescript">): string =>
-  guide.typescript ? guide.packages : [OTEL_BASE_PACKAGES, guide.packages].filter(Boolean).join(" ");
-
-/** The endpoint is the proxy base URL: OTLP exporters append /v1/traces themselves. */
 export const tracingEnvSnippet = (proxyUrl: string, tracingKey: string | null = null): string =>
   [
     ...(tracingKey ? [`export LITELLM_TRACING_KEY=${tracingKey}`] : []),
-    `export OTEL_EXPORTER_OTLP_ENDPOINT=${proxyUrl}`,
-    "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
-    `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $${tracingKey ? "LITELLM_TRACING_KEY" : "LITELLM_API_KEY"}"`,
-    "export OTEL_SERVICE_NAME=my-agent",
+    `export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="${proxyUrl}/v1/traces"`,
+    `export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer $${tracingKey ? "LITELLM_TRACING_KEY" : "LITELLM_API_KEY"}"`,
+    'export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"',
+    'export OTEL_METRICS_EXPORTER="none"',
+    'export OTEL_LOGS_EXPORTER="none"',
   ].join("\n");
 
-export const codingAgentPrompt = (
-  proxyUrl: string,
-  guide: Pick<FrameworkGuide, "label" | "packages" | "typescript">,
-): string =>
+export const codingAgentPrompt = (proxyUrl: string, guide: FrameworkGuide, model: string): string =>
   [
     `Send this ${guide.label} project's OpenTelemetry traces to LiteLLM.`,
-    "",
-    `1. Add these dependencies: ${installPackages(guide)}`,
-    "2. Set these env vars wherever the project loads config (.env, settings, deployment manifests):",
-    `   OTEL_EXPORTER_OTLP_ENDPOINT=${proxyUrl}`,
-    "   OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
-    '   OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $LITELLM_API_KEY"',
-    "   OTEL_SERVICE_NAME=<a short name for this agent>",
-    guide.typescript
-      ? "3. Call registerOTel() from @vercel/otel at startup and pass experimental_telemetry: { isEnabled: true } to every AI SDK call."
-      : "3. Start the app through OTEL auto-instrumentation: opentelemetry-instrument <existing start command>.",
-    `4. Point every LLM client at LiteLLM: base_url=${proxyUrl}/v1, api key from LITELLM_API_KEY.`,
-    "5. Give each agent and subagent a name so runs are easy to read.",
-    "6. Run the agent once and confirm the run shows up in the LiteLLM UI under Lens > Traces.",
-    "",
-    "Never hardcode the key. Read it from LITELLM_API_KEY.",
-  ].join("\n");
+    "Keep the existing model configuration, authentication, and application behavior. Never hardcode a key; read it from LITELLM_API_KEY.",
+    "Set the trace destination wherever this project loads environment variables:",
+    tracingEnvSnippet(proxyUrl),
+    guide.install ?? `Install and enable the ${guide.plugin?.label}: ${guide.plugin?.url}`,
+    guide.plugin?.instruction ??
+      "Initialize OpenTelemetry before creating the agent. If the app already configures a tracer provider, keep it and point its exporter at the destination above instead.",
+    "Adapt this example to the existing application, replacing research_agent with the agent's name:",
+    frameworkSnippet(guide, proxyUrl, model),
+    guide.note ?? "",
+    "Run the agent once and confirm its named run appears in Lens > Traces.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -222,10 +73,9 @@ export const maskSecret = (secret: string): string =>
   secret.length > 10 ? `${secret.slice(0, 5)}${"•".repeat(16)}${secret.slice(-4)}` : "•".repeat(secret.length);
 
 export const otlpEndpoints = (proxyUrl: string): readonly (readonly [string, string, boolean])[] => [
-  ["Traces endpoint (POST)", `${proxyUrl}/v1/traces`, true],
-  ["OTEL_EXPORTER_OTLP_ENDPOINT", proxyUrl, true],
+  ["Traces endpoint", `${proxyUrl}/v1/traces`, true],
   ["Auth header", "Authorization: Bearer <LiteLLM virtual key>", true],
-  ["Protocol", "OTLP/HTTP, protobuf or JSON (gRPC not supported)", false],
+  ["Protocol", "OTLP/HTTP (protobuf or JSON)", false],
 ];
 
 export const PROXY_CONFIG_SNIPPET = [
@@ -270,8 +120,8 @@ function CodeBlock({
       </div>
       <pre
         className={cn(
-          "px-4 py-3 font-mono text-[12.5px] leading-6 text-foreground",
-          wrap ? "whitespace-pre-wrap" : "overflow-x-auto",
+          "m-0 px-4 py-3 font-mono text-xs leading-5 text-foreground",
+          wrap ? "whitespace-pre-wrap break-words" : "overflow-x-auto",
         )}
       >
         <code>{display}</code>
@@ -322,7 +172,7 @@ function LineTabs<T extends string>({
 function Step({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="mt-6">
-      <h3 className="mb-2 text-[13px] font-medium text-foreground">{title}</h3>
+      <h3 className="mb-3 text-sm font-medium text-foreground">{title}</h3>
       {children}
     </section>
   );
@@ -395,7 +245,7 @@ function SendTestTrace({
   const busy = state.kind === "sending" || state.kind === "waiting";
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Button onClick={() => void send()} disabled={busy}>
+      <Button variant="outline" onClick={() => void send()} disabled={busy}>
         {busy ? (
           <Loader2 aria-hidden="true" className="size-4 animate-spin" />
         ) : (
@@ -421,20 +271,18 @@ function TraceReceipt({
 }) {
   const missingAfterCheck = checked && !checking && !connected;
   return (
-    <Step title="Run your agent once">
-      <p className="text-sm leading-6 text-muted-foreground">
-        Keep this page open. Your runs will appear here when LiteLLM receives them.
-      </p>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+    <section className="mt-6 border-t pt-6" aria-label="Trace connection status">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p role="status" className="text-sm font-medium">
+            {connected ? "Traces connected" : "Waiting for your first trace"}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">Run your agent once. Its traces will appear here.</p>
+        </div>
         <Button variant="outline" onClick={onCheck} disabled={checking}>
           {checking && <Loader2 aria-hidden="true" className="size-4 animate-spin" />}
           {checking ? "Checking…" : "Check for traces"}
         </Button>
-        {!connected && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Waiting for your first trace
-          </p>
-        )}
       </div>
       {missingAfterCheck && (
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
@@ -442,7 +290,7 @@ function TraceReceipt({
           logs for export errors.
         </p>
       )}
-    </Step>
+    </section>
   );
 }
 
@@ -526,19 +374,19 @@ function EndpointValue({ value }: { value: string }) {
   );
 }
 
-function Endpoints({ proxyUrl }: { proxyUrl: string }) {
+function Endpoints({ proxyUrl, children }: { proxyUrl: string; children?: React.ReactNode }) {
   return (
     <section className="mt-6" aria-labelledby="otel-endpoints">
-      <h3 id="otel-endpoints" className="inline-flex items-center gap-2 text-sm font-medium">
-        <img src={otelLogo.src} alt="" className="size-5" />
-        OpenTelemetry (OTEL) endpoints
-      </h3>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Point any OpenTelemetry exporter here. The framework guides below set these for you.
-      </p>
-      <dl className="mt-3 grid gap-x-8 gap-y-3 rounded-md border border-l-2 border-border border-l-trace-brand bg-muted/30 px-4 py-3 md:grid-cols-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 id="otel-endpoints" className="inline-flex items-center gap-2 text-sm font-medium">
+          <img src={otelLogo.src} alt="" className="size-5" />
+          Connection details
+        </h3>
+        {children}
+      </div>
+      <dl className="mt-3 grid gap-x-6 gap-y-3 rounded-md border bg-muted/30 p-4 md:grid-cols-2">
         {otlpEndpoints(proxyUrl).map(([label, value, copyable]) => (
-          <div key={label} className="min-w-0">
+          <div key={label} className={cn("min-w-0", label === "Traces endpoint" && "md:col-span-2")}>
             <dt className="text-[12px] text-muted-foreground">{label}</dt>
             <dd className="mt-0.5">
               {copyable ? <EndpointValue value={value} /> : <span className="text-[12.5px]">{value}</span>}
@@ -574,7 +422,7 @@ interface ConnectAgentProps {
 function EnableTracing({ checked, checking, onCheck }: { checked: boolean; checking: boolean; onCheck: () => void }) {
   return (
     <>
-      <Step title="Enable tracing on the proxy">
+      <Step title="Proxy configuration">
         <p className="mb-3 text-sm leading-6 text-muted-foreground">
           Set your ClickHouse URL, add this to config.yaml, then restart the proxy. Ask your proxy administrator if you
           don’t manage this deployment.
@@ -594,11 +442,65 @@ function EnableTracing({ checked, checking, onCheck }: { checked: boolean; check
           Tracing is still unavailable. Check that the configuration was applied to this proxy and it has restarted.
         </p>
       )}
-      <Button className="mt-6" onClick={onCheck} disabled={checking}>
-        {checking && <Loader2 aria-hidden="true" className="size-4 animate-spin" />}
-        {checking ? "Checking…" : "Check setup"}
-      </Button>
+      <div className="mt-6 border-t pt-6">
+        <Button onClick={onCheck} disabled={checking}>
+          {checking && <Loader2 aria-hidden="true" className="size-4 animate-spin" />}
+          {checking ? "Checking…" : "Check setup"}
+        </Button>
+      </div>
     </>
+  );
+}
+
+function CodingAgentSetup({ proxyUrl, guide, model }: { proxyUrl: string; guide: FrameworkGuide; model: string }) {
+  const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
+  const [copied, setCopied] = useState<string | null>(null);
+  const command = codingAgentCommand(codingAgent, codingAgentPrompt(proxyUrl, guide, model));
+  const copy = async () => {
+    if (await copyToClipboard(command)) {
+      setCopied(command);
+      window.setTimeout(() => setCopied(null), COPIED_RESET_MS);
+    }
+  };
+  return (
+    <section className="mt-6" aria-labelledby="connect-project">
+      <h3 id="connect-project" className="text-sm font-medium">
+        Connect your project
+      </h3>
+      <div className="mt-3 overflow-hidden rounded-md border">
+        <div className="border-b bg-muted/30 px-4">
+          <LineTabs
+            value={codingAgent}
+            options={["Claude Code", "Codex"]}
+            onChange={(value) => {
+              setCodingAgent(value);
+              setCopied(null);
+            }}
+            logos={CODING_AGENT_LOGOS}
+          />
+        </div>
+        <div className="p-4">
+          <p className="text-sm leading-6 text-muted-foreground">
+            Run the setup command in your agent’s project. It uses your <code className="text-xs">LITELLM_API_KEY</code>
+            .
+          </p>
+          <Button className="mt-3" onClick={() => void copy()}>
+            {copied === command ? (
+              <Check aria-hidden="true" className="size-4" />
+            ) : (
+              <Copy aria-hidden="true" className="size-4" />
+            )}
+            {copied === command ? "Copied" : "Copy setup command"}
+          </Button>
+          <details className="mt-3">
+            <summary className="w-fit cursor-pointer text-xs text-muted-foreground">View command</summary>
+            <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-muted/40 p-3 text-xs leading-5">
+              <code>{command}</code>
+            </pre>
+          </details>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -615,27 +517,20 @@ function ConnectAgent({
   const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
   const [framework, setFramework] = useState(FRAMEWORKS[0].id);
   const [installer, setInstaller] = useState<Installer>("pip");
-  const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
   const [tracingKey, setTracingKey] = useState<string | null>(null);
   const guide = FRAMEWORKS.find((f) => f.id === framework) ?? FRAMEWORKS[0];
-  const packages = installPackages(guide);
-  const install = guide.typescript ? `npm install ${packages}` : PY_INSTALL[installer](packages);
-  const quickstart = guide.quickstart.replace("{PROXY}", proxyUrl);
+  const install = guide.install?.startsWith("pip install ")
+    ? PY_INSTALL[installer](guide.install.slice("pip install ".length))
+    : guide.install;
+  const model = EXAMPLE_MODEL;
+  const quickstart = frameworkSnippet(guide, proxyUrl, model, !!tracingKey);
   return (
     <>
-      {!readOnly && (
-        <Step title="See it work in one click">
-          <p className="mb-3 text-sm leading-6 text-muted-foreground">
-            Send a small sample run (an agent, an LLM call and a tool call) to confirm tracing works end to end.
-          </p>
-          <SendTestTrace accessToken={accessToken} onOpenTrace={onOpenTrace} />
-        </Step>
-      )}
-
-      <Endpoints proxyUrl={proxyUrl} />
-
+      <Endpoints proxyUrl={proxyUrl}>
+        {!readOnly && <SendTestTrace accessToken={accessToken} onOpenTrace={onOpenTrace} />}
+      </Endpoints>
       <div className="mt-6 space-y-2">
-        <label id="tracing-framework" className="text-sm font-medium">
+        <label id="tracing-framework" className="block text-sm font-medium">
           Your agent framework
         </label>
         <Select
@@ -646,14 +541,14 @@ function ConnectAgent({
         >
           <SelectTrigger aria-labelledby="tracing-framework" className="w-full">
             <SelectValue>
-              <img src={guide.logo} alt="" className="size-4" />
+              <img src={guide.logo} alt="" className="size-4 shrink-0 object-contain" />
               {guide.label}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {FRAMEWORKS.map((f) => (
               <SelectItem key={f.id} value={f.id}>
-                <img src={f.logo} alt="" className="size-4" />
+                <img src={f.logo} alt="" className="size-4 shrink-0 object-contain" />
                 {f.label}
               </SelectItem>
             ))}
@@ -661,87 +556,91 @@ function ConnectAgent({
         </Select>
       </div>
 
-      <Step title="Get a LiteLLM key">
-        {canMintTracingKey && !readOnly ? (
-          <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={setTracingKey} />
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Use any LiteLLM virtual key you already have, or ask a proxy admin for one.
-          </p>
-        )}
-      </Step>
-
-      <Step
-        title={
-          <span className="inline-flex items-center gap-1.5">
-            Let <img src={anthropicLogo.src} alt="" className="size-3.5" /> Claude Code or
-            <img src={openaiLogo.src} alt="" className="size-3.5" /> Codex connect it
-          </span>
-        }
-      >
-        <p className="mb-3 text-sm leading-6 text-muted-foreground">
-          Run this in your agent’s project. It starts your coding agent with the setup task and reads the key from
-          LITELLM_API_KEY.
-        </p>
-        <CodeBlock
-          code={codingAgentCommand(codingAgent, codingAgentPrompt(proxyUrl, guide))}
-          wrap
-          tabs={
-            <LineTabs
-              value={codingAgent}
-              options={["Claude Code", "Codex"]}
-              onChange={setCodingAgent}
-              logos={CODING_AGENT_LOGOS}
-            />
-          }
-        />
-      </Step>
-
-      <details className="mt-6 border-y py-4">
-        <summary className="cursor-pointer text-sm font-medium">Set up manually</summary>
-        <Step title="Install dependencies">
-          <CodeBlock
-            code={install}
-            tabs={
-              guide.typescript ? (
-                <FileLabel>npm</FileLabel>
-              ) : (
-                <LineTabs value={installer} options={["pip", "uv"]} onChange={setInstaller} />
-              )
-            }
-          />
+      <CodingAgentSetup proxyUrl={proxyUrl} guide={guide} model={model} />
+      <details className="mt-6 border-t pt-6">
+        <summary className="w-fit cursor-pointer text-sm font-medium">Set up manually</summary>
+        <Step title="Get a LiteLLM key">
+          {canMintTracingKey && !readOnly ? (
+            <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={setTracingKey} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Use any LiteLLM virtual key you already have, or ask a proxy admin for one.
+            </p>
+          )}
         </Step>
+        {install && (
+          <Step title="Install dependencies">
+            <CodeBlock
+              code={install}
+              wrap
+              tabs={
+                guide.language === "typescript" ? (
+                  <FileLabel>npm</FileLabel>
+                ) : (
+                  <LineTabs value={installer} options={["pip", "uv"]} onChange={setInstaller} />
+                )
+              }
+            />
+          </Step>
+        )}
+        {guide.plugin && (
+          <Step title="Enable the plugin">
+            <p className="text-sm leading-6 text-muted-foreground">
+              Install and enable the{" "}
+              <a className="underline underline-offset-4" href={guide.plugin.url} target="_blank" rel="noreferrer">
+                {guide.plugin.label}
+              </a>
+              . {guide.plugin.instruction}
+            </p>
+          </Step>
+        )}
         <Step title="Configure environment">
+          <p className="mb-3 text-sm leading-6 text-muted-foreground">
+            {tracingKey ? (
+              <>
+                Tracing uses the key above. Set <code>LITELLM_API_KEY</code> to a key with model access.
+              </>
+            ) : (
+              <>
+                Set <code>LITELLM_API_KEY</code> to your LiteLLM key.
+              </>
+            )}
+          </p>
           <CodeBlock
             code={tracingEnvSnippet(proxyUrl, tracingKey)}
             display={tracingEnvSnippet(proxyUrl, tracingKey && maskSecret(tracingKey))}
             tabs={<FileLabel>Shell</FileLabel>}
+            wrap
           />
         </Step>
         <Step title="Run your agent">
-          <p className="mb-2 text-sm text-muted-foreground">
-            Replace the example model with a model configured on your proxy.
+          <p className="mb-3 text-sm leading-6 text-muted-foreground">
+            {guide.existingModel ? "Keep your existing model settings. " : "Save and run this example. "}
+            Replace <code>research_agent</code> with your agent’s name.
+            {!guide.existingModel && " Use a model configured on this proxy."}
           </p>
-          <CodeBlock
-            code={guide.typescript ? quickstart : `import os\n\n${quickstart}`}
-            tabs={<FileLabel>{guide.typescript ? "my_agent.ts" : "my_agent.py"}</FileLabel>}
-          />
-          <div className="mt-3">
-            <CodeBlock code={guide.typescript ? TS_RUN_SNIPPET : PY_RUN_SNIPPET} tabs={<FileLabel>Shell</FileLabel>} />
-          </div>
+          <CodeBlock code={quickstart} tabs={<FileLabel>{guide.fileName}</FileLabel>} wrap />
+          {guide.note && <p className="mt-3 text-sm leading-6 text-muted-foreground">{guide.note}</p>}
+          {!guide.existingModel && (
+            <div className="mt-3">
+              <CodeBlock
+                code={guide.language === "typescript" ? "npx tsx agent.mts" : "python agent.py"}
+                tabs={<FileLabel>Shell</FileLabel>}
+              />
+            </div>
+          )}
+          <a
+            href={`${DOCS_URL}?framework=${guide.id}#send-your-first-trace`}
+            className="mt-3 inline-flex items-center gap-1 text-sm underline underline-offset-4"
+            target="_blank"
+            rel="noreferrer"
+          >
+            View in docs <ArrowUpRight aria-hidden="true" className="size-3.5" />
+          </a>
         </Step>
       </details>
 
       <TraceReceipt connected={connected} checked={checked} checking={checking} onCheck={onCheck} />
-
-      {!connected && (
-        <section className="mt-6">
-          <h3 className="mb-2 text-sm font-medium">
-            Example run <span className="font-normal text-muted-foreground">(sample data, not your runs)</span>
-          </h3>
-          <TracePreview />
-        </section>
-      )}
     </>
   );
 }
@@ -755,6 +654,7 @@ export function TracingSetupCard({
   checking = false,
   readOnly = false,
   canMintTracingKey = false,
+  onDemo,
 }: {
   detail: string | null;
   accessToken: string;
@@ -764,6 +664,7 @@ export function TracingSetupCard({
   checking?: boolean;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  onDemo?: () => void;
 }) {
   const [checked, setChecked] = useState(false);
   const enabled = detail === null;
@@ -773,9 +674,18 @@ export function TracingSetupCard({
   };
 
   return (
-    <div className="w-full py-6 pb-12" data-testid="tracing-setup-card">
-      <div className="flex items-start gap-4">
+    <div className="w-full max-w-3xl pb-8" data-testid="tracing-setup-card">
+      {onDemo && <LensPreviewButton onClick={onDemo} />}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, connected)}</h2>
+        <span role="status" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+          {enabled ? (
+            <ActiveDot />
+          ) : (
+            <span aria-hidden="true" className="size-1.5 rounded-full bg-muted-foreground/50" />
+          )}
+          {enabled ? "Tracing enabled" : "Tracing is not enabled"}
+        </span>
         <a
           className="ml-auto inline-flex shrink-0 items-center gap-1 text-sm underline underline-offset-4"
           href={DOCS_URL}
@@ -789,10 +699,6 @@ export function TracingSetupCard({
         {enabled
           ? "Send your agent’s runs to LiteLLM to see its inputs, outputs, and tool calls."
           : "Tracing needs ClickHouse and a small update to your LiteLLM proxy configuration."}
-      </p>
-      <p role="status" className="mt-4 flex items-center gap-2 text-sm">
-        {enabled && <ActiveDot />}
-        {enabled ? "Tracing enabled" : "Tracing is not enabled"}
       </p>
       {enabled ? (
         <ConnectAgent

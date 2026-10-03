@@ -249,6 +249,32 @@ describe("ROICalculatorView", () => {
     expect(screen.getAllByText("Connect GitHub to get started")).toHaveLength(1);
   });
 
+  it("clearly identifies the sample report and returns to setup when exiting", async () => {
+    const emptySettings = { ...settings, has_github_token: false, ready: false, repos: [], estimator_model: "" };
+    vi.mocked(apiClient.get).mockImplementation((path: string, options) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(emptySettings);
+      if (path === "/roi-calculator/report") {
+        return Promise.resolve({ report: options?.query?.mode === "demo" ? { ...summary, mode: "demo" } : null });
+      }
+      return Promise.resolve(idleStatus);
+    });
+
+    render(<ROICalculatorView accessToken="token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview sample report" }));
+
+    expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
+    expect(screen.getByText("Spend per estimated engineering hour")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Exit demo" }));
+
+    expect(screen.getByRole("heading", { name: "Connect GitHub to get started" })).toBeVisible();
+    expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.put).not.toHaveBeenCalled();
+  });
+
   it("returns to Overview and shows the last sync time when completion is polled from Settings", async () => {
     const runningStatus = {
       ...idleStatus,

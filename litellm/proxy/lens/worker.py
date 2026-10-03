@@ -8,11 +8,23 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .analysis import analyze_sample
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 
 logger: Final = logging.getLogger("litellm.lens.worker")
+
+
+class ClaimedJobIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    id: str
+
+
+class ClaimIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    lens_id: str
+    job: ClaimedJobIdentity
 
 
 def failure_message(error: Exception) -> str:
@@ -74,9 +86,24 @@ class LensWorker:
     async def run_once(self) -> bool:
         response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 2}))
         response.raise_for_status()
-        if response.json() is None:
+        payload: Final = response.json()
+        if payload is None:
             return False
-        claim: Final = Claim.model_validate(response.json())
+        try:
+            claim: Final = Claim.model_validate(payload)
+        except ValidationError:
+            identity: Final = ClaimIdentity.model_validate(payload)
+            failure: Final = await self.client.post(
+                f"/lens/worker/{identity.lens_id}/{identity.job.id}/result",
+                json=Result(
+                    coverage=Coverage(),
+                    error="The worker could not read this investigation. Update the worker to match the gateway, then retry.",
+                ).model_dump(),
+            )
+            if failure.status_code != 409:
+                failure.raise_for_status()
+            logger.warning("Worker could not read a claimed investigation; reported a version compatibility failure")
+            return True
         prefix: Final = f"/lens/worker/{claim.lens_id}/{claim.job.id}"
 
         async def model(body: ModelRequest) -> ModelResult:

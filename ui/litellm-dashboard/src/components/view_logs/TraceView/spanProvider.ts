@@ -1,3 +1,4 @@
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
@@ -29,6 +30,7 @@ export function resolveSpanProvider(model: string | null, lookup: ProviderLookup
 }
 
 export function useSpanProvider(model: string | null): string | null {
-  const { data } = useModelCostMap();
+  const demo = useLensDemo();
+  const { data } = useModelCostMap(!demo && model !== null);
   return resolveSpanProvider(model, costMapLookup(data));
 }

@@ -58,6 +58,28 @@ const job: Job = {
 };
 
 describe("Analysis progress", () => {
+  it.each(["Collecting executions", "Reading executions"])(
+    "does not turn an unreported run count into zero runs during %s",
+    (stage) => {
+      expect(analysisProgress({ ...job, stage })).toEqual({
+        step: -1,
+        title: "Preparing activity",
+        done: 0,
+        total: 0,
+        detail: "Loading the runs selected for this investigation.",
+      });
+    },
+  );
+
+  it("shows the selected count as soon as the worker reports it", () => {
+    expect(analysisProgress({ ...job, coverage: { ...coverage, selected: 7 } })).toMatchObject({
+      step: 0,
+      done: 0,
+      total: 7,
+      detail: "0 of 7 selected runs reviewed",
+    });
+  });
+
   it("measures review progress against the sample, not all eligible runs", () => {
     const expected = { step: 0, done: 7, total: 20, detail: "7 of 20 selected runs reviewed" };
     expect(
