@@ -848,3 +848,60 @@ fn langsmith_consumption_follows_selected_payloads(
         }
     }
 }
+
+#[rstest]
+#[case::with_output_messages(&[
+    ("langsmith.span.kind", "llm"),
+    ("gen_ai.operation.name", "chat"),
+    ("gen_ai.response.id", "chatcmpl-1"),
+    (
+        "gen_ai.output.messages",
+        r#"[{"role":"assistant","parts":[{"type":"text","content":"hi"}]}]"#,
+    ),
+])]
+#[case::without_output_messages(&[
+    ("langsmith.span.kind", "llm"),
+    ("gen_ai.operation.name", "chat"),
+    ("gen_ai.response.id", "chatcmpl-1"),
+])]
+fn langsmith_response_id_is_complete_without_legacy_payloads(
+    span: Span,
+    #[case] attributes: &[(&str, &str)],
+) {
+    let decoded = decode(span, "langsmith", attributes, vec![]).unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([
+            CallKey::ProviderResponse("chatcmpl-1".into()),
+        ]))
+    );
+}
+
+#[rstest]
+#[case::langsmith("langsmith", "langsmith.span.kind", "llm")]
+#[case::logfire("logfire", "events", "[]")]
+#[case::traceloop("custom", "traceloop.span.kind", "llm")]
+#[case::vercel("ai", "ai.operationId", "ai.generateText")]
+fn convention_markers_keep_genai_call_evidence(
+    span: Span,
+    #[case] scope: &str,
+    #[case] marker: &str,
+    #[case] marker_value: &str,
+) {
+    let attributes = [
+        ("gen_ai.operation.name", "chat"),
+        ("gen_ai.response.id", "chatcmpl-1"),
+        ("gen_ai.request.model", "fixture-model"),
+        (
+            "gen_ai.output.messages",
+            r#"[{"role":"assistant","parts":[{"type":"text","content":"hi"}]}]"#,
+        ),
+    ];
+    let plain = decode(span.clone(), "custom", &attributes, vec![]).unwrap();
+    let marked_attributes = attributes
+        .into_iter()
+        .chain([(marker, marker_value)])
+        .collect::<Vec<_>>();
+    let marked = decode(span, scope, &marked_attributes, vec![]).unwrap();
+    assert_eq!(marked.normalized.calls, plain.normalized.calls);
+}

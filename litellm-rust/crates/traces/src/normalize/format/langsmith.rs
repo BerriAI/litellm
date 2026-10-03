@@ -194,7 +194,10 @@ impl Format for LangSmith {
                 } else {
                     base.facts.output
                 },
-                calls: io.calls,
+                calls: match io.calls {
+                    CallEvidence::Unknown => base.facts.calls,
+                    calls => calls,
+                },
                 ..base.facts
             },
             display_name: None,
