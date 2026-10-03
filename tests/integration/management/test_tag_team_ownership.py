@@ -159,6 +159,31 @@ def test_team_admin_manages_their_own_team_tags(gateway: Gateway) -> None:
         assert _tag_rows(name) == []
 
 
+def test_team_admin_cannot_set_a_tag_budget(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        admin_id: Final = scenario.user()
+        team_a: Final = scenario.team(members_with_roles=[{"role": "admin", "user_id": admin_id}])
+        admin_key: Final = scenario.key(user_id=admin_id, team_id=team_a)
+        tag: Final = _tag_name()
+        _create_tag(scenario, tag, team_id=team_a, max_budget=100.0)
+        budget_before: Final = read_rows(
+            'SELECT b.max_budget FROM "LiteLLM_BudgetTable" b '
+            'JOIN "LiteLLM_TagTable" t ON t.budget_id = b.budget_id WHERE t.tag_name = %s',
+            (tag,),
+        )
+        assert len(budget_before) == 1
+
+        denied: Final = gateway.request("POST", "/tag/update", {"name": tag, "max_budget": 5.0}, key=admin_key)
+        assert denied.status_code == 403, denied.text
+
+        budget_after: Final = read_rows(
+            'SELECT b.max_budget FROM "LiteLLM_BudgetTable" b '
+            'JOIN "LiteLLM_TagTable" t ON t.budget_id = b.budget_id WHERE t.tag_name = %s',
+            (tag,),
+        )
+        assert budget_after == budget_before
+
+
 def test_regular_team_member_cannot_manage_tags_and_sees_only_own_team_tags(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         member_id: Final = scenario.user()

@@ -19,7 +19,11 @@ from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
+from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
+    UserAPIKeyAuth,
+    user_api_key_has_admin_view,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -194,8 +198,8 @@ async def _require_tag_create_permission(
         raise HTTPException(status_code=403, detail=f"Caller does not administer team {tag.team_id}")
     if tag.models:
         raise HTTPException(status_code=403, detail="Only proxy admins can attach deployments to a tag")
-    if tag.budget_id is not None:
-        raise HTTPException(status_code=403, detail="Only proxy admins can attach an existing budget to a tag")
+    if _sets_tag_budget_fields(tag):
+        raise HTTPException(status_code=403, detail="Only proxy admins can set tag budgets")
 
 
 async def _require_no_foreign_tag_usage(
@@ -222,6 +226,10 @@ async def _require_no_foreign_tag_usage(
         )
 
 
+def _sets_tag_budget_fields(tag: "TagNewRequest | TagUpdateRequest") -> bool:
+    return bool(LiteLLM_BudgetTable.model_fields.keys() & tag.model_fields_set)
+
+
 async def _require_tag_update_permission(
     tag: TagUpdateRequest,
     existing_tag: "_TagRecord",
@@ -244,8 +252,8 @@ async def _require_tag_update_permission(
             status_code=403,
             detail="Only proxy admins can change a tag's model associations",
         )
-    if tag.budget_id is not None and tag.budget_id != existing_tag.budget_id:
-        raise HTTPException(status_code=403, detail="Only proxy admins can attach an existing budget to a tag")
+    if _sets_tag_budget_fields(tag):
+        raise HTTPException(status_code=403, detail="Only proxy admins can set tag budgets")
 
 
 async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
