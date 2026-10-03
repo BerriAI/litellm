@@ -1633,3 +1633,192 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
+
+
+def _threshold_test_messages(turns: int) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": "You are a terse assistant. " * 20}]
+    for index in range(turns):
+        messages.append({"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"Answer {index}: the capital is city number {index}."}],
+            }
+        )
+    return messages
+
+
+_THRESHOLD_TEST_TOOLS: Final = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_capital",
+            "description": "Look up the capital of a country",
+            "parameters": {"type": "object", "properties": {"country": {"type": "string"}}},
+        },
+    }
+]
+
+
+def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold() -> None:
+    """The threshold check is the same arithmetic as token_counter(...) >= threshold, including the
+    tools and system-message adjustments, so the boundary values must agree exactly."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    messages = _threshold_test_messages(turns=12)
+    total = token_counter_new(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        tools=_THRESHOLD_TEST_TOOLS,
+        use_default_image_token_count=True,
+    )
+    assert total > 100
+    for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
+        assert messages_reach_token_count(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            threshold=threshold,
+            tools=_THRESHOLD_TEST_TOOLS,
+            use_default_image_token_count=True,
+        ) is (total >= threshold), threshold
+
+
+_SHAPE_IMAGE: Final = "data:image/png;base64," + "iVBORw0KGgo=" * 4
+
+_OPENAI_SHAPE_MESSAGES: Final = [
+    {"role": "system", "content": "You are a careful assistant. " * 20},
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this screenshot. " * 30},
+            {"type": "image_url", "image_url": {"url": _SHAPE_IMAGE}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "/a/b"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "c1", "content": "file body line\n" * 40},
+    {"role": "assistant", "content": "Here is what the file does. " * 20},
+]
+
+_ANTHROPIC_SHAPE_MESSAGES: Final = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this screenshot. " * 30, "cache_control": {"type": "ephemeral"}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" * 4}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me look."},
+            {"type": "tool_use", "id": "t1", "name": "read_file", "input": {"path": "/a/b"}},
+        ],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "file body line\n" * 40}]}],
+    },
+    {"role": "assistant", "content": [{"type": "text", "text": "Here is what the file does. " * 20}]},
+]
+
+_RESPONSES_SHAPE_INPUT: Final = [
+    {
+        "type": "message",
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Describe this screenshot. " * 30},
+            {"type": "input_image", "image_url": _SHAPE_IMAGE},
+        ],
+    },
+    {"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": '{"path": "/a/b"}'},
+    {"type": "function_call_output", "call_id": "c1", "output": "file body line\n" * 40},
+]
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(_OPENAI_SHAPE_MESSAGES, id="openai_chat_shape"),
+        pytest.param(_ANTHROPIC_SHAPE_MESSAGES, id="anthropic_messages_shape"),
+    ],
+)
+def test_messages_reach_token_count_agrees_with_token_counter_per_message_shape(messages: list[dict]) -> None:
+    """Content lists, images, tool calls, tool results and cache_control blocks in the OpenAI chat shape
+    (/v1/chat/completions) and the Anthropic shape (/v1/messages) count the same bounded as in full."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    total = token_counter_new(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        tools=_THRESHOLD_TEST_TOOLS,
+        use_default_image_token_count=True,
+    )
+    assert total > 100
+    for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
+        assert messages_reach_token_count(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            threshold=threshold,
+            tools=_THRESHOLD_TEST_TOOLS,
+            use_default_image_token_count=True,
+        ) is (total >= threshold), threshold
+
+
+def test_messages_reach_token_count_rejects_responses_items_exactly_like_token_counter() -> None:
+    """Responses API input items are not chat messages; the full counter raises on them and the
+    bounded counter raises the same error rather than silently returning a verdict."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    with pytest.raises(ValueError, match="input_text") as full:
+        token_counter_new(model="gpt-4o", messages=_RESPONSES_SHAPE_INPUT, use_default_image_token_count=True)
+    with pytest.raises(ValueError, match="input_text") as bounded:
+        messages_reach_token_count(
+            model="gpt-4o", messages=_RESPONSES_SHAPE_INPUT, threshold=10**6, use_default_image_token_count=True
+        )
+    assert str(bounded.value) == str(full.value)
+
+
+def test_messages_reach_token_count_stops_at_the_first_message_past_the_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the prompt-cache eligibility check used to tokenize every message of a 700k-token
+    Claude Code conversation to compare against a 1024-token minimum, costing hundreds of
+    milliseconds per request before routing. Counting must stop once the threshold is crossed."""
+    import litellm.litellm_core_utils.token_counter as token_counter_module
+
+    messages = _threshold_test_messages(turns=500)
+    counted_batches: list[int] = []  # mutable-ok: recorder for the _count_messages double
+    real_count_messages = token_counter_module._count_messages
+
+    def counting(params, batch, use_default_image_token_count, default_token_count):
+        counted_batches.append(len(batch))
+        return real_count_messages(params, batch, use_default_image_token_count, default_token_count)
+
+    monkeypatch.setattr(token_counter_module, "_count_messages", counting)
+    assert token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=1024
+    )
+    assert all(size == 1 for size in counted_batches)
+    bounded_calls: Final = len(counted_batches)
+    assert bounded_calls < len(messages) // 4, bounded_calls
+
+    assert not token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=10**9
+    )
+    assert len(counted_batches) - bounded_calls == len(messages)
+
+
+def test_messages_reach_token_count_honours_disable_token_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the counter disabled token_counter reports 0, so only a non-positive threshold is reached."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    messages = _threshold_test_messages(turns=3)
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=0) is True
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=1) is False

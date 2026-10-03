@@ -4,6 +4,7 @@ import base64
 import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from itertools import accumulate
 from typing import Final, Literal, cast
 
 import anyio
@@ -464,6 +465,37 @@ def token_counter(
         raise ValueError("Either text or messages must be provided")
 
     return num_tokens
+
+
+def messages_reach_token_count(
+    model: str,
+    messages: Sequence[AllMessageValues | Message],
+    threshold: int,
+    tools: list[ChatCompletionToolParam] | None = None,
+    use_default_image_token_count: bool = False,
+) -> bool:
+    """Whether ``messages`` plus ``tools`` hold at least ``threshold`` prompt tokens for ``model``.
+
+    Same arithmetic as ``token_counter(messages=..., tools=...) >= threshold``, counted one message
+    at a time and stopped at the first message that crosses the threshold, so a prompt far above it
+    costs the tokenizer a few messages rather than the whole conversation.
+    """
+    from litellm.utils import convert_list_message_to_dict
+
+    if litellm.disable_token_counter is True:
+        return threshold <= 0
+    new_messages: Final = cast(  # cast-ok: convert_list_message_to_dict is untyped, same as token_counter
+        list[AllMessageValues], convert_list_message_to_dict(messages)
+    )
+    params: Final = _MessageCountParams(model, None)
+    includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
+    per_message_counts: Final = (
+        _count_messages(params, [message], use_default_image_token_count, None) for message in new_messages
+    )
+    running_totals: Final = accumulate(
+        per_message_counts, initial=_count_extra(params.count_function, tools, None, includes_system_message)
+    )
+    return any(total >= threshold for total in running_totals)
 
 
 def _count_function_call_tokens(

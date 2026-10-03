@@ -36,7 +36,7 @@ from litellm.constants import (
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
 )
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.integrations.otel.runtime import phase_span, seed_request_identity
+from litellm.integrations.otel.runtime import phase_event, phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
@@ -3501,6 +3501,7 @@ async def user_api_key_auth(
     _ensure_parent_otel_span_on_request_state(request)
 
     request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
+    phase_event("litellm.request.body_parsed")
     route: Final[str] = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED
 

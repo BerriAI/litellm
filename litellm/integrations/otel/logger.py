@@ -771,6 +771,12 @@ class OpenTelemetryV2(CustomLogger):
                     stamp_error(span, _span_error_from_exception(exc), record_event=False, set_status=False)
                 raise
 
+    def add_phase_event(self, name: str, attributes: Mapping[str, str | int] | None = None) -> None:
+        """Mark a point in the request on its root span, or on the ambient span before the root is anchored."""
+        span: Final = request_root_span() or get_current_span()
+        if is_recordable_span(span):
+            span.add_event(name, attributes)
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: "UserAPIKeyAuth",
@@ -1025,6 +1031,12 @@ def phase_span(name: str) -> "Iterator[Span | None]":
         return
     with logger.start_phase_span(name) as span:
         yield span
+
+
+def phase_event(name: str, attributes: Mapping[str, str | int] | None = None) -> None:
+    logger: Final = _registered_v2_logger()
+    if logger is not None:
+        logger.add_phase_event(name, attributes)
 
 
 def build_otel_v2_logger(

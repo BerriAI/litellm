@@ -1078,6 +1078,31 @@ def test_llm_span_anchors_to_root_even_inside_active_phase_span():
     assert llm_span.parent.span_id != auth_span.get_span_context().span_id
 
 
+def test_phase_event_lands_on_root_span_even_inside_active_phase_span():
+    """Request phase marks (body parsed, pre-call done, deployment selected) are
+    events on the server span: they must land on the anchored root even while the
+    ``auth`` phase span is active, and on the ambient server span before the root
+    is anchored (the body is parsed before auth anchors it)."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    with trace.use_span(server, end_on_exit=False):
+        logger.add_phase_event("litellm.request.body_parsed")
+        set_request_root_span(server)
+        with logger.start_phase_span("auth /chat/completions"):
+            logger.add_phase_event("litellm.request.pre_call_completed")
+            logger.add_phase_event("litellm.request.deployment_selected", {"litellm.deployment.attempt": 1})
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    root_events = by_name[LITELLM_PROXY_REQUEST_SPAN_NAME].events
+    assert [e.name for e in root_events] == [
+        "litellm.request.body_parsed",
+        "litellm.request.pre_call_completed",
+        "litellm.request.deployment_selected",
+    ]
+    assert dict(root_events[2].attributes or {}) == {"litellm.deployment.attempt": 1}
+    assert by_name["auth /chat/completions"].events == ()
+
+
 def test_live_llm_span_anchors_to_root_with_no_active_span():
     """Bug 2 (pass-through), live path: even with no span active at ``pre_call``,
     the anchor is a recordable parent, so the span opens live under the server root

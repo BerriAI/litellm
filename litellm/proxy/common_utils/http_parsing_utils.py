@@ -15,6 +15,7 @@ from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
 )
+from litellm.integrations.otel.runtime import phase_event
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -168,6 +169,19 @@ def _parse_binary_body(body: bytes) -> dict:
     return {}
 
 
+def _declared_content_length(headers: Mapping[str, str]) -> int | None:
+    declared: Final = headers.get("content-length")
+    return int(declared) if isinstance(declared, str) and declared.isdigit() else None
+
+
+def _mark_body_received(byte_count: int | None) -> None:
+    """Marks the end of body transfer on the request's server span, once per body read."""
+    phase_event(
+        "litellm.request.body_received",
+        None if byte_count is None else {"litellm.request.body_bytes": byte_count},
+    )
+
+
 def is_otlp_trace_request(request: Request) -> bool:
     return request.method == "POST" and get_route_path(request.scope) == "/v1/traces"
 
@@ -198,10 +212,13 @@ async def _read_request_body(request: Request | None) -> dict:
         content_type: Final = _request_headers.get("content-type", "")
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
-            parsed_body = _parse_binary_body(await request.body())
+            binary_body: Final = await request.body()
+            _mark_body_received(len(binary_body))
+            parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
             try:
                 form_data: Final = await request.form()
+                _mark_body_received(_declared_content_length(request.headers))
             except Exception as e:
                 # ``request.form()`` raises on malformed multipart (missing
                 # boundary, malformed chunk encoding, …). Surface as 400 so
@@ -222,6 +239,7 @@ async def _read_request_body(request: Request | None) -> dict:
         else:
             # Read the request body
             body: Final = await request.body()
+            _mark_body_received(len(body))
 
             # Return empty dict if body is empty or None
             if not body:

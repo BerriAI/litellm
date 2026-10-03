@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 
 import litellm
+import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
@@ -33,13 +34,21 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 
 
 def _starlette_request(
-    body: bytes, content_type: str, path: str = "/v1/messages", content_encoding: str = ""
+    body: bytes,
+    content_type: str,
+    path: str = "/v1/messages",
+    content_encoding: str = "",
+    content_length: str = "",
 ) -> Request:
     scope = {
         "type": "http",
         "method": "POST",
         "path": path,
-        "headers": [(b"content-type", content_type.encode()), (b"content-encoding", content_encoding.encode())],
+        "headers": [
+            (b"content-type", content_type.encode()),
+            (b"content-encoding", content_encoding.encode()),
+            (b"content-length", content_length.encode()),
+        ],
         "query_string": b"",
     }
     chunks = iter((body,))
@@ -48,6 +57,46 @@ def _starlette_request(
         return {"type": "http.request", "body": next(chunks, b""), "more_body": False}
 
     return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_marks_body_received_once_with_its_size(monkeypatch: pytest.MonkeyPatch):
+    events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
+
+    def record(name: str, attributes: dict[str, str | int]) -> None:
+        events.append((name, dict(attributes)))
+
+    monkeypatch.setattr(http_parsing_utils, "phase_event", record)
+    body: Final = orjson.dumps({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "x" * 4096}]})
+    request: Final = _starlette_request(body, "application/json")
+
+    assert await _read_request_body(request) == orjson.loads(body)
+    assert await _read_request_body(request) == orjson.loads(body)
+
+    assert events == [("litellm.request.body_received", {"litellm.request.body_bytes": len(body)})]
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_marks_body_received_for_binary_and_form_bodies(monkeypatch: pytest.MonkeyPatch):
+    events: list[tuple[str, dict[str, str | int] | None]] = []  # mutable-ok: recorder for the phase_event double
+
+    def record(name: str, attributes: dict[str, str | int] | None) -> None:
+        events.append((name, None if attributes is None else dict(attributes)))
+
+    monkeypatch.setattr(http_parsing_utils, "phase_event", record)
+    protobuf: Final = b"\x08\x96\x01" * 50
+    form: Final = b"model=whisper-1&language=en"
+    form_type: Final = "application/x-www-form-urlencoded"
+
+    await _read_request_body(_starlette_request(protobuf, "application/x-protobuf"))
+    await _read_request_body(_starlette_request(form, form_type, content_length=str(len(form))))
+    await _read_request_body(_starlette_request(form, form_type))
+
+    assert events == [
+        ("litellm.request.body_received", {"litellm.request.body_bytes": len(protobuf)}),
+        ("litellm.request.body_received", {"litellm.request.body_bytes": len(form)}),
+        ("litellm.request.body_received", None),
+    ]
 
 
 @pytest.mark.asyncio
