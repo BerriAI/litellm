@@ -747,7 +747,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return;
     }
     try {
-      const built = buildEditServerPayload(values, {
+      const uiState = {
+        dcrClient: dcrClientRef.current,
         mcpServer,
         logoUrl,
         costConfig,
@@ -757,15 +758,13 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         toolNameToDisplayName,
         toolNameToDescription,
         removeStoredApp,
-      });
+      };
+      const built = buildEditServerPayload(values, uiState);
       if (built.kind !== "ok") {
         toast.fromError(editPayloadErrorMessage(built));
         return;
       }
-      const payload =
-        dcrClientRef.current && values.auth_type === AUTH_TYPE.OAUTH2 && !isM2MFlow
-          ? { ...built.payload, credentials: { ...built.payload.credentials, ...dcrClientRef.current } }
-          : built.payload;
+      const payload = built.payload;
 
       const updated = await updateMCPServer(accessToken, payload);
 

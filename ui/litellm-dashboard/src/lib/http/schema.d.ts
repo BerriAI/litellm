@@ -37108,6 +37108,10 @@ export interface components {
             client_private_key_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
+            /** Dcr Issuer */
+            dcr_issuer?: string | null;
+            /** Dcr Server Url */
+            dcr_server_url?: string | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
             /** Id Jag Resource Token Endpoint */

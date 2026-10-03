@@ -31,6 +31,24 @@ export interface RegisteredMcpOAuthClient {
   dcrCredentials?: McpDcrCredentials;
 }
 
+const getRegisteredOAuthClient = (
+  registration: (McpDcrCredentials & { dcr_redirect_uris?: string[] }) | undefined,
+): RegisteredMcpOAuthClient => ({
+  clientId: registration?.client_id,
+  clientSecret: registration?.client_secret ?? undefined,
+  dcrCredentials: registration?.dcr_server_url
+    ? {
+        client_id: registration.client_id,
+        client_secret: registration.client_secret ?? null,
+        dcr_issuer: registration.dcr_issuer ?? null,
+        dcr_server_url: registration.dcr_server_url,
+        token_endpoint_auth_method:
+          registration.token_endpoint_auth_method === "client_secret_basic" ? "client_secret_basic" : null,
+        redirect_uris: registration.dcr_redirect_uris,
+      }
+    : undefined,
+});
+
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
   getCredentials: () =>
@@ -175,21 +193,7 @@ export const useMcpOAuthFlow = ({
           // rejects the registration and the admin authorize dead-ends.
           redirect_uris: [callbackUrl()],
         });
-        registeredClient = {
-          clientId: registration?.client_id,
-          clientSecret: registration?.client_secret,
-          dcrCredentials: registration?.dcr_server_url
-            ? {
-                client_id: registration.client_id,
-                client_secret: registration.client_secret ?? null,
-                dcr_issuer: registration.dcr_issuer ?? null,
-                dcr_server_url: registration.dcr_server_url,
-                token_endpoint_auth_method:
-                  registration.token_endpoint_auth_method === "client_secret_basic" ? "client_secret_basic" : null,
-                redirect_uris: registration.dcr_redirect_uris,
-              }
-            : undefined,
-        };
+        registeredClient = getRegisteredOAuthClient(registration);
       }
 
       const verifier = generateCodeVerifier();
