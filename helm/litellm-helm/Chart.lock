@@ -5,5 +5,8 @@ dependencies:
 - name: redis
   repository: oci://registry-1.docker.io/bitnamicharts
   version: 18.19.1
-digest: sha256:38962e231f6596b93f82a8412bbe4cf5de696caecf5775dfbbd163383eb1c009
-generated: "2026-07-28T10:21:22.511401-07:00"
+- name: k8s-aibom
+  repository: oci://ghcr.io/googlecloudplatform/charts
+  version: 1.5.1
+digest: sha256:d4621c5d49e4bb7a107e67a5272056fbd4037c262495d8c31abc150de5198cb4
+generated: "2026-09-29T16:54:10.796253-07:00"
