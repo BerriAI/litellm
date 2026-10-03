@@ -171,7 +171,9 @@ fn decoded_span(
                     crate::CallKey::LiteLlmRequest(id) | crate::CallKey::ProviderResponse(id) => {
                         id.len() + size_of::<crate::CallKey>()
                     }
-                    crate::CallKey::Transport => size_of::<crate::CallKey>(),
+                    crate::CallKey::Transport | crate::CallKey::GatewayAttempt => {
+                        size_of::<crate::CallKey>()
+                    }
                 })
                 .sum::<usize>()
             + normalized.model.as_ref().map_or(0, String::len)

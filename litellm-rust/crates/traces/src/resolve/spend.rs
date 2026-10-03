@@ -48,7 +48,9 @@ impl SpendLookup {
             trace_ids: sorted(
                 keys()
                     .filter_map(|(row, key)| match key {
-                        CallKey::Transport if !row.trace_id.is_empty() => {
+                        CallKey::Transport | CallKey::GatewayAttempt
+                            if !row.trace_id.is_empty() =>
+                        {
                             Some(row.trace_id.clone())
                         }
                         _ => None,
@@ -79,6 +81,21 @@ impl Ownership<'_> {
 }
 
 pub(super) type Requests<'a> = Vec<&'a SpendRow>;
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum KeyFamily {
+    GatewayCall,
+    ProviderResponse,
+    Transport,
+}
+
+fn key_family(key: &CallKey) -> KeyFamily {
+    match key {
+        CallKey::LiteLlmRequest(_) => KeyFamily::GatewayCall,
+        CallKey::ProviderResponse(_) => KeyFamily::ProviderResponse,
+        CallKey::Transport | CallKey::GatewayAttempt => KeyFamily::Transport,
+    }
+}
 
 pub(super) enum KeyMatch<'a> {
     Missing,
@@ -174,7 +191,7 @@ fn matches<'a>(
                 && (spend.litellm_call_id == *id
                     || (spend.litellm_call_id.is_empty() && spend.request_id == *id))
         }
-        CallKey::Transport => {
+        CallKey::Transport | CallKey::GatewayAttempt => {
             !row.trace_id.is_empty()
                 && !row.span_id.is_empty()
                 && spend.trace_id == row.trace_id
@@ -216,12 +233,37 @@ pub(super) fn requests<'a>(
         && anchored
             .iter()
             .all(|request| request.litellm_call_id.is_empty());
-    let matches = keyed
+    let aliases: Vec<_> = keyed
         .into_iter()
         .filter(|(key, requests)| {
             !(legacy_rows && requests.is_empty() && matches!(key, CallKey::LiteLlmRequest(_)))
         })
-        .map(|(_, requests)| KeyMatch::new(requests))
+        .collect();
+    let families: BTreeSet<_> = aliases.iter().map(|(key, _)| key_family(key)).collect();
+    let compatible_rows: Vec<BTreeSet<_>> = families
+        .into_iter()
+        .map(|family| {
+            aliases
+                .iter()
+                .filter(|(key, _)| key_family(key) == family)
+                .flat_map(|(_, requests)| requests.iter().map(|request| request.identity()))
+                .collect()
+        })
+        .collect();
+    let matches = aliases
+        .into_iter()
+        .map(|(_, requests)| {
+            KeyMatch::new(
+                requests
+                    .into_iter()
+                    .filter(|request| {
+                        compatible_rows
+                            .iter()
+                            .all(|family| family.contains(&request.identity()))
+                    })
+                    .collect(),
+            )
+        })
         .collect();
     match evidence.kind() {
         CallEvidenceKind::Complete => SpendEvidence::Complete(matches),
