@@ -163,8 +163,8 @@ export function LogDetailContent({
               </DescriptionItem>
               {podRouting && typeof podRouting === "object" && (
                 <DescriptionItem label="Pod">
-                  {podRouting.pod_ip} · {KUBERNETES_POD_ROUTING_LABELS[podRouting.selection]} ·{" "}
-                  {podRouting.pod_count} pods
+                  {podRouting.pod_ip} · {KUBERNETES_POD_ROUTING_LABELS[podRouting.selection]} · {podRouting.pod_count}{" "}
+                  pods
                 </DescriptionItem>
               )}
               {logEntry.requester_ip_address && (
