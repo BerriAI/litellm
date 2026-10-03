@@ -1883,6 +1883,15 @@ def _extract_model_candidates_from_request(
     llm_router: Router | None = None,
     team_id: str | None = None,
 ) -> list[str]:
+    if route.rstrip("/") == "/laya/v1/systemone":
+        from litellm.llms.laya.common_utils import validate_laya_model
+
+        try:
+            laya_request: Final = TypeAdapter(Mapping[str, object]).validate_python(request_data)
+            laya_model: Final = validate_laya_model(laya_request.get("model"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _dedupe_model_candidates((f"laya/{laya_model}",))
     if route == "/cost/predict-cache":
         prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
         return _dedupe_model_candidates(prediction_models)

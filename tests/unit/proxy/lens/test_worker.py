@@ -3,6 +3,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.lens.models import (
     Claim,
@@ -15,7 +16,7 @@ from litellm.proxy.lens.models import (
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from litellm.proxy.lens.worker import LensWorker
+from litellm.proxy.lens.worker import LensWorker, failure_message
 from tests.unit.proxy.lens.test_state import NOW, lens
 
 
@@ -82,6 +83,45 @@ async def test_idle_worker_does_not_start_an_analysis() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("result_status", (200, 409))
+async def test_incompatible_claim_reports_failure_instead_of_leaving_the_investigation_running(
+    result_status: int,
+) -> None:
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    payload: Final = claim.model_dump(mode="json") | {
+        "job": claim.job.model_dump(mode="json") | {
+            "settings": claim.job.settings.model_dump() | {"future_setting": "private content"},
+        },
+    }
+    saved: Final = SimpleQueue[Result]()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/lens/worker/claim":
+            return httpx.Response(200, json=payload)
+        assert request.url.path == "/lens/worker/lens/job/result"
+        saved.put(Result.model_validate_json(request.content))
+        return httpx.Response(result_status, json=True)
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert await LensWorker(client).run_once() is True
+    assert saved.get_nowait().error == (
+        "The worker could not read this investigation. Update the worker to match the gateway, then retry."
+    )
+    assert saved.empty()
+
+
+@pytest.mark.asyncio
+async def test_claim_without_an_identity_does_not_report_failure_for_another_investigation() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/lens/worker/claim"
+        return httpx.Response(200, json={"job": {"settings": {"future_setting": True}}})
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(ValidationError):
+            await LensWorker(client).run_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model_status", (200, 402, 503))
 async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(model_status: int) -> None:
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
@@ -126,6 +166,34 @@ async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(mod
         assert result.coverage.screened == 1
         assert result.coverage.unassessable == 0
     elif model_status == 402:
-        assert result.error == "Monthly budget reached"
+        assert "HTTP 402" in result.error and "remaining budget" in result.error
     else:
-        assert result.error.startswith("Analysis interrupted.")
+        assert result.error.startswith("Model request failed (HTTP 503).")
+
+
+@pytest.mark.parametrize("status", (400, 401, 402, 403, 404, 409, 429, 503))
+def test_failure_reports_action_and_status_without_private_response_content(status: int) -> None:
+    request: Final = httpx.Request(
+        "POST", "https://private-host.test/lens/worker/private-lens/private-run/model?token=secret"
+    )
+    response: Final = httpx.Response(status, request=request, text="private trace content and key")
+    error: Final = httpx.HTTPStatusError("private exception details", request=request, response=response)
+    message: Final = failure_message(error)
+    assert message.startswith(f"Model request failed (HTTP {status}).")
+    assert "private" not in message and "secret" not in message
+
+
+@pytest.mark.parametrize(
+    "route,action", (("sample", "Reading trace data"), ("content", "Reading trace data"), ("result", "Saving results"))
+)
+def test_failure_identifies_the_failing_worker_operation(route: str, action: str) -> None:
+    request: Final = httpx.Request("GET", f"https://proxy.test/lens/worker/lens/job/{route}")
+    response: Final = httpx.Response(503, request=request)
+    error: Final = httpx.HTTPStatusError("private body", request=request, response=response)
+    assert failure_message(error).startswith(f"{action} failed (HTTP 503).")
+
+
+def test_connection_timeout_and_invalid_response_have_distinct_private_diagnostics() -> None:
+    assert "connect to the proxy" in failure_message(httpx.ConnectError("private hostname"))
+    assert "timed out" in failure_message(httpx.ReadTimeout("private prompt"))
+    assert "structured JSON" in failure_message(ValueError("private model response"))

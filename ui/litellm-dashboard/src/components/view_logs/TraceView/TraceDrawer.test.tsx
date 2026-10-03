@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -60,6 +60,27 @@ describe("RunView", () => {
     expect(header).not.toHaveTextContent("failed");
   });
 
+  it("shows the agent name with the SDK logo in the run header instead of the generic agent icon", async () => {
+    renderRun({
+      ...research,
+      summary: { ...research.summary, agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
+    });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("run-framework")).toHaveTextContent(/^research-bot$/);
+    expect(within(header).getByTestId("run-framework")).toHaveAttribute("title", "Claude Agent SDK");
+    expect(within(header).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toBeInTheDocument();
+    expect(within(header).queryByTestId("span-icon")).not.toBeInTheDocument();
+  });
+
+  it("keeps the generic agent icon when the trace has no known SDK", async () => {
+    renderRun({ ...research, summary: { ...research.summary, frameworks: ["some-other-sdk"] } });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("span-icon")).toBeInTheDocument();
+    expect(within(header).queryByTestId("run-framework")).not.toBeInTheDocument();
+  });
+
   it("folds researcher ×12 in the span tree", async () => {
     renderRun(swarm);
 
@@ -112,6 +133,21 @@ describe("RunView", () => {
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
+  });
+
+  it.each(["button", "Escape"])("reopens the selected step after closing details with %s", async (method) => {
+    const user = userEvent.setup();
+    renderRun(research);
+    await screen.findByTestId("detail-pane");
+    await user.keyboard("j");
+    const selectedId = screen.getByTestId("detail-pane").getAttribute("data-row-id");
+    expect(selectedId).not.toBe(rootSpanId(research));
+    if (method === "button") await user.click(screen.getByRole("button", { name: "close detail" }));
+    else await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show details" }));
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selectedId);
+    expect(screen.queryByRole("button", { name: "Show details" })).not.toBeInTheDocument();
   });
 
   it("keeps a way back to the runs table when a run fails to load", async () => {

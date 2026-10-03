@@ -1,14 +1,13 @@
 mod error;
-mod insert;
+mod normalize;
 mod otlp;
-mod schema;
+pub mod query;
+mod query_access;
 mod shared;
-mod sql;
 
-pub use error::DecodeError;
-pub use insert::{InsertRow, InsertTable, encode_rows, insert_rows, insert_shared_rows};
-pub use litellm_storage_clickhouse::{Connection, Error, Parameter, execute_read};
+pub use error::{Error, InvalidQuery, InvalidScope};
+pub use normalize::{NormalizedSpan, ObservationType};
 pub use otlp::{DecodedSpan, decode_otlp};
-pub use schema::{ensure_schema, schema_statements};
+pub use query::ReadQuery;
+pub use query_access::QueryScope;
 pub use shared::{Shared, SharedIdentity};
-pub use sql::{LensQuery, ReadQuery, execute_named_read};

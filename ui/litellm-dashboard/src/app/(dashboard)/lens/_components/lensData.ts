@@ -1,3 +1,4 @@
+import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import type { components } from "@/lib/http/schema";
 
 export type Lens = components["schemas"]["Lens"];
@@ -6,6 +7,18 @@ export type LensList = components["schemas"]["LensList"];
 export type Finding = components["schemas"]["Finding"];
 export type Sample = components["schemas"]["Sample"];
 export type WorkerCreated = components["schemas"]["WorkerCreated"];
+
+export function workerConnected(worker: LensList["workers"][number], now = Date.now()): boolean {
+  return !worker.revoked && !!worker.analysis_key_id && now - Date.parse(worker.last_seen) < 120000;
+}
+
+export function scopeLabel(settings: Partial<Pick<Settings, "service" | "agent_name" | "filters">>): string {
+  return (
+    [settings.agent_name, settings.service, ...(settings.filters ?? []).map((f) => `${f.key}: ${f.value}`)]
+      .filter(Boolean)
+      .join(" · ") || "All activity"
+  );
+}
 
 export const starterQuestions = [
   "Find repeated work or tool calls that add no useful information.",
@@ -20,10 +33,7 @@ export function normalizeFilters(filters: NonNullable<Settings["filters"]>): Set
   });
 }
 
-export function runTime(value: string): string {
-  const date = new Date(value.includes("T") ? value : value.replace(" ", "T").slice(0, 23) + "Z");
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
+export { formatActivityTimestamp as runTime } from "@/utils/activityTimestamp";
 
 export function sortedFindings(findings: Finding[]): Finding[] {
   const rank = { high: 0, medium: 1, low: 2 };
@@ -37,9 +47,12 @@ export function lensStatus(lens: Lens, connected: boolean): string {
   const active = lens.jobs?.find((job) => ["queued", "running"].includes(job.status ?? ""));
   if (active) return connected ? active.stage ?? "Queued" : "Waiting for analyzer";
   const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
-  if (spent >= (lens.settings.monthly_budget ?? 20)) return "Budget reached";
-  if (!lens.settings.enabled) return "Paused";
-  return connected ? "Monitoring" : "Analyzer disconnected";
+  if (spent >= (lens.settings.monthly_budget ?? 100)) return "Budget reached";
+  const latest = lens.jobs?.[0];
+  if (latest?.status === "failed") return "Failed";
+  if (latest?.status === "cancelled") return "Cancelled";
+  if (latest?.status === "completed") return "Completed";
+  return "Ready";
 }
 
 export function evidenceTarget(id: string): { source: string; team: string; id: string; traceRef?: string } | null {
@@ -67,10 +80,10 @@ export function analysisProgress(job: Job) {
   if (job.status === "queued") {
     return {
       step: -1,
-      title: "Waiting for an analyzer",
+      title: "Queued for your worker",
       done: 0,
       total: 0,
-      detail: "Analysis will start when an analyzer is available.",
+      detail: "The worker picks up queued investigations automatically.",
     };
   }
   if (job.stage === "Grouping observations") {
@@ -95,6 +108,15 @@ export function analysisProgress(job: Job) {
         : `${investigated} patterns checked against the original activity`,
     };
   }
+  if (!selected) {
+    return {
+      step: -1,
+      title: "Preparing activity",
+      done: 0,
+      total: 0,
+      detail: "Loading the runs selected for this investigation.",
+    };
+  }
   return {
     step: 0,
     title: "Reviewing activity",
@@ -104,8 +126,90 @@ export function analysisProgress(job: Job) {
   };
 }
 
+export function analysisStages(job: Job): { done: number; total: number }[] {
+  const {
+    screened = 0,
+    selected = 0,
+    grouped_batches = 0,
+    grouping_batches = 0,
+    investigated = 0,
+    candidates = 0,
+  } = job.coverage ?? {};
+  return [
+    { done: screened, total: selected },
+    { done: grouped_batches, total: grouping_batches },
+    { done: investigated, total: candidates },
+  ];
+}
+
+export interface ProgressSample {
+  at: number;
+  step: number;
+  done: number;
+  fraction: number;
+}
+
+export const stageWeights = [0.6, 0.2, 0.2];
+
+export function analysisFraction({
+  step,
+  done,
+  total,
+}: Pick<ReturnType<typeof analysisProgress>, "step" | "done" | "total">): number {
+  if (step < 0) return 0;
+  const before = stageWeights.slice(0, step).reduce((sum, weight) => sum + weight, 0);
+  return before + stageWeights[step] * (total ? Math.min(1, done / total) : 0);
+}
+
+function windowStart(samples: readonly ProgressSample[], now: number): ProgressSample | undefined {
+  return samples.findLast((sample) => now - sample.at >= 60000) ?? samples[0];
+}
+
+export function analysisPace(samples: readonly ProgressSample[], now: number) {
+  const latest = samples.at(-1);
+  if (!latest) return { perMinute: null, secondsLeft: null };
+  const first = windowStart(
+    samples.filter((sample) => sample.step === latest.step),
+    now,
+  );
+  const anchor = windowStart(samples, now);
+  if (!first || !anchor) return { perMinute: null, secondsLeft: null };
+  const stepMinutes = (now - first.at) / 60000;
+  const perMinute = stepMinutes >= 1 / 6 ? (latest.done - first.done) / stepMinutes : null;
+  const spanSeconds = (now - anchor.at) / 1000;
+  const gained = latest.fraction - anchor.fraction;
+  const secondsLeft = spanSeconds >= 10 && gained > 0 ? ((1 - latest.fraction) * spanSeconds) / gained : null;
+  return { perMinute, secondsLeft };
+}
+
+export function stageDurations(samples: readonly ProgressSample[], createdAt: string, now: number): (number | null)[] {
+  const current = samples.at(-1)?.step ?? -1;
+  const starts = [0, 1, 2].map((stage) => {
+    if (stage === 0) return Date.parse(createdAt);
+    const entered = samples.findIndex(
+      (sample, index) => index > 0 && sample.step >= stage && samples[index - 1].step < stage,
+    );
+    return entered < 0 ? null : samples[entered].at;
+  });
+  return starts.map((start, stage) => {
+    if (start === null || stage > current) return null;
+    const end = stage === current ? now : starts[stage + 1];
+    return end === null ? null : Math.max(0, Math.floor((end - start) / 1000));
+  });
+}
+
+export function remainingLabel(seconds: number | null): string {
+  if (seconds === null) return "estimating";
+  if (seconds < 60) return "<1m";
+  if (seconds < 3600) return `~${Math.ceil(seconds / 60)}m`;
+  return `~${Math.floor(seconds / 3600)}h ${Math.ceil((seconds % 3600) / 60)}m`;
+}
+
 export function analysisElapsed(createdAt: string, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000));
+  return durationText(Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000)));
+}
+
+export function durationText(seconds: number): string {
   if (!Number.isFinite(seconds)) return "0s";
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -145,13 +249,6 @@ export function durationLabel(value: number, base: "minutes" | "hours" = "minute
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
-const nextCheckTimeFormat: Intl.DateTimeFormatOptions = {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-};
-
 export function nextCheckStatus(lens: Lens, now: number): string | null {
   if (!lens.settings.enabled) return null;
   const active = lens.jobs.find((job) => job.status === "queued" || job.status === "running");
@@ -162,6 +259,6 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   if (remaining <= 0) return "Due now · waiting for an analyzer";
   const minutes = Math.ceil(remaining / 60000);
   const relative = minutes === 1 ? "in less than a minute" : `in ${minutes} minutes`;
-  const time = next.toLocaleString(undefined, nextCheckTimeFormat);
+  const time = formatActivityTimestamp(lens.next_run_at);
   return `Next check ${time} · ${relative}`;
 }

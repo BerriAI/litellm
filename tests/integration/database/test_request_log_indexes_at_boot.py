@@ -116,7 +116,6 @@ def migration_cli(database_url: str, gateway: Gateway, resolver: Resolver) -> su
             "tests/integration/proxy_config.yaml",
             *resolver.proxy_flags,
             "--skip_server_startup",
-            "--enforce_prisma_migration_check",
         ],
         capture_output=True,
         text=True,

@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 pytest.importorskip("opentelemetry")
 
@@ -81,15 +81,16 @@ def _user_api_key_dict():
     return d
 
 
-def _mock_request():
-    r = MagicMock()
-    r.method = "POST"
-    r.query_params = {}
-    r.url = "http://testserver/mock/echo"
-    headers = MagicMock()
-    headers.copy.return_value = {}
-    r.headers = headers
-    return r
+def _mock_request() -> Request:
+    return Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "path": "/mock/echo",
+        "headers": [],
+        "query_string": b"",
+    })
 
 
 def _httpx_response(text: str) -> httpx.Response:
