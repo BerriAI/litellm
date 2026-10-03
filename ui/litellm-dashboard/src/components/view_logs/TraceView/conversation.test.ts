@@ -52,7 +52,7 @@ describe("trace conversation", () => {
       input: "unparsed input",
       output: "unparsed output",
       attributes: {},
-      input_ui: { kind: "messages", messages: [user] },
+      input_ui: { kind: "messages", messages: [{ role: "user", content: user.content }] },
       output_ui: {
         kind: "messages",
         messages: [

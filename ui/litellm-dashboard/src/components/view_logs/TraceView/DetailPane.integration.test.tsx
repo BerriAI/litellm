@@ -173,7 +173,10 @@ describe("DetailPane", () => {
 
   it("keeps the output visible when a step contains a long input conversation", async () => {
     const user = userEvent.setup();
-    const messages = Array.from({ length: 120 }, (_, index) => ({ role: "user", content: `Review case ${index}` }));
+    const messages = Array.from({ length: 120 }, (_, index) => ({
+      role: "user" as const,
+      content: `Review case ${index}`,
+    }));
     vi.mocked(agentTraceSpanCall).mockResolvedValue({
       ...details.root,
       input: JSON.stringify(messages),
