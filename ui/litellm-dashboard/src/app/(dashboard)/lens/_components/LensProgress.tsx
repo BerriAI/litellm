@@ -7,16 +7,26 @@ import {
   analysisFraction,
   analysisPace,
   analysisProgress,
+  analysisStages,
+  durationText,
   nextCheckStatus,
   remainingLabel,
-  stageWeights,
+  stageDurations,
   type Lens,
   type Job,
   type ProgressSample,
 } from "./lensData";
 
-const steps = ["Review runs", "Find patterns", "Check evidence"];
+const steps = ["review runs", "find patterns", "check evidence"];
 const units = ["runs", "batches", "patterns"];
+const markers = { done: "✓", active: "▸", todo: "·" };
+const rowText = { done: "text-foreground", active: "font-medium text-foreground", todo: "text-muted-foreground" };
+const blocks = 32;
+
+function stageState(index: number, current: number): keyof typeof markers {
+  if (index < current) return "done";
+  return index === current ? "active" : "todo";
+}
 
 export function LensProgress({ job, onCancel }: { job: Job; onCancel?: () => void }) {
   const [now, setNow] = useState(Date.now);
@@ -34,67 +44,88 @@ export function LensProgress({ job, onCancel }: { job: Job; onCancel?: () => voi
   const pace = analysisPace(samples, now);
   const percent = Math.round(fraction * 100);
   const queued = progress.step < 0;
-  const status = queued ? progress.title : `${progress.title}: ${progress.detail}`;
+  const counts = analysisStages(job);
+  const durations = stageDurations(samples, job.created_at, now);
+  const filled = Math.round(fraction * blocks);
+  const stats = [
+    ["eta", remainingLabel(pace.secondsLeft)],
+    ["rate", pace.perMinute === null ? "–" : `${Math.round(pace.perMinute)}/min`],
+    ["elapsed", analysisElapsed(job.created_at, now)],
+  ];
 
   return (
-    <section aria-label="Analysis progress" className="space-y-2 rounded-xl border bg-muted/30 p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-        <span className="min-w-0 font-medium" role="status">
-          {status}
-        </span>
-        <span className="tabular-nums text-muted-foreground">{percent}%</span>
-      </div>
-      <div
-        role="progressbar"
-        aria-label="Investigation progress"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
-        aria-valuetext={status}
-        className="relative h-2 overflow-hidden rounded-full bg-muted"
-      >
-        <div
-          className={`h-full rounded-full bg-foreground transition-[width] duration-700 ${queued ? "motion-safe:animate-pulse" : ""}`}
-          style={{ width: queued ? "33%" : `${Math.max(fraction * 100, 1)}%` }}
-        />
-        {stageWeights.slice(0, -1).map((_, index) => (
-          <span
-            key={index}
-            aria-hidden="true"
-            className="absolute inset-y-0 w-0.5 bg-background"
-            style={{ left: `${stageWeights.slice(0, index + 1).reduce((sum, weight) => sum + weight, 0) * 100}%` }}
-          />
-        ))}
-      </div>
-      <ol aria-label="Analysis stages" className="flex text-xs">
-        {steps.map((label, index) => (
-          <li
-            key={label}
-            aria-current={index === progress.step ? "step" : undefined}
-            style={{ width: `${stageWeights[index] * 100}%` }}
-            className={`truncate pr-2 ${index === progress.step ? "font-medium text-foreground" : "text-muted-foreground"}`}
-          >
-            {index < progress.step ? `${label} ✓` : label}
-          </li>
-        ))}
-      </ol>
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 pt-1 text-xs text-muted-foreground">
-        <span className="tabular-nums">
-          {queued
-            ? progress.detail
-            : [
-                remainingLabel(pace.secondsLeft),
-                pace.perMinute !== null && `${Math.round(pace.perMinute)} ${units[progress.step]}/min`,
-                `${analysisElapsed(job.created_at, now)} elapsed`,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
+    <section aria-label="Analysis progress" className="space-y-3 rounded-md border bg-muted/40 px-4 py-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate" role="status">
+          <span className="font-medium">{progress.title}</span>
+          {!queued && <span className="text-muted-foreground"> · {progress.detail}</span>}
         </span>
         {onCancel && (
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={onCancel}>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={onCancel}>
             Cancel
           </Button>
         )}
+      </div>
+      <div className="max-w-2xl space-y-1.5 pl-3">
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className="text-muted-foreground">
+            [
+          </span>
+          <div
+            role="progressbar"
+            aria-label="Investigation progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+            aria-valuetext={queued ? progress.title : `${progress.title}: ${progress.detail}`}
+            className="flex h-3.5 min-w-0 flex-1 gap-px"
+          >
+            {Array.from({ length: blocks }, (_, index) => (
+              <span
+                key={index}
+                className={`flex-1 ${index < filled ? "bg-foreground" : "bg-foreground/10"} ${
+                  queued && index < blocks / 3 ? "motion-safe:animate-pulse bg-foreground/30" : ""
+                }`}
+              />
+            ))}
+          </div>
+          <span aria-hidden="true" className="text-muted-foreground">
+            ]
+          </span>
+          <span className="w-10 text-right tabular-nums">{percent}%</span>
+        </div>
+        <ol aria-label="Analysis stages" className="space-y-0.5">
+          {steps.map((label, index) => {
+            const state = stageState(index, progress.step);
+            const { done, total } = counts[index];
+            const seconds = durations[index];
+            return (
+              <li
+                key={label}
+                aria-current={state === "active" ? "step" : undefined}
+                className={`grid grid-cols-[1rem_minmax(0,9rem)_6rem_auto] items-baseline gap-2 tabular-nums ${rowText[state]}`}
+              >
+                <span aria-hidden="true">{markers[state]}</span>
+                <span className="truncate">{label}</span>
+                <span className="text-right text-muted-foreground">
+                  {state === "todo" || !total ? "–" : `${Math.min(done, total)}/${total}`}
+                </span>
+                <span className="text-muted-foreground">{seconds === null ? "" : durationText(seconds)}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="flex flex-wrap gap-x-5 gap-y-1 pt-1 tabular-nums">
+          {queued ? (
+            <span className="text-muted-foreground">{progress.detail}</span>
+          ) : (
+            stats.map(([key, value]) => (
+              <span key={key}>
+                <span className="text-muted-foreground">{key}</span> {value}
+              </span>
+            ))
+          )}
+        </div>
       </div>
     </section>
   );
