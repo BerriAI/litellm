@@ -2478,7 +2478,20 @@ def parse_tool_call_arguments(
         return {}
 
     try:
-        return json.loads(arguments)
+        parsed = json.loads(arguments)
+        if isinstance(parsed, str):
+            try:
+                _second_decode = json.loads(parsed)
+                if isinstance(_second_decode, dict):
+                    verbose_logger.warning(
+                        "Tool call arguments for tool '%s' (%s) were double-encoded",
+                        tool_name or "<unknown>",
+                        context or "unknown context",
+                    )
+                    parsed = _second_decode
+            except json.JSONDecodeError:
+                pass
+        return parsed
     except json.JSONDecodeError as original_error:
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:
