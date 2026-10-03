@@ -30,7 +30,7 @@ const LiteAdminContext = createContext<LiteAdminState | null>(null);
 function useLiteAdminSession() {
   const auth = useAuthorized();
   const [disabled] = useDisableLiteAdmin(auth.userId);
-  const sessionReady = !auth.isLoading && auth.isAuthorized;
+  const sessionReady = !auth.isLoading && auth.isAuthorized && auth.premiumUser === true;
   const writableAdmin = !auth.isViewOnly && isProxyAdminRole(auth.userRole);
   const allowed = sessionReady && writableAdmin && !disabled;
   if (!allowed || !auth.token || !auth.accessToken) return null;

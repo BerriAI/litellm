@@ -248,7 +248,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
               />
             </div>
           ))}
-          {canUseLiteAdmin && (
+          {premiumUser === true && canUseLiteAdmin && (
             <div className="flex h-[38px] items-center justify-between gap-3 px-3">
               <span className="text-[13px] text-foreground">Hide LiteAdmin</span>
               <Switch
