@@ -258,3 +258,37 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None
 
+
+
+def test_translate_responses_chunk_annotation_added_to_delta_annotations():
+    """response.output_text.annotation.added must land on delta.annotations (Fixes #43817)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    cite = {
+        "type": "url_citation",
+        "url": "https://a.example",
+        "title": "A",
+        "start_index": 0,
+        "end_index": 5,
+    }
+    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        {
+            "type": "response.output_text.annotation.added",
+            "sequence_number": 2,
+            "output_index": 0,
+            "item_id": "msg_1",
+            "content_index": 0,
+            "annotation_index": 0,
+            "annotation": cite,
+        }
+    )
+
+    annotations = result.choices[0].delta.annotations
+    assert annotations is not None
+    assert len(annotations) == 1
+    assert annotations[0]["type"] == "url_citation"
+    assert annotations[0]["url"] == "https://a.example"
+    assert annotations[0]["title"] == "A"
+    assert result.choices[0].finish_reason is None
