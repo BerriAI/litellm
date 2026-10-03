@@ -143,7 +143,6 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
-from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
@@ -477,23 +476,22 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
     zero_cost_cache: Final = _get_router_zero_cost_cache(llm_router)
 
     for model_name in model_list:
+        if zero_cost_cache is not None:
+            cached = zero_cost_cache.get(model_name)
+            if cached is not None:
+                if cached is False:
+                    return False
+                continue
         try:
             # Use router's get_model_group_info method directly for better reliability
-            target_group = resolve_model_group_alias(llm_router.model_group_alias, model_name) or model_name
-            if zero_cost_cache is not None:
-                cached = zero_cost_cache.get(target_group)
-                if cached is not None:
-                    if cached is False:
-                        return False
-                    continue
-            model_group_info = llm_router.get_model_group_info(model_group=target_group)
+            model_group_info = llm_router.get_model_group_info(model_group=model_name, include_hidden=True)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
                 # Conservative approach: assume it has cost
                 verbose_proxy_logger.debug("No model group info found for %s, assuming it has cost", model_name)
                 if zero_cost_cache is not None:
-                    zero_cost_cache[target_group] = False
+                    zero_cost_cache[model_name] = False
                 return False
 
             # Check costs for this model
@@ -510,7 +508,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     output_cost,
                 )
                 if zero_cost_cache is not None:
-                    zero_cost_cache[target_group] = False
+                    zero_cost_cache[model_name] = False
                 return False
 
             # If either cost is non-zero, return False
@@ -519,7 +517,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     "Model %s has non-zero cost (input: %s, output: %s)", model_name, input_cost, output_cost
                 )
                 if zero_cost_cache is not None:
-                    zero_cost_cache[target_group] = False
+                    zero_cost_cache[model_name] = False
                 return False
 
             # Costs are 0 — verify this is from explicit configuration,
@@ -534,7 +532,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     safe_name,
                 )
                 if zero_cost_cache is not None:
-                    zero_cost_cache[target_group] = False
+                    zero_cost_cache[model_name] = False
                 return False
 
             if _has_ptu_flat_cost(model_name, llm_router):
@@ -544,7 +542,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     safe_name,
                 )
                 if zero_cost_cache is not None:
-                    zero_cost_cache[target_group] = False
+                    zero_cost_cache[model_name] = False
                 return False
 
             verbose_proxy_logger.debug(
@@ -554,7 +552,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                 output_cost,
             )
             if zero_cost_cache is not None:
-                zero_cost_cache[target_group] = True
+                zero_cost_cache[model_name] = True
 
         except Exception as e:
             # If we can't determine the cost, assume it has cost (conservative approach)
