@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
 from typing import Final
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+import litellm.router_strategy.lowest_tpm_rpm_v2 as strategy_module
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
@@ -42,14 +43,11 @@ def test_usage_based_routing_v1_selects_the_lowest_recorded_tpm() -> None:
     }
     now: Final = datetime.now()
     cache_keys: Final = tuple(
-        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}"
-        for offset in range(60)
+        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}" for offset in range(60)
     )
 
     for cache_key in cache_keys:
-        router.cache.set_cache(
-            key=cache_key, value=usage_by_deployment, ttl=float("inf")
-        )
+        router.cache.set_cache(key=cache_key, value=usage_by_deployment, ttl=float("inf"))
 
     deployment: Final = router.get_available_deployment(
         model=MODEL_GROUP,
@@ -109,11 +107,58 @@ async def test_v2_subclass_overriding_async_get_available_deployments_with_the_o
     )
     router.lowesttpm_logger_v2 = OldSignatureV2(router_cache=router.cache, routing_args={})
 
-    response: Final = await router.acompletion(
-        model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}]
-    )
+    response: Final = await router.acompletion(model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content in {
         f"from {HIGH_USAGE_DEPLOYMENT_ID}",
         f"from {LOW_USAGE_DEPLOYMENT_ID}",
     }
+
+
+@pytest.mark.asyncio
+async def test_v2_counts_prompt_tokens_only_when_a_deployment_declares_a_tpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = Mock(return_value=40_000)
+    monkeypatch.setattr(strategy_module, "token_counter", counter)
+    router_cache: Final = DualCache()
+    monkeypatch.setattr(router_cache, "async_batch_get_cache", AsyncMock(return_value=[10, 20, None, None]))
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=router_cache)
+    messages: Final = [{"role": "user", "content": "a long prompt"}]
+    unlimited: Final = [
+        {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "a"}},
+        {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "b"}},
+    ]
+
+    chosen: Final = await strategy.async_get_available_deployments(
+        model_group="g", healthy_deployments=unlimited, messages=messages
+    )
+    assert chosen["model_info"]["id"] == "a", "the lowest counter still wins without any tpm limit"
+    assert counter.call_count == 0, "no deployment has a tpm limit, so the prompt is never tokenized for selection"
+
+    limited: Final = [
+        {"model_name": "g", "litellm_params": {"model": "m", "tpm": 30_000}, "model_info": {"id": "a"}},
+        {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "b"}},
+    ]
+    chosen_limited: Final = await strategy.async_get_available_deployments(
+        model_group="g", healthy_deployments=limited, messages=messages
+    )
+    assert counter.call_count == 1, "a declared tpm limit needs the prompt size to be enforced"
+    assert chosen_limited["model_info"]["id"] == "b", "a's tpm limit cannot fit the counted prompt, so b is picked"
+
+
+@pytest.mark.asyncio
+async def test_v2_treats_a_failed_prompt_count_as_zero_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(strategy_module, "token_counter", Mock(side_effect=ValueError("no tokenizer")))
+    router_cache: Final = DualCache()
+    monkeypatch.setattr(router_cache, "async_batch_get_cache", AsyncMock(return_value=[10, 20, None, None]))
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=router_cache)
+    limited: Final = [
+        {"model_name": "g", "litellm_params": {"model": "m", "tpm": 30_000}, "model_info": {"id": "a"}},
+        {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "b"}},
+    ]
+
+    chosen: Final = await strategy.async_get_available_deployments(
+        model_group="g", healthy_deployments=limited, messages=[{"role": "user", "content": "a long prompt"}]
+    )
+    assert chosen["model_info"]["id"] == "a", "a failed count weighs as zero tokens, so the lowest counter still wins"

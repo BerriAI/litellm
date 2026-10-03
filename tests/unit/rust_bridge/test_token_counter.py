@@ -94,7 +94,7 @@ async def test_native_count_returns_typed_count_and_reuses_one_counter(fake_toke
     assert second == first
     assert len(factory.counters) == 1
     assert factory.counters[0].bodies == [BODY, BODY]
-    assert factory.counters[0].fast is False
+    assert factory.counters[0].fast is True
     assert factory.counters[0].tokenizer is tokenizer_dispatch.native_anthropic()
     assert json.loads(factory.counters[0].tokenizer.json or "")["model"]["type"] == "BPE"
 
@@ -113,7 +113,7 @@ async def test_tiktoken_counter_is_built_over_the_shared_encoding_once(
     assert len(factory.counters) == 1
     assert factory.counters[0].tokenizer.name == tokenizer
     assert factory.counters[0].tokenizer is tokenizer_dispatch.native_encoding(tokenizer)
-    assert factory.counters[0].fast is False
+    assert factory.counters[0].fast is True
     assert factory.counters[0].bodies == [BODY, BODY]
 
 

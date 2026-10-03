@@ -79,7 +79,7 @@ def rust_tokenizer(model: str) -> RustTokenizer | None:
 
 @lru_cache(maxsize=4)
 def _counter(factory: RustTokenCounterFactory, tokenizer: RustTokenizer) -> RustTokenCounter:
-    return factory.from_tokenizer(_native_tokenizer(tokenizer))
+    return factory.from_tokenizer(_native_tokenizer(tokenizer), fast=True)
 
 
 def _native_tokenizer(tokenizer: RustTokenizer) -> NativeTokenizer:
