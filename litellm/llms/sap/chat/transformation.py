@@ -2,6 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+import os
 from collections.abc import AsyncIterator, Iterator
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
@@ -172,7 +173,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
         deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
-        valid: Final[list[tuple[str, str]]] = []
+        valid: Final[list[tuple[str, str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
                 cfg = client.get(
@@ -180,9 +181,29 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                     headers=self.headers,
                 ).json()
                 if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+                    valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.get("name", "")))
+        if not valid:
+            raise GenAIHubOrchestrationError(
+                status_code=400,
+                message=(
+                    "No orchestration deployment found for this SAP AI Core resource group. Create one, or set "
+                    "AICORE_ORCHESTRATION_DEPLOYMENT_URL, or pass deployment_url in optional_params, to skip "
+                    "discovery."
+                ),
+            )
+        # newest first
+        ranked: Final = sorted(valid, key=lambda dep: dep[1], reverse=True)
+        if len(ranked) > 1:
+            chosen_url, _, chosen_name = ranked[0]
+            others: Final = [(name, url) for url, _, name in ranked[1:]]
+            litellm.verbose_logger.warning(
+                "SAP: %d orchestration deployments found; using newest (name=%r, url=%r). Others ignored: %r.",
+                len(ranked),
+                chosen_name,
+                chosen_url,
+                others,
+            )
+        return ranked[0][0]
 
     @classmethod
     def get_config(cls):
@@ -249,8 +270,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
-        api_base_: Final = f"{self.deployment_url}/v2/completion"
-        return api_base_
+        deployment_url: Final = (
+            optional_params.get("deployment_url")
+            or os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
+            or self.deployment_url
+        )
+        return f"{deployment_url.rstrip('/')}/v2/completion"
 
     def _build_prompt_module(
         self,
