@@ -7,12 +7,14 @@ from .common_utils import resolve_dashscope_family_rerank_api_base
 from .embed.transformation import DashScopeEmbeddingConfig
 from .image_generation.transformation import DashScopeImageGenerationConfig
 from .rerank.transformation import DashScopeRerankConfig
+from .videos.transformation import DashScopeVideoConfig
 
 QWENCLOUD_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 QWENCLOUD_RERANK_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
 QWENCLOUD_IMAGE_API_BASE: Final = (
     "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
 )
+QWENCLOUD_VIDEO_API_BASE: Final = "https://dashscope-intl.aliyuncs.com"
 
 
 def _resolve_qwencloud_api_key(api_key: str | None) -> str | None:
@@ -63,3 +65,11 @@ class QwenCloudImageGenerationConfig(DashScopeImageGenerationConfig):
 
     def _resolve_image_api_base(self, image_api_base: str | None) -> str:
         return image_api_base or get_secret_str("QWENCLOUD_API_BASE_IMAGE") or QWENCLOUD_IMAGE_API_BASE
+
+
+class QwenCloudVideoConfig(DashScopeVideoConfig):
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        return _require_qwencloud_api_key(api_key)
+
+    def _resolve_video_api_base(self, video_api_base: str | None) -> str:
+        return video_api_base or get_secret_str("QWENCLOUD_API_BASE_VIDEO") or QWENCLOUD_VIDEO_API_BASE
