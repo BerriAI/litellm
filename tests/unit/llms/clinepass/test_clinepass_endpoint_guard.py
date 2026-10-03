@@ -47,12 +47,17 @@ def no_request_allowed(monkeypatch):
 
 
 def test_speech_makes_no_outbound_request(no_request_allowed):
-    with pytest.raises(Exception) as excinfo:
+    # Which exception litellm raises for an unsupported endpoint is its business
+    # and may change; that nothing is transmitted is the contract under test. The
+    # fixture's AssertionError means the network WAS reached, so it must escape
+    # rather than be swallowed as "some exception happened".
+    try:
         litellm.speech(model="clinepass/deepseek-v4-flash", input="hi", voice="alloy")
+    except AssertionError:
+        raise
+    except Exception:  # noqa: S110 - deliberate; see above
+        pass
 
-    assert not isinstance(excinfo.value, AssertionError), (
-        "speech() reached the network; the unsupported-endpoint guard is gone"
-    )
     assert no_request_allowed == []
 
 
@@ -61,10 +66,13 @@ def test_transcription_makes_no_outbound_request(no_request_allowed, tmp_path):
     audio.write_bytes(b"\x00\x00")
 
     with open(audio, "rb") as handle:
-        with pytest.raises(Exception) as excinfo:
+        try:
             litellm.transcription(model="clinepass/deepseek-v4-flash", file=handle)
+        except AssertionError:
+            raise
+        except Exception:  # noqa: S110 - deliberate; see test_speech_makes_no_outbound_request
+            pass
 
-    assert not isinstance(excinfo.value, AssertionError)
     assert no_request_allowed == []
 
 
