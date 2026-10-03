@@ -463,16 +463,22 @@ def test_get_model_from_request_no_request_extracts_model():
     )
 
 
-@pytest.mark.parametrize("model", ["english", "multilingual", "typed-decisions"])
-@pytest.mark.parametrize("route", ["/laya/v1/systemone", "/laya/v1/systemone/"])
-def test_laya_native_model_uses_the_classifier_permission_identity(model: str, route: str) -> None:
-    assert get_model_from_request(request_data={"model": model}, route=route) == f"laya/{model}"
+@pytest.mark.parametrize("provider,model", [
+    ("laya", "english"), ("laya", "multilingual"), ("laya", "typed-decisions"),
+    ("bespoke", "nimble-latest"), ("bespoke", "bespokelabs/Bespoke-Nimble-9B"),
+])
+@pytest.mark.parametrize("suffix", ["", "/"])
+def test_oss_native_model_uses_the_classifier_permission_identity(provider: str, model: str, suffix: str) -> None:
+    assert get_model_from_request(
+        request_data={"model": model}, route=f"/{provider}/v1/systemone{suffix}"
+    ) == f"{provider}/{model}"
 
 
-@pytest.mark.parametrize("model", [None, "", "auto", "laya/english", "unknown", ["english"], 7])
-def test_laya_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(model: object) -> None:
+@pytest.mark.parametrize("provider", ["laya", "bespoke"])
+@pytest.mark.parametrize("model", [None, "", "auto", "laya/english", "bespoke/nimble-latest", "unknown", ["english"], 7])
+def test_oss_native_model_cannot_implicitly_select_an_unauthorized_checkpoint(provider: str, model: object) -> None:
     with pytest.raises(HTTPException) as denied:
-        get_model_from_request(request_data={"model": model}, route="/laya/v1/systemone")
+        get_model_from_request(request_data={"model": model}, route=f"/{provider}/v1/systemone")
     assert denied.value.status_code == 400
 
 

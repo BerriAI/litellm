@@ -65,6 +65,7 @@ describe("buildComplexityRouterConfig", () => {
     { model: "" },
     { model: "   " },
     { provider: "laya" as const, model: "unsupported" },
+    { provider: "bespoke" as const, model: "unsupported" },
     { timeout_ms: 0 },
     { timeout_ms: 1.5 },
     { timeout_ms: Number.NaN },
@@ -79,13 +80,35 @@ describe("buildComplexityRouterConfig", () => {
     ).toBe("Enter a valid classifier model, a positive whole-number timeout and a positive cooldown");
   });
 
-  it.each([false, true])("serializes Laya with shared context and no LLM config, custom tiers: %s", (custom) => {
+  it.each([
+    ["bespoke", "nimble-latest"],
+    ["bespoke", "nimble"],
+    ["bespoke", "bespokelabs/Bespoke-Nimble-9B"],
+    ["jev", "custom-jev-model"],
+    [undefined, "custom-jev-model"],
+  ] as const)("accepts %s model %s before saving or testing", (provider, model) => {
+    expect(
+      getClassifierModelError({
+        classifier_type: "jev",
+        jev_classifier_config: { provider, model, timeout_ms: 3000 },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["jev", "jev-latest", false],
+    ["jev", "jev-latest", true],
+    ["laya", "english", false],
+    ["laya", "english", true],
+    ["bespoke", "nimble-latest", false],
+    ["bespoke", "nimble-latest", true],
+  ] as const)("serializes %s/%s with shared context and no LLM config, custom tiers: %s", (provider, model, custom) => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "jev",
       jevClassifierConfig: {
-        provider: "laya",
-        model: "english",
+        provider,
+        model,
         timeout_ms: 4500,
         instructions: "  Choose the configured tier  ",
         circuit_breaker_enabled: false,
@@ -112,8 +135,8 @@ describe("buildComplexityRouterConfig", () => {
     const config = buildComplexityRouterConfig(params);
     expect(config.classifier_type).toBe("oss_classifier");
     const expectedJevConfig = {
-      provider: "laya",
-      model: "english",
+      provider,
+      model,
       timeout_ms: 4500,
       instructions: "Choose the configured tier",
       circuit_breaker_enabled: false,

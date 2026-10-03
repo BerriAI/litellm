@@ -698,17 +698,17 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
 class OpenSourceClassifierConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["jev", "laya"] = "jev"
+    provider: Literal["jev", "laya", "bespoke"] = "jev"
     model: str = "jev-latest"
-    api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted Laya")
+    api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
         default=None,
-        description="Provider API base; defaults to TYPESAFE_API_BASE or LAYA_API_BASE for the selected provider",
+        description="Provider API base; defaults to the selected provider API_BASE environment variable",
     )
     timeout_ms: int = Field(default=3000, ge=1)
     instructions: str | None = Field(
         default=None,
-        description="Replaces the built-in Jev question instructions",
+        description="Replaces the built-in classification instructions",
     )
     circuit_breaker_enabled: bool = True
     circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0.0)
@@ -729,17 +729,19 @@ class OpenSourceClassifierConfig(BaseModel):
     @classmethod
     def _reject_blank_api_key(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
-            raise ValueError("opensource_classifier_config.api_key must be non-empty; omit it to use TYPESAFE_API_KEY")
+            raise ValueError(
+                "opensource_classifier_config.api_key must be non-empty; omit it to use the provider environment key"
+            )
         return value
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
-        if self.provider == "laya":
-            from litellm.llms.laya.common_utils import validate_laya_api_base, validate_laya_model
+        if self.provider in ("laya", "bespoke"):
+            from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
-            _ = validate_laya_model(self.model)
+            _ = validate_oss_model(self.provider, self.model)
             if self.api_base is not None:
-                _ = validate_laya_api_base(self.api_base)
+                _ = validate_oss_api_base(self.provider, self.api_base)
             return self
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
@@ -1150,7 +1152,7 @@ class ComplexityRouterConfig(BaseModel):
             "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, "
             "a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
             "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
-            "everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev or Laya"
+            "everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev, Laya or Bespoke Nimble"
         ),
     )
     llm_v2_config: LLMV2Config | None = Field(

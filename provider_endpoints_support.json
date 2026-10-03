@@ -1477,6 +1477,13 @@
         "rerank": false
       }
     },
+    "bespoke": {
+      "display_name": "Bespoke Nimble (`bespoke`)",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "laya": {
       "display_name": "Laya (`laya`)",
       "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",

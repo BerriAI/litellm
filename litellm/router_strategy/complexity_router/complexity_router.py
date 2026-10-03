@@ -1309,15 +1309,15 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
-        if config.provider == "laya":
-            from litellm.llms.laya.common_utils import laya_connection
+        if config.provider in ("laya", "bespoke"):
+            from litellm.llms.oss_decision import oss_connection
 
-            connection: Final = laya_connection(config.api_base, config.api_key)
+            connection: Final = oss_connection(config.provider, config.api_base, config.api_key)
             return HttpJevClassifierClient(
                 api_key=connection.api_key,
                 api_base=connection.api_base,
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
-                provider="laya",
+                provider=config.provider,
             )
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
@@ -2228,7 +2228,7 @@ class ComplexityRouter(CustomLogger):
             if not self._tier_pools().get(tier_name):
                 raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
             model: Final = response.model or config.model
-            accounting_provider: Final = "laya" if config.provider == "laya" else "typesafe"
+            accounting_provider: Final = "typesafe" if config.provider == "jev" else config.provider
             verdict: Final = JevVerdict(
                 label=answer.choice,
                 probabilities=answer.probabilities,
@@ -2243,8 +2243,8 @@ class ComplexityRouter(CustomLogger):
                 tier=tier,
                 score=None,
                 signals=(
-                    f"{'laya' if config.provider == 'laya' else 'jev'}-classifier:{tier_name}",
-                    f"{'laya' if config.provider == 'laya' else 'jev'}-confidence={answer.confidence:.6f}",
+                    f"{config.provider}-classifier:{tier_name}",
+                    f"{config.provider}-confidence={answer.confidence:.6f}",
                     *(
                         f"tier-probability:{label}={probability:.6f}"
                         for label, probability in answer.probabilities.items()

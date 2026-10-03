@@ -7706,6 +7706,10 @@ class TestTeamMemberAutoRouterWrites:
     @pytest.mark.parametrize(
         "stored_provider,stored_base,supplied,expected_transport",
         [
+            ("bespoke", "https://decision.test", {"provider": "bespoke", "model": "nimble-latest"}, {"api_base": "https://decision.test", "api_key": "stored-secret"}),
+            ("bespoke", "https://decision.test", {"provider": "bespoke", "model": "nimble-latest", "api_base": "https://new.test"}, {}),
+            ("bespoke", "https://decision.test", {"provider": "laya", "model": "english"}, {}),
+            ("laya", "https://decision.test", {"provider": "bespoke", "model": "nimble-latest"}, {}),
             ("laya", "https://decision.test", {"provider": "laya", "model": "english"}, {"api_base": "https://decision.test", "api_key": "stored-secret"}),
             ("laya", "https://decision.test", {"provider": "laya", "model": "english", "api_base": "https://decision.test"}, {"api_base": "https://decision.test", "api_key": "stored-secret"}),
             (
@@ -7743,7 +7747,7 @@ class TestTeamMemberAutoRouterWrites:
             "model": "auto_router/complexity_router",
             "complexity_router_config": self._classifier_config(
                 {
-                    "provider": stored_provider, "model": "english" if stored_provider == "laya" else "jev-latest",
+                    "provider": stored_provider, "model": {"laya": "english", "bespoke": "nimble-latest"}.get(stored_provider, "jev-latest"),
                     "api_base": stored_base, "api_key": "stored-secret",
                 },
                 stored_legacy,

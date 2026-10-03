@@ -43,10 +43,19 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     expect(request?.complexity_router_config.opensource_classifier_config).not.toHaveProperty("api_key");
     expect(request?.complexity_router_config.opensource_classifier_config).not.toHaveProperty("api_base");
   });
-  it.each(["object", "json"])("probes saved Laya %s configuration with custom tiers and team context", (format) => {
+  it.each([
+    ["jev", "jev-latest", "object"],
+    ["jev", "jev-latest", "json"],
+    ["laya", "english", "object"],
+    ["laya", "english", "json"],
+    ["bespoke", "nimble-latest", "object"],
+    ["bespoke", "nimble-latest", "json"],
+    ["bespoke", "bespokelabs/Bespoke-Nimble-9B", "object"],
+    ["bespoke", "bespokelabs/Bespoke-Nimble-9B", "json"],
+  ])("probes saved %s/%s %s configuration with custom tiers and team context", (provider, model, format) => {
     const config = {
       classifier_type: "oss_classifier",
-      opensource_classifier_config: { provider: "laya", model: "english", timeout_ms: 900 },
+      opensource_classifier_config: { provider, model, timeout_ms: 900 },
       tiers: { QUICK: ["fast"], DEEP: ["strong"] },
       tier_definitions: { QUICK: "Simple questions", DEEP: "Complex questions" },
       fallback_tier: "DEEP",
@@ -61,6 +70,14 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     expect(
       buildSavedJevConnectionTestRequest(format === "json" ? JSON.stringify(config) : config, "saved-id", "team-1"),
     ).toEqual(expectedRequest);
+  });
+  it.each(["laya", "bespoke"])("does not probe unsupported %s models", (provider) => {
+    const config = {
+      classifier_type: "oss_classifier",
+      opensource_classifier_config: { provider, model: "unsupported" },
+      tiers: CONFIG.tiers,
+    };
+    expect(buildSavedJevConnectionTestRequest(config, "saved-id")).toBeUndefined();
   });
   it.each([undefined, null, "not json", "[]", {}, { classifier_type: "llm", tiers: {} }, { classifier_type: "jev" }])(
     "does not build a JEV probe for invalid or other classifier configurations: %j",

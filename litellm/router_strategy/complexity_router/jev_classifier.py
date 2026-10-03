@@ -84,7 +84,7 @@ class HttpJevClassifierClient:
         api_key: str | None,
         api_base: str,
         http_client: AsyncHTTPHandler,
-        provider: Literal["typesafe", "laya"] = "typesafe",
+        provider: Literal["typesafe", "laya", "bespoke"] = "typesafe",
     ) -> None:
         self._api_key = api_key
         self._api_base = api_base.rstrip("/")
@@ -201,7 +201,7 @@ class JevVerdict(NamedTuple):
     confidence: float
     model: str
     cost: float | None
-    provider: Literal["typesafe", "laya"] = "typesafe"
+    provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
 
 
 class _RegistryPricing(BaseModel):
@@ -225,7 +225,7 @@ def build_jev_request(
 
 
 def jev_classifier_cost(
-    response: JevSystemOneResponse, configured_model: str, provider: Literal["typesafe", "laya"] = "typesafe"
+    response: JevSystemOneResponse, configured_model: str, provider: Literal["typesafe", "laya", "bespoke"] = "typesafe"
 ) -> float | None:
     usage: Final = response.usage
     if usage is None:
