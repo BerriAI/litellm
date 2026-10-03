@@ -186,6 +186,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "count": len(recorded),
                 "host": self.headers.get("host", ""),
                 "headers": dict(self.headers),
+                "span_ids": [span["span_id"] for span in recorded],
             }
         )
         self._send_json({"recorded": len(recorded)}, status=self.state.status)
@@ -466,9 +467,7 @@ def _await_sink(url: str) -> None:
 def owned_grpc_sink(directory: Path) -> Iterator[GrpcSink]:
     http_port: Final = _free_port()
     grpc_port: Final = _free_port()
-    with _spawn_sink(
-        directory, "otlp-grpc-sink.log", ["--port", str(http_port), "--grpc-port", str(grpc_port)]
-    ):
+    with _spawn_sink(directory, "otlp-grpc-sink.log", ["--port", str(http_port), "--grpc-port", str(grpc_port)]):
         control_url: Final = f"http://127.0.0.1:{http_port}"
         _await_sink(control_url)
         yield GrpcSink(url=f"http://127.0.0.1:{grpc_port}", control_url=control_url)
