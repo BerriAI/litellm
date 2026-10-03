@@ -116,30 +116,42 @@ async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
     assert read_through._recent_misses.get_cache("ghost-c") is None
 
 
-@pytest.mark.asyncio
-async def test_requests_queued_behind_a_successful_resync_spend_no_budget():
-    loaded: Final[set[str]] = set()
-    calls: Final[list[str]] = []
+class GatedLoadingResync:
+    def __init__(self) -> None:
+        self.calls: tuple[str, ...] = ()
+        self.loaded: frozenset[str] = frozenset()
+        self.entered: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
 
-    async def loading_resync(key: str) -> bool:
-        calls.append(key)
-        await asyncio.sleep(0.05)
-        loaded.add(key)
+    async def __call__(self, key: str) -> bool:
+        self.calls = (*self.calls, key)
+        self.entered.set()
+        await self.release.wait()
+        self.loaded = self.loaded | {key}
         return True
 
+    def is_loaded(self, key: str) -> bool:
+        return key in self.loaded
+
+
+@pytest.mark.asyncio
+async def test_requests_queued_behind_a_successful_resync_spend_no_budget():
+    resync: Final = GatedLoadingResync()
     read_through: Final = RegistryReadThrough(
-        resync=loading_resync,
-        is_loaded=loaded.__contains__,
+        resync=resync,
+        is_loaded=resync.is_loaded,
         max_resyncs_per_window=2,
         resync_window_seconds=60.0,
     )
 
-    results: Final = await asyncio.gather(*(read_through.attempt("new-model") for _ in range(25)))
+    burst: Final = asyncio.gather(*(read_through.attempt("new-model") for _ in range(25)))
+    await resync.entered.wait()
+    resync.release.set()
 
-    assert results == [True] * 25
-    assert calls == ["new-model"]
+    assert await burst == [True] * 25
+    assert resync.calls == ("new-model",)
     assert await read_through.attempt("other-model") is True
-    assert calls == ["new-model", "other-model"]
+    assert resync.calls == ("new-model", "other-model")
 
 
 @pytest.mark.asyncio
@@ -611,3 +623,76 @@ def test_model_is_loaded_matches_router_model_names_and_deployment_ids(monkeypat
 
     monkeypatch.setattr(proxy_server, "llm_router", None)
     assert _model_is_loaded("loaded-model") is False
+
+
+@pytest.mark.asyncio
+async def test_model_read_through_answers_a_loaded_model_without_reading_the_db(monkeypatch: pytest.MonkeyPatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+    from litellm.proxy.common_utils.registry_read_through import model_registry_read_through
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=AssertionError("db read"))
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "wired-loaded-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    assert await model_registry_read_through.attempt("wired-loaded-model") is True
+    prisma_client.db.litellm_proxymodeltable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_read_through_answers_a_loaded_guardrail_without_reading_the_db(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import guardrail_registry_read_through
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.types.guardrails import Guardrail
+
+    guardrail_id: Final = "wired-loaded-guardrail-id"
+    guardrail_name: Final = "wired-loaded-guardrail"
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(side_effect=AssertionError("db read"))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+    IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+        guardrail=Guardrail(**dict(FakeGuardrailRow(guardrail_id, guardrail_name)))
+    )
+    try:
+        assert await guardrail_registry_read_through.attempt(guardrail_name) is True
+        prisma_client.db.litellm_guardrailstable.find_first.assert_not_awaited()
+    finally:
+        IN_MEMORY_GUARDRAIL_HANDLER.delete_in_memory_guardrail(guardrail_id)
+
+
+@pytest.mark.asyncio
+async def test_agent_read_through_answers_a_loaded_agent_without_reading_the_db(
+    clean_agent_registry, monkeypatch: pytest.MonkeyPatch
+):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import agent_registry_read_through
+    from litellm.types.agents import AgentResponse
+
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    clean_agent_registry.register_agent(
+        agent_config=AgentResponse.model_validate(
+            FakeAgentRow("wired-loaded-agent-id", "wired-loaded-agent").model_dump()
+        )
+    )
+
+    assert await agent_registry_read_through.attempt("wired-loaded-agent-id") is True
+    assert await agent_registry_read_through.attempt("wired-loaded-agent") is True
