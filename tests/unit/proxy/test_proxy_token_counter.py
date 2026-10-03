@@ -1242,3 +1242,162 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
+
+
+def _server_tool_history(stdout: str, encrypted_content: str) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "paris"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com/paris",
+                            "title": "Paris weather",
+                            "encrypted_content": encrypted_content,
+                        }
+                    ],
+                },
+                {
+                    "type": "bash_code_execution_tool_result",
+                    "tool_use_id": "srvtoolu_2",
+                    "content": {"type": "bash_code_execution_result", "stdout": stdout, "stderr": "", "return_code": 0},
+                },
+                {
+                    "type": "text_editor_code_execution_tool_result",
+                    "tool_use_id": "srvtoolu_3",
+                    "content": {"type": "text_editor_code_execution_view_result", "content": "notes"},
+                },
+                {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        {
+                            "type": "search_result",
+                            "source": "https://example.com",
+                            "title": "t",
+                            "content": [{"type": "text", "text": "18C"}],
+                        }
+                    ],
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_token_count_estimates_server_tool_history_without_counting_ciphertext(monkeypatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+
+    async def count(stdout: str, encrypted_content: str) -> int:
+        result = await token_counter(
+            request=TokenCountRequest(model="gpt-4o", messages=_server_tool_history(stdout, encrypted_content))
+        )
+        return result.total_tokens
+
+    baseline = await count("18C", "RW5jcnlwdGVk")
+
+    assert baseline > 0
+    assert await count("18C", "RW5jcnlwdGVk" * 2000) == baseline
+    assert await count("18C and sunny for the rest of the week", "RW5jcnlwdGVk") > baseline
+
+
+def _gemini_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-count",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "fake-gemini-key"},
+            }
+        ]
+    )
+
+_GEMINI_COUNT_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens"
+
+
+@pytest.mark.asyncio
+async def test_gemini_count_error_falls_back_to_the_local_estimate(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    count_route = respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(
+        return_value=httpx.Response(400, json={"error": {"code": 400, "message": "API key not valid"}})
+    )
+
+    response = await token_counter(
+        request=TokenCountRequest(model="gemini-count", messages=[{"role": "user", "content": "hello world"}]),
+        call_endpoint=True,
+    )
+
+    assert count_route.called
+    assert response.error is not True
+    assert response.total_tokens > 0
+    assert response.tokenizer_type != "gemini_api"
+
+
+@pytest.mark.asyncio
+async def test_gemini_count_error_is_returned_when_fallback_is_disabled(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(
+        return_value=httpx.Response(400, json={"error": {"code": 400, "message": "API key not valid"}})
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(model="gemini-count", messages=[{"role": "user", "content": "hi"}]),
+            call_endpoint=True,
+        )
+
+    assert exc_info.value.code == "400"
+    assert "API key not valid" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_gemini_non_json_success_body_surfaces_as_bad_gateway_when_fallback_disabled(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(return_value=httpx.Response(200, content=b"<html>portal</html>"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(model="gemini-count", messages=[{"role": "user", "content": "hi"}]),
+            call_endpoint=True,
+        )
+
+    assert exc_info.value.code == "502"
+
+
+@pytest.mark.asyncio
+async def test_local_estimate_counts_a_tool_with_an_array_property_without_items(monkeypatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    tags_tool = {
+        "type": "function",
+        "function": {
+            "name": "set_tags",
+            "description": "Set tags",
+            "parameters": {"type": "object", "properties": {"tags": {"type": "array"}}, "required": ["tags"]},
+        },
+    }
+
+    async def count(tools: list[dict[str, object]] | None) -> int:
+        result = await token_counter(
+            request=TokenCountRequest(model="gpt-4o", messages=[{"role": "user", "content": "tag this"}], tools=tools)
+        )
+        return result.total_tokens
+
+    assert await count([tags_tool]) > await count(None)
+

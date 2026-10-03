@@ -3,7 +3,7 @@ import datetime
 import json
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -14,6 +14,9 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
+
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
@@ -491,10 +494,25 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        client: "httpx.AsyncClient | AsyncHTTPHandler | None" = None,
     ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+
+        def failed(
+            message: str, status_code: int, original_response: dict[str, object] | None = None
+        ) -> TokenCountResponse:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="gemini_api",
+                error=True,
+                error_message=message,
+                status_code=status_code,
+                original_response=original_response,
+            )
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
@@ -503,17 +521,24 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             "contents": contents,
         }
         count_tokens_params_request.update(count_tokens_params)
-        result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-            **count_tokens_params_request,
-        )
-
-        if result is not None:
-            return TokenCountResponse(
-                total_tokens=result.get("totalTokens", 0),
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
+        try:
+            result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
+                client=client,
+                **count_tokens_params_request,
             )
-
-        return None
+        except (litellm.APIError, litellm.APIConnectionError) as e:
+            return failed(e.message, e.status_code)
+        total_tokens: Final = result.get("totalTokens") if isinstance(result, dict) else None
+        if not isinstance(total_tokens, int) or isinstance(total_tokens, bool):
+            return failed(
+                "Google Gen AI Studio countTokens response has no totalTokens",
+                502,
+                result if isinstance(result, dict) else None,
+            )
+        return TokenCountResponse(
+            total_tokens=total_tokens,
+            request_model=request_model,
+            model_used=model_to_use,
+            tokenizer_type=result.get("tokenizer_used", ""),
+            original_response=result,
+        )

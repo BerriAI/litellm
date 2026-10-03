@@ -89,6 +89,103 @@ class TestGeminiModelInfo:
 
 
 class TestGoogleAIStudioTokenCounter:
+    async def _count(self, handler, litellm_params=None):
+        import httpx
+
+        return await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "hello"}]}],
+            deployment={"litellm_params": litellm_params or {"api_key": "test-key"}},
+            request_model="gemini/gemini-2.5-flash",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_provider_error_returns_error_response(self):
+        import httpx
+
+        result = await self._count(
+            lambda request: httpx.Response(
+                400, json={"error": {"code": 400, "message": "bad request", "status": "INVALID_ARGUMENT"}}
+            )
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 400
+        assert result.total_tokens == 0
+        assert "bad request" in (result.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_without_api_key_returns_provider_error_response(self, monkeypatch):
+        import httpx
+
+        import litellm
+
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", None)
+        recorded = []
+
+        def _handler(request):
+            recorded.append(request)
+            return httpx.Response(
+                403, json={"error": {"code": 403, "message": "API key not valid", "status": "PERMISSION_DENIED"}}
+            )
+
+        result = await self._count(_handler, litellm_params={"model": "gemini/gemini-2.5-flash"})
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 403
+        assert len(recorded) == 1 and "x-goog-api-key" not in recorded[0].headers
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_connection_error_returns_error_response(self):
+        import httpx
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused", request=request)
+
+        result = await self._count(_handler)
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 500
+        assert "connection refused" in (result.error_message or "")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "upstream_json",
+        [
+            {"totalTokens": "abc"},
+            {"totalTokens": True},
+            {"promptTokensDetails": []},
+            [{"totalTokens": 5}],
+        ],
+    )
+    async def test_count_tokens_malformed_provider_response_returns_502(self, upstream_json):
+        import httpx
+
+        result = await self._count(lambda request: httpx.Response(200, json=upstream_json))
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 502
+        assert result.total_tokens == 0
+        assert "totalTokens" in (result.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_valid_response_returns_the_count(self):
+        import httpx
+
+        result = await self._count(lambda request: httpx.Response(200, json={"totalTokens": 7}))
+
+        assert result is not None
+        assert result.error is not True
+        assert result.total_tokens == 7
+
     """Test suite for GoogleAIStudioTokenCounter class"""
 
     def test_should_use_token_counting_api(self):
@@ -158,7 +255,7 @@ class TestGoogleAIStudioTokenCounter:
 
             # Verify the mock was called correctly
             mock_acount_tokens.assert_called_once_with(
-                model=model_to_use, contents=contents
+                model=model_to_use, contents=contents, client=None
             )
 
     def test_clean_contents_for_gemini_api_removes_id_field(self):
