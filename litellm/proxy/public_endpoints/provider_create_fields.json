@@ -2884,6 +2884,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "ALPHA",
+    "provider_display_name": "Alpha.sh",
+    "litellm_provider": "alpha",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://alpha.sh/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "alpha/Qwen/Qwen3.8-27B-FP8"
+  },
+  {
     "provider": "PRISM",
     "provider_display_name": "Prism",
     "litellm_provider": "prism",

@@ -207,6 +207,12 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "alpha": {
+    "base_url": "https://alpha.sh/v1",
+    "api_key_env": "ALPHA_API_KEY",
+    "api_base_env": "ALPHA_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "prism": {
     "base_url": "https://api.prisminference.com/v1",
     "api_key_env": "PRISM_API_KEY",
