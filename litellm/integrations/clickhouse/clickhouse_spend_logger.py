@@ -19,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.tracing.types import SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
 
@@ -134,12 +135,24 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     redact = litellm.turn_off_message_logging is True
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
     response_cost: Final = payload.get("response_cost")
+    unknown_success_cost: Final[bool] = payload.get("status") == "success" and kwargs.get("response_cost") is None
+    spend: Final = (
+        None
+        if unknown_success_cost or response_cost is None or not isfinite(response_cost)
+        else response_cost
+    )
     litellm_params: Final = _METADATA_MAPPING.validate_python(kwargs.get("litellm_params") or {})
-    request_metadata: Final = MappingProxyType(
-        {
-            **dict(_request_metadata_fields(litellm_params.get("litellm_metadata"))),
-            **dict(_request_metadata_fields(litellm_params.get("metadata"))),
-        }
+    request_metadata: Final = (
+        MappingProxyType({})
+        if redact
+        else redact_credentials_in_payload(
+            MappingProxyType(
+                {
+                    **dict(_request_metadata_fields(litellm_params.get("litellm_metadata"))),
+                    **dict(_request_metadata_fields(litellm_params.get("metadata"))),
+                }
+            )
+        )
     )
     return SpendLogRecord(
         request_id=request_id,
@@ -157,7 +170,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         model_id=payload.get("model_id") or "",
         custom_llm_provider=payload.get("custom_llm_provider") or "",
         api_base=payload.get("api_base") or "",
-        spend=response_cost if response_cost is not None and isfinite(response_cost) else None,
+        spend=spend,
         prompt_tokens=_int(payload.get("prompt_tokens")),
         completion_tokens=_int(payload.get("completion_tokens")),
         total_tokens=_int(payload.get("total_tokens")),
