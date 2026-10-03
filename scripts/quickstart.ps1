@@ -206,9 +206,10 @@ function Invoke-LiteLLMQuickstart {
         elseif ($key.KeyChar -match '^[1-9]$' -and [int]"$($key.KeyChar)" -le $count) { $choice = [int]"$($key.KeyChar)" }
         elseif ($key.Key -eq 'Enter') { break }
       }
-      # The key hint has done its job once the choice is made.
       if ($vt) { Write-Host "$e[1A" -NoNewline } else { [Console]::SetCursorPosition(0, $top + $count) }
       Clear-Line
+    } catch [System.Management.Automation.PipelineStoppedException] {
+      throw
     } catch {
       # No cursor control here: fall back to a numbered list.
       for ($i = 1; $i -le $count; $i++) { Write-Host ("  $i) " + $Options[$i - 1][0]) }
@@ -420,7 +421,6 @@ function Invoke-LiteLLMQuickstart {
     $composeVersion = "$($compose.Out[0])".TrimStart('v')
     Step "$engineName ${engineVersion}with Compose $composeVersion is running"
 
-    # Where the files go
     $homeDir = Join-Path $HOME 'litellm-gateway'
     $hereDir = Join-Path (Get-Location).ProviderPath 'litellm-gateway'
     $found = $false
@@ -508,7 +508,6 @@ function Invoke-LiteLLMQuickstart {
     Invoke-WebRequest -UseBasicParsing -Uri $composeUrl -OutFile (Join-Path $dir 'docker-compose.quickstart.yml')
     Step 'Downloaded docker-compose.quickstart.yml'
 
-    # The port
     $saved = ''
     if (Test-Path -LiteralPath $envFile) {
       $m = Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^LITELLM_PORT=(.*)$' } | Select-Object -Last 1
@@ -532,7 +531,6 @@ function Invoke-LiteLLMQuickstart {
       if ($port -eq 4000) { Step 'Port {b:4000} is free' } else { Warn "Port 4000 is in use, so LiteLLM will use {b:$port}" }
     }
 
-    # The keys
     if (Test-Path -LiteralPath $envFile) {
       Step 'Reusing .env, so existing keys and data keep working'
     } else {
@@ -578,7 +576,6 @@ function Invoke-LiteLLMQuickstart {
     if (Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^LITELLM_BIND=' }) { Remove-Item Env:LITELLM_BIND -ErrorAction SilentlyContinue }
     $env:LITELLM_PORT = "$port"
 
-    # Start it
     $started = Get-Date
     $detail = ''
     foreach ($image in (Invoke-Native $docker @('compose', '-f', 'docker-compose.quickstart.yml', 'config', '--images')).Out) {

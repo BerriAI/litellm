@@ -67,7 +67,6 @@ setup_output() {
   fi
 }
 
-# step "text": a step that finished. The text may carry ${C_BOLD} or ${C_DIM} spans.
 step() {
   if [ "$STYLE" = 1 ]; then
     printf '%s%s%s %s%s\n' "${C_OK}" "$S_OK" "${C_OFF}" "$1" "${C_OFF}"
@@ -76,7 +75,6 @@ step() {
   fi
 }
 
-# warn "text": something worth knowing that did not stop the run.
 warn() {
   if [ "$STYLE" = 1 ]; then
     printf '%s%s%s %s%s\n' "${C_WARN}" "$S_WARN" "${C_OFF}" "$1" "${C_OFF}"
@@ -85,7 +83,6 @@ warn() {
   fi
 }
 
-# fail "headline" ["rest of the line"]: the first line of an error, on stderr.
 fail() {
   if [ "$ERR_STYLE" = 1 ]; then
     printf '%s%s %s%s%s\n' "${C_ERR}${C_BOLD}" "$S_ERR" "$1" "${C_OFF}" "${2:+ $2}" >&2
@@ -94,7 +91,6 @@ fail() {
   fi
 }
 
-# Show $HOME as ~ the way people type it.
 tildify() {
   case "$1" in
     "$HOME") printf '~' ;;
@@ -275,7 +271,6 @@ menu() {
         '' | "$(printf '\r')") break ;;
       esac
     done
-    # The key hint has done its job once the choice is made.
     printf '\033[1A\033[2K' >/dev/tty
     stty "$STTY_SAVED" </dev/tty 2>/dev/null || true
     printf '\033[?25h' >/dev/tty
@@ -572,11 +567,13 @@ EOF
     master="$(openssl rand -hex 32)"
     salt="$(openssl rand -hex 32)"
     db_password="$(openssl rand -hex 24)"
-    # Write a temporary file and rename it, so a failed write never leaves a
-    # partial .env that a rerun would mistake for a finished install.
-    if ! (umask 077 && printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1:\nCOMPOSE_PROJECT_NAME=%s\n' \
-      "$master" "$salt" "$db_password" "$PORT" "$project" >.env.tmp) || ! mv -f .env.tmp .env; then
-      rm -f .env.tmp
+    # Write a fresh mktemp file (mode 600, never a reused one) and rename it, so a
+    # failed write never leaves a partial .env that a rerun would mistake for a
+    # finished install.
+    if ! env_tmp="$(mktemp .env.XXXXXX)" ||
+      ! printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1:\nCOMPOSE_PROJECT_NAME=%s\n' \
+        "$master" "$salt" "$db_password" "$PORT" "$project" >"$env_tmp" || ! mv -f "$env_tmp" .env; then
+      [ -z "${env_tmp:-}" ] || rm -f "$env_tmp"
       fail "Could not write $(tildify "$DIR")/.env."
       exit 1
     fi
