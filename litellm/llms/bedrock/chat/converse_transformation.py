@@ -104,6 +104,7 @@ from ..common_utils import (
     BedrockModelInfo,
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
+    bedrock_reasoning_effort_disabled,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
@@ -1133,6 +1134,25 @@ class AmazonConverseConfig(BaseConfig):
             elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
                 verbose_logger.debug(
                     "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it always reasons and rejects it.",
+                    model,
+                )
+            elif (
+                param == "reasoning_effort"
+                and isinstance(value, str)
+                and self._is_openai_gpt_reasoning_model(model)
+                and bedrock_reasoning_effort_disabled(model=model, effort=value)
+            ):
+                if not (litellm.drop_params or drop_params):
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            f"{model} does not support reasoning_effort={value}. "
+                            "To drop unsupported params, set `litellm.drop_params = True`."
+                        ),
+                        status_code=400,
+                    )
+                verbose_logger.debug(
+                    "Dropping unsupported `reasoning_effort=%s` for Bedrock model=%s.",
+                    value,
                     model,
                 )
             elif param == "reasoning_effort" and isinstance(value, str):

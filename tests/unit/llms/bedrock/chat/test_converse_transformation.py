@@ -523,6 +523,39 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
 @pytest.mark.parametrize(
     "model",
     [
+        "us.openai.gpt-5.6-luna",
+        "bedrock/converse/global.openai.gpt-5.6-terra",
+        "us.openai.gpt-6-astra",
+    ],
+)
+def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, local_model_cost_map):
+    config = AmazonConverseConfig()
+    assert litellm.utils.is_explicitly_disabled_factory(
+        model=model, custom_llm_provider="bedrock_converse", key="supports_minimal_reasoning_effort"
+    )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="minimal"):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
+    assert "reasoning" not in additional_request_params
+    assert "thinking" not in additional_request_params
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
         "us.openai.gpt-5.6-sol",
         "bedrock/converse/global.openai.gpt-5.6-luna",
         "us.openai.gpt-6-astra",
