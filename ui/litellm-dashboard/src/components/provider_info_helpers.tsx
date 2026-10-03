@@ -52,6 +52,7 @@ import replicateLogo from "../../public/assets/logos/replicate.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
+import scalewayLogo from "../../public/assets/logos/scaleway.svg";
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
@@ -164,6 +165,7 @@ export enum Providers {
   Sail = "Sail",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
+  Scaleway = "Scaleway",
   SCX_AI = "SCX.ai",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
@@ -284,6 +286,7 @@ export const provider_map: Record<string, string> = {
   Sail: "sail",
   Sambanova: "sambanova",
   SAP: "sap",
+  Scaleway: "scaleway",
   SCX_AI: "scx-ai",
   Snowflake: "snowflake",
   Soniox: "soniox",
@@ -384,6 +387,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
+  [Providers.Scaleway]: scalewayLogo.src,
   [Providers.SCX_AI]: scxAiLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
