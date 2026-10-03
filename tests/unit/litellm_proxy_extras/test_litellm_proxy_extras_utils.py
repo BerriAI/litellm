@@ -603,45 +603,6 @@ class TestResolveAllMigrationsLedger:
         assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
 
 
-class TestDbPushAppliesDailySpendIdentity:
-    def _push(self, monkeypatch, tmp_path, run):
-        import litellm_proxy_extras.utils as utils_module
-
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _FakeCompleted()
-
-        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
-        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fake_run)
-        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
-        monkeypatch.setattr(ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: False))
-        monkeypatch.setattr(ProxyExtrasDBManager, "raise_if_lens_rename_pending", staticmethod(lambda: None))
-        assert run() is True
-        return calls
-
-    @pytest.mark.parametrize(
-        "run",
-        [
-            lambda: ProxyExtrasDBManager._run_migrations(use_migrate=False, use_v2_resolver=False),
-            lambda: ProxyExtrasDBManager._setup_database_v2(use_migrate=False),
-        ],
-        ids=["v1", "v2"],
-    )
-    def test_the_identity_migration_runs_right_after_the_push(self, monkeypatch, tmp_path, run):
-        import litellm_proxy_extras.utils as utils_module
-
-        calls = self._push(monkeypatch, tmp_path, run)
-
-        assert [cmd[1:3] for cmd in calls] == [["db", "push"], ["db", "execute"]]
-        executed = calls[1]
-        assert executed[executed.index("--file") + 1] == (
-            f"{tmp_path}/migrations/{utils_module.DAILY_SPEND_IDENTITY_MIGRATION}/migration.sql"
-        )
-        assert executed[executed.index("--schema") + 1] == f"{tmp_path}/schema.prisma"
-
-
 class TestPartitionedSpendLogsPushGuard:
     def _forbid_subprocess(self, monkeypatch):
         import litellm_proxy_extras.utils as utils_module

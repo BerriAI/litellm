@@ -98,7 +98,7 @@ When the guard fires:
 
 `20260922000000_daily_spend_model_group_identity` separates daily usage by the requested public model group. Schedule a maintenance window: the six replacement unique indexes scan existing daily spend tables and block writes while building
 
-Drain incoming requests and all in-memory and shared Redis spend buffers, then stop every old proxy and spend collector before applying this migration. Start only upgraded writers after it completes. Old writers require the removed conflict target and cannot run alongside the expanded identity. The migration changes indexes only and previously merged attribution stays as recorded. The new indexes and the writer's conflict target match `model_group` through `COALESCE("model_group", '')`, so rows stored with a NULL group before this change share one identity with the `''` new writers store and no row is rewritten. Prisma cannot declare an expression index, so `--use_prisma_db_push` deployments run this migration right after the push
+Drain incoming requests and all in-memory and shared Redis spend buffers, then stop every old proxy and spend collector before applying this migration. Start only upgraded writers after it completes. Old writers require the removed conflict target and cannot run alongside the expanded identity. The migration changes indexes only; previously merged attribution and legacy NULL groups remain as recorded
 
 PTU flat charges retain their deployment/day identity across public-model renames. New inference rows include the requested group in their identity. Rolling back requires stopping writers and reconciling group-separated rows before restoring the old unique indexes; simply starting an older image is unsupported
 
