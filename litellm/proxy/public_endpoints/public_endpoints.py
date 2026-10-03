@@ -21,7 +21,13 @@ from litellm.litellm_core_utils.get_blog_posts import (
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
-from litellm.proxy.pass_through_endpoints.model_hub import published_pass_through_rows
+from litellm.proxy.public_endpoints.model_hub_rows import (
+    HubRow,
+    ModelGroupRow,
+    NoModelsConfigured,
+    PassThroughRow,
+    published_hub_rows,
+)
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.router_strategy.complexity_router.fuse_presets import FusePresetCatalog, get_fuse_presets
@@ -220,31 +226,17 @@ def _load_endpoints() -> list[_EndpointEntry]:
     response_model=list[ModelGroupInfoProxy],
 )
 async def public_model_hub():
-    import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
         _convert_health_check_to_dict,
     )
-    from litellm.proxy.proxy_server import (
-        _get_model_group_info,
-        llm_router,
-        prisma_client,
-    )
+    from litellm.proxy.proxy_server import prisma_client
 
-    pass_through_rows: Final = published_pass_through_rows()
-    if llm_router is None and not pass_through_rows:
+    rows: Final = published_hub_rows()
+    if isinstance(rows, NoModelsConfigured):
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
-    model_groups: Final = [
-        *(
-            _get_model_group_info(llm_router=llm_router, all_models_str=litellm.public_model_groups, model_group=None)
-            if llm_router is not None and litellm.public_model_groups is not None
-            else ()
-        ),
-        *pass_through_rows,
-    ]
-
     # Fetch health check information if available
-    health_checks_map: Final = {}
+    health_checks_map: Final[dict[str, Mapping[str, object]]] = {}
     if prisma_client is not None:
         try:
             latest_checks: Final = await prisma_client.get_all_latest_health_checks()
@@ -258,14 +250,24 @@ async def public_model_hub():
         except Exception:
             pass
 
-    for model_group in model_groups:
-        health_info = None if model_group.pass_through_path else health_checks_map.get(model_group.model_group)
-        if health_info:
-            model_group.health_status = health_info.get("status")
-            model_group.health_response_time = health_info.get("response_time_ms")
-            model_group.health_checked_at = health_info.get("checked_at")
+    return [_with_legacy_health(row, health_checks_map) for row in rows]
 
-    return model_groups
+
+def _with_legacy_health(row: HubRow, health_checks_map: Mapping[str, Mapping[str, object]]) -> ModelGroupInfoProxy:
+    match row:
+        case PassThroughRow(info=info):
+            return info
+        case ModelGroupRow(info=info):
+            health_info: Final = health_checks_map.get(info.model_group)
+            if not health_info:
+                return info
+            return info.model_copy(
+                update={
+                    "health_status": health_info.get("status"),
+                    "health_response_time": health_info.get("response_time_ms"),
+                    "health_checked_at": health_info.get("checked_at"),
+                }
+            )
 
 
 @router.get(
