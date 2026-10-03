@@ -6381,6 +6381,133 @@
       ],
       "title": "litellm_zero_cost_requests rate",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 438
+      },
+      "id": 112,
+      "panels": [],
+      "title": "Project model rate limits",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Configured rate limit for the Project on the requested model in the current window, by rate_limit_type",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 439
+      },
+      "id": 113,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "max by (project_id, project_alias, requested_model, rate_limit_type) (litellm_project_model_rate_limit_allowed_metric)",
+          "legendFormat": "{{project_alias}} ({{project_id}}) / {{requested_model}} / {{rate_limit_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "litellm_project_model_rate_limit_allowed_metric",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Requests or tokens the Project has consumed on the requested model in the current rate limit window, by rate_limit_type",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 439
+      },
+      "id": 114,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "max by (project_id, project_alias, requested_model, rate_limit_type) (litellm_project_model_rate_limit_used_metric)",
+          "legendFormat": "{{project_alias}} ({{project_id}}) / {{requested_model}} / {{rate_limit_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "litellm_project_model_rate_limit_used_metric",
+      "type": "timeseries"
     }
   ],
   "preload": false,
