@@ -1573,3 +1573,36 @@ def test_guardrail_provider_failure_status_is_still_mapped():
         )
 
     assert exc_info.value is not upstream_failure
+
+
+def test_exception_mapping_vllm_nested_status_code():
+    class MockResponse:
+        def __init__(self, code):
+            self.status_code = code
+
+    class RawHTTPError(Exception):
+        def __init__(self, response):
+            self.response = response
+            super().__init__("Mock HTTP Error")
+
+    crash_error = RawHTTPError(MockResponse(500))
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        exception_type(
+            model="test-model",
+            original_exception=crash_error,
+            custom_llm_provider="hosted_vllm",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert exc_info.value.status_code == 500
+
+    weird_error = RawHTTPError(MockResponse("500"))
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        exception_type(
+            model="test-model",
+            original_exception=weird_error,
+            custom_llm_provider="hosted_vllm",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert exc_info.value.status_code == 500
