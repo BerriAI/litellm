@@ -8,6 +8,7 @@ so `response_id` is always the raw provider response id (cache-hit suffix stripp
 import json
 import re
 from collections.abc import Mapping
+from math import isfinite
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -112,6 +113,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     request_id = str(payload.get("id") or "")
     redact = litellm.turn_off_message_logging is True
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
+    response_cost: Final = payload.get("response_cost")
     return SpendLogRecord(
         request_id=request_id,
         response_id=strip_cache_hit_suffix(request_id),
@@ -128,7 +130,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         model_id=payload.get("model_id") or "",
         custom_llm_provider=payload.get("custom_llm_provider") or "",
         api_base=payload.get("api_base") or "",
-        spend=float(payload.get("response_cost") or 0.0),
+        spend=response_cost if response_cost is not None and isfinite(response_cost) else None,
         prompt_tokens=_int(payload.get("prompt_tokens")),
         completion_tokens=_int(payload.get("completion_tokens")),
         total_tokens=_int(payload.get("total_tokens")),

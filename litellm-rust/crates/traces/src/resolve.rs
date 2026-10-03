@@ -12,39 +12,33 @@ use indexmap::IndexMap;
 use time::OffsetDateTime;
 
 use crate::{
+    normalize::CallKey,
     query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
     view::{AgentNode, Span, SpanStatus, Trace, TraceSummary},
 };
 
 const NANOS_PER_MS: f64 = 1_000_000.0;
 
-enum CallKey<'a> {
-    ProviderResponse(&'a str),
-    LiteLlmRequest(&'a str),
-    Transport,
-    Unrecognized,
-}
-
-impl<'a> CallKey<'a> {
-    fn parse(encoded: &'a str) -> Self {
-        let (kind, id) = encoded.split_once(':').unwrap_or((encoded, ""));
-        match kind {
-            "provider_response" => Self::ProviderResponse(id),
-            "litellm_request" => Self::LiteLlmRequest(id),
-            "transport" => Self::Transport,
-            _ => Self::Unrecognized,
-        }
+fn parse_call_key(encoded: &str) -> Option<CallKey> {
+    let (kind, id) = encoded.split_once(':')?;
+    match kind {
+        "provider_response" if !id.is_empty() => Some(CallKey::ProviderResponse(id.to_owned())),
+        "litellm_request" if !id.is_empty() => Some(CallKey::LiteLlmRequest(id.to_owned())),
+        "transport" if id.is_empty() => Some(CallKey::Transport),
+        _ => None,
     }
 }
 
 /// The span's recorded keys; rows stored before call evidence keep one response id.
-fn call_keys(row: &TraceSpansRow) -> Vec<CallKey<'_>> {
+fn call_keys(row: &TraceSpansRow) -> Vec<Option<CallKey>> {
     if row.call_keys.is_empty() && !row.litellm_request_id.is_empty() {
-        return vec![CallKey::ProviderResponse(&row.litellm_request_id)];
+        return vec![Some(CallKey::ProviderResponse(
+            row.litellm_request_id.clone(),
+        ))];
     }
     row.call_keys
         .iter()
-        .map(|key| CallKey::parse(key))
+        .map(|key| parse_call_key(key))
         .collect()
 }
 
@@ -76,13 +70,13 @@ impl SpendLookup {
         for row in rows {
             for key in call_keys(row) {
                 match key {
-                    CallKey::ProviderResponse(id) if !id.is_empty() => {
+                    Some(CallKey::ProviderResponse(id)) => {
                         response_ids.insert(id.to_owned());
                     }
-                    CallKey::LiteLlmRequest(id) if !id.is_empty() => {
+                    Some(CallKey::LiteLlmRequest(id)) => {
                         request_ids.insert(id.to_owned());
                     }
-                    CallKey::Transport if !row.trace_id.is_empty() => {
+                    Some(CallKey::Transport) if !row.trace_id.is_empty() => {
                         trace_ids.insert(row.trace_id.clone());
                     }
                     _ => {}
@@ -202,6 +196,85 @@ fn agent_label(row: &TraceSpansRow) -> &str {
 
 type Requests<'a> = Vec<&'a SpendRow>;
 
+enum KeyMatch<'a> {
+    Missing,
+    Unique(&'a SpendRow),
+    Ambiguous(Requests<'a>),
+}
+
+impl<'a> KeyMatch<'a> {
+    fn new(requests: Requests<'a>) -> Self {
+        match requests.as_slice() {
+            [] => Self::Missing,
+            [request] => Self::Unique(request),
+            _ => Self::Ambiguous(requests),
+        }
+    }
+
+    fn unique(&self) -> Option<&'a SpendRow> {
+        match self {
+            Self::Unique(request) => Some(request),
+            Self::Missing | Self::Ambiguous(_) => None,
+        }
+    }
+
+    fn agrees_with(&self, selected: &[&SpendRow]) -> bool {
+        match self {
+            Self::Missing => false,
+            Self::Unique(request) => selected
+                .iter()
+                .any(|row| row.request_id == request.request_id),
+            Self::Ambiguous(requests) => {
+                requests
+                    .iter()
+                    .filter(|request| {
+                        selected
+                            .iter()
+                            .any(|row| row.request_id == request.request_id)
+                    })
+                    .count()
+                    == 1
+            }
+        }
+    }
+}
+
+enum SpendEvidence<'a> {
+    Unknown,
+    Partial(Vec<KeyMatch<'a>>),
+    Complete(Vec<KeyMatch<'a>>),
+}
+
+impl<'a> SpendEvidence<'a> {
+    fn complete_requests(&self) -> Option<Requests<'a>> {
+        match self {
+            Self::Complete(matches) if !matches.is_empty() => {
+                let requests: Requests<'a> = matches
+                    .iter()
+                    .filter_map(KeyMatch::unique)
+                    .map(|request| (request.request_id.as_str(), request))
+                    .collect::<IndexMap<_, _>>()
+                    .into_values()
+                    .collect();
+                matches
+                    .iter()
+                    .all(|matched| matched.agrees_with(&requests))
+                    .then_some(requests)
+            }
+            Self::Unknown | Self::Partial(_) | Self::Complete(_) => None,
+        }
+    }
+
+    fn agrees_with(&self, selected: &[&SpendRow]) -> bool {
+        match self {
+            Self::Unknown => true,
+            Self::Partial(matches) | Self::Complete(matches) => matches
+                .iter()
+                .all(|evidence| evidence.agrees_with(selected)),
+        }
+    }
+}
+
 /// Roles, ownership and calls of one trace's spans.
 struct Resolution<'a> {
     graph: Graph<'a>,
@@ -265,14 +338,23 @@ impl<'a> Resolution<'a> {
             .map_or("", |agent| agent_label(self.row(agent)))
     }
 
-    fn matches(&self, key: &CallKey<'_>, row: &TraceSpansRow) -> IndexMap<&'a str, &'a SpendRow> {
+    fn matches(
+        &self,
+        key: &Option<CallKey>,
+        row: &TraceSpansRow,
+    ) -> IndexMap<&'a str, &'a SpendRow> {
         let matches = |spend: &SpendRow| match key {
-            CallKey::ProviderResponse(id) => {
+            Some(CallKey::ProviderResponse(id)) => {
                 !id.is_empty() && (spend.response_id == *id || spend.upstream_response_id == *id)
             }
-            CallKey::LiteLlmRequest(id) => !id.is_empty() && spend.request_id == *id,
-            CallKey::Transport => spend.trace_id == row.trace_id && spend.span_id == row.span_id,
-            CallKey::Unrecognized => false,
+            Some(CallKey::LiteLlmRequest(id)) => !id.is_empty() && spend.request_id == *id,
+            Some(CallKey::Transport) => {
+                !row.trace_id.is_empty()
+                    && !row.span_id.is_empty()
+                    && spend.trace_id == row.trace_id
+                    && spend.span_id == row.span_id
+            }
+            None => false,
         };
         self.spend
             .iter()
@@ -281,22 +363,19 @@ impl<'a> Resolution<'a> {
             .collect()
     }
 
-    /// Spend records the span's keys resolve to, and whether they are all of its requests.
-    fn requests(&self, index: usize) -> (Requests<'a>, bool) {
+    fn requests(&self, index: usize) -> SpendEvidence<'a> {
         let row = self.row(index);
-        let resolved: Vec<_> = call_keys(row)
+        let matches = call_keys(row)
             .iter()
-            .map(|key| self.matches(key, row))
+            .map(|key| KeyMatch::new(self.matches(key, row).into_values().collect()))
             .collect();
-        let complete = call_evidence(row) == "complete"
-            && !resolved.is_empty()
-            && resolved.iter().all(|matches| matches.len() == 1);
-        let unique: IndexMap<&str, &SpendRow> = resolved.into_iter().flatten().collect();
-        (unique.into_values().collect(), complete)
+        match call_evidence(row) {
+            "complete" => SpendEvidence::Complete(matches),
+            "partial" => SpendEvidence::Partial(matches),
+            _ => SpendEvidence::Unknown,
+        }
     }
 
-    /// All spend records behind a model call, or None when they cannot all be known. Evidence comes
-    /// from the call span, LLM spans that only wrap this call, and the HTTP requests made inside it.
     fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == "llm"
@@ -309,41 +388,47 @@ impl<'a> Resolution<'a> {
                             || self.kind(descendant) != "llm"
                     })
         });
-        let transports: Vec<usize> = self
+        let sources: Vec<_> = std::iter::once(call)
+            .chain(wrappers)
+            .map(|source| self.requests(source))
+            .collect();
+        let transports: Vec<_> = self
             .graph
             .descendants(call)
             .into_iter()
             .filter(|descendant| {
                 call_keys(self.row(*descendant))
                     .iter()
-                    .any(|key| matches!(key, CallKey::Transport))
+                    .any(|key| matches!(key, Some(CallKey::Transport)))
             })
+            .map(|transport| self.requests(transport))
             .collect();
-        let mut found: IndexMap<&str, &SpendRow> = IndexMap::new();
-        let mut known = false;
-        for source in std::iter::once(call).chain(wrappers) {
-            let (requests, complete) = self.requests(source);
-            found.extend(
-                requests
-                    .into_iter()
-                    .map(|spend| (spend.request_id.as_str(), spend)),
-            );
-            known |= complete;
-        }
-        if !transports.is_empty() {
-            let outcomes: Vec<_> = transports
+        let transport_requests: Option<Vec<Requests<'a>>> = (!transports.is_empty())
+            .then(|| {
+                transports
+                    .iter()
+                    .map(SpendEvidence::complete_requests)
+                    .collect()
+            })
+            .flatten();
+        let selected: Requests<'a> = transport_requests
+            .map(|requests| requests.into_iter().flatten().collect())
+            .into_iter()
+            .chain(sources.iter().filter_map(SpendEvidence::complete_requests))
+            .find(|selected| {
+                sources
+                    .iter()
+                    .chain(&transports)
+                    .all(|source| source.agrees_with(selected))
+            })?;
+        Some(
+            selected
                 .into_iter()
-                .map(|transport| self.requests(transport))
-                .collect();
-            known = known || outcomes.iter().all(|(_, complete)| *complete);
-            found.extend(
-                outcomes
-                    .into_iter()
-                    .flat_map(|(requests, _)| requests)
-                    .map(|spend| (spend.request_id.as_str(), spend)),
-            );
-        }
-        known.then(|| found.into_values().collect())
+                .map(|request| (request.request_id.as_str(), request))
+                .collect::<IndexMap<_, _>>()
+                .into_values()
+                .collect(),
+        )
     }
 
     /// Tool spans, once per call: overlapping instrumentations record one call under one id.
@@ -382,20 +467,28 @@ fn resolved_type<'a>(graph: &Graph<'a>, index: usize, named_agents: bool) -> &'a
     }
 }
 
+fn request_cost(requests: &[&SpendRow]) -> Option<f64> {
+    requests.iter().try_fold(0.0, |total, request| {
+        let cost = request.spend.filter(|cost| cost.is_finite())?;
+        let sum = total + cost;
+        sum.is_finite().then_some(sum)
+    })
+}
+
 fn total(calls: &[Option<Requests<'_>>]) -> Option<f64> {
     if calls.is_empty() {
         return None;
     }
-    let mut unique: IndexMap<&str, f64> = IndexMap::new();
-    for requests in calls {
-        unique.extend(
-            requests
-                .as_ref()?
-                .iter()
-                .map(|spend| (spend.request_id.as_str(), spend.spend)),
-        );
-    }
-    Some(unique.values().sum())
+    let requests: Option<Vec<&SpendRow>> = calls
+        .iter()
+        .map(|requests| requests.as_ref())
+        .collect::<Option<Vec<_>>>()
+        .map(|calls| calls.into_iter().flatten().copied().collect());
+    let unique: IndexMap<&str, &SpendRow> = requests?
+        .into_iter()
+        .map(|request| (request.request_id.as_str(), request))
+        .collect();
+    request_cost(&unique.into_values().collect::<Vec<_>>())
 }
 
 fn optional(value: &str) -> Option<String> {
@@ -404,7 +497,7 @@ fn optional(value: &str) -> Option<String> {
 
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
-    let (requests, complete) = resolution.requests(index);
+    let requests = resolution.requests(index).complete_requests();
     Span {
         span_id: row.span_id.clone(),
         parent_span_id: optional(&row.parent_span_id),
@@ -423,7 +516,9 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         input_tokens: row.input_tokens,
         output_tokens: row.output_tokens,
         litellm_request_id: optional(&row.litellm_request_id),
-        spend: complete.then(|| requests.iter().map(|spend| spend.spend).sum()),
+        spend: requests
+            .as_ref()
+            .and_then(|requests| request_cost(requests)),
     }
 }
 

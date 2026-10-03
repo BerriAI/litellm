@@ -162,7 +162,7 @@ pub struct SpendByResponseIdsRow {
     pub team_id: String,
     pub api_key: String,
     pub user: String,
-    pub spend: f64,
+    pub spend: Option<f64>,
     pub start_ms: i64,
 }
 

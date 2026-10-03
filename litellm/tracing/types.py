@@ -21,7 +21,7 @@ class SpendLogRecord(TypedDict):
     model_id: ReadOnly[str]
     custom_llm_provider: ReadOnly[str]
     api_base: ReadOnly[str]
-    spend: ReadOnly[float]
+    spend: ReadOnly[float | None]
     prompt_tokens: ReadOnly[int]
     completion_tokens: ReadOnly[int]
     total_tokens: ReadOnly[int]

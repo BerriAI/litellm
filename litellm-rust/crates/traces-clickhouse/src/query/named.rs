@@ -201,8 +201,8 @@ struct SpendByResponseIdsRowEncoding {
     pub team_id: String,
     pub api_key: String,
     pub user: String,
-    #[serde(deserialize_with = "super::number::deserialize")]
-    pub spend: f64,
+    #[serde(deserialize_with = "super::number::optional_finite")]
+    pub spend: Option<f64>,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ms: i64,
 }
@@ -366,5 +366,33 @@ mod tests {
             json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "response_ids": ["response"], "request_ids": ["request"], "trace_ids": ["trace"], "start_ms": -1, "end_ms": 10}),
             quoted,
         );
+    }
+    #[rstest]
+    #[case::unknown(json!(null), None)]
+    #[case::free(json!(0), Some(0.0))]
+    #[case::paid(json!("0.125"), Some(0.125))]
+    fn spend_rows_preserve_unknown_and_known_cost(
+        #[case] cost: serde_json::Value,
+        #[case] expected: Option<f64>,
+    ) {
+        let row: SpendByResponseIdsRow = serde_json::from_value(json!({
+            "request_id": "request", "response_id": "response", "upstream_response_id": "",
+            "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key",
+            "user": "user", "spend": cost, "start_ms": 0
+        }))
+        .unwrap();
+        assert_eq!(row.0.spend, expected);
+    }
+    #[rstest]
+    #[case::nan(json!("NaN"))]
+    #[case::infinity(json!("1e999"))]
+    #[case::boolean(json!(true))]
+    fn spend_rows_reject_invalid_cost(#[case] cost: serde_json::Value) {
+        let row = serde_json::from_value::<SpendByResponseIdsRow>(json!({
+            "request_id": "request", "response_id": "response", "upstream_response_id": "",
+            "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key",
+            "user": "user", "spend": cost, "start_ms": 0
+        }));
+        assert!(row.is_err());
     }
 }

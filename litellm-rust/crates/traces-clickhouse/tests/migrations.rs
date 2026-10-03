@@ -1997,3 +1997,55 @@ async fn agent_final_answer_preserves_visibility_and_trace_ownership(
     }
     Ok(())
 }
+
+#[rstest]
+#[tokio::test]
+async fn nullable_spend_upgrade_preserves_existing_costs_and_unknown_new_costs(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    let timestamp = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
+    let statements = schema_statements("trace_test", 7)?;
+    for statement in &statements[..statements.len() - 1] {
+        execute_write(&database, statement).await?;
+    }
+    let legacy = serde_json::from_value(serde_json::json!({
+        "request_id": "legacy", "response_id": "legacy-response", "spend": 0.25,
+        "start_time": timestamp, "end_time": timestamp + 100
+    }))?;
+    insert_rows(&database, "spend_logs", vec![legacy]).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let unknown = serde_json::from_value(serde_json::json!({
+        "request_id": "unknown", "response_id": "unknown-response", "spend": null,
+        "start_time": timestamp, "end_time": timestamp + 100
+    }))?;
+    let free = serde_json::from_value(serde_json::json!({
+        "request_id": "free", "response_id": "free-response", "spend": 0.0,
+        "start_time": timestamp, "end_time": timestamp + 100
+    }))?;
+    insert_rows(&database, "spend_logs", vec![unknown, free]).await?;
+    let result = read_json(
+        &database,
+        "SELECT request_id, spend FROM trace_test.spend_logs FINAL ORDER BY request_id",
+    )
+    .await?;
+    #[derive(Debug, serde::Deserialize)]
+    struct CostRow {
+        request_id: String,
+        spend: Option<f64>,
+    }
+    let rows: Vec<CostRow> = serde_json::from_value(result["data"].clone())?;
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.request_id.as_str(), row.spend))
+            .collect::<Vec<_>>(),
+        vec![
+            ("free", Some(0.0)),
+            ("legacy", Some(0.25)),
+            ("unknown", None)
+        ]
+    );
+    Ok(())
+}

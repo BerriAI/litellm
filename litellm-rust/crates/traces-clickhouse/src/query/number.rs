@@ -18,6 +18,21 @@ where
     .map_err(serde::de::Error::custom)
 }
 
+pub(super) fn optional_finite<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let number: f64 = deserialize(value).map_err(serde::de::Error::custom)?;
+    if number.is_finite() {
+        Ok(Some(number))
+    } else {
+        Err(serde::de::Error::custom("expected finite spend"))
+    }
+}
+
 pub(super) fn flag<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
     match deserialize(deserializer)? {
         value @ 0..=1 => Ok(value),

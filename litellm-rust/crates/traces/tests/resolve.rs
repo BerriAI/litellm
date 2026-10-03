@@ -78,7 +78,7 @@ fn spend(
         team_id: team.into(),
         api_key: key.into(),
         user: user.into(),
-        spend: cost,
+        spend: Some(cost),
         start_ms: T0 / MS,
     }
 }
@@ -610,4 +610,187 @@ fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
 #[case::before_epoch(-500, "1969-12-31T23:59:59.500000+00:00")]
 fn iso_time_matches_python_isoformat(#[case] ms: i64, #[case] expected: &str) {
     assert_eq!(iso_time(ms), expected);
+}
+
+#[rstest]
+#[case::narrows_ambiguity("request-a", Some(0.25))]
+#[case::conflicting_exact_request("request-c", None)]
+fn complete_wrapper_reconciles_ambiguous_response(
+    #[case] exact_id: &str,
+    #[case] expected: Option<f64>,
+) {
+    let wrapper = TraceSpansRow {
+        call_keys: vec![format!("litellm_request:{exact_id}")],
+        call_evidence: "complete".into(),
+        ..owned(llm("wrapper", "", "agent", ""), "team", "", "key")
+    };
+    let rows = [
+        wrapper,
+        owned(
+            llm("call", "wrapper", "agent", "response"),
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        spend("request-a", "response", "team", "", "key", 0.25),
+        spend("request-b", "response", "team", "", "key", 0.5),
+        spend("request-c", "other-response", "team", "", "key", 0.75),
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::missing(None, None)]
+#[case::free(Some(0.0), Some(0.0))]
+#[case::paid(Some(0.25), Some(0.25))]
+#[case::nan(Some(f64::NAN), None)]
+#[case::infinity(Some(f64::INFINITY), None)]
+fn complete_correlation_requires_known_finite_cost(
+    #[case] cost: Option<f64>,
+    #[case] expected: Option<f64>,
+) {
+    let rows = [owned(
+        llm("call", "", "agent", "response"),
+        "team",
+        "",
+        "key",
+    )];
+    let logged = SpendByResponseIdsRow {
+        spend: cost,
+        ..spend("request", "response", "team", "", "key", 0.25)
+    };
+    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+    assert_eq!(trace.spans[0].spend, expected);
+}
+
+#[rstest]
+#[case::complete_retry(true, Some(0.75))]
+#[case::missing_retry(false, None)]
+fn transports_preserve_retry_spend_without_counting_unrelated_cached_rows(
+    #[case] retry_logged: bool,
+    #[case] expected: Option<f64>,
+) {
+    let transport = |id: &str| {
+        owned(
+            TraceSpansRow {
+                trace_id: "trace".into(),
+                call_keys: vec!["transport:".into()],
+                call_evidence: "complete".into(),
+                ..row(id, "call", "POST", "framework", "")
+            },
+            "team",
+            "",
+            "key",
+        )
+    };
+    let rows = [
+        owned(
+            llm("call", "", "agent", "final-response"),
+            "team",
+            "",
+            "key",
+        ),
+        transport("first"),
+        transport("second"),
+    ];
+    let logs = [
+        SpendByResponseIdsRow {
+            trace_id: "trace".into(),
+            span_id: "first".into(),
+            ..spend("retry", "retry-response", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            trace_id: "trace".into(),
+            span_id: "second".into(),
+            ..spend("final", "final-response", "team", "", "key", 0.5)
+        },
+        spend("cached", "final-response", "team", "", "key", 0.0),
+    ];
+    let available = if retry_logged { &logs[..] } else { &logs[1..] };
+    let trace = resolve_trace("trace", "ref", &rows, available).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::same_request(false)]
+#[case::ambiguous_response(true)]
+fn multiple_identifiers_for_one_request_count_its_spend_once(#[case] cached_row: bool) {
+    let rows = [owned(
+        TraceSpansRow {
+            call_keys: vec![
+                "provider_response:response".into(),
+                "litellm_request:request".into(),
+            ],
+            call_evidence: "complete".into(),
+            ..llm("call", "", "agent", "response")
+        },
+        "team",
+        "",
+        "key",
+    )];
+    let logs = [
+        spend("request", "response", "team", "", "key", 0.25),
+        spend("cached", "response", "team", "", "key", 0.5),
+    ];
+    let available = if cached_row { &logs[..] } else { &logs[..1] };
+    let trace = resolve_trace("trace", "ref", &rows, available).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.25));
+    assert_eq!(trace.agents[0].spend, Some(0.25));
+    assert_eq!(trace.spans[0].spend, Some(0.25));
+}
+
+#[rstest]
+#[case::finite(0.25, Some(0.5))]
+#[case::overflow(f64::MAX, None)]
+fn trace_cost_requires_a_finite_total(#[case] cost: f64, #[case] expected: Option<f64>) {
+    let rows = [
+        owned(llm("first", "", "agent", "response-a"), "team", "", "key"),
+        owned(llm("second", "", "agent", "response-b"), "team", "", "key"),
+    ];
+    let logs = [
+        spend("request-a", "response-a", "team", "", "key", cost),
+        spend("request-b", "response-b", "team", "", "key", cost),
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+fn complete_wrapper_accounts_for_retries_missing_from_the_call_span() {
+    let rows = [
+        owned(
+            TraceSpansRow {
+                call_keys: vec![
+                    "litellm_request:retry".into(),
+                    "litellm_request:final".into(),
+                ],
+                call_evidence: "complete".into(),
+                ..llm("wrapper", "", "agent", "")
+            },
+            "team",
+            "",
+            "key",
+        ),
+        owned(
+            llm("call", "wrapper", "agent", "response"),
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        spend("retry", "retry-response", "team", "", "key", 0.25),
+        spend("final", "response", "team", "", "key", 0.5),
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.75));
+    assert_eq!(trace.agents[0].spend, Some(0.75));
 }

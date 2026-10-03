@@ -6,7 +6,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -24,6 +24,7 @@ from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.tracing.types import SpendLogRecord
+from litellm.types.utils import StandardLoggingPayload
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 SPAN_ID = "00f067aa0ba902b7"
@@ -330,3 +331,14 @@ async def test_trace_ingest_and_invalid_payload_do_not_write_spend():
 
     assert logger.log_queue == []
     storage.ensure_schema.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "cost,expected",
+    [(None, None), (0.0, 0.0), (0.25, 0.25), (float("nan"), None), (float("inf"), None)],
+)
+def test_spend_preserves_unknown_and_known_free_cost(cost: float | None, expected: float | None) -> None:
+    payload: Final = cast(StandardLoggingPayload, _payload(response_cost=cost))
+    row: Final = spend_log_row_from_payload(payload, {})
+    assert row["spend"] == expected
+    assert json.loads(json.dumps(row, allow_nan=False))["spend"] == expected
