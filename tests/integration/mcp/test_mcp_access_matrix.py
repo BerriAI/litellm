@@ -1,8 +1,9 @@
+import time
 import uuid
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
@@ -15,9 +16,11 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.mcp_grants import SUBJECTS, Subject, grant
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 
 CALLABLE: Final = {"add": {"a": 1, "b": 2}, "multiply": {"a": 2, "b": 3}}
 RESULTS: Final = {"add": "3", "multiply": "6"}
+_END_USER_GRANT_SETTLE_SECONDS: Final = DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL + 15
 
 
 def _server_scoped(entry: EntryPoint, identity: str) -> str | None:
@@ -46,6 +49,78 @@ def _assert_denied(caller: McpCaller, peer: McpPeer, name: str, identity: str, e
     assert tool_calls(peer.drain()) == (), "denied call reached the peer"
 
 
+def _assert_grant_holds(
+    gateway: Gateway,
+    caller: McpCaller,
+    entry: EntryPoint,
+    subject: Subject,
+    granted_alias: str,
+    denied_alias: str,
+    granted: str,
+    denied: str,
+    granted_peer: McpPeer,
+    denied_peer: McpPeer,
+) -> None:
+    open_before: Final = _open_aliases()
+    listed: Final = caller.list_tools(_server_scoped(entry, granted))
+    assert listed.ok, listed.raw
+    open_aliases: Final = open_before | _open_aliases()
+    expected: Final = (
+        {_name(entry, granted_alias, "add")}
+        if subject in ("toolset", "allowed_tools")
+        else {_name(entry, granted_alias, tool) for tool in ("add", "multiply", "fail")}
+    )
+    assert _without_foreign_open_servers(listed.tools, open_aliases) == expected, listed.tools
+    for tool, arguments in CALLABLE.items():
+        name: Final = _name(entry, granted_alias, tool)
+        if name not in listed.tools:
+            continue
+        granted_peer.drain()
+        outcome: Final = caller.call(name, arguments, _server_scoped(entry, granted))
+        assert outcome.ok and outcome.text == RESULTS[tool], outcome.raw
+        assert [call["body"]["params"]["name"] for call in tool_calls(granted_peer.drain())] == [tool]
+    if subject in ("toolset", "allowed_tools"):
+        _assert_denied(caller, granted_peer, _name(entry, granted_alias, "multiply"), granted, entry)
+    blocked: Final = McpCaller(gateway, caller.key, entry, denied_alias, caller.headers)
+    _assert_denied(blocked, denied_peer, _name(entry, denied_alias, "add"), denied, entry)
+    denied_listed: Final = blocked.list_tools(_server_scoped(entry, denied))
+    if entry == "rest":
+        assert denied_listed.status == 403 and "access_denied" in denied_listed.raw, denied_listed.raw
+        assert denied_listed.tools == ()
+    else:
+        assert not any(name.startswith(denied_alias) for name in denied_listed.tools), denied_listed.tools
+
+
+def _grant_failure(
+    gateway: Gateway,
+    caller: McpCaller,
+    entry: EntryPoint,
+    subject: Subject,
+    granted_alias: str,
+    denied_alias: str,
+    granted: str,
+    denied: str,
+    granted_peer: McpPeer,
+    denied_peer: McpPeer,
+) -> str | None:
+    try:
+        _assert_grant_holds(
+            gateway,
+            caller,
+            entry,
+            subject,
+            granted_alias,
+            denied_alias,
+            granted,
+            denied,
+            granted_peer,
+            denied_peer,
+        )
+    except AssertionError as error:
+        return str(error) or repr(error)
+    return None
+
+
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
 @pytest.mark.parametrize("subject", SUBJECTS)
 @pytest.mark.parametrize("peer_kind", ("http", "sse"))
@@ -58,38 +133,41 @@ def test_subject_grant_lists_only_reachable_tools_and_denies_the_rest(
         denied_alias: Final = "no" + uuid.uuid4().hex[:8]
         granted: Final = register_mcp(scenario, granted_peer, granted_alias, mcp_access_groups=[group])
         denied: Final = register_mcp(scenario, denied_peer, denied_alias)
-        caller: Final = grant(
+        granted_at: Final = time.monotonic()
+        granted_subject: Final = grant(
             scenario, subject, (granted,), (granted, denied), access_group=group, allowed_tools={granted: ("add",)}
         )
-        reach: Final = McpCaller(gateway, caller.key, entry, granted_alias, caller.headers)
-        open_before: Final = _open_aliases()
-        listed: Final = reach.list_tools(_server_scoped(entry, granted))
-        assert listed.ok, listed.raw
-        open_aliases: Final = open_before | _open_aliases()
-        expected: Final = (
-            {_name(entry, granted_alias, "add")}
-            if subject in ("toolset", "allowed_tools")
-            else {_name(entry, granted_alias, tool) for tool in ("add", "multiply", "fail")}
+        caller: Final = McpCaller(gateway, granted_subject.key, entry, granted_alias, granted_subject.headers)
+        if subject == "end_user":
+            eventually(
+                lambda: _grant_failure(
+                    gateway,
+                    caller,
+                    entry,
+                    subject,
+                    granted_alias,
+                    denied_alias,
+                    granted,
+                    denied,
+                    granted_peer,
+                    denied_peer,
+                ),
+                lambda failure: failure is None,
+                seconds=granted_at + _END_USER_GRANT_SETTLE_SECONDS - time.monotonic(),
+            )
+            return
+        _assert_grant_holds(
+            gateway,
+            caller,
+            entry,
+            subject,
+            granted_alias,
+            denied_alias,
+            granted,
+            denied,
+            granted_peer,
+            denied_peer,
         )
-        assert _without_foreign_open_servers(listed.tools, open_aliases) == expected, listed.tools
-        for tool, arguments in CALLABLE.items():
-            name: Final = _name(entry, granted_alias, tool)
-            if name not in listed.tools:
-                continue
-            granted_peer.drain()
-            outcome: Final = reach.call(name, arguments, _server_scoped(entry, granted))
-            assert outcome.ok and outcome.text == RESULTS[tool], outcome.raw
-            assert [call["body"]["params"]["name"] for call in tool_calls(granted_peer.drain())] == [tool]
-        if subject in ("toolset", "allowed_tools"):
-            _assert_denied(reach, granted_peer, _name(entry, granted_alias, "multiply"), granted, entry)
-        blocked: Final = McpCaller(gateway, caller.key, entry, denied_alias, caller.headers)
-        _assert_denied(blocked, denied_peer, _name(entry, denied_alias, "add"), denied, entry)
-        denied_listed: Final = blocked.list_tools(_server_scoped(entry, denied))
-        if entry == "rest":
-            assert denied_listed.status == 403 and "access_denied" in denied_listed.raw, denied_listed.raw
-            assert denied_listed.tools == ()
-        else:
-            assert not any(name.startswith(denied_alias) for name in denied_listed.tools), denied_listed.tools
 
 
 @pytest.mark.parametrize("entry", ("mcp", "server_mcp", "rest"))
