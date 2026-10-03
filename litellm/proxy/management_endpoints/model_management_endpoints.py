@@ -2448,8 +2448,8 @@ async def add_new_model(
             enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
         )
 
-        clean_model_info: Final = ModelInfo(
-            **without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True))
+        clean_model_info: Final = ModelInfo.model_validate(
+            dict(without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True)))
         )
         model_params.model_info = (  # rebind-ok: downstream team-model handling mutates this same object
             clean_model_info.model_copy(update=MappingProxyType({"member_auto_router": True}))
@@ -3094,6 +3094,9 @@ def _deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
     return unique_models
 
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
 def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
     """A DB row's model_info column arrives as a dict or as its JSON string depending on
     the query path, and every consumer needs the mapping. Single owner of that parse:
@@ -3104,10 +3107,9 @@ def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
     if not isinstance(model_info, str):
         return None
     try:
-        parsed: Final = json.loads(model_info)
+        return _JSON_OBJECT.validate_python(json.loads(model_info))
     except (TypeError, ValueError):
         return None
-    return parsed if isinstance(parsed, Mapping) else None
 
 
 def _expects_liveness_on_this_pod(model_info: object) -> bool:
