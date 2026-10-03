@@ -1,7 +1,7 @@
 "use client";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { LensWorkspace } from "./_components/LensWorkspace";
+import { LensWorkspace } from "@/components/lens/LensWorkspace";
 
 export default function LensPage() {
   const { accessToken, userRole, isViewOnly } = useAuthorized();
