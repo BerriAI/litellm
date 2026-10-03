@@ -12,7 +12,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse, completion
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -3439,6 +3439,48 @@ async def test_google_ai_studio_forwards_seed_to_generation_config(drop_params: 
     )
 
     assert response.choices[0].message.content == "seed=42"
+
+
+def test_google_ai_studio_sync_stream_forwards_request_timeout() -> None:
+    expected_timeout: Final = 2.5
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == expected_timeout
+        return httpx.Response(200, content=b"", request=request)
+
+    http_client: Final = httpx.Client(transport=httpx.MockTransport(respond), timeout=91.0)
+    stream: Final = litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=expected_timeout,
+        api_key="fake-gemini-key",
+        client=HTTPHandler(client=http_client),
+    )
+
+    assert isinstance(stream, CustomStreamWrapper)
+    stream.fetch_sync_stream()
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_async_stream_forwards_request_timeout() -> None:
+    expected_timeout: Final = 3.5
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == expected_timeout
+        return httpx.Response(200, content=b"", request=request)
+
+    stream: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=httpx.Timeout(expected_timeout),
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(timeout=91.0, transport=httpx.MockTransport(respond)),
+    )
+
+    assert isinstance(stream, CustomStreamWrapper)
+    await stream.fetch_stream()
 
 
 # ==================== Tool Type Separation Tests ====================
