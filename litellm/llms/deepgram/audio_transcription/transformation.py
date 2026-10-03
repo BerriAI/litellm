@@ -104,9 +104,11 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             # Add additional metadata matching OpenAI format
             response["task"] = "transcribe"
 
-            # Use detected_language if available, otherwise default to "en"
             detected_language: Final = first_channel.get("detected_language")
-            response["language"] = detected_language if detected_language else "en"
+            requested_language: Final = raw_response.request.url.params.get("language")
+            response["language"] = (
+                detected_language or (requested_language if isinstance(requested_language, str) else None) or "en"
+            )
 
             response["duration"] = response_json["metadata"]["duration"]
 
@@ -176,12 +178,12 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             api_base = get_secret_str("DEEPGRAM_API_BASE") or "https://api.deepgram.com/v1"
         api_base = api_base.rstrip("/")  # Remove trailing slash if present
 
-        # Build query parameters including the model
-        all_query_params: Final = {"model": model}
-
-        # Add filtered optional parameters
-        additional_params: Final = self._build_query_params(optional_params, model)
-        all_query_params.update(additional_params)
+        language: Final = optional_params.get("language")
+        all_query_params: Final = (
+            ("model", model),
+            *self._build_query_params(optional_params, model).items(),
+            *((("language", language),) if language is not None else ()),
+        )
 
         # Construct URL with proper query string encoding
         base_url: Final = f"{api_base}/listen"
