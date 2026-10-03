@@ -9469,6 +9469,10 @@ def _restamp_streaming_chunk_model(
 
     # The streaming wrapper keeps these same chunk objects to assemble the response it
     # prices, so stamp a copy for the client and leave the provider's model for pricing.
+    # The logging object stamps the same model on the assembled response after pricing it.
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.client_facing_stream_model = target_model
     if isinstance(chunk, dict):
         return {**chunk, "model": target_model}, model_mismatch_logged
 

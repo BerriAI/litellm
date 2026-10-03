@@ -3,18 +3,30 @@
 The proxy shows the client's alias on every streamed chunk, but the chunks kept for end-of-stream cost calculation
 keep the deployment's model. "claude-opus-4.8-<digits>" is no cost-map key and only matches the claude capability
 rules, whose model info carries no prices, so a stream through that alias must bill exactly what the plain alias
-"integration-<hex>" bills at the same deployment rates, and the client must still see the alias it asked for
+"integration-<hex>" bills at the same deployment rates, and the client must still see the alias it asked for.
+Logging callbacks see that alias as the response model on streamed requests, the same as on non-streamed ones
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from hashlib import sha256
+from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+import yaml
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
+from integration._support.otlp_sink import owned_sinks, recorded_spans
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -23,10 +35,25 @@ def _sse_event(name: str, payload: dict[str, JsonValue]) -> bytes:
     return f"event: {name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode()
 
 
-def _anthropic_stream(request: Request) -> Reply:
+def _anthropic_reply(request: Request) -> Reply:
     assert request.target.endswith("/v1/messages"), request.target
     body: Final = json.loads(request.body)
-    assert body["model"] == "claude-opus-4-8" and body["stream"] is True, body
+    assert body["model"] == "claude-opus-4-8", body
+    if body.get("stream") is not True:
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": f"msg_{uuid4().hex[:12]}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text", "text": "hi"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 30, "output_tokens": 40},
+                }
+            ).encode()
+        )
     return Reply(
         content_type="text/event-stream",
         chunks=(
@@ -124,28 +151,28 @@ def _deployment_pricing(gateway: Gateway, model_name: str) -> dict[str, JsonValu
     return object_value(listed[0]["model_info"])
 
 
-@pytest.mark.parametrize(
-    "litellm_params",
-    (
-        pytest.param(
-            lambda _: {"model": "vertex_ai/claude-opus-4-8@default", "mock_response": "hi"},
-            id="vertex-mock-response",
-        ),
-        pytest.param(
-            lambda wire_url: {
-                "model": "anthropic/claude-opus-4-8",
-                "api_key": "integration-provider-key",
-                "api_base": wire_url,
-            },
-            id="anthropic-upstream",
-        ),
+_BACKENDS: Final = (
+    pytest.param(
+        lambda _: {"model": "vertex_ai/claude-opus-4-8@default", "mock_response": "hi"},
+        id="vertex-mock-response",
+    ),
+    pytest.param(
+        lambda wire_url: {
+            "model": "anthropic/claude-opus-4-8",
+            "api_key": "integration-provider-key",
+            "api_base": wire_url,
+        },
+        id="anthropic-upstream",
     ),
 )
+
+
+@pytest.mark.parametrize("litellm_params", _BACKENDS)
 @pytest.mark.timeout(180)
 def test_streamed_alias_matching_a_capability_rule_bills_the_deployment_price(
     gateway: Gateway, litellm_params: Callable[[str], dict[str, JsonValue]]
 ) -> None:
-    with wire_server(_anthropic_stream) as wire, gateway.scenario() as scenario:
+    with wire_server(_anthropic_reply) as wire, gateway.scenario() as scenario:
         content: Final = f"alias billing {uuid4().hex}"
         plain_alias: Final = f"integration-{uuid4().hex}"
         rule_alias: Final = f"claude-opus-4.8-{uuid4().int % 10**8:08d}"
@@ -166,3 +193,61 @@ def test_streamed_alias_matching_a_capability_rule_bills_the_deployment_price(
                 uplift
                 * (float(str(row["prompt_tokens"])) * input_rate + float(str(row["completion_tokens"])) * output_rate)
             ), (model_name, row, pricing)
+
+
+@pytest.fixture(scope="module")
+def otel_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
+    directory: Final = tmp_path_factory.mktemp("stream-alias-otel")
+    with owned_sinks(directory / "sinks") as sinks, gateway_from_environment() as base:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["litellm_settings"] = {**config["litellm_settings"], "callbacks": ["otel"]}
+        config["callback_settings"] = {
+            "otel": {"exporter": "http/json", "endpoint": sinks.operator, "use_simple_processor": True}
+        }
+        path: Final = directory / "otel.yaml"
+        path.write_text(yaml.safe_dump(config))
+        overrides: Final = {"OTEL_EXPORTER": "http/json", "OTEL_ENDPOINT": sinks.operator}
+        with owned_proxy(base, directory, overrides, config=path) as candidate:
+            yield candidate, sinks.operator
+
+
+def _logged_response_models(sink: str, call_ids: Mapping[str, str]) -> dict[str, JsonValue]:
+    _, spans = recorded_spans(sink)
+    return {
+        label: span["attributes"]["gen_ai.response.model"]
+        for span in spans
+        for label, call_id in call_ids.items()
+        if span["attributes"].get("litellm.call_id") == call_id and "gen_ai.response.model" in span["attributes"]
+    }
+
+
+@pytest.mark.parametrize("litellm_params", _BACKENDS)
+@pytest.mark.timeout(240)
+def test_logged_response_model_is_the_client_alias_whether_or_not_the_request_streams(
+    otel_proxy: tuple[Gateway, str], litellm_params: Callable[[str], dict[str, JsonValue]]
+) -> None:
+    candidate, sink = otel_proxy
+    with wire_server(_anthropic_reply) as wire, candidate.scenario() as scenario:
+        alias: Final = f"claude-opus-4.8-{uuid4().int % 10**8:08d}"
+        key: Final = scenario.key(models=[_deployment(scenario, alias, litellm_params(wire.url))])
+        call_ids: Final[dict[str, str]] = {}
+        for label, stream_fields in (
+            ("non-streamed", {}),
+            ("streamed", {"stream": True, "stream_options": {"include_usage": True}}),
+        ):
+            response = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": alias, "messages": [{"role": "user", "content": f"logged alias {uuid4().hex}"}]}
+                | stream_fields,
+                key=key,
+            )
+            assert response.status_code == 200, response.text
+            call_ids[label] = response.headers["x-litellm-call-id"]
+        logged: Final = eventually(
+            lambda: _logged_response_models(sink, call_ids),
+            lambda found: len(found) == 2,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert logged == {"non-streamed": alias, "streamed": alias}, call_ids

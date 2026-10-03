@@ -465,6 +465,29 @@ def test_restamp_streaming_chunk_model_restamps_a_frozen_chunk_through_a_copy():
     assert (new_chunk.model, chunk.model, logged) == ("gpt-4", "openai/internal-x", True)
 
 
+def test_restamp_streaming_chunk_model_records_the_client_model_on_the_logging_object():
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="openai/internal-x",
+        messages=[],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="test-id",
+        function_id="test-id",
+    )
+    _restamp_streaming_chunk_model(
+        chunk=_simple_chunk(model="openai/internal-x"),
+        requested_model_from_client="gpt-4",
+        request_data={"litellm_call_id": "test-id", "litellm_logging_obj": logging_obj},
+        model_mismatch_logged=False,
+    )
+    assert logging_obj.client_facing_stream_model == "gpt-4"
+
+
 def test_format_fallback_metadata_sse_event():
     fallback_errors = [
         {
