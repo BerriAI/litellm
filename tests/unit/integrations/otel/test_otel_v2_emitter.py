@@ -123,6 +123,27 @@ def test_llm_call_span_tells_unpriced_call_from_free_call(cost_fields, expected_
     assert langfuse_cost == expected_cost
 
 
+def test_unpriced_call_keeps_the_guardrail_charge_on_the_guardrail_span():
+    engine, exporter = _engine()
+    payload = _payload(
+        response_cost=0.002,
+        response_cost_failure_debug_info=_PRICE_LOOKUP_FAILED,
+        cost_breakdown={"guardrail_cost": 0.002, "total_cost": 0.002},
+    )
+
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload))
+    engine.emit(
+        SpanRole.GUARDRAIL,
+        GuardrailSpanData.from_logging_entry(
+            {"guardrail_name": "bedrock", "guardrail_status": "success", "guardrail_cost": 0.002}
+        ),
+    )
+
+    llm_span, guardrail_span = exporter.get_finished_spans()
+    assert f"{LiteLLM.COST_PREFIX}total" not in llm_span.attributes
+    assert guardrail_span.attributes[LiteLLM.GUARDRAIL_COST] == 0.002
+
+
 def test_tracer_scope_carries_litellm_version():
     from litellm._version import version as litellm_version
 
