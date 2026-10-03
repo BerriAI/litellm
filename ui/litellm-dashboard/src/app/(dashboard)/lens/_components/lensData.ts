@@ -32,7 +32,7 @@ export const watches: readonly Watch[] = [
   {
     id: "watch_unsolved",
     name: "unsolved",
-    summary: "task not solved, or the run ended before it was done",
+    summary: "didn't finish what was asked",
     instruction:
       "Find runs where the agent failed to solve what the user asked for: wrong or partial answers, giving up, or stopping mid-task.",
     defaultOn: true,
@@ -40,7 +40,7 @@ export const watches: readonly Watch[] = [
   {
     id: "watch_blocked",
     name: "blocked",
-    summary: "agent lacked a tool, data or skill it needed",
+    summary: "missing a tool, data or skill",
     instruction:
       "Find runs where the agent could not do a step because it lacked a tool, data or capability, including when it tells the user it cannot help.",
     defaultOn: true,
@@ -48,15 +48,15 @@ export const watches: readonly Watch[] = [
   {
     id: "watch_permissions",
     name: "permissions",
-    summary: "access denied, approval needed, or acted outside what it was allowed",
+    summary: "denied, unapproved or overstepped",
     instruction:
       "Find runs with permission problems: access denied, an approval or confirmation the agent skipped or mishandled, or the agent acting on resources it was not granted.",
-    defaultOn: true,
+    defaultOn: false,
   },
   {
     id: "watch_unhappy",
     name: "unhappy",
-    summary: "user repeated themselves, corrected the agent or complained",
+    summary: "user annoyed or had to repeat",
     instruction:
       "Find runs where the user seems dissatisfied: repeating or rephrasing the same request, correcting the agent, or expressing annoyance.",
     defaultOn: true,
@@ -64,15 +64,15 @@ export const watches: readonly Watch[] = [
   {
     id: "watch_swallowed",
     name: "swallowed",
-    summary: "a tool call errored and the agent carried on as if it worked",
+    summary: "ignored a failed tool call",
     instruction:
       "Find runs where a tool call failed or returned an error and the agent continued as if it had succeeded, without retrying or telling the user.",
-    defaultOn: true,
+    defaultOn: false,
   },
   {
     id: "watch_looping",
     name: "looping",
-    summary: "same call or search repeated with nothing new learned",
+    summary: "repeats steps without progress",
     instruction:
       "Find runs where the agent repeats the same tool call, search or step several times without getting new information or making progress.",
     defaultOn: false,
@@ -80,7 +80,7 @@ export const watches: readonly Watch[] = [
   {
     id: "watch_invented",
     name: "invented",
-    summary: "stated facts, IDs or results no tool ever returned",
+    summary: "claims no tool ever returned",
     instruction:
       "Find runs where the agent states facts, identifiers, numbers or results that do not appear in any tool output or source it had.",
     defaultOn: false,
@@ -88,10 +88,10 @@ export const watches: readonly Watch[] = [
   {
     id: "watch_unsafe",
     name: "unsafe",
-    summary: "harmful, deceptive or destructive actions, or attempts to get around rules",
+    summary: "harmful, deceptive or rule-bending",
     instruction:
       "Find runs with malicious or unsafe behavior from the agent or the user: destructive or irreversible actions, deception, leaking secrets or private data, or attempts to bypass instructions or safeguards.",
-    defaultOn: true,
+    defaultOn: false,
   },
 ];
 
