@@ -2,7 +2,8 @@
 
 After every completion it adds LiteLLM's computed spend and the latest answer to the program's row, and
 when the request carried ``metadata.program_done`` it completes the program: the slot is released at once
-and the verifier runs in the background. Nothing here can fail a request.
+and the verifier runs in the background. Only requests the Router stamped as routed by this ORACLE router
+are read, and only against the program of the key that sent them. Nothing here can fail a request.
 """
 
 import math
@@ -26,7 +27,29 @@ if TYPE_CHECKING:
 
 
 def _request_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    return as_str_mapping(as_str_mapping(kwargs.get("litellm_params")).get("metadata"))
+    """The request's metadata as the proxy saw it: the caller's bucket with the proxy-internal one on top."""
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params"))
+    return _merged(litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
+
+
+def _merged(metadata: object, litellm_metadata: object) -> Mapping[str, object]:
+    return {**as_str_mapping(metadata), **as_str_mapping(litellm_metadata)}
+
+
+def _routed_by(metadata: Mapping[str, object], router_name: str) -> bool:
+    """True when the Router stamped this request as routed by this ORACLE router.
+
+    The Router writes or clears ``routing_decision`` on every routing attempt, so a caller cannot make a
+    request to some other model look like one of this router's by putting ORACLE keys in its metadata.
+    """
+    decision: Final = as_str_mapping(metadata.get("routing_decision"))
+    return decision.get("router_type") == "oracle" and decision.get("router_model_name") == router_name
+
+
+def _owner(metadata: Mapping[str, object]) -> str | None:
+    """The key the proxy authenticated, stamped server-side as ``user_api_key_hash``; None outside the proxy."""
+    value: Final = metadata.get("user_api_key_hash")
+    return str(value) if value else None
 
 
 def _score(metadata: Mapping[str, object]) -> float | None:
@@ -54,10 +77,10 @@ class OracleRouterPostCallHook(CustomLogger):
         request_headers: dict[str, str] | None = None,  # mutable-ok: CustomLogger's hook signature
         litellm_call_info: dict[str, object] | None = None,  # mutable-ok: CustomLogger's hook signature
     ) -> dict[str, str] | None:  # mutable-ok: CustomLogger's hook signature
-        buckets: Final = (as_str_mapping(data.get("litellm_metadata")), as_str_mapping(data.get("metadata")))
-        chosen: Final = next(
-            (bucket[CHOSEN_MODEL_METADATA_KEY] for bucket in buckets if CHOSEN_MODEL_METADATA_KEY in bucket), None
-        )
+        metadata: Final = _merged(data.get("metadata"), data.get("litellm_metadata"))
+        if not _routed_by(metadata, self.oracle_router.router_name):
+            return None
+        chosen: Final = metadata.get(CHOSEN_MODEL_METADATA_KEY)
         return {RESPONSE_HEADER: str(chosen)} if chosen else None
 
     async def async_log_success_event(
@@ -73,9 +96,12 @@ class OracleRouterPostCallHook(CustomLogger):
     def _record(self, kwargs: Mapping[str, object], response_obj: object, succeeded: bool) -> None:
         try:
             metadata: Final = _request_metadata(kwargs)
+            if not _routed_by(metadata, self.oracle_router.router_name):
+                return
             program_id: Final = metadata.get(PROGRAM_ID_METADATA_KEY)
             if not isinstance(program_id, str):
                 return
+            owner: Final = _owner(metadata)
             if succeeded:
                 cost: Final = kwargs.get("response_cost")
                 self.oracle_router.observe_request(
@@ -83,8 +109,9 @@ class OracleRouterPostCallHook(CustomLogger):
                     cost=float(cost) if isinstance(cost, (int, float)) else 0.0,
                     response_text=response_text(response_obj),
                     messages=kwargs.get("messages"),
+                    owner=owner,
                 )
             if metadata.get(PROGRAM_DONE_KEY):
-                self.oracle_router.complete(program_id, score=_score(metadata))
+                self.oracle_router.complete(program_id, score=_score(metadata), owner=owner)
         except Exception as error:  # noqa: BLE001  # a logging callback must never fail the request it observes
             verbose_router_logger.exception("OracleRouterPostCallHook: failed to record request: %s", error)

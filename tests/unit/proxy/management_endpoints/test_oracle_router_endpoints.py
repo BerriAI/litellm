@@ -62,7 +62,7 @@ async def _bind(oracle: OracleRouter, program_id: str, api_key_hash: str | None 
 @pytest.mark.asyncio
 async def test_feedback_completes_the_program_and_the_router_learns(oracle):
     await _bind(oracle, "task-1")
-    oracle.observe_request("task-1", cost=0.2, response_text="done")
+    oracle.observe_request("task-1", cost=0.2, response_text="done", owner="owner-hash")
     with patch("litellm.proxy.proxy_server.llm_router", _LLMRouter(oracle)):
         response = await submit_oracle_router_feedback(
             OracleRouterFeedbackRequest(program_id="task-1", score=1.0), OWNER
@@ -73,22 +73,35 @@ async def test_feedback_completes_the_program_and_the_router_learns(oracle):
         "model": "smart",
         "pending_verifications": 1,
     }
-    assert oracle.binding("task-1") is None
+    assert oracle.binding("task-1", "owner-hash") is None
     await oracle.drain()
     assert oracle.maker.updates == [("smart", 1.0)]
 
 
 @pytest.mark.asyncio
-async def test_feedback_from_another_key_is_forbidden_but_an_admin_may_complete(oracle):
+async def test_another_key_does_not_see_the_program_but_an_admin_may_complete_it(oracle):
     await _bind(oracle, "task-1")
     with patch("litellm.proxy.proxy_server.llm_router", _LLMRouter(oracle)):
-        with pytest.raises(HTTPException) as denied:
+        with pytest.raises(HTTPException) as unseen:
             await submit_oracle_router_feedback(OracleRouterFeedbackRequest(program_id="task-1", score=1.0), STRANGER)
-        assert denied.value.status_code == 403 and oracle.binding("task-1") is not None
+        assert unseen.value.status_code == 404 and oracle.binding("task-1", "owner-hash") is not None
         response = await submit_oracle_router_feedback(
             OracleRouterFeedbackRequest(program_id="task-1", score=0.0), ADMIN
         )
-    assert response.program_id == "task-1" and oracle.binding("task-1") is None
+    assert response.program_id == "task-1" and oracle.binding("task-1", "owner-hash") is None
+    await oracle.drain()
+
+
+@pytest.mark.asyncio
+async def test_feedback_reaches_only_the_callers_program_when_ids_collide_across_keys(oracle):
+    await _bind(oracle, "task-1", "owner-hash")
+    await _bind(oracle, "task-1", "other-hash")
+    with patch("litellm.proxy.proxy_server.llm_router", _LLMRouter(oracle)):
+        response = await submit_oracle_router_feedback(
+            OracleRouterFeedbackRequest(program_id="task-1", score=0.5), STRANGER
+        )
+    assert response.program_id == "task-1"
+    assert oracle.binding("task-1", "other-hash") is None and oracle.binding("task-1", "owner-hash") is not None
     await oracle.drain()
 
 

@@ -9487,6 +9487,13 @@ class Router:
         if raw_config is None:
             raise ValueError("oracle_router_config is required for oracle-router deployments.")
         config: Final = OracleRouterConfig.model_validate(raw_config)
+        if deployment.model_info.db_model and "custom" in (config.decision_maker.type, config.verifier.type):
+            # A custom decision maker or verifier imports and runs Python named by the deployment. Only the
+            # operator's config file may name it; a model written through the API (any role) must not.
+            raise ValueError(
+                f"oracle_router deployment {deployment.model_name!r}: custom decision makers and verifiers "
+                "can only be configured in the proxy config file, not through the model API."
+            )
         oracle_router: Final = OracleRouter(
             router_name=deployment.model_name,
             config=config,

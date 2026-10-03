@@ -35,6 +35,20 @@ def _oracle_hooks():
     return litellm.logging_callback_manager.get_custom_loggers_for_type(OracleRouterPostCallHook)
 
 
+class _CustomMaker:
+    def __init__(self, models):
+        self.models = tuple(models)
+
+    async def select(self, context):
+        return self.models[-1]
+
+    def update(self, context, model, score):
+        pass
+
+    def snapshot(self):
+        return {"type": "custom"}
+
+
 def test_prefix_is_classified_as_oracle_and_not_as_a_semantic_router():
     router = Router(model_list=[])
     params = LiteLLM_Params(model="auto_router/oracle_router")
@@ -200,6 +214,37 @@ def test_upserting_an_oracle_deployment_builds_its_router_once_and_rebuilds_it_w
     rebuilt = _oracle(router, "late-oracle")
     assert rebuilt is not oracle and rebuilt.models == ("fast",)
     assert [hook.oracle_router for hook in _oracle_hooks() if hook.oracle_router in (oracle, rebuilt)] == [rebuilt]
+
+
+def test_custom_plugins_load_from_the_config_file_but_never_for_models_written_through_the_api(monkeypatch):
+    import subprocess
+
+    popen_calls = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: popen_calls.append(args))
+    from_config = Router(model_list=_model_list(decision_maker={"type": "custom", "path": f"{__name__}:_CustomMaker"}))
+    assert _oracle(from_config, "oracle").decision_maker.models == ("smart", "fast")
+    for config_key in ("decision_maker", "verifier"):
+        model_list = _model_list(**{config_key: {"type": "custom", "path": "subprocess:Popen"}})
+        model_list[0]["model_info"] = {"db_model": True}  # what the proxy sets for /model/new and /model/update
+        model_list[0]["litellm_params"]["oracle_router_config"]["available_models"] = ["/bin/sh", "-c", "id"]
+        with pytest.raises(ValueError, match="config file"):
+            Router(model_list=model_list)
+    router = Router(model_list=_model_list()[1:])
+    with pytest.raises(ValueError, match="config file"):
+        router.upsert_deployment(
+            deployment=Deployment(
+                model_name="api-oracle",
+                litellm_params=LiteLLM_Params(
+                    model="auto_router/oracle_router",
+                    oracle_router_config={
+                        "available_models": ["smart", "fast"],
+                        "verifier": {"type": "custom", "path": "subprocess:Popen"},
+                    },
+                ),
+                model_info={"id": "api-oracle-1", "db_model": True},
+            )
+        )
+    assert popen_calls == [] and "api-oracle" not in router.oracle_routers
 
 
 def test_strategy_router_dependencies_cover_available_models():

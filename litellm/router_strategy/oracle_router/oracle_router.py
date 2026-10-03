@@ -14,7 +14,7 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Final
+from typing import Final, NamedTuple
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -52,6 +52,13 @@ def as_str_mapping(value: object) -> Mapping[str, object]:
         return _STR_MAPPING.validate_python(value)
     except ValidationError:
         return _EMPTY
+
+
+class ProgramKey(NamedTuple):
+    """A program is private to the API key that started it: the same id under another key is another program."""
+
+    owner: str | None
+    program_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,8 +134,27 @@ def _transcript(messages: object, fallback: Sequence[AllMessageValues]) -> Seque
 
 
 def _api_key_hash(request_kwargs: Mapping[str, object]) -> str | None:
+    """The key the proxy authenticated, stamped server-side as ``user_api_key_hash``; None outside the proxy."""
     value: Final = _metadata(request_kwargs).get("user_api_key_hash")
     return str(value) if value else None
+
+
+def _stamp_internal(
+    request_kwargs: dict[str, object],  # mutable-ok: pre-routing contract
+    key: str,
+    value: object | None,
+) -> None:
+    """Write a router-internal metadata key where the proxy keeps its own state.
+
+    Any copy the caller supplied is dropped from both buckets first, so the post-call hook only ever reads
+    what this router wrote; None clears the key.
+    """
+    for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
+        if isinstance(bucket, dict):
+            bucket.pop(key, None)  # pyright: ignore[reportUnknownMemberType]  # caller-supplied dict
+    if value is not None:
+        _, internal = get_or_create_metadata_bucket(request_kwargs)  # pyright: ignore[reportUnknownVariableType]  # bare dict upstream
+        internal[key] = value
 
 
 class OracleRouter:
@@ -150,8 +176,8 @@ class OracleRouter:
         self._cause: Final[RoutingDecisionCause] = (
             "bandit" if config.decision_maker.type in _LEARNING_DECISION_MAKERS else "classifier_plugin"
         )
-        self._bindings: Final[dict[str, ProgramBinding]] = {}  # mutable-ok: the lookup table
-        self._binding_in_flight: Final[dict[str, asyncio.Event]] = {}  # mutable-ok: programs being bound right now
+        self._bindings: Final[dict[ProgramKey, ProgramBinding]] = {}  # mutable-ok: the lookup table
+        self._binding_in_flight: Final[dict[ProgramKey, asyncio.Event]] = {}  # mutable-ok: being bound right now
         self._tasks: Final[set[asyncio.Task[float]]] = set()  # mutable-ok: in-flight verifications
         self._history: Final[deque[FeedbackRecord]] = deque(maxlen=FEEDBACK_HISTORY_SIZE)  # mutable-ok: bounded log
         self._update_lock: Final = asyncio.Lock()
@@ -168,53 +194,60 @@ class OracleRouter:
     def context_for(self, program_id: str, prompt: str) -> ProgramContext:
         return ProgramContext(program_id=program_id, prompt=prompt, request_type=classify_prompt(prompt))
 
-    def binding(self, program_id: str) -> ProgramBinding | None:
-        return self._bindings.get(program_id)
+    def binding(self, program_id: str, owner: str | None = None) -> ProgramBinding | None:
+        """The program's row as seen by ``owner``, the key that started it (``user_api_key_hash``)."""
+        return self._bindings.get(ProgramKey(owner, program_id))
+
+    def bindings_named(self, program_id: str) -> tuple[ProgramBinding, ...]:
+        """Every key's program with this id, oldest first: an admin may complete another key's program."""
+        matching: Final = (binding for key, binding in self._bindings.items() if key.program_id == program_id)
+        return tuple(sorted(matching, key=lambda binding: binding.bound_at))
 
     def _evict_expired(self, now: float) -> None:
         deadline: Final = now - self.config.program_ttl_seconds
-        expired: Final = tuple(
-            program_id for program_id, binding in self._bindings.items() if binding.bound_at < deadline
-        )
-        for program_id in expired:
-            self._bindings.pop(program_id, None)
+        expired: Final = tuple(key for key, binding in self._bindings.items() if binding.bound_at < deadline)
+        for key in expired:
+            self._bindings.pop(key, None)
         overflow: Final = len(self._bindings) + 1 - self.config.max_programs  # +1: room for the program being bound
-        oldest: Final = tuple(sorted(self._bindings, key=lambda pid: self._bindings[pid].bound_at))[: max(overflow, 0)]
-        for program_id in oldest:
-            self._bindings.pop(program_id, None)
+        oldest: Final = tuple(sorted(self._bindings, key=lambda key: self._bindings[key].bound_at))[: max(overflow, 0)]
+        for key in oldest:
+            self._bindings.pop(key, None)
         self.programs_evicted += len(expired) + len(oldest)
 
     async def bind(self, program_id: str, prompt: str, api_key_hash: str | None) -> ProgramBinding:
         """Bind a new program, or return its existing row.
 
-        Concurrent first requests of one program (a harness that fans out) wait for the decision in
-        flight instead of each asking the decision maker, so a program is bound exactly once.
+        A program is private to the key that started it: the same id under another key starts that key's
+        own program instead of riding on, or completing, someone else's. Concurrent first requests of one
+        program (a harness that fans out) wait for the decision in flight instead of each asking the
+        decision maker, so a program is bound exactly once.
         """
-        in_flight = self._binding_in_flight.get(program_id)  # rebind-ok: re-read after each wait
+        key: Final = ProgramKey(api_key_hash, program_id)
+        in_flight = self._binding_in_flight.get(key)  # rebind-ok: re-read after each wait
         while in_flight is not None:
             await in_flight.wait()
-            in_flight = self._binding_in_flight.get(program_id)
-        existing: Final = self._bindings.get(program_id)
+            in_flight = self._binding_in_flight.get(key)
+        existing: Final = self._bindings.get(key)
         if existing is not None:
             return existing
         event: Final = asyncio.Event()
-        self._binding_in_flight[program_id] = event
+        self._binding_in_flight[key] = event
         try:
-            return await self._bind(program_id, prompt, api_key_hash)
+            return await self._bind(key, prompt)
         finally:
-            self._binding_in_flight.pop(program_id, None)
+            self._binding_in_flight.pop(key, None)
             event.set()
 
-    async def _bind(self, program_id: str, prompt: str, api_key_hash: str | None) -> ProgramBinding:
+    async def _bind(self, key: ProgramKey, prompt: str) -> ProgramBinding:
         now: Final = self._clock()
         if len(self._bindings) >= min(PROGRAM_SWEEP_THRESHOLD, self.config.max_programs):
             self._evict_expired(now)
-        context: Final = self.context_for(program_id, prompt)
+        context: Final = self.context_for(key.program_id, prompt)
         model: Final = await self.decision_maker.select(context)
         binding: Final = ProgramBinding(
-            program_id=program_id, model=model, context=context, api_key_hash=api_key_hash, bound_at=now
+            program_id=key.program_id, model=model, context=context, api_key_hash=key.owner, bound_at=now
         )
-        self._bindings[program_id] = binding
+        self._bindings[key] = binding
         self.programs_bound += 1
         return binding
 
@@ -230,9 +263,8 @@ class OracleRouter:
         program_id: Final = resolve_program_id(request_kwargs, self.config.program_id_key)
         prompt: Final = first_user_text(messages)
         chosen_model, request_type = await self._decide(program_id, prompt, _api_key_hash(request_kwargs))
-        _, bucket = get_or_create_metadata_bucket(request_kwargs)  # pyright: ignore[reportUnknownVariableType]  # bare dict upstream
-        bucket[CHOSEN_MODEL_METADATA_KEY] = chosen_model
-        bucket[PROGRAM_ID_METADATA_KEY] = program_id
+        _stamp_internal(request_kwargs, CHOSEN_MODEL_METADATA_KEY, chosen_model)
+        _stamp_internal(request_kwargs, PROGRAM_ID_METADATA_KEY, program_id)
         verbose_router_logger.debug(
             "OracleRouter[%s]: program=%s request_type=%s -> %s",
             self.router_name,
@@ -260,13 +292,16 @@ class OracleRouter:
         binding: Final = await self.bind(program_id, prompt, api_key_hash)
         return binding.model, binding.context.request_type
 
-    def observe_request(self, program_id: str, cost: float, response_text: str, messages: object = None) -> None:
+    def observe_request(
+        self, program_id: str, cost: float, response_text: str, messages: object = None, owner: str | None = None
+    ) -> None:
         """Account one finished LLM request of the program: LiteLLM's spend, the latest answer and transcript."""
-        binding: Final = self._bindings.get(program_id)
+        key: Final = ProgramKey(owner, program_id)
+        binding: Final = self._bindings.get(key)
         if binding is None:
             return
         transcript: Final = _transcript(messages, binding.last_messages)
-        self._bindings[program_id] = replace(
+        self._bindings[key] = replace(
             binding,
             requests=binding.requests + 1,
             cost=binding.cost + max(cost, 0.0),
@@ -280,9 +315,10 @@ class OracleRouter:
         score: float | None = None,
         cost: float | None = None,
         payload: Mapping[str, object] = _EMPTY,
+        owner: str | None = None,
     ) -> asyncio.Task[float] | None:
         """Release the program now and verify it in the background; the task resolves to the verified score."""
-        binding: Final = self._bindings.pop(program_id, None)
+        binding: Final = self._bindings.pop(ProgramKey(owner, program_id), None)
         if binding is None:
             return None
         outcome: Final = ProgramOutcome(

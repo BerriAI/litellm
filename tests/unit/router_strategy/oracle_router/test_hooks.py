@@ -34,11 +34,17 @@ class _Maker:
         return {}
 
 
-def _kwargs(program_id="t1", cost=0.01, **metadata):
+ROUTED = {"router_model_name": "oracle", "router_type": "oracle"}  # what the Router stamps for this router
+
+
+def _kwargs(program_id="t1", cost=0.01, routing_decision=ROUTED, **metadata):
+    stamped = {PROGRAM_ID_METADATA_KEY: program_id, **metadata}
+    if routing_decision is not None:
+        stamped["routing_decision"] = routing_decision
     return {
         "model": "openai/gpt-4o",
         "messages": [{"role": "user", "content": "task"}],
-        "litellm_params": {"metadata": {PROGRAM_ID_METADATA_KEY: program_id, **metadata}},
+        "litellm_params": {"metadata": stamped},
         "response_cost": cost,
     }
 
@@ -114,17 +120,50 @@ async def test_events_for_unknown_or_untagged_programs_are_ignored(bound):
 
 
 @pytest.mark.asyncio
+async def test_events_from_requests_this_router_did_not_route_are_ignored(bound):
+    router, maker, hook = bound
+    unrouted = _kwargs(cost=0.5, program_done=True, program_score="1", routing_decision=None)
+    await hook.async_log_success_event(unrouted, _response(), None, None)
+    elsewhere = _kwargs(
+        cost=0.5, program_done=True, program_score="1", routing_decision={**ROUTED, "router_model_name": "x"}
+    )
+    await hook.async_log_success_event(elsewhere, _response(), None, None)
+    assert router.binding("t1").requests == 0 and maker.updates == []
+
+
+@pytest.mark.asyncio
+async def test_events_only_reach_the_program_of_the_key_that_sent_them(bound):
+    router, maker, hook = bound  # t1 was started without a key
+    stranger = _kwargs(cost=0.5, program_done=True, program_score="1", user_api_key_hash="other-key")
+    await hook.async_log_success_event(stranger, _response(), None, None)
+    assert router.binding("t1").requests == 0 and maker.updates == []
+    await router.async_pre_routing_hook(
+        model="oracle",
+        request_kwargs={"metadata": {"program_id": "t1", "user_api_key_hash": "other-key"}},
+        messages=[{"role": "user", "content": "task"}],
+    )
+    await hook.async_log_success_event(stranger, _response(), None, None)
+    assert router.binding("t1", "other-key") is None and router.binding("t1").requests == 0
+    await router.drain()
+    assert maker.updates == [("smart", 1.0)]
+
+
+@pytest.mark.asyncio
 async def test_response_header_names_the_bound_model(bound):
     _, _, hook = bound
     headers = await hook.async_post_call_response_headers_hook(
-        {"metadata": {CHOSEN_MODEL_METADATA_KEY: "smart"}}, None, None
+        {"metadata": {CHOSEN_MODEL_METADATA_KEY: "smart", "routing_decision": ROUTED}}, None, None
     )
     assert headers == {RESPONSE_HEADER: "smart"}
-    assert await hook.async_post_call_response_headers_hook({"metadata": {}}, None, None) is None
+    assert (
+        await hook.async_post_call_response_headers_hook({"metadata": {"routing_decision": ROUTED}}, None, None) is None
+    )
+    forged = {"metadata": {CHOSEN_MODEL_METADATA_KEY: "smart"}}  # a request this router did not route
+    assert await hook.async_post_call_response_headers_hook(forged, None, None) is None
 
 
 @pytest.mark.asyncio
 async def test_response_header_reads_the_litellm_metadata_bucket_too(bound):
     _, _, hook = bound
-    data = {"metadata": {}, "litellm_metadata": {CHOSEN_MODEL_METADATA_KEY: "fast"}}
+    data = {"metadata": {}, "litellm_metadata": {CHOSEN_MODEL_METADATA_KEY: "fast", "routing_decision": ROUTED}}
     assert await hook.async_post_call_response_headers_hook(data, None, None) == {RESPONSE_HEADER: "fast"}

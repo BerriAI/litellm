@@ -98,13 +98,13 @@ async def test_first_request_binds_and_later_requests_reuse_the_binding():
     )
     assert response.routing_decision["router_type"] == "oracle" and response.routing_decision["routed_model"] == "smart"
 
-    later = {"metadata": {"program_id": "t1"}}
+    later = {"metadata": {"program_id": "t1", "user_api_key_hash": "key-1"}}
     again = await router.async_pre_routing_hook(
         model="oracle", request_kwargs=later, messages=_messages("now run the tests")
     )
     assert again is not None and again.model == "smart"
     assert maker.selections == 1
-    assert router.binding("t1").api_key_hash == "key-1"
+    assert router.binding("t1", "key-1").api_key_hash == "key-1"
 
     other = await router.async_pre_routing_hook(
         model="oracle", request_kwargs={"metadata": {"program_id": "t2"}}, messages=_messages()
@@ -152,7 +152,7 @@ async def test_requests_without_a_program_id_route_statelessly_and_never_learn()
     router, maker = _router()
     kwargs = {"metadata": {}}
     response = await router.async_pre_routing_hook(model="oracle", request_kwargs=kwargs, messages=_messages())
-    assert response.model == "smart" and kwargs["metadata"][PROGRAM_ID_METADATA_KEY] is None
+    assert response.model == "smart" and PROGRAM_ID_METADATA_KEY not in kwargs["metadata"]
     assert router.stateless_requests == 1 and router.binding("") is None
     assert router.complete("", score=1.0) is None
 
@@ -238,4 +238,38 @@ async def test_decision_is_stamped_in_the_proxy_internal_bucket_when_one_exists(
     assert response.model == "smart"
     assert kwargs["litellm_metadata"][CHOSEN_MODEL_METADATA_KEY] == "smart"
     assert CHOSEN_MODEL_METADATA_KEY not in kwargs["metadata"]
-    assert router.binding("t1").api_key_hash == "k"
+    assert router.binding("t1", "k").api_key_hash == "k"
+
+
+@pytest.mark.asyncio
+async def test_the_same_program_id_under_another_key_is_another_program():
+    router, maker = _router()
+    for key in ("key-a", "key-b"):
+        await router.async_pre_routing_hook(
+            model="oracle",
+            request_kwargs={"metadata": {"program_id": "t1", "user_api_key_hash": key}},
+            messages=_messages(),
+        )
+    assert router.programs_bound == 2 and maker.selections == 2
+    assert router.binding("t1") is None  # no key: not the same program either
+    assert [binding.api_key_hash for binding in router.bindings_named("t1")] == ["key-a", "key-b"]
+    router.complete("t1", score=1.0, owner="key-b")
+    assert router.binding("t1", "key-a") is not None and router.binding("t1", "key-b") is None
+    await router.drain()
+
+
+@pytest.mark.asyncio
+async def test_pre_routing_hook_replaces_caller_supplied_internal_keys():
+    router, _ = _router()
+    kwargs = {
+        "metadata": {"program_id": "t1", PROGRAM_ID_METADATA_KEY: "victim", CHOSEN_MODEL_METADATA_KEY: "fast"},
+        "litellm_metadata": {PROGRAM_ID_METADATA_KEY: "victim"},
+    }
+    response = await router.async_pre_routing_hook(model="oracle", request_kwargs=kwargs, messages=_messages())
+    assert PROGRAM_ID_METADATA_KEY not in kwargs["metadata"] and CHOSEN_MODEL_METADATA_KEY not in kwargs["metadata"]
+    assert kwargs["litellm_metadata"][PROGRAM_ID_METADATA_KEY] == "t1"
+    assert kwargs["litellm_metadata"][CHOSEN_MODEL_METADATA_KEY] == response.model
+    stateless = {"metadata": {PROGRAM_ID_METADATA_KEY: "victim", CHOSEN_MODEL_METADATA_KEY: "fast"}}
+    await router.async_pre_routing_hook(model="oracle", request_kwargs=stateless, messages=_messages())
+    assert PROGRAM_ID_METADATA_KEY not in stateless["metadata"]
+    assert stateless["metadata"][CHOSEN_MODEL_METADATA_KEY] in ("smart", "fast")

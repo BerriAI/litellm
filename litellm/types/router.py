@@ -1258,7 +1258,8 @@ class OracleDecisionMakerConfig(BaseModel):
     are that bandit's quality/cost weights. ``fixed`` always picks ``model``. ``pre_routing`` lets the strategy
     router named by ``router`` (a complexity, quality, adaptive or semantic router in the same model_list)
     propose the model once per program. ``custom`` imports ``path`` (``package.module:Factory``) and calls it
-    with the model tuple.
+    with the model tuple; it is honoured only for deployments in the proxy config file, never for models
+    written through the API.
     """
 
     type: OracleDecisionMakerType = "thompson"
@@ -1283,7 +1284,8 @@ class OracleVerifierConfig(BaseModel):
     ``guardrail`` applies the configured LiteLLM guardrail ``guardrail`` (for example an ``llm_as_a_judge``
     guardrail) to the program's final turn with the transcript as context. ``reported`` trusts
     ``metadata.program_score`` or the feedback endpoint. ``custom`` imports ``path`` and calls it with no
-    arguments.
+    arguments; it is honoured only for deployments in the proxy config file, never for models written
+    through the API.
     """
 
     type: OracleVerifierType = "reported"

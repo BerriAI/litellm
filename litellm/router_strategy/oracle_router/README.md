@@ -51,6 +51,19 @@ verifier), or call `POST /oracle_router/feedback {"program_id": ..., "score": ..
 the harness once the task is graded. `GET /oracle_router/state` (admin) shows bindings, decision-maker
 state and recent feedback. The response header `x-litellm-oracle-router-model` names the bound model.
 
+## Security
+
+A program is private to the API key that started it: the same `program_id` under another key is another
+program, so no caller can ride on, observe or complete someone else's binding. `POST /oracle_router/feedback`
+completes the caller's own program; an admin key may complete any key's. The post-call hook only reads
+requests the Router stamped as routed by this router (`routing_decision`), so ORACLE keys placed in the
+metadata of a request to some other model are ignored, and the router drops any caller-supplied copy of
+its internal metadata keys before stamping its own.
+
+`custom` decision makers and verifiers import Python named by the deployment, so they are honoured only
+for deployments in the proxy config file. A model written through the API (`/model/new`, `/model/update`,
+whatever the caller's role) with a `custom` type is rejected when the router is built and never imported.
+
 ## Limits
 
 State is in memory per proxy process; it is not persisted or shared across replicas. The paper's

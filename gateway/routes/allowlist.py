@@ -116,6 +116,8 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     # Realtime / streaming
     "/v1/realtime",
     "/realtime",
+    # ORACLE router feedback and state: the program bindings live in the serving process
+    "/oracle_router/",
     # Health & ops
     "/health",
     "/metrics",
