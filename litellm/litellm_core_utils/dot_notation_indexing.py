@@ -28,6 +28,9 @@ from typing import Any, Final, TypeVar
 
 T = TypeVar("T")
 
+_MISSING: Final = object()
+"""Sentinel for "this path does not resolve", distinct from any caller default."""
+
 
 def get_nested_value(data: Mapping[str, object], key_path: str, default: T | None = None) -> T | None:
     """
@@ -54,29 +57,45 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
     if not key_path:
         return default
 
-    # Remove metadata. prefix if it exists
-    key_path = key_path.replace("metadata.", "", 1) if key_path.startswith("metadata.") else key_path
-
     # Split the key path into parts, respecting escaped dots (\.)
     # Use a temporary placeholder, split on unescaped dots, then restore
     placeholder: Final = "\x00"
-    parts = key_path.replace("\\.", placeholder).split(".")
-    parts = [p.replace(placeholder, ".") for p in parts]
 
-    # Traverse through the dictionary
-    current: Any = data
-    for part in parts:
-        try:
-            current = current[part]
-        except (KeyError, TypeError):
-            return default
+    def _resolve(path: str) -> Any:
+        parts = path.replace("\\.", placeholder).split(".")
+        current: Any = data
+        for part in parts:
+            part = part.replace(placeholder, ".")
+            try:
+                current = current[part]
+            except (KeyError, TypeError):
+                return _MISSING
+        return current
+
+    found = _resolve(key_path)
+
+    # Historically a leading "metadata." was stripped unconditionally, so that
+    # `roles_jwt_field: "metadata.roles"` also matched a token carrying `roles`
+    # at the top level. Stripping it up front also made a genuinely nested
+    # `metadata` object unreachable: the path became `roles`, which is absent,
+    # so the claim read as missing and JWT auth fell back to its defaults --
+    # get_team_id() then places the caller in `team_id_default` rather than the
+    # team they named. Try the path as written first and keep the legacy
+    # spelling working as a fallback, so both token shapes resolve.
+    if found is _MISSING and key_path.startswith("metadata."):
+        without_prefix: Final = key_path[len("metadata.") :]
+        if without_prefix:
+            found = _resolve(without_prefix)
+
+    if found is _MISSING:
+        return default
 
     # If default is None, we can return any type
     if default is None:
-        return current
+        return found
 
     # Otherwise, ensure the type matches the default
-    return current if isinstance(current, type(default)) else default
+    return found if isinstance(found, type(default)) else default
 
 
 def _parse_path_segments(path: str) -> list:
