@@ -76,6 +76,18 @@ class Evidence(Record):
     role: Literal["support", "counterexample"] = "support"
 
 
+class AgentTestCase(Record):
+    input: str = Field(min_length=1, max_length=1000)
+    expected: str = Field(min_length=1, max_length=1000)
+
+
+class IssueBrief(Record):
+    problem: str = Field(min_length=10, max_length=400)
+    user_goal: str = Field(min_length=3, max_length=400)
+    what_happened: str = Field(min_length=3, max_length=1500)
+    test_cases: tuple[AgentTestCase, ...] = Field(min_length=1, max_length=5)
+
+
 class FindingDraft(Record):
     title: str = Field(min_length=3, max_length=160)
     description: str = Field(min_length=10, max_length=4000)
@@ -84,6 +96,7 @@ class FindingDraft(Record):
     priority: Literal["high", "medium", "low"] = "medium"
     suggestion: str = Field(default="", max_length=2000)
     limitation: str = Field(default="", max_length=600)
+    brief: IssueBrief | None = None
     evidence: tuple[Evidence, ...] = Field(min_length=1, max_length=20)
     existing_finding_id: str | None = None
 
