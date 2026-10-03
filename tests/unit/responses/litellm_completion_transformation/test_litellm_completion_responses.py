@@ -5159,6 +5159,61 @@ def test_transform_chat_completion_response_incomplete_details():
     assert result_existing.incomplete_details == existing_details
 
 
+def test_transform_chat_completion_response_null_finish_reason_is_incomplete():
+    """
+    A choice with no finish signal (e.g. Gemini thinking consuming the whole
+    output budget, or a provider that never sent one) must not report
+    status "completed". Output at the requested cap reads as
+    max_output_tokens; below it, no reason can be claimed.
+    """
+    # finish_reason=None forced after construction: Choices.__init__ coerces
+    # None to "stop", which is exactly why a real None only shows up in
+    # abnormal responses.
+    resp_at_cap = ModelResponse(
+        id="resp-null-cap",
+        choices=[Choices(index=0, finish_reason="stop", message=Message(content="", role="assistant"))],
+        model="gemini-2.5-pro",
+        usage=Usage(prompt_tokens=10, completion_tokens=60, total_tokens=70),
+    )
+    resp_at_cap.choices[0].finish_reason = None
+    result_at_cap = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={"max_output_tokens": 60},
+        chat_completion_response=resp_at_cap,
+    )
+    # Output hit the cap with no finish signal: truncated, reason inferred
+    # from usage rather than claimed by the provider.
+    assert result_at_cap.status == "incomplete"
+    assert result_at_cap.incomplete_details is not None
+    assert result_at_cap.incomplete_details.reason == "max_output_tokens"
+
+    # Below the cap the response still ended without a finish signal, so it
+    # is incomplete, but no reason can be inferred.
+    resp_under_cap = ModelResponse(
+        id="resp-null-under",
+        choices=[Choices(index=0, finish_reason="stop", message=Message(content="", role="assistant"))],
+        model="gemini-2.5-pro",
+        usage=Usage(prompt_tokens=10, completion_tokens=30, total_tokens=40),
+    )
+    resp_under_cap.choices[0].finish_reason = None
+    result_under_cap = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={"max_output_tokens": 60},
+        chat_completion_response=resp_under_cap,
+    )
+    assert result_under_cap.status == "incomplete"
+    assert result_under_cap.incomplete_details is None
+
+    # Provider returned no candidates at all: nothing completed.
+    resp_empty = ModelResponse(id="resp-empty", choices=[], model="gemini-2.5-pro")
+    result_empty = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_empty,
+    )
+    assert result_empty.status == "incomplete"
+
+
 @pytest.mark.parametrize("stream", [True, False])
 async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool):
     with pytest.raises(litellm.BadRequestError) as exc_info:

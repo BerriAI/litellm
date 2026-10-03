@@ -2258,7 +2258,9 @@ class LiteLLMCompletionResponsesConfig:
             The corresponding responses API status value (one of ResponsesAPIStatus)
         """
         if finish_reason is None:
-            return "completed"
+            # No finish signal (empty choices, or a provider that never sent
+            # one) means we cannot claim the response completed.
+            return "incomplete"
 
         # Map finish reasons to status
         if finish_reason in ["stop", "tool_calls", "function_call"]:
@@ -2273,11 +2275,20 @@ class LiteLLMCompletionResponsesConfig:
     def _incomplete_details_for_finish_reason(
         finish_reason: str | None,
         existing: IncompleteDetails | None,
+        completion_tokens: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> IncompleteDetails | None:
         if existing is not None:
             return existing
         if finish_reason is None:
-            return None
+            # With no finish signal we cannot name a reason, but output at the
+            # requested cap was almost certainly truncated by it.
+            hit_cap: Final = (
+                completion_tokens is not None
+                and max_output_tokens is not None
+                and completion_tokens >= max_output_tokens
+            )
+            return IncompleteDetails(reason="max_output_tokens") if hit_cap else None
         reason: Final = _INCOMPLETE_REASON_BY_FINISH_REASON.get(finish_reason)
         return IncompleteDetails(reason=reason) if reason is not None else None
 
@@ -2397,9 +2408,12 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
+        chat_usage: Final = getattr(chat_completion_response, "usage", None)
         incomplete_details: Final = LiteLLMCompletionResponsesConfig._incomplete_details_for_finish_reason(
             finish_reason=finish_reason,
             existing=getattr(chat_completion_response, "incomplete_details", None),
+            completion_tokens=getattr(chat_usage, "completion_tokens", None),
+            max_output_tokens=responses_api_request.get("max_output_tokens"),
         )
 
         responses_api_response: Final[ResponsesAPIResponse] = ResponsesAPIResponse(
