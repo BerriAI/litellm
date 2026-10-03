@@ -105,6 +105,7 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
 #[case::large_rows(1, 280, 20_000, false)]
 #[case::large_cached_snapshot(1, 280, 140_000, false)]
 #[case::many_costs(1, 1101, 0, true)]
+#[case::many_costed_runs(500, 2, 0, true)]
 #[tokio::test]
 async fn large_runs_remain_complete_under_default_reader_limits(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
@@ -116,9 +117,9 @@ async fn large_runs_remain_complete_under_default_reader_limits(
     let fixture = migrated_database?;
     let client = &fixture.database.client;
     let writer = Connection::writer(&fixture.database.url)?;
-    for run in 0..runs {
-        let rows = (0..steps)
-            .map(|step| {
+    let rows = (0..runs)
+        .flat_map(|run| {
+            (0..steps).map(move |step| {
                 BTreeMap::from([
                     (
                         "Timestamp".into(),
@@ -161,17 +162,17 @@ async fn large_runs_remain_complete_under_default_reader_limits(
                     ),
                 ])
             })
-            .collect::<Vec<_>>();
-        for chunk in rows.chunks(100) {
-            insert_rows(
-                client,
-                &writer,
-                DATABASE,
-                InsertTable::OtelTraces,
-                chunk.to_vec(),
-            )
-            .await?;
-        }
+        })
+        .collect::<Vec<_>>();
+    for chunk in rows.chunks(100) {
+        insert_rows(
+            client,
+            &writer,
+            DATABASE,
+            InsertTable::OtelTraces,
+            chunk.to_vec(),
+        )
+        .await?;
     }
     if costed {
         let costs = (1..steps)
@@ -198,8 +199,13 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         user_id: String::new(),
         team_ids: vec!["team-a".into()],
     };
-    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 500).await?;
     assert_eq!(page.data.len(), runs);
+    assert!(
+        page.data
+            .windows(2)
+            .all(|runs| runs[0].trace_ref > runs[1].trace_ref)
+    );
     if runs > 1 {
         client
             .post(writer.url().clone())
@@ -215,6 +221,36 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             read_queries > 0 && read_queries < runs,
             "{read_queries} span queries for {runs} runs"
         );
+        if costed {
+            let overlapping = client
+                .post(writer.url().clone())
+                .body(format!(
+                    "WITH spend_reads AS (
+                        SELECT query_start_time_microseconds AS started, event_time_microseconds AS finished
+                        FROM system.query_log
+                        WHERE type = 'QueryFinish' AND current_database = '{DATABASE}'
+                          AND query LIKE '%FROM spend_logs FINAL%' AND query NOT LIKE '%system.query_log%'
+                    ), events AS (
+                        SELECT started AS at, 1 AS delta FROM spend_reads
+                        UNION ALL SELECT finished AS at, -1 AS delta FROM spend_reads
+                    )
+                    SELECT max(active) FROM (
+                        SELECT sum(delta) OVER (ORDER BY at, delta ROWS UNBOUNDED PRECEDING) AS active
+                        FROM events
+                    )"
+                ))
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?
+                .trim()
+                .parse::<usize>()?;
+            assert!(
+                (2..=4).contains(&overlapping),
+                "{overlapping} simultaneous spend reads for {runs} runs"
+            );
+        }
     }
     for summary in &page.data {
         assert_eq!(summary.span_count, steps as u64);

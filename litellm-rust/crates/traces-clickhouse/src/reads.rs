@@ -1,10 +1,11 @@
 //! Scoped trace reads: the trace list, one trace resolved with its spend, and span payloads.
 
-use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE};
+use futures_util::{StreamExt, TryStreamExt, stream};
+use itertools::Itertools;
 use litellm_http::Client;
 use litellm_storage_clickhouse::{Query, fetch};
 use litellm_traces::{
@@ -52,6 +53,7 @@ static TRACE_SNAPSHOTS: LazyLock<Cache<String, Arc<Trace>>> = LazyLock::new(|| {
 
 const NANOS_PER_MS: i64 = 1_000_000;
 const SPEND_WINDOW_MS: i64 = 30 * 60 * 1000;
+const SPEND_CONCURRENCY: usize = 4;
 
 fn encode_cursor<T: Serialize>(position: &T) -> String {
     URL_SAFE.encode(serde_json::to_vec(position).unwrap_or_default())
@@ -195,28 +197,13 @@ pub async fn list_traces(
         .last()
         .filter(|_| page.len() == params.0.limit as usize)
         .map(|last| encode_cursor(&(last.start_ms, &last.trace_ref)));
-    let mut data = Vec::with_capacity(page.len());
-    for batch in page.chunks(16) {
-        match list_summaries(client, connection, access, batch).await {
-            Ok(summaries) => data.extend(summaries),
-            Err(Error::ReadTooLarge) => {
-                for row in batch {
-                    let summary =
-                        match get_trace(client, connection, access, &row.trace_id, &row.trace_ref)
-                            .await
-                        {
-                            Ok(trace) => {
-                                trace.map_or_else(|| listed_summary(row), |trace| trace.summary)
-                            }
-                            Err(Error::ReadTooLarge) => listed_summary(row),
-                            Err(error) => return Err(error),
-                        };
-                    data.push(summary);
-                }
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    let data = stream::iter(page.chunks(16))
+        .then(|batch| list_summaries(client, connection, access, batch))
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .flatten()
+        .collect();
     Ok(TracePage { data, next_cursor })
 }
 
@@ -240,33 +227,54 @@ async fn list_summaries(
         start_ms,
         end_ms: end_ms.saturating_add(1),
     });
-    let spans = crate::span_batches::read_list_spans(client, connection, params).await?;
-    let mut by_trace: HashMap<_, Vec<_>> = HashMap::new();
-    for span in spans {
-        let key = (
+    let spans = match crate::span_batches::read_list_spans(client, connection, params).await {
+        Ok(spans) => spans,
+        Err(Error::ReadTooLarge) => {
+            return stream::iter(runs)
+                .then(|row| async move {
+                    match get_trace(client, connection, access, &row.trace_id, &row.trace_ref).await
+                    {
+                        Ok(trace) => {
+                            Ok(trace.map_or_else(|| listed_summary(row), |trace| trace.summary))
+                        }
+                        Err(Error::ReadTooLarge) => Ok(listed_summary(row)),
+                        Err(error) => Err(error),
+                    }
+                })
+                .try_collect()
+                .await;
+        }
+        Err(error) => return Err(error),
+    };
+    let by_trace = spans.into_iter().into_group_map_by(|span| {
+        (
             span.team_id.clone(),
             span.api_key_hash.clone(),
             span.trace_id.clone(),
-        );
-        by_trace.entry(key).or_default().push(span);
-    }
-    let mut summaries = Vec::with_capacity(runs.len());
-    for row in runs {
-        let spans = by_trace
-            .get(&(
-                row.team_id.clone(),
-                row.api_key_hash.clone(),
-                row.trace_id.clone(),
-            ))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let spend_rows = spend(client, connection, access, spans).await;
-        summaries.push(
-            resolve_trace(&row.trace_id, &row.trace_ref, spans, &spend_rows)
-                .map_or_else(|| listed_summary(row), |trace| trace.summary),
-        );
-    }
-    Ok(summaries)
+        )
+    });
+    let summaries = runs
+        .iter()
+        .map(|row| {
+            let spans = by_trace
+                .get(&(
+                    row.team_id.clone(),
+                    row.api_key_hash.clone(),
+                    row.trace_id.clone(),
+                ))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            async move {
+                let spend_rows = spend(client, connection, access, spans).await;
+                resolve_trace(&row.trace_id, &row.trace_ref, spans, &spend_rows)
+                    .map_or_else(|| listed_summary(row), |trace| trace.summary)
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(stream::iter(summaries)
+        .buffered(SPEND_CONCURRENCY)
+        .collect()
+        .await)
 }
 
 pub async fn get_trace(

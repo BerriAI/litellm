@@ -1,3 +1,5 @@
+use futures_util::{TryStreamExt, stream};
+use itertools::Itertools;
 use litellm_http::Client;
 use litellm_storage_clickhouse::{Query, fetch};
 use litellm_traces::query::named as contracts;
@@ -16,18 +18,21 @@ struct ReadBudget {
 }
 
 impl ReadBudget {
-    fn reserve(&mut self, bytes: usize) -> Result<(), Error> {
-        self.bytes = self.bytes.saturating_add(bytes);
-        if self.bytes > MAX_GRAPH_BYTES || self.rows == MAX_GRAPH_SPANS {
+    fn checked_add(&self, bytes: usize, rows: usize) -> Result<Self, Error> {
+        let next = Self {
+            bytes: self.bytes.saturating_add(bytes),
+            rows: self.rows.saturating_add(rows),
+        };
+        if next.bytes > MAX_GRAPH_BYTES || next.rows > MAX_GRAPH_SPANS {
             return Err(Error::ReadTooLarge);
         }
-        self.rows += 1;
-        Ok(())
+        Ok(next)
     }
 
     fn record(&mut self, row: &impl Serialize) -> Result<(), Error> {
         let bytes = serde_json::to_vec(row).map_err(|_| Error::InvalidResponse)?;
-        self.reserve(bytes.len())
+        *self = self.checked_add(bytes.len(), 1)?;
+        Ok(())
     }
 }
 
@@ -118,7 +123,7 @@ pub(crate) async fn read_list_spans(
     connection: &Connection,
     runs: crate::query::named::TracePageSpansParams,
 ) -> Result<Vec<contracts::TraceSpansRow>, Error> {
-    let mut parameters = ListParameters {
+    let parameters = ListParameters {
         runs,
         after_team: String::new(),
         after_key: String::new(),
@@ -127,38 +132,53 @@ pub(crate) async fn read_list_spans(
         page_size: PAGE_SIZE,
         snapshot_ms: (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64,
     };
-    let mut spans = Vec::new();
-    let mut budget = ReadBudget::default();
-    loop {
-        let page = match fetch::<ListSpanBatch>(client, connection, &parameters).await {
-            Err(litellm_storage_clickhouse::Error::ResponseTooLarge)
-                if parameters.page_size > 1 =>
-            {
-                parameters.page_size /= 2;
-                continue;
-            }
-            Err(litellm_storage_clickhouse::Error::ResponseTooLarge) => {
-                return Err(Error::ReadTooLarge);
-            }
-            result => result?,
-        };
-        let complete = page.len() < parameters.page_size as usize;
-        if let Some(last) = page.last() {
-            parameters.after_team.clone_from(&last.0.team_id);
-            parameters.after_key.clone_from(&last.0.api_key_hash);
-            parameters.after_trace.clone_from(&last.0.trace_id);
-            parameters.after_span.clone_from(&last.0.span_id);
-        }
-        for row in page {
-            budget.record(&row)?;
-            spans.push(row.0);
-        }
-        if complete {
-            spans.sort_by_key(|row| row.start_ns);
-            return Ok(spans);
-        }
-        parameters.page_size = (parameters.page_size * 2).min(PAGE_SIZE);
-    }
+    let pages = stream::try_unfold(
+        (Some(parameters), ReadBudget::default()),
+        |(parameters, budget)| async move {
+            let Some(parameters) = parameters else {
+                return Ok(None);
+            };
+            let page = match fetch::<ListSpanBatch>(client, connection, &parameters).await {
+                Err(litellm_storage_clickhouse::Error::ResponseTooLarge)
+                    if parameters.page_size > 1 =>
+                {
+                    let retry = ListParameters {
+                        page_size: parameters.page_size / 2,
+                        ..parameters
+                    };
+                    return Ok(Some((Vec::new(), (Some(retry), budget))));
+                }
+                Err(litellm_storage_clickhouse::Error::ResponseTooLarge) => {
+                    return Err(Error::ReadTooLarge);
+                }
+                result => result?,
+            };
+            let next = page
+                .last()
+                .filter(|_| page.len() == parameters.page_size as usize)
+                .map(|last| ListParameters {
+                    after_team: last.0.team_id.clone(),
+                    after_key: last.0.api_key_hash.clone(),
+                    after_trace: last.0.trace_id.clone(),
+                    after_span: last.0.span_id.clone(),
+                    page_size: (parameters.page_size * 2).min(PAGE_SIZE),
+                    ..parameters
+                });
+            let next_budget = page.iter().try_fold(budget, |budget, row| {
+                let bytes = serde_json::to_vec(row).map_err(|_| Error::InvalidResponse)?;
+                budget.checked_add(bytes.len(), 1)
+            })?;
+            Ok(Some((page, (next, next_budget))))
+        },
+    )
+    .try_collect::<Vec<_>>()
+    .await?;
+    Ok(pages
+        .into_iter()
+        .flatten()
+        .map(|row| row.0)
+        .sorted_by_key(|row| row.start_ns)
+        .collect())
 }
 
 #[derive(Serialize)]
@@ -244,7 +264,7 @@ mod tests {
         #[case] next: usize,
         #[case] rejected: bool,
     ) {
-        let mut budget = ReadBudget { bytes, rows };
-        assert_eq!(budget.reserve(next).is_err(), rejected);
+        let budget = ReadBudget { bytes, rows };
+        assert_eq!(budget.checked_add(next, 1).is_err(), rejected);
     }
 }
