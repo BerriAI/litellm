@@ -8,7 +8,7 @@ import httpx
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -138,12 +138,22 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             if isinstance(raw_usage, dict):
                 cache_read = raw_usage.get("cache_read_input_tokens")
                 if cache_read is not None:
-                    setattr(returned_response.usage, "cache_read_input_tokens", cache_read)
-                    setattr(returned_response.usage, "_cache_read_input_tokens", cache_read)
+                    object.__setattr__(returned_response.usage, "_cache_read_input_tokens", cache_read)
+                    if returned_response.usage.prompt_tokens_details is None:
+                        returned_response.usage.prompt_tokens_details = PromptTokensDetailsWrapper(
+                            cached_tokens=cache_read
+                        )
+                    else:
+                        returned_response.usage.prompt_tokens_details.cached_tokens = cache_read
                 cache_creation = raw_usage.get("cache_creation_input_tokens")
                 if cache_creation is not None:
-                    setattr(returned_response.usage, "cache_creation_input_tokens", cache_creation)
-                    setattr(returned_response.usage, "_cache_creation_input_tokens", cache_creation)
+                    object.__setattr__(returned_response.usage, "_cache_creation_input_tokens", cache_creation)
+                    if returned_response.usage.prompt_tokens_details is None:
+                        returned_response.usage.prompt_tokens_details = PromptTokensDetailsWrapper(
+                            cache_write_tokens=cache_creation
+                        )
+                    else:
+                        returned_response.usage.prompt_tokens_details.cache_write_tokens = cache_creation
 
         return returned_response
 
