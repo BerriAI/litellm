@@ -2222,6 +2222,7 @@ if TYPE_CHECKING:
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
     get_model_info: Callable[..., _ModelInfoType]
+    get_priced_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]
