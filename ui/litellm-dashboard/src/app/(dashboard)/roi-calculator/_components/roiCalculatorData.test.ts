@@ -66,7 +66,7 @@ describe("ROI calculator display helpers", () => {
   it("labels estimates and filters PRs by title, repository, number, or login", () => {
     const matchingPull = pull({});
     expect(estimateLabel(matchingPull.estimate)).toBe("4.5 hrs");
-    const incompleteEstimate = { status: "needs_review", hours: null, reasoning: "", cached: false };
+    const incompleteEstimate = { status: "needs_review" as const, hours: null, reasoning: "", cached: false };
     expect(estimateLabel(incompleteEstimate)).toBe("Needs review");
     expect(filterPulls([matchingPull], "ROUTING")).toEqual([matchingPull]);
     expect(filterPulls([matchingPull], "nobody")).toEqual([]);

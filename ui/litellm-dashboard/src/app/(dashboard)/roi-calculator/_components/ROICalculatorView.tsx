@@ -204,6 +204,8 @@ export default function ROICalculatorView({
       });
       setSampleSummary(response.report);
       setView("overview");
+      setCostView("branches");
+      setQuery("");
     } catch (reason) {
       setError(extractErrorMessage(reason));
     }
@@ -230,24 +232,26 @@ export default function ROICalculatorView({
             <Calculator />
             ROI Calculator
           </PageHeaderTitle>
-          {summary && !sampleSummary && (
+          {!sampleSummary && (
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={() => setSettingsOpen(true)}>
-                <Settings2 />
-                Settings
-              </Button>
-              {!readOnly && (
+              {showLiveStatus && (
+                <Button variant="ghost" onClick={() => void previewSample()}>
+                  Preview sample report
+                </Button>
+              )}
+              {summary && (
+                <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+                  <Settings2 />
+                  Settings
+                </Button>
+              )}
+              {summary && !readOnly && (
                 <Button onClick={() => void startSync()} disabled={status.running || !settings.ready}>
                   <RefreshCw className={status.running ? "animate-spin" : ""} />
                   {status.running ? "Syncing…" : "Run analysis"}
                 </Button>
               )}
             </div>
-          )}
-          {!liveSummary && showLiveStatus && (
-            <Button variant="outline" onClick={() => void previewSample()}>
-              Preview sample report
-            </Button>
           )}
         </div>
         <PageHeaderDescription className="flex flex-wrap items-center gap-x-4 gap-y-1">

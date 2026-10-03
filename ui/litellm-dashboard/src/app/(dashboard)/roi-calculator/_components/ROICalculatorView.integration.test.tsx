@@ -279,6 +279,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
+    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
     expect(screen.getByText("Cost / estimated hour")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
@@ -287,6 +288,55 @@ describe("ROICalculatorView", () => {
 
     expect(screen.getByRole("heading", { name: "Connect your repositories" })).toBeVisible();
     expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(apiClient.put).not.toHaveBeenCalled();
+  });
+
+  it("opens sample PR costs from a live report and restores the live data on exit", async () => {
+    const samplePull = {
+      ...summary.pulls[0],
+      title: "Sample usage breakdown",
+      source_repo: "github.com/org/repo",
+      source_branch: "feature/usage",
+      branch_cost: {
+        status: "matched",
+        spend: 9.1,
+        requests: 75,
+        repo: "github.com/org/repo",
+        branch: "feature/usage",
+      },
+    };
+    vi.mocked(apiClient.get).mockImplementation((path: string, options) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (path === "/roi-calculator/report") {
+        return Promise.resolve({
+          report: options?.query?.mode === "demo" ? { ...summary, mode: "demo", pulls: [samplePull] } : summary,
+        });
+      }
+      return Promise.resolve(idleStatus);
+    });
+
+    render(<ROICalculatorView accessToken="token" />);
+    fireEvent.change(await screen.findByRole("searchbox"), { target: { value: "no matching PR" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview sample report" }));
+
+    expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
+    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(screen.getByRole("cell", { name: "$9.10" })).toBeVisible();
+    expect(screen.queryByText("Improve request routing")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" }));
+    expect(await screen.findByRole("dialog")).toBeVisible();
+    expect(screen.getByText("75 requests")).toBeVisible();
+    expect(screen.getByText(/branch:feature\/usage/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Exit demo" }));
+
+    expect(screen.getByText("Improve request routing")).toBeVisible();
+    expect(screen.queryByText("Sample usage breakdown")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run analysis" })).toBeVisible();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.put).not.toHaveBeenCalled();
   });

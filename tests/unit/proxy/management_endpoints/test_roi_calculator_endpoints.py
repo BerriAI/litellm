@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from math import isclose
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -23,7 +24,7 @@ from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
 )
 from litellm.proxy.roi_calculator.estimator import estimator_options
 from litellm.proxy.roi_calculator.sample import sample_report
-from litellm.types.roi_calculator import ROIReport, ROISettings, ROISyncStatus
+from litellm.types.roi_calculator import ROIReport, ROISettings, ROISummaryResponse, ROISyncStatus
 
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
 
@@ -209,8 +210,16 @@ def test_sample_preview_does_not_change_live_settings_or_report() -> None:
     client: Final = _client(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, repository)
     response: Final = client.get("/roi-calculator/report", params={"mode": "demo"})
     assert response.status_code == 200
-    assert response.json()["report"]["mode"] == "demo"
-    assert response.json()["report"]["metrics"]["cost_per_hour"] > 0
+    report: Final = ROISummaryResponse.model_validate(response.json()["report"])
+    assert report.mode == "demo"
+    assert report.metrics.cost_per_hour is not None and report.metrics.cost_per_hour > 0
+    assert all(pull.branch_cost.status == "matched" and (pull.branch_cost.spend or 0) > 0 for pull in report.pulls)
+    assert any(not pull.matched for pull in report.pulls)
+    assert isclose(report.branch_metrics.spend, sum(pull.branch_cost.spend or 0 for pull in report.pulls))
+    assert report.branch_metrics.unlinked_spend > 0
+    assert isclose(
+        report.branch_metrics.total_tagged_spend, report.branch_metrics.spend + report.branch_metrics.unlinked_spend
+    )
     assert not repository.values
     assert client.get("/roi-calculator/report").json()["report"] is None
 
