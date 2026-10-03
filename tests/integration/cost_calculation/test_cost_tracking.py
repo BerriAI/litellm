@@ -269,7 +269,9 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
         if case.endpoint == "/v1/decisions":
-            observed: Final = gateway.get("/__observations")
+            observed: Final = JSON_OBJECT.validate_json(
+                httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
+            )
             decision_observations: Final = tuple(
                 value
                 for value in observed["requests"]
