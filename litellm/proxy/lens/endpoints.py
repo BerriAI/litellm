@@ -49,8 +49,10 @@ from litellm.proxy.lens.state import (
     claim_job,
     current_job,
     merge_finding,
+    next_scan_start,
     queue_job,
     replace_job,
+    scheduled_window,
     snapshot_finding,
 )
 from litellm.proxy.tracing_runtime import provide_storage
@@ -284,6 +286,14 @@ async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
     )
 
 
+def run_window(lens: Lens, body: RunRequest, now: datetime) -> tuple[datetime, datetime] | None:
+    if body.start is not None and body.end is not None:
+        return body.start, body.end
+    if body.lookback_hours is None and body.settings is None:
+        return scheduled_window(lens, now)
+    return None
+
+
 def run_settings(lens: Lens, body: RunRequest) -> LensSettings | None:
     if body.agent_name is None:
         return body.settings
@@ -307,7 +317,8 @@ async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
                 job_id,
                 body.lookback_hours,
                 run_settings(e, body),
-                (body.start, body.end) if body.start is not None and body.end is not None else None,
+                run_window(e, body, now),
+                "manual",
             ),
         )
     )
@@ -604,7 +615,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
             update=MappingProxyType(
                 {
                     "findings": (*merged, *(f for f in e.findings if f.id not in merged_ids)),
-                    "last_scan_at": e.last_scan_at if body.error else max(e.last_scan_at or job.end, job.end),
+                    "last_scan_at": next_scan_start(e, job, failed=bool(body.error)),
                     "next_run_at": now + timedelta(minutes=e.settings.interval_minutes),
                 }
             )
