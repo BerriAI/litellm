@@ -1139,3 +1139,37 @@ def test_reasoning_content_survives_the_mapping(logger: DataDogLLMObsLogger) -> 
     )
 
     assert payload["meta"]["output"]["messages"][0]["reasoning_content"] == "thinking"
+
+
+def test_embedding_span_sets_top_level_model_name(logger: DataDogLLMObsLogger) -> None:
+    """Datadog prices embedding spans from meta.model_name, not meta.metadata (issue #41601)."""
+    kwargs = build_payload(messages=None)
+    kwargs["standard_logging_object"]["call_type"] = "aembedding"
+    kwargs["standard_logging_object"]["model"] = "openai/text-embedding-3-small"
+    kwargs["standard_logging_object"]["custom_llm_provider"] = "openai"
+    kwargs["standard_logging_object"]["response"] = {"data": [{"embedding": [0.1, 0.2]}]}
+    kwargs["litellm_params"]["metadata"]["parent_id"] = "parent-span-1"
+
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    span = json.loads(safe_dumps(logger.create_llm_obs_payload(kwargs, start, start + timedelta(seconds=1))))
+
+    assert span["meta"]["kind"] == "embedding"
+    assert span["meta"]["model_name"] == "openai/text-embedding-3-small"
+    assert span["meta"]["model_provider"] == "openai"
+    # Still present under metadata for backwards compatibility.
+    assert span["meta"]["metadata"]["model_name"] == "openai/text-embedding-3-small"
+    assert span["meta"]["metadata"]["model_provider"] == "openai"
+
+
+def test_llm_span_sets_top_level_model_name(logger: DataDogLLMObsLogger) -> None:
+    """llm spans must keep top-level model_name/model_provider for Datadog cost attribution."""
+    kwargs = build_payload()
+    kwargs["standard_logging_object"]["model"] = "openai/gpt-4.1-mini"
+    kwargs["standard_logging_object"]["custom_llm_provider"] = "openai"
+
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    span = json.loads(safe_dumps(logger.create_llm_obs_payload(kwargs, start, start + timedelta(seconds=1))))
+
+    assert span["meta"]["kind"] == "llm"
+    assert span["meta"]["model_name"] == "openai/gpt-4.1-mini"
+    assert span["meta"]["model_provider"] == "openai"
