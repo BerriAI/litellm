@@ -7,7 +7,6 @@ Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
 
-import os
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -98,13 +97,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
-        effective_api_base = (
-            api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        effective_api_base = self.authenticator.get_api_base(api_base) or DEFAULT_GITHUB_COPILOT_API_BASE
 
         # Remove trailing slashes
         effective_api_base = effective_api_base.rstrip("/")

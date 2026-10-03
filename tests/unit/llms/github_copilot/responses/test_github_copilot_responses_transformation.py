@@ -7,8 +7,8 @@ transformations for the Responses API.
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
-from unittest.mock import patch, MagicMock
-
+import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 import litellm
@@ -53,7 +53,9 @@ class TestGithubCopilotResponsesAPITransformation:
         """Test that get_complete_url returns correct GitHub Copilot endpoint"""
         # Mock authenticator to return default base
         mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_base.return_value = "https://api.individual.githubcopilot.com"
+        mock_auth_instance.get_api_base.side_effect = lambda api_base=None: (
+            api_base or "https://api.individual.githubcopilot.com"
+        )
         mock_authenticator_class.return_value = mock_auth_instance
 
         config = GithubCopilotResponsesAPIConfig()
@@ -64,36 +66,89 @@ class TestGithubCopilotResponsesAPITransformation:
             f"Expected GitHub Copilot responses endpoint, got {url}"
         )
 
-        # Test with custom api_base (overrides authenticator)
-        custom_url = config.get_complete_url(api_base="https://custom.githubcopilot.com", litellm_params={})
-        assert custom_url == "https://custom.githubcopilot.com/responses", f"Expected custom endpoint, got {custom_url}"
+        custom_url = config.get_complete_url(api_base="https://api.business.githubcopilot.com", litellm_params={})
+        assert custom_url == "https://api.business.githubcopilot.com/responses"
 
-        # Test with trailing slash
         url_with_slash = config.get_complete_url(api_base="https://api.githubcopilot.com/", litellm_params={})
-        assert url_with_slash == "https://api.githubcopilot.com/responses", "Should handle trailing slash"
+        assert url_with_slash == "https://api.githubcopilot.com/responses"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_default_headers(self, mock_authenticator_class):
-        """Test that validate_environment generates correct default headers"""
-        # Mock the authenticator
+    def test_validate_environment_default_headers(self, mock_authenticator_class, monkeypatch):
+        for environment_variable in (
+            "GITHUB_COPILOT_OPENAI_INTENT",
+            "GITHUB_COPILOT_API_VERSION",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
+        ):
+            monkeypatch.delenv(environment_variable, raising=False)
+
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key-123"
         mock_authenticator_class.return_value = mock_auth_instance
 
         config = GithubCopilotResponsesAPIConfig()
-
         headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params={})
 
-        # Check required headers
         assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["accept"] == "application/json"
         assert headers["content-type"] == "application/json"
         assert headers["copilot-integration-id"] == "vscode-chat"
-        assert headers["editor-version"] == "vscode/1.95.0"
+        assert headers["editor-version"] == "vscode/1.115.0"
         assert headers["editor-plugin-version"] == "copilot-chat/0.26.7"
         assert headers["user-agent"] == "GitHubCopilotChat/0.26.7"
-        assert headers["openai-intent"] == "conversation-panel"
-        assert headers["x-github-api-version"] == "2025-04-01"
-        assert "x-request-id" in headers
+        assert "openai-intent" not in headers
+        assert "x-github-api-version" not in headers
+        assert "x-request-id" not in headers
+        assert "x-vscode-user-agent-library-version" not in headers
+
+    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
+        "litellm.llms.github_copilot.responses.transformation.Authenticator"
+    )
+    def test_validate_environment_headers_from_environment(self, mock_authenticator_class):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+        environment = {
+            "GITHUB_COPILOT_ACCEPT": "application/vnd.github+json",
+            "GITHUB_COPILOT_CONTENT_TYPE": "application/custom+json",
+            "GITHUB_COPILOT_INTEGRATION_ID": "custom-integration",
+            "GITHUB_COPILOT_EDITOR_VERSION": "custom-editor/1.0",
+            "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION": "custom-plugin/2.0",
+            "GITHUB_COPILOT_USER_AGENT": "CustomAgent/2.0",
+            "GITHUB_COPILOT_OPENAI_INTENT": "custom-intent",
+            "GITHUB_COPILOT_API_VERSION": "2099-01-01",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION": "custom-library",
+        }
+
+        with patch.dict(os.environ, environment):
+            headers = GithubCopilotResponsesAPIConfig().validate_environment(
+                headers={}, model="gpt-5.1-codex", litellm_params={}
+            )
+
+        assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["accept"] == "application/vnd.github+json"
+        assert headers["content-type"] == "application/custom+json"
+        assert headers["copilot-integration-id"] == "custom-integration"
+        assert headers["editor-version"] == "custom-editor/1.0"
+        assert headers["editor-plugin-version"] == "custom-plugin/2.0"
+        assert headers["user-agent"] == "CustomAgent/2.0"
+        assert headers["openai-intent"] == "custom-intent"
+        assert headers["x-github-api-version"] == "2099-01-01"
+        assert headers["x-vscode-user-agent-library-version"] == "custom-library"
+
+    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
+        "litellm.llms.github_copilot.responses.transformation.Authenticator"
+    )
+    def test_empty_environment_header_omits_default(self, mock_authenticator_class):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        with patch.dict(os.environ, {"GITHUB_COPILOT_USER_AGENT": ""}):
+            headers = GithubCopilotResponsesAPIConfig().validate_environment(
+                headers={}, model="gpt-5.1-codex", litellm_params={}
+            )
+
+        assert "user-agent" not in headers
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_user_headers_override(self, mock_authenticator_class):

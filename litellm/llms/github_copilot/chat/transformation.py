@@ -1,5 +1,4 @@
 import json
-import os
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -32,12 +31,7 @@ class GithubCopilotConfig(OpenAIConfig):
         self.authenticator = Authenticator()
 
     def api_base_without_login(self, api_base: str | None = None) -> str:
-        return (
-            api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
+        return self.authenticator.get_api_base(api_base) or DEFAULT_GITHUB_COPILOT_API_BASE
 
     def _get_openai_compatible_provider_info(
         self,
