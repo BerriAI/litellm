@@ -4,6 +4,9 @@ Amazon Nova Canvas image edit on Bedrock (InvokeModel).
 Maps OpenAI-style image edit (image + prompt, optional mask) to Nova Canvas task types:
 - With mask: INPAINTING (inPaintingParams per AWS docs)
 - Without mask: IMAGE_VARIATION (imageVariationParams)
+- TEXT_IMAGE: conditioned editing where the input image conditions layout via
+  textToImageParams.conditionImage + controlMode (CANNY_EDGE | SEGMENTATION) +
+  controlStrength (issue #39552)
 
 Refs:
 - https://docs.aws.amazon.com/nova/latest/userguide/image-gen-access.html
@@ -38,6 +41,44 @@ else:
     LiteLLMLoggingObj = Any
 
 
+NOVA_CANVAS_CONTROL_MODES: Final[tuple[str, ...]] = ("CANNY_EDGE", "SEGMENTATION")
+
+
+def _invalid_input_error(message: str) -> BedrockError:
+    """400-class error for invalid caller input.
+
+    A plain ValueError would surface as APIConnectionError (500-class, which OpenAI
+    SDKs auto-retry); BedrockError(status_code=400) maps to BadRequestError instead
+    (same mapping the Nova Reel video config relies on).
+    """
+    return BedrockError(status_code=400, message=message)
+
+
+def _resolve_edit_image_b64(
+    image: FileTypes | None,
+    condition_image_b64: str | None,
+    task_type: str | None,
+) -> str:
+    """Base64 image for the task body: the multipart ``image`` wins; ``conditionImage``
+    (already encoded) backs TEXT_IMAGE when no multipart file was sent."""
+    if condition_image_b64 is not None and task_type != "TEXT_IMAGE":
+        # Checked before the multipart-image early return: image + conditionImage
+        # with a non-TEXT_IMAGE taskType must fail loudly instead of silently
+        # discarding the caller's conditionImage.
+        raise _invalid_input_error(
+            "Amazon Nova Canvas conditionImage is only supported with "
+            f"taskType=TEXT_IMAGE (conditioned editing); got taskType={task_type!r}."
+        )
+    if image is not None:
+        return _file_types_to_b64(image)
+    if task_type != "TEXT_IMAGE" or condition_image_b64 is None:
+        raise _invalid_input_error(
+            "Nova Canvas image edit requires an image input. Pass the multipart "
+            "`image` file, or a `conditionImage` for taskType=TEXT_IMAGE."
+        )
+    return condition_image_b64
+
+
 def _nova_canvas_task_body(
     *,
     image_b64: str,
@@ -48,6 +89,9 @@ def _nova_canvas_task_body(
     task_type: str | None,
     mask_prompt: str | None,
     out_painting_mode: str | None,
+    control_mode: str | None = None,
+    control_strength: float | str | None = None,
+    style: str | None = None,
 ) -> dict[str, object]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
     if task_type == "BACKGROUND_REMOVAL":
@@ -77,6 +121,50 @@ def _nova_canvas_task_body(
             "taskType": "OUTPAINTING",
             "outPaintingParams": out_params,
         }
+    if task_type == "TEXT_IMAGE":
+        # Conditioned editing: the input image guides layout/composition of the
+        # generated image via textToImageParams.conditionImage. SEGMENTATION
+        # controlMode derives a segmentation mask from the condition image;
+        # CANNY_EDGE (the AWS default) follows its prominent contours.
+        if mask_b64 is not None or mask_prompt is not None:
+            # AWS TEXT_IMAGE has no mask field; fail fast instead of silently
+            # dropping the caller's mask or maskPrompt.
+            raise _invalid_input_error(
+                "Amazon Nova Canvas TEXT_IMAGE (conditioned editing) does not support a "
+                "mask. Use INPAINTING or OUTPAINTING for mask-based editing workflows."
+            )
+        if control_mode is not None and control_mode not in NOVA_CANVAS_CONTROL_MODES:
+            raise _invalid_input_error(
+                f"Unsupported Amazon Nova Canvas controlMode: {control_mode!r}. Use one of {NOVA_CANVAS_CONTROL_MODES}."
+            )
+        control_strength_value: float | None = None
+        if control_strength is not None:
+            # Multipart form data delivers controlStrength as a string; coerce
+            # before the range check (raw strings would TypeError on <=).
+            try:
+                control_strength_value = float(control_strength)
+            except (TypeError, ValueError):
+                raise _invalid_input_error("Amazon Nova Canvas controlStrength must be a number in [0.0, 1.0].")
+            if not 0.0 <= control_strength_value <= 1.0:
+                raise _invalid_input_error(
+                    f"Amazon Nova Canvas controlStrength must be between 0.0 and 1.0; got {control_strength_value!r}."
+                )
+        t2i_params: Final[dict[str, object]] = {  # mutable-ok: optional conditioned-editing keys are set below
+            "text": text,
+            "conditionImage": image_b64,
+        }
+        if negative_text is not None:
+            t2i_params["negativeText"] = negative_text
+        if control_mode is not None:
+            t2i_params["controlMode"] = control_mode
+        if control_strength_value is not None:
+            t2i_params["controlStrength"] = control_strength_value
+        if style is not None:
+            t2i_params["style"] = style
+        return {  # mutable-ok: InvokeModel JSON body is a plain dict
+            "taskType": "TEXT_IMAGE",
+            "textToImageParams": t2i_params,
+        }
     # Honour explicit IMAGE_VARIATION even when a mask is present (mask is ignored
     # for this task type; callers use INPAINTING when they want mask semantics).
     if task_type == "IMAGE_VARIATION":
@@ -95,9 +183,10 @@ def _nova_canvas_task_body(
     # Explicit taskType must be INPAINTING or omitted from here on; anything else is invalid.
     if task_type is not None and str(task_type).strip() != "":
         if task_type != "INPAINTING":
-            raise ValueError(
+            raise _invalid_input_error(
                 f"Unsupported Amazon Nova Canvas taskType: {task_type!r}. "
                 "Use BACKGROUND_REMOVAL, OUTPAINTING, IMAGE_VARIATION, INPAINTING, "
+                "TEXT_IMAGE (conditioned editing via conditionImage/controlMode), "
                 "or omit taskType for automatic routing (mask → INPAINTING, else IMAGE_VARIATION)."
             )
     if mask_b64 is not None or mask_prompt is not None or task_type == "INPAINTING":
@@ -109,7 +198,7 @@ def _nova_canvas_task_body(
         if negative_text is not None:
             in_params["negativeText"] = negative_text
         if "maskPrompt" not in in_params and "maskImage" not in in_params:
-            raise ValueError(
+            raise _invalid_input_error(
                 "Amazon Nova Canvas INPAINTING requires either maskPrompt or maskImage "
                 "(use OpenAI mask= for maskImage, or pass maskPrompt in optional params). "
                 "See https://docs.aws.amazon.com/nova/latest/userguide/image-gen-req-resp-structure.html"
@@ -248,9 +337,13 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             "cfgScale",
             "seed",
             "quality",
+            "style",
             "taskType",
             "maskPrompt",
             "outPaintingMode",
+            "controlMode",
+            "controlStrength",
+            "conditionImage",
             "imageGenerationConfig",
         ]
 
@@ -314,7 +407,15 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         headers: dict,
     ) -> tuple[dict, Any]:
         op: Final = dict(image_edit_optional_request_params)
-        image_b64: Final = _file_types_to_b64(image)
+        # conditionImage: alternative source for the TEXT_IMAGE condition image
+        # for callers that cannot send a multipart `image` file (e.g. plain JSON
+        # bodies). When both are supplied the multipart `image` field wins.
+        condition_image_raw: Final = op.pop("conditionImage", None)
+        condition_image_b64: Final[str | None] = (
+            _file_types_to_b64(condition_image_raw) if condition_image_raw is not None else None
+        )
+        task_type: Final = op.pop("taskType", None)
+        image_b64: Final[str] = _resolve_edit_image_b64(image, condition_image_b64, task_type)
 
         mask_raw: Final = op.pop("mask", None)
         mask_b64: str | None = None
@@ -353,12 +454,12 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         if seed is not None:
             image_generation_config["seed"] = seed
 
-        task_type: Final = op.pop("taskType", None)
         if (prompt is None or prompt == "") and task_type in (
             "INPAINTING",
             "OUTPAINTING",
+            "TEXT_IMAGE",
         ):
-            raise ValueError(
+            raise _invalid_input_error(
                 f"Amazon Nova Canvas {task_type} requires a text prompt. Pass a non-empty `prompt` in your request."
             )
         text: Final = prompt if prompt is not None and prompt != "" else " "
@@ -366,6 +467,19 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         similarity_strength: Final = op.pop("similarityStrength", None)
         mask_prompt: Final = op.pop("maskPrompt", None)
         out_painting_mode: Final = op.pop("outPaintingMode", None)
+        control_mode: Final = op.pop("controlMode", None)
+        control_strength: Final = op.pop("controlStrength", None)
+        style: Final = op.pop("style", None)
+        if (
+            control_mode is not None or control_strength is not None or style is not None
+        ) and task_type != "TEXT_IMAGE":
+            # Conditioning fields only exist on textToImageParams (TEXT_IMAGE);
+            # any other resolved task type would silently drop them.
+            raise _invalid_input_error(
+                "Amazon Nova Canvas controlMode/controlStrength/style are only supported "
+                f"with taskType=TEXT_IMAGE (conditioned editing); resolved taskType={task_type!r} "
+                "would silently drop them. Set taskType=TEXT_IMAGE to use them."
+            )
 
         body: Final = _nova_canvas_task_body(
             image_b64=image_b64,
@@ -376,6 +490,9 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             task_type=task_type,
             mask_prompt=mask_prompt,
             out_painting_mode=out_painting_mode,
+            control_mode=control_mode,
+            control_strength=control_strength,
+            style=style,
         )
 
         # BACKGROUND_REMOVAL InvokeModel body must not include imageGenerationConfig (AWS rejects it).

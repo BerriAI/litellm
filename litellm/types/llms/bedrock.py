@@ -914,13 +914,29 @@ class AmazonNovaCanvasImageGenerationConfig(TypedDict, total=False):
 class AmazonNovaCanvasTextToImageParams(TypedDict, total=False):
     """
     Params for Amazon Nova Canvas Text to Image API
+
+    conditionImage + controlMode + controlStrength enable conditioned editing
+    (SEGMENTATION derives a segmentation mask from the condition image;
+    CANNY_EDGE follows its prominent contours and is the AWS default).
     """
 
     text: str
     negativeText: str
     controlStrength: float
-    controlMode: Literal["CANNY_EDIT", "SEGMENTATION"]
+    controlMode: ReadOnly[Literal["CANNY_EDGE", "SEGMENTATION"]]
     conditionImage: str
+    style: ReadOnly[
+        Literal[
+            "3D_ANIMATED_FAMILY_FILM",
+            "DESIGN_SKETCH",
+            "FLAT_VECTOR_ILLUSTRATION",
+            "GRAPHIC_NOVEL_ILLUSTRATION",
+            "MAXIMALISM",
+            "MIDCENTURY_RETRO",
+            "PHOTOREALISM",
+            "SOFT_DIGITAL_PAINTING",
+        ]
+    ]
 
 
 class AmazonNovaCanvasTextToImageRequest(AmazonNovaCanvasRequestBase, TypedDict, total=False):
@@ -999,6 +1015,175 @@ class AmazonTitanImageGenerationRequestBody(TypedDict, total=False):
     taskType: Literal["TEXT_IMAGE", "COLOR_GUIDED_GENERATION", "INPAINTING"]
     textToImageParams: AmazonTitanTextToImageParams
     imageGenerationConfig: AmazonNovaCanvasImageGenerationConfig
+
+
+################ Amazon Nova Reel Video Types ################
+
+NOVA_REEL_TASK_TYPES = Literal["TEXT_VIDEO", "MULTI_SHOT_AUTOMATED", "MULTI_SHOT_MANUAL"]
+
+
+class AmazonNovaReelS3Location(TypedDict, total=False):
+    """
+    S3 location for a Nova Reel input image.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-req-resp-structure.html
+    """
+
+    uri: ReadOnly[str]
+    bucketOwner: ReadOnly[str]
+
+
+class AmazonNovaReelImageSourceLocation(TypedDict, total=False):
+    """
+    Location of a Nova Reel input image: inline base64 bytes or S3.
+    """
+
+    bytes: ReadOnly[str]  # base64 encoded image
+    s3Location: ReadOnly[AmazonNovaReelS3Location]
+
+
+class AmazonNovaReelImageSource(TypedDict, total=False):
+    """
+    Image source for Nova Reel textToVideoParams.images entries.
+    """
+
+    format: ReadOnly[Literal["png", "jpeg"]]
+    source: ReadOnly[AmazonNovaReelImageSourceLocation]
+
+
+class AmazonNovaReelTextToVideoParams(TypedDict, total=False):
+    """
+    Params for Amazon Nova Reel text/image-to-video generation.
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-req-resp-structure.html
+    """
+
+    text: ReadOnly[str]
+    images: ReadOnly[Sequence[AmazonNovaReelImageSource]]
+
+
+class AmazonNovaReelVideoGenerationConfig(TypedDict, total=False):
+    """
+    Generation config for Amazon Nova Reel.
+
+    durationSeconds: 6 for single-shot (v1:0 supports 6|10; v1:1 single-shot is 6);
+    multiples of 6 up to 120 for multi-shot. fps: 24 only. dimension: "1280x720"
+    (v1:0 also supports "720x1280"). seed: 0-2147483646, AWS default 42.
+    """
+
+    durationSeconds: ReadOnly[int]
+    fps: ReadOnly[int]
+    dimension: ReadOnly[str]
+    seed: ReadOnly[int]
+
+
+class AmazonNovaReelMultiShotAutomatedParams(TypedDict, total=False):
+    """
+    Params for Nova Reel MULTI_SHOT_AUTOMATED: text-driven shot planning only
+    (no input images; durationSeconds stays on videoGenerationConfig).
+    """
+
+    text: ReadOnly[str]
+
+
+class AmazonNovaReelMultiShotManualShot(TypedDict, total=False):
+    """
+    One shot of MULTI_SHOT_MANUAL: per-shot text, optional input images and
+    durationSeconds (durations live per shot, not on videoGenerationConfig).
+    """
+
+    text: ReadOnly[str]
+    durationSeconds: ReadOnly[int]
+    images: ReadOnly[Sequence[AmazonNovaReelImageSource]]
+
+
+class AmazonNovaReelMultiShotManualParams(TypedDict, total=False):
+    """
+    Params for Nova Reel MULTI_SHOT_MANUAL (required for that task type).
+    """
+
+    shots: ReadOnly[Sequence[AmazonNovaReelMultiShotManualShot]]
+
+
+class AmazonNovaReelModelInput(TypedDict, total=False):
+    """
+    modelInput body for Nova Reel StartAsyncInvoke.
+
+    TEXT_VIDEO (default) uses textToVideoParams; MULTI_SHOT_AUTOMATED uses
+    multiShotAutomatedParams (no input images); MULTI_SHOT_MANUAL requires
+    multiShotManualParams and omits top-level videoGenerationConfig.durationSeconds.
+    """
+
+    taskType: ReadOnly[NOVA_REEL_TASK_TYPES]
+    textToVideoParams: ReadOnly[AmazonNovaReelTextToVideoParams]
+    multiShotAutomatedParams: ReadOnly[AmazonNovaReelMultiShotAutomatedParams]
+    multiShotManualParams: ReadOnly[AmazonNovaReelMultiShotManualParams]
+    videoGenerationConfig: ReadOnly[AmazonNovaReelVideoGenerationConfig]
+
+
+class BedrockAsyncInvokeS3OutputDataConfig(TypedDict, total=False):
+    """
+    S3 output config for Bedrock StartAsyncInvoke (nested outputDataConfig key).
+
+    Ref: bedrock-runtime service model (StartAsyncInvokeRequest.outputDataConfig)
+    """
+
+    s3Uri: ReadOnly[str]
+    kmsKeyId: ReadOnly[str]
+    bucketOwner: ReadOnly[str]
+
+
+class BedrockAsyncInvokeOutputDataConfig(TypedDict, total=False):
+    """
+    Output data config for Bedrock StartAsyncInvoke.
+    """
+
+    s3OutputDataConfig: ReadOnly[BedrockAsyncInvokeS3OutputDataConfig]
+
+
+class BedrockStartAsyncInvokeRequest(TypedDict, total=False):
+    """
+    Request body for POST {runtime}/async-invoke (StartAsyncInvoke).
+
+    Ref: https://docs.aws.amazon.com/nova/latest/userguide/video-gen-access.html
+    """
+
+    modelId: ReadOnly[str]
+    modelInput: ReadOnly[AmazonNovaReelModelInput]
+    outputDataConfig: ReadOnly[BedrockAsyncInvokeOutputDataConfig]
+    clientRequestToken: ReadOnly[str]
+
+
+class BedrockStartAsyncInvokeResponse(TypedDict, total=False):
+    """
+    Response body for POST {runtime}/async-invoke.
+    """
+
+    invocationArn: ReadOnly[str]
+
+
+BEDROCK_ASYNC_INVOKE_STATUSES = Literal["InProgress", "Completed", "Failed"]
+
+
+class BedrockGetAsyncInvokeResponse(TypedDict, total=False):
+    """
+    Response body for GET {runtime}/async-invoke/{invocationArn} (GetAsyncInvoke).
+
+    status enum verified against the bedrock-runtime service model
+    (AsyncInvokeStatus): InProgress | Completed | Failed. failureMessage is
+    present when status is Failed. Timestamps use the model's iso8601
+    timestampFormat ("2026-01-15T10:30:00Z"); numeric epochs are tolerated.
+    """
+
+    invocationArn: ReadOnly[str]
+    modelArn: ReadOnly[str]
+    clientRequestToken: ReadOnly[str]
+    status: ReadOnly[BEDROCK_ASYNC_INVOKE_STATUSES]
+    failureMessage: ReadOnly[str]
+    submitTime: ReadOnly[str | float]
+    lastModifiedTime: ReadOnly[str | float]
+    endTime: ReadOnly[str | float]
+    outputDataConfig: ReadOnly[BedrockAsyncInvokeOutputDataConfig]
 
 
 if TYPE_CHECKING:
