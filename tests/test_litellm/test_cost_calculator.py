@@ -4230,3 +4230,33 @@ def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider,deployment_model,cost_map_key",
+    [
+        ("vertex_ai", "claude-opus-4-8@default", "vertex_ai/claude-opus-4-8@default"),
+        ("anthropic", "claude-opus-4-8", "claude-opus-4-8"),
+    ],
+)
+def test_completion_cost_prices_capability_rule_alias_from_the_deployment(
+    _local_model_cost_map: None, custom_llm_provider: str, deployment_model: str, cost_map_key: str
+) -> None:
+    """Streamed proxy chunks carry the client's alias, so the first cost candidate is the
+    provider-prefixed alias. That name matches a claude capability generalization rule (unpriced)
+    and must fall through to the deployment's priced model instead of stopping at $0."""
+    response: Final = ModelResponse(
+        id="chatcmpl_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-opus-4.8",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+    row: Final = litellm.model_cost[cost_map_key]
+    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
+    assert expected > 0
+
+    assert completion_cost(
+        completion_response=response,
+        model=deployment_model,
+        custom_llm_provider=custom_llm_provider,
+    ) == pytest.approx(expected)
