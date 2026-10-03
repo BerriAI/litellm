@@ -1230,6 +1230,149 @@ async def test_vertex_ai_token_counter_routes_partner_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_request():
+    from typing import Final
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float,
+        ) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    counter: Final = VertexAITokenCounter()
+    model: Final = "claude-opus-5-5"
+    messages: Final = [{"role": "user", "content": "Hello"}]
+    system: Final = "Follow the system instructions"
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Look up a value",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+    deployment: Final = {
+        "litellm_params": {
+            "vertex_project": "test-project",
+            "vertex_location": "us-east5",
+        }
+    }
+
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        with_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+            system=system,
+            tools=tools,
+        )
+        without_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+        )
+
+    assert fake_http_client.posted_bodies == (
+        {"model": model, "messages": messages, "system": system, "tools": tools},
+        {"model": model, "messages": messages},
+    )
+    assert with_optional_fields is not None
+    assert with_optional_fields.total_tokens == 37
+    assert without_optional_fields is not None
+    assert without_optional_fields.total_tokens == 37
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_failure", "expected_status", "expected_message"),
+    [
+        ("http_400", 400, 'tools.0: Input tag "function" does not match any of the expected tags'),
+        ("credentials", 500, "could not resolve credentials"),
+    ],
+)
+async def test_vertex_ai_token_counter_returns_partner_provider_error_as_value(
+    provider_failure: str, expected_status: int, expected_message: str
+):
+    from typing import Final
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class RejectingHttpClient:
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float,
+        ) -> None:
+            request: Final = httpx.Request("POST", url)
+            response: Final = httpx.Response(400, text=expected_message, request=request)
+            raise MaskedHTTPStatusError(
+                httpx.HTTPStatusError("Client error '400 Bad Request'", request=request, response=response),
+                message=expected_message,
+                text=expected_message,
+            )
+
+    access_token: Final = (
+        AsyncMock(side_effect=ValueError(expected_message))
+        if provider_failure == "credentials"
+        else AsyncMock(return_value=("fake-token", "test-project"))
+    )
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=RejectingHttpClient()),
+        patch.object(handler.VertexAIPartnerModelsTokenCounter, "_ensure_access_token_async", new=access_token),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            request_model="vertex-claude",
+            tools=[{"type": "function", "function": {"name": "lookup", "parameters": {}}}],
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == expected_status
+    assert result.error_message is not None
+    assert expected_message in result.error_message
+    assert result.total_tokens == 0
+    assert result.request_model == "vertex-claude"
+    assert result.tokenizer_type == "vertex_ai_partner_models"
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_token_counter_uses_count_tokens_location():
     """
     Test that VertexAITokenCounter uses vertex_count_tokens_location to override
