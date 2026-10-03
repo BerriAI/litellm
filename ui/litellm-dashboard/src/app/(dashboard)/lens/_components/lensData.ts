@@ -189,6 +189,6 @@ export function briefMarkdown(title: string, brief: IssueBrief): string {
     `## Problem\n${brief.problem}`,
     `## User goal\n${brief.user_goal}`,
     `## What happened\n${brief.what_happened}`,
-    `## Test cases\n${brief.test_cases.map((t, i) => `${i + 1}. Input: ${t.input}\n   Expect: ${t.expected}`).join("\n")}`,
+    `## Test cases\n${brief.test_cases.map((t, i) => `${i + 1}. **Input:** ${t.input}  \n   **Expect:** ${t.expected}`).join("\n")}`,
   ].join("\n\n");
 }
