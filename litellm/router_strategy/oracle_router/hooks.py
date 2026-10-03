@@ -3,14 +3,14 @@
 After every completion it adds LiteLLM's computed spend and the latest answer to the program's row, and
 when the request carried ``metadata.program_done`` it completes the program: the slot is released at once
 and the verifier runs in the background. Only requests the Router stamped as routed by this ORACLE router
-are read, and only against the program of the key that sent them. Nothing here can fail a request.
+are read, and only against the program of the key that sent them. Nothing here can fail a request, and
+nothing here logs: a failure is kept on the router for ``/oracle_router/state``.
 """
 
 import math
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_strategy.oracle_router.config import (
     CHOSEN_MODEL_METADATA_KEY,
@@ -113,5 +113,5 @@ class OracleRouterPostCallHook(CustomLogger):
                 )
             if metadata.get(PROGRAM_DONE_KEY):
                 self.oracle_router.complete(program_id, score=_score(metadata), owner=owner)
-        except Exception:  # noqa: BLE001  # a logging callback must never fail the request it observes
-            verbose_router_logger.exception("OracleRouterPostCallHook: failed to record a request")
+        except Exception as error:  # noqa: BLE001  # a logging callback must never fail the request it observes
+            self.oracle_router.note_failure("post-call hook", error)

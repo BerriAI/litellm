@@ -9551,13 +9551,6 @@ class Router:
             strategy=oracle_router,
             strategy_label="Oracle-router",
         )
-        verbose_router_logger.info(
-            "OracleRouter[%s] initialized with %d models, decision_maker=%s, verifier=%s",
-            deployment.model_name,
-            len(config.available_models),
-            config.decision_maker.type,
-            config.verifier.type,
-        )
 
     def _is_quality_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """

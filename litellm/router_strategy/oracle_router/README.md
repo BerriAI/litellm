@@ -72,4 +72,6 @@ whatever the caller's role) with a `custom` type is rejected when the router is 
 ## Limits
 
 State is in memory per proxy process; it is not persisted or shared across replicas. The paper's
-dispatch scheduler (DISC) is not part of this strategy.
+dispatch scheduler (DISC) is not part of this strategy. The router and its hook write nothing to the
+process log: `GET /oracle_router/state` carries the counters and the last background failure
+(`last_failure`) instead.

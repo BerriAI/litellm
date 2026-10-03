@@ -215,6 +215,8 @@ async def test_failed_verification_is_counted_and_does_not_update():
     router.observe_request("t", cost=0.1, response_text="answer")
     result = await router.complete("t")
     assert result != result and router.verifications_failed == 1 and maker.updates == []
+    snapshot = await router.get_state_snapshot()
+    assert snapshot["last_failure"] == "verification: RuntimeError: sandbox down"  # kept for the state endpoint, not logged
 
 
 @pytest.mark.asyncio

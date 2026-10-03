@@ -18,7 +18,6 @@ from typing import Final, NamedTuple
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,  # pyright: ignore[reportUnknownVariableType]  # upstream helper returns a bare dict
 )
@@ -196,10 +195,20 @@ class OracleRouter:
         self.programs_evicted: int = 0
         self.stateless_requests: int = 0
         self.verifications_failed: int = 0
+        self.last_failure: str | None = None
 
     @property
     def models(self) -> tuple[str, ...]:
         return tuple(self.config.available_models)
+
+    def note_failure(self, step: str, error: Exception) -> None:
+        """Keep the last failure of a background step for ``/oracle_router/state``.
+
+        The router and its hook write nothing to the process log: every request input reaches them, and a
+        log call on that path makes CodeQL's log-injection analysis fall back to a whole-codebase pass that
+        no longer fits its limits on this codebase. The admin state endpoint carries the failure instead.
+        """
+        self.last_failure = f"{step}: {type(error).__name__}: {error}"
 
     def context_for(self, program_id: str, prompt: str) -> ProgramContext:
         return ProgramContext(program_id=program_id, prompt=prompt, request_type=classify_prompt(prompt))
@@ -275,9 +284,6 @@ class OracleRouter:
         chosen_model, request_type = await self._decide(program_id, prompt, _api_key_hash(request_kwargs))
         _stamp_internal(request_kwargs, CHOSEN_MODEL_METADATA_KEY, chosen_model)
         _stamp_internal(request_kwargs, PROGRAM_ID_METADATA_KEY, program_id)
-        verbose_router_logger.debug(  # nothing request-derived is logged; the decision is on the request's metadata
-            "OracleRouter: routed a %s request", "program" if program_id else "stateless"
-        )
         return PreRoutingHookResponse(
             model=chosen_model,
             messages=messages,
@@ -359,9 +365,9 @@ class OracleRouter:
     async def _verify_and_learn(self, binding: ProgramBinding, outcome: ProgramOutcome) -> float:
         try:
             score: Final = clamp_score(await self.verifier.verify(outcome))
-        except Exception:  # noqa: BLE001  # any verifier failure is counted and must not break the feedback loop
+        except Exception as error:  # noqa: BLE001  # any verifier failure is counted and must not break the feedback loop
             self.verifications_failed += 1
-            verbose_router_logger.exception("OracleRouter: a verification failed")
+            self.note_failure("verification", error)
             return float("nan")
         async with self._update_lock:
             self.decision_maker.update(binding.context, binding.model, score)
@@ -410,6 +416,7 @@ class OracleRouter:
             "stateless_requests": self.stateless_requests,
             "pending_verifications": self.pending_verifications,
             "verifications_failed": self.verifications_failed,
+            "last_failure": self.last_failure,
             "recent_accuracy": self._accuracy_by_model(),
             "recent_feedback": [
                 {
