@@ -2,6 +2,7 @@ from typing import Final
 
 import pytest
 
+from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -139,6 +140,24 @@ async def test_a_rejection_does_not_use_up_the_scope_that_rejected_it():
     raised_limit: Final = (_scoped("key", "hashed", 2),)
 
     assert await consume_file_usage(cache, raised_limit, DAY, "", MIDDAY) is None
+
+
+class _ServiceTargetSeen(Exception):
+    pass
+
+
+class _TargetReportingCache(InternalUsageCache):
+    async def async_increment_cache(self, key, value, litellm_parent_otel_span, local_only=False, **kwargs):
+        raise _ServiceTargetSeen(current_service_target())
+
+
+async def test_counter_writes_are_declared_as_rate_limit_calls_so_their_redis_spans_are_named():
+    cache: Final = _TargetReportingCache(dual_cache=DualCache())
+
+    with pytest.raises(_ServiceTargetSeen) as seen:
+        await consume_file_usage(cache, (_scoped("key", "hashed", 1),), DAY, "", MIDDAY)
+
+    assert seen.value.args == ("rate_limits",)
 
 
 async def test_download_counters_are_per_file():

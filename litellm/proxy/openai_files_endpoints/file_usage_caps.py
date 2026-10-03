@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, NoReturn, TypeAlias
 from pydantic import Field, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     EMPTY_MAPPING,
@@ -148,6 +149,7 @@ async def _increment_all_or_none(
     return exceeded
 
 
+@with_service_target("rate_limits")
 async def consume_file_usage(
     cache: "InternalUsageCache",
     limits: tuple[ScopedFileUsageLimit, ...],
