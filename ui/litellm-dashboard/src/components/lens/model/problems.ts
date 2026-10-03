@@ -36,6 +36,23 @@ export interface ProblemsOverview {
 
 const rank = { high: 0, medium: 1, low: 2 } as const;
 
+export function readableQuote(quote: string): string {
+  const body = quote.replace(/^\s*(output|input)\s*:\s*/i, "").trim();
+  try {
+    const parsed: unknown = JSON.parse(body);
+    const messages = Array.isArray(parsed) ? parsed : [parsed];
+    const text = messages
+      .map((m: unknown) =>
+        typeof m === "object" && m && "content" in m && typeof m.content === "string" ? m.content : "",
+      )
+      .filter(Boolean)
+      .join(" ");
+    return text || quote;
+  } catch {
+    return quote;
+  }
+}
+
 const agentOf = (execution: Execution, lens: Lens): string => {
   const candidates = [
     execution.metadata.find((m) => m.key === "gen_ai.agent.name")?.value,
@@ -60,7 +77,7 @@ function problemsFor(lens: Lens, job: Job): Problem[] {
     .filter((finding) => finding.kind === "issue" && finding.status === "open")
     .map((finding) => {
       const agent = problemAgent(finding, executions, lens);
-      const quotes = new Map(finding.evidence.map((e) => [e.execution_id, e.quote]));
+      const quotes = new Map(finding.evidence.map((e) => [e.execution_id, readableQuote(e.quote)]));
       const runs = executions
         .filter((execution) => agentOf(execution, lens) === agent)
         .map((execution) => ({
@@ -76,7 +93,7 @@ function problemsFor(lens: Lens, job: Job): Problem[] {
         findingId: finding.id,
         title: finding.title,
         priority: finding.priority,
-        quote: finding.evidence.find((e) => e.role === "support")?.quote ?? finding.description,
+        quote: readableQuote(finding.evidence.find((e) => e.role === "support")?.quote ?? finding.description),
         agent,
         runs,
         hits: runs.filter((run) => run.hit).length || finding.occurrences.length,
