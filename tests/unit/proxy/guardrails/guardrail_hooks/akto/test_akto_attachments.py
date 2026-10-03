@@ -85,6 +85,22 @@ def test_request_attachments_reads_responses_api_input():
     )
 
 
+def test_a_decoy_messages_list_does_not_hide_responses_api_input_attachments():
+    request_data = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_file", "file_data": f"data:application/pdf;base64,{PDF_B64}", "filename": "r.pdf"}
+                ],
+            }
+        ],
+    }
+
+    assert request_attachments(request_data).attachments == (Attachment("r.pdf", "file", content=PDF_B64),)
+
+
 def test_request_attachments_names_files_by_their_type():
     request_data = {
         "messages": [

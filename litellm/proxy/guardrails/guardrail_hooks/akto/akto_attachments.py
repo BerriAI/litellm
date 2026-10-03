@@ -159,10 +159,9 @@ _UNSENDABLE: Final[_Classified] = (None, True)
 
 
 def request_attachments(request_data: Mapping[str, object]) -> RequestAttachments:
-    messages: Final = _parse(_ITEMS_ADAPTER, request_data.get("messages")) or _parse(
-        _ITEMS_ADAPTER, request_data.get("input")
-    )
-    blocks: Final = chain.from_iterable(_message_blocks(message) for message in messages or ())
+    # Both, so a decoy "messages" can't hide attachments in a Responses API "input"
+    containers: Final = (_parse(_ITEMS_ADAPTER, request_data.get(key)) or () for key in ("messages", "input"))
+    blocks: Final = chain.from_iterable(_message_blocks(message) for message in chain.from_iterable(containers))
     classified: Final = tuple(_classify_block(block, index) for index, block in enumerate(blocks))
     return RequestAttachments(
         attachments=tuple(attachment for attachment, _ in classified if attachment is not None),
