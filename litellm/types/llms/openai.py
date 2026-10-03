@@ -667,7 +667,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
+    summary: list[ChatCompletionReasoningSummaryTextBlock]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
