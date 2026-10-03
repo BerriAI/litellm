@@ -102,3 +102,13 @@ tests:
           content:
             name: LENS_WORKER_IMAGE
             value: ghcr.io/berriai/litellm-lens-worker:v1.2.3-dev.4
+  - it: normalizes a numeric backend tag to the published worker tag
+    template: lens/deployment.yaml
+    set:
+      backend.image.tag: 1.2.3-dev.4
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker:v1.2.3-dev.4

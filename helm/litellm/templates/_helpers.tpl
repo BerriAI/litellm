@@ -472,8 +472,9 @@ collector containers through an emptyDir. Empty when the sidecar is off
 or gateway.collector.address is a tcp://127.0.0.1:<port> address.
 */}}
 {{- define "litellm.lensWorker.image" -}}
-{{- $chartTag := ternary (printf "v%s" .Chart.AppVersion) .Chart.AppVersion (regexMatch "^[0-9]" .Chart.AppVersion) -}}
-{{- $tag := .Values.lensWorker.image.tag | default .Values.backend.image.tag | default $chartTag -}}
+{{- $backendTag := .Values.backend.image.tag | default .Chart.AppVersion -}}
+{{- $releaseTag := ternary (printf "v%s" $backendTag) $backendTag (regexMatch "^[0-9]" $backendTag) -}}
+{{- $tag := .Values.lensWorker.image.tag | default $releaseTag -}}
 {{- printf "%s:%s" .Values.lensWorker.image.repository $tag -}}
 {{- end -}}
 

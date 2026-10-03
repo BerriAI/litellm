@@ -12,7 +12,7 @@ trap cleanup EXIT
 umask 077
 printf 'LITELLM_VERSION=0.0.0-lens-ci\nLITELLM_PORT=4418\nLITELLM_MASTER_KEY=%s\nLITELLM_SALT_KEY=sk-%s\n' \
   "$master_key" "$(openssl rand -hex 32)" > "$qa_dir/env"
-printf 'POSTGRES_PASSWORD=%s\nCLICKHOUSE_PASSWORD=%s\n' \
+printf 'POSTGRES_PASSWORD=%s:/?#@%%\nCLICKHOUSE_PASSWORD=%s:/?#@%%\n' \
   "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> "$qa_dir/env"
 docker tag "${LITELLM_IMAGE:?Set LITELLM_IMAGE to the built gateway image}" ghcr.io/berriai/litellm:0.0.0-lens-ci
 docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -f deploy/lens/Dockerfile \
