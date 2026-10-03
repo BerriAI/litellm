@@ -865,7 +865,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: Final[list[Choices]] = []
         index = 0
         reasoning_content: str | None = None
-        pending_reasoning_item: _BuiltReasoningItem | None = None
+        # Tuple accumulator: the Responses API can emit several reasoning items
+        # before the next message / tool call, and each flush below consumes
+        # every item seen since the previous flush.
+        pending_reasoning_items: tuple[_BuiltReasoningItem, ...] = ()
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -874,12 +877,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                pending_reasoning_item = _build_reasoning_item(
+                built_reasoning_item: Final = _build_reasoning_item(
                     item_id=item.id,
                     encrypted_content=getattr(item, "encrypted_content", None),
                     summary_raw=item.summary,
                 )
-                reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
+                pending_reasoning_items = (*pending_reasoning_items, built_reasoning_item)
+                reasoning_content = " ".join(s["text"] for s in built_reasoning_item["summary"] if s.get("text"))
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
@@ -894,10 +898,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
                         annotations=annotations,
-                        reasoning_items=cast(
-                            list[ChatCompletionReasoningItem] | None,
-                            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-                        ),
+                        reasoning_items=_as_chat_reasoning_items(pending_reasoning_items),
                     )
 
                     choices.append(
@@ -909,7 +910,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
 
                     reasoning_content = None  # flush
-                    pending_reasoning_item = None  # flush
+                    pending_reasoning_items = ()  # flush
                     index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -966,10 +967,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 " ".join(value for value in (last_reasoning_content, reasoning_content) if value) or None
             )
             merged_reasoning_items: Final = _as_chat_reasoning_items(
-                (
-                    *(last_reasoning_items or ()),
-                    *(() if pending_reasoning_item is None else (pending_reasoning_item,)),
-                )
+                (*(last_reasoning_items or ()), *pending_reasoning_items)
             )
             merged_message: Final = Message(
                 role=last_choice.message.role,
@@ -989,14 +987,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 content=None,
                 tool_calls=accumulated_tool_calls,
                 reasoning_content=reasoning_content,
-                reasoning_items=cast(
-                    list[ChatCompletionReasoningItem] | None,
-                    ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-                ),
+                reasoning_items=_as_chat_reasoning_items(pending_reasoning_items),
             )
             choices.append(Choices(message=msg, finish_reason="tool_calls", index=index))
             reasoning_content = None
-            pending_reasoning_item = None
+            pending_reasoning_items = ()
 
         return choices
 
