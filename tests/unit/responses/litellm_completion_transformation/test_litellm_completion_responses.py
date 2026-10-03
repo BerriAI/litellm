@@ -4382,11 +4382,11 @@ class TestEnsureOutputItemContentPartAdded:
         namespace_map.assert_called_once_with(request["tools"])
 
 
-    def test_emit_response_completed_uses_stream_finish_reason(self):
+    def test_emit_terminal_event_uses_stream_finish_reason(self):
         """
-        When the assembled model response carries finish_reason="content_filter"
-        (snapshotted from the underlying stream before any pending events fire),
-        _emit_response_completed_event must produce status="incomplete".
+        The terminal stream event type must track the assembled response
+        status: finish_reason="content_filter" yields response.incomplete,
+        finish_reason="stop" yields response.completed.
         """
         from unittest.mock import Mock
 
@@ -4394,6 +4394,7 @@ class TestEnsureOutputItemContentPartAdded:
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
+        from litellm.types.llms.openai import ResponsesAPIStreamEvents
 
         mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
         mock_stream_wrapper.logging_obj = Mock()
@@ -4406,28 +4407,32 @@ class TestEnsureOutputItemContentPartAdded:
             custom_llm_provider="anthropic",
         )
 
-        litellm_model_response = ModelResponse(
-            id="chatcmpl-test",
-            created=1234567890,
-            model="anthropic/claude-sonnet-4-6",
-            object="chat.completion",
-            choices=[
-                Choices(
-                    finish_reason="content_filter",
-                    index=0,
-                    message=Message(content="", role="assistant"),
-                )
-            ],
-            usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
-        )
+        def _response(finish_reason):
+            return ModelResponse(
+                id="chatcmpl-test",
+                created=1234567890,
+                model="anthropic/claude-sonnet-4-6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason=finish_reason,
+                        index=0,
+                        message=Message(content="", role="assistant"),
+                    )
+                ],
+                usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+            )
 
-        completed_event = iterator._emit_response_completed_event(
-            litellm_model_response
-        )
+        incomplete_event = iterator._emit_terminal_response_event(_response("content_filter"))
+        assert incomplete_event is not None
+        assert incomplete_event.type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+        assert incomplete_event.response.status == "incomplete"
+        assert incomplete_event.response.output[0].status == "incomplete"
 
+        completed_event = iterator._emit_terminal_response_event(_response("stop"))
         assert completed_event is not None
-        assert completed_event.response.status == "incomplete"
-        assert completed_event.response.output[0].status == "incomplete"
+        assert completed_event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        assert completed_event.response.status == "completed"
 
     def test_reasoning_item_does_not_emit_content_part_added(self):
         """Reasoning items should not get a content_part.added event."""
@@ -5016,7 +5021,7 @@ class TestStreamingSnapshotItemIds:
         )
         assert streamed_event is not None
 
-        completed_event = iterator._emit_response_completed_event(
+        completed_event = iterator._emit_terminal_response_event(
             _bridged_chat_completion_response()
         )
 
@@ -5031,7 +5036,7 @@ class TestStreamingSnapshotItemIds:
             self._make_chunk("apple")
         )
 
-        completed_event = iterator._emit_response_completed_event(
+        completed_event = iterator._emit_terminal_response_event(
             _bridged_chat_completion_response()
         )
 
@@ -5088,7 +5093,7 @@ class TestStreamingSnapshotItemIds:
         )
         assert streamed_event is not None
 
-        completed_event = iterator._emit_response_completed_event(
+        completed_event = iterator._emit_terminal_response_event(
             self._reasoning_chat_completion_response()
         )
 
