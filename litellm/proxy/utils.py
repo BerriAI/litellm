@@ -7330,13 +7330,20 @@ class ProxyUpdateSpend:
         start_time: Final = time.time()
         try:
             for i in range(n_retry_times + 1):
+                external_post_attempted = False
                 try:
                     base_url = os.getenv("SPEND_LOGS_URL", None)
                     if len(logs_to_process) > 0 and base_url is not None and db_writer_client is not None:
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: %s", base_url)
-                        json_data = json.dumps(logs_to_process)
+                        try:
+                            json_data = json.dumps(logs_to_process)
+                        except (TypeError, ValueError):
+                            # No external request has been sent. The batch is safe to replay.
+                            await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process)
+                            raise
+                        external_post_attempted = True
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -7349,7 +7356,13 @@ class ProxyUpdateSpend:
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
-                            batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
+                            try:
+                                batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
+                            except (TypeError, ValueError):
+                                # This batch has not reached Prisma. Earlier batches may
+                                # already have committed, so replay only this tail.
+                                await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process[j:])
+                                raise
                             isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
                             for statement_rows in spend_log_write_batches(
                                 batch_with_dates,
@@ -7373,6 +7386,10 @@ class ProxyUpdateSpend:
                         )
                     break
                 except Exception as e:
+                    if external_post_attempted:
+                        # Even a transport error can arrive after the remote writer
+                        # committed. Retrying or requeueing could duplicate spend.
+                        raise
                     if not _is_transient_spend_log_write_error(e):
                         if PrismaDBExceptionHandler.is_prisma_error(e):
                             await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process)
