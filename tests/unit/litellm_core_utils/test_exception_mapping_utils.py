@@ -1064,7 +1064,7 @@ AIAND_INSUFFICIENT_CREDITS_MESSAGE = (
         },
     ],
 )
-def test_an_aiand_402_billing_error_is_a_rate_limit_error(error_body, quiet_exception_mapping):
+def test_an_aiand_402_billing_error_is_a_permission_denied_error(error_body, quiet_exception_mapping):
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
     original_exception = BaseLLMException(
@@ -1072,20 +1072,20 @@ def test_an_aiand_402_billing_error_is_a_rate_limit_error(error_body, quiet_exce
         message=json.dumps({"error": error_body}),
     )
 
-    with pytest.raises(litellm.RateLimitError) as raised:
+    with pytest.raises(litellm.PermissionDeniedError) as raised:
         exception_type(
             model="test-model",
             original_exception=original_exception,
             custom_llm_provider="aiand",
         )
 
-    assert raised.value.status_code == 429
+    assert raised.value.status_code == 402
     assert raised.value.llm_provider == "aiand"
     assert raised.value.model == "test-model"
-    assert raised.value.message == f"litellm.RateLimitError: AiandException - {error_body['message']}"
+    assert raised.value.message == f"litellm.PermissionDeniedError: AiandException - {error_body['message']}"
 
 
-def test_an_aiand_402_from_the_response_body_is_a_rate_limit_error(quiet_exception_mapping):
+def test_an_aiand_402_from_the_response_body_is_a_permission_denied_error(quiet_exception_mapping):
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
     original_exception = BaseLLMException(
@@ -1101,7 +1101,7 @@ def test_an_aiand_402_from_the_response_body_is_a_rate_limit_error(quiet_excepti
         },
     )
 
-    with pytest.raises(litellm.RateLimitError) as raised:
+    with pytest.raises(litellm.PermissionDeniedError) as raised:
         exception_type(
             model="test-model",
             original_exception=original_exception,
@@ -1109,10 +1109,12 @@ def test_an_aiand_402_from_the_response_body_is_a_rate_limit_error(quiet_excepti
         )
 
     assert raised.value.llm_provider == "aiand"
-    assert raised.value.message == f"litellm.RateLimitError: AiandException - {AIAND_INSUFFICIENT_CREDITS_MESSAGE}"
+    assert (
+        raised.value.message == f"litellm.PermissionDeniedError: AiandException - {AIAND_INSUFFICIENT_CREDITS_MESSAGE}"
+    )
 
 
-def test_an_aiand_402_from_an_unwrapped_body_is_a_rate_limit_error(quiet_exception_mapping):
+def test_an_aiand_402_from_an_unwrapped_body_is_a_permission_denied_error(quiet_exception_mapping):
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
     original_exception = BaseLLMException(
@@ -1130,19 +1132,21 @@ def test_an_aiand_402_from_an_unwrapped_body_is_a_rate_limit_error(quiet_excepti
         },
     )
 
-    with pytest.raises(litellm.RateLimitError) as raised:
+    with pytest.raises(litellm.PermissionDeniedError) as raised:
         exception_type(
             model="test-model",
             original_exception=original_exception,
             custom_llm_provider="aiand",
         )
 
-    assert raised.value.status_code == 429
+    assert raised.value.status_code == 402
     assert raised.value.llm_provider == "aiand"
-    assert raised.value.message == f"litellm.RateLimitError: AiandException - {AIAND_INSUFFICIENT_CREDITS_MESSAGE}"
+    assert (
+        raised.value.message == f"litellm.PermissionDeniedError: AiandException - {AIAND_INSUFFICIENT_CREDITS_MESSAGE}"
+    )
 
 
-def test_an_aiand_402_from_a_non_json_error_str_is_a_rate_limit_error(quiet_exception_mapping):
+def test_an_aiand_402_from_a_non_json_error_str_is_a_permission_denied_error(quiet_exception_mapping):
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
     error_str = (
@@ -1152,16 +1156,16 @@ def test_an_aiand_402_from_a_non_json_error_str_is_a_rate_limit_error(quiet_exce
     )
     original_exception = BaseLLMException(status_code=402, message=error_str)
 
-    with pytest.raises(litellm.RateLimitError) as raised:
+    with pytest.raises(litellm.PermissionDeniedError) as raised:
         exception_type(
             model="test-model",
             original_exception=original_exception,
             custom_llm_provider="aiand",
         )
 
-    assert raised.value.status_code == 429
+    assert raised.value.status_code == 402
     assert raised.value.llm_provider == "aiand"
-    assert raised.value.message == f"litellm.RateLimitError: AiandException - {error_str}"
+    assert raised.value.message == f"litellm.PermissionDeniedError: AiandException - {error_str}"
 
 
 def test_an_aiand_401_invalid_api_key_is_an_authentication_error(quiet_exception_mapping):
@@ -1222,6 +1226,25 @@ def test_an_aiand_404_model_not_found_is_a_not_found_error(quiet_exception_mappi
     assert raised.value.llm_provider == "aiand"
     assert raised.value.model == "test-model"
     assert raised.value.message == "litellm.NotFoundError: AiandException - Model not found"
+
+
+def test_an_aiand_context_window_error_is_a_context_window_exceeded_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=400, message=CONTEXT_WINDOW_MESSAGE)
+
+    with pytest.raises(litellm.ContextWindowExceededError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert type(raised.value) is litellm.ContextWindowExceededError
+    assert raised.value.status_code == 400
+    assert raised.value.llm_provider == "aiand"
+    assert raised.value.model == "test-model"
+    assert f"ContextWindowExceededError: AiandException - {CONTEXT_WINDOW_MESSAGE}" in raised.value.message
 
 
 def test_an_unknown_aiand_error_falls_through_without_raising():

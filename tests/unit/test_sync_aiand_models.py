@@ -106,6 +106,18 @@ def test_updated_price_is_detected_and_rendered() -> None:
     assert outcome.has_changes is True
 
 
+def test_dropped_effort_option_is_reported_and_cleared() -> None:
+    offered = _model(reasoning_options=[{"type": "effort", "values": ["low", "high"]}])
+    baseline = sync.compute_sync({}, sync.load_spec(_spec_json(offered)))
+    outcome = sync.compute_sync(baseline.cost_map, sync.load_spec(_spec_json(_model())))
+    assert outcome.added == ()
+    assert len(outcome.updated) == 1
+    assert outcome.updated[0].startswith("aiand/acme/chat-1:")
+    assert "reasoning_effort_levels" in outcome.updated[0]
+    assert outcome.cost_map["aiand/acme/chat-1"]["reasoning_effort_levels"] == []
+    assert outcome.has_changes is True
+
+
 def test_removed_model_is_stamped_and_counted_as_updated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

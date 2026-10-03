@@ -1839,11 +1839,11 @@ def _map_aiand_exception(
         or "insufficient_credits" in error_str
         or "billing_error" in error_str
     ):
-        raise RateLimitError(
+        raise PermissionDeniedError(
             message=f"{exception_provider} - {message}",
             llm_provider="aiand",
             model=model,
-            response=getattr(original_exception, "response", None),
+            response=_response_or_stub(original_exception, status_code=403),
             litellm_debug_info=extra_information,
         )
     elif status_code == 401 and (error_payload.get("code") == "invalid_api_key" or "invalid_api_key" in error_str):
@@ -2538,7 +2538,7 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
-            elif (
+            if (
                 custom_llm_provider == "openai"
                 or custom_llm_provider == "text-completion-openai"
                 or custom_llm_provider == "custom_openai"

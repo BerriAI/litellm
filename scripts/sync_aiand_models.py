@@ -136,8 +136,7 @@ def _spec_fields(model: SpecModel) -> RegistryEntry:
         "source": SOURCE_URL,
         "supported_endpoints": list(SUPPORTED_ENDPOINTS),
     }
-    if effort_levels:
-        fields["reasoning_effort_levels"] = list(effort_levels)
+    fields["reasoning_effort_levels"] = list(effort_levels)
     return fields
 
 
