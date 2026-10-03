@@ -13,13 +13,15 @@ services:
   litellm:
     image: docker.litellm.ai/berriai/litellm:main-stable
     ports:
-      # LITELLM_BIND is empty by default, so this stays "4000:4000". The quickstart
-      # script sets it to "127.0.0.1:" so new installs listen on this machine only.
-      - "${LITELLM_BIND:-}${LITELLM_PORT:-4000}:4000"
+      # LITELLM_BIND is a plain IP, such as 127.0.0.1 for local-only access.
+      - "${LITELLM_BIND:+${LITELLM_BIND}:}${LITELLM_PORT:-4000}:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in .env - see the header of this file}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set it in .env - see the header of this file}
-      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:-litellm}@db:5432/litellm
+      DATABASE_HOST: db:5432
+      DATABASE_USERNAME: litellm
+      DATABASE_PASSWORD: ${LITELLM_POSTGRES_PASSWORD:-litellm}
+      DATABASE_NAME: litellm
       STORE_MODEL_IN_DB: "True"
     depends_on:
       db:
@@ -29,7 +31,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: litellm
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-litellm}
+      POSTGRES_PASSWORD: ${LITELLM_POSTGRES_PASSWORD:-litellm}
       POSTGRES_DB: litellm
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U litellm"]
