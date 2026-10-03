@@ -76,6 +76,10 @@ jobs:
         run: |
           uv lock --check
 
+      - name: Verify dashboard build helpers
+        if: steps.changes.outputs.decision != 'skip'
+        run: uv run --no-project --with pytest python -m pytest -c /dev/null tests/base_sdk_tests/test_ui_build_scripts.py -q
+
       - name: Set up dashboard Node
         if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
