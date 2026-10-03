@@ -42,13 +42,12 @@ def _ids(response) -> str:
     raise AssertionError(f"no upstream id in {response.text[:200]}")
 
 
-def _tagged_requests(
-    candidate: Gateway, key: str, anthropic_model: str, openai_model: str, stream: bool, index: int
+def _requests(
+    candidate: Gateway, key: str, anthropic_model: str, openai_model: str, stream: bool, marker: str
 ) -> tuple:
-    """One call per route in ROUTES order with the same client headers."""
-    marker: Final = f"burst {index} {uuid.uuid4().hex}"
+    """Deferred calls for one request per route in ROUTES order with the same client headers."""
     return (
-        candidate.request(
+        lambda: candidate.request(
             "POST",
             "/anthropic/v1/messages",
             {
@@ -60,21 +59,21 @@ def _tagged_requests(
             key=key,
             headers=ANTHROPIC_HEADERS,
         ),
-        candidate.request(
+        lambda: candidate.request(
             "POST",
             "/openai/v1/chat/completions",
             {"model": OPENAI_MODEL, "messages": [{"role": "user", "content": marker}], "stream": stream},
             key=key,
             headers=HEADERS,
         ),
-        candidate.request(
+        lambda: candidate.request(
             "POST",
             "/v1/chat/completions",
             {"model": openai_model, "messages": [{"role": "user", "content": marker}]},
             key=key,
             headers=HEADERS,
         ),
-        candidate.request(
+        lambda: candidate.request(
             "POST",
             "/v1/messages",
             {
@@ -85,8 +84,18 @@ def _tagged_requests(
             key=key,
             headers=ANTHROPIC_HEADERS,
         ),
-        candidate.request("POST", "/v1/responses", {"model": openai_model, "input": marker}, key=key, headers=HEADERS),
+        lambda: candidate.request(
+            "POST", "/v1/responses", {"model": openai_model, "input": marker}, key=key, headers=HEADERS
+        ),
     )
+
+
+def _tagged_requests(
+    candidate: Gateway, key: str, anthropic_model: str, openai_model: str, stream: bool, index: int
+) -> tuple:
+    """One call per route in ROUTES order with the same client headers."""
+    marker: Final = f"burst {index} {uuid.uuid4().hex}"
+    return tuple(send() for send in _requests(candidate, key, anthropic_model, openai_model, stream, marker))
 
 
 def _deployments(scenario, url: str) -> tuple[str, str]:
@@ -192,47 +201,48 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
             anthropic_model, openai_model = _deployments(scenario, wire.url)
             key: Final = scenario.key()
 
-            def burst(index: int) -> tuple:
-                return _tagged_requests(candidate, key, anthropic_model, openai_model, stream=False, index=index)
-
-            with ThreadPoolExecutor(max_workers=5) as pool:
-                first: Final = tuple(chain.from_iterable(pool.map(burst, range(3))))
-            assert all(response.status_code == 200 for response in first), [
-                (response.status_code, response.text[:200]) for response in first
-            ]
-
-            def call_ids(responses: Sequence) -> Set[str]:
-                return {response.headers["x-litellm-call-id"] for response in responses}
-
-            first_ids: Final = call_ids(first)
-            first_landed: Final = _landed_tags(key, lambda values: len(values) == len(first))
-            assert len(first_landed) == len(first)
-
-            def events_for(ids: Set[str]) -> Sequence[Mapping]:
-                events: Final = chain.from_iterable(json.loads(batch.body) for batch in delivered)
+            def events_for(batches: Sequence[Request], ids: Set[str]) -> Sequence[Mapping]:
+                events: Final = chain.from_iterable(json.loads(batch.body) for batch in batches)
                 return [event for event in events if event.get("litellm_call_id") in ids]
 
-            eventually(lambda: events_for(first_ids), lambda found: len(found) >= 1, seconds=70)
-            first_events: Final = events_for(first_ids)
+            first: Final = []
+            for index in range(3):
+                first_sends: Final = _requests(
+                    candidate, key, anthropic_model, openai_model, False, f"burst {index} {uuid.uuid4().hex}"
+                )
+                for send in first_sends:
+                    response = send()
+                    assert response.status_code == 200, response.text
+                    first.append(response)
+                    call_id = response.headers["x-litellm-call-id"]
+                    eventually(lambda: events_for(delivered, {call_id}), lambda found: len(found) == 1, seconds=30)
+            first_ids: Final = {response.headers["x-litellm-call-id"] for response in first}
+            first_events: Final = events_for(delivered, first_ids)
             first_occurrences: Final = [event["litellm_call_id"] for event in first_events]
-            assert set(first_occurrences) <= first_ids
-            assert len(first_occurrences) == len(set(first_occurrences)), "duplicate burst-1 delivery"
+            assert sorted(first_occurrences) == sorted(first_ids), "burst-1 sink delivery is not exactly once per call"
             for event in first_events:
                 assert event["request_tags"] == EXPECTED
             down.set()
-            with ThreadPoolExecutor(max_workers=5) as pool:
-                second: Final = tuple(chain.from_iterable(pool.map(lambda i: burst(100 + i), range(3))))
-            assert all(response.status_code == 200 for response in second), [
-                (response.status_code, response.text[:200]) for response in second
-            ]
-            second_ids: Final = call_ids(second)
-            outage_probe: Final = eventually(
-                lambda: (len(rejected), {event["litellm_call_id"] for event in events_for(second_ids)}),
-                lambda state: state[0] >= 1 and state[1] == set(),
-                seconds=30,
-            )
-            assert outage_probe[0] >= 1, "sink saw no rejection during the outage window"
-            assert outage_probe[1] == set(), "burst-2 event delivered to a down sink"
+            second: Final = []
+            for index in range(3):
+                second_sends: Final = _requests(
+                    candidate,
+                    key,
+                    anthropic_model,
+                    openai_model,
+                    False,
+                    f"outage {index} {uuid.uuid4().hex}",
+                )
+                for send in second_sends:
+                    response = send()
+                    assert response.status_code == 200, response.text
+                    second.append(response)
+                    call_id = response.headers["x-litellm-call-id"]
+                    eventually(lambda: events_for(rejected, {call_id}), lambda found: len(found) >= 1, seconds=30)
+            second_ids: Final = {response.headers["x-litellm-call-id"] for response in second}
+            rejected_ids: Final = {event["litellm_call_id"] for event in events_for(rejected, second_ids)}
+            assert rejected_ids == second_ids, "outage burst was not rejected by the down sink"
+            assert events_for(delivered, second_ids) == [], "burst-2 event delivered to a down sink"
             down.clear()
             probe: Final = candidate.request(
                 "POST",
@@ -247,20 +257,19 @@ def test_sink_outage_does_not_lose_spend_log_tags(gateway: Gateway, tmp_path: Pa
             assert probe.status_code == 200, probe.text
             probe_id: Final = probe.headers["x-litellm-call-id"]
             probe_events: Final = eventually(
-                lambda: events_for({probe_id}),
+                lambda: events_for(delivered, {probe_id}),
                 lambda found: len(found) >= 1,
                 seconds=70,
             )
             assert len(probe_events) == 1, "recovery probe delivered to the sink more than once"
             assert probe_events[0]["request_tags"] == EXPECTED
-            responses: Final = [*first, *second, probe]
-            second_events: Final = events_for(second_ids)
+            second_events: Final = events_for(delivered, second_ids)
             second_occurrences: Final = [event["litellm_call_id"] for event in second_events]
             assert len(second_occurrences) == len(set(second_occurrences)), (
                 "duplicate burst-2 delivery after the outage"
             )
 
-            _landed_tags(key, lambda values: len(values) == len(responses))
+            _landed_tags(key, lambda values: len(values) == len(first) + len(second) + 1)
 
 
 def test_worker_kill_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
