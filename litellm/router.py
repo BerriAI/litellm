@@ -87,6 +87,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     is_registered_custom_provider,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -513,9 +514,7 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
         return _NO_SESSION_KWARGS
     if "model" not in typed_session:
         return _NO_SESSION_KWARGS
-    return MappingProxyType(
-        {"session": {**typed_session, "model": model_name}}  # mutable-ok: callees deepcopy and JSON-dump session
-    )
+    return MappingProxyType({"session": {**typed_session, "model": model_name}})
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -635,9 +634,7 @@ class FallbackAwareAnthropicMessagesStream:
         self._async_generator = async_generator
         self._source_iterator = source_iterator
         self.fallback_headers_adopted = False
-        self._hidden_params = dict(  # mutable-ok: mutated in place by merge_fallback_hidden_params
-            getattr(source_iterator, "_hidden_params", None) or {}
-        )
+        self._hidden_params = dict(getattr(source_iterator, "_hidden_params", None) or {})
 
     @property
     def has_buffered_provider_output(self) -> bool:
@@ -689,12 +686,10 @@ class FallbackAwareAnthropicMessagesStream:
         existing_headers: Final = cast(  # cast-ok: additional_headers is always a dict[str, object] when present
             "dict[str, object]", self._hidden_params.get("additional_headers") or {}
         )
-        self._hidden_params = {  # mutable-ok: matches _hidden_params' existing dict[str, object] shape
+        self._hidden_params = {
             **self._hidden_params,
             **fallback_hidden_params,
-            "additional_headers": dict(  # mutable-ok: hidden params expect a writable header bag
-                replace_complexity_router_headers(existing_headers, fallback_headers)
-            ),
+            "additional_headers": dict(replace_complexity_router_headers(existing_headers, fallback_headers)),
         }
 
 
@@ -741,12 +736,12 @@ class FallbackAwareStreamWrapper(CustomStreamWrapper):
         self._response_headers = getattr(fallback_response, "_response_headers", None)
         fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
         if fallback_hidden_params:
-            self._hidden_params = {  # mutable-ok: the rest of litellm writes into _hidden_params
+            self._hidden_params = {
                 **fallback_hidden_params,
                 # dict() because add_retry_fallback_headers mutates additional_headers in place
-                "additional_headers": dict(fallback_headers),  # mutable-ok: see above
+                "additional_headers": dict(fallback_headers),
             }
-            self._base_hidden_params = {  # mutable-ok: CustomStreamWrapper keeps this snapshot as a dict
+            self._base_hidden_params = {
                 **self._hidden_params,
                 "response_cost": None,
             }
@@ -1589,7 +1584,7 @@ class Router:
         routing_group: Final = self.get_routing_group(model)
         if routing_group is None:
             return None
-        return [  # mutable-ok: matches _get_all_deployments' list contract expected by downstream filters
+        return [
             apply_routing_group_priority(routing_group, member, deployment)
             for member in routing_group.models
             for deployment in self._get_all_deployments(model_name=member, team_id=team_id)
@@ -1813,7 +1808,6 @@ class Router:
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: dict | None,
-        prefetched_usage: PrefetchedUsage | None = None,
     ) -> Any | None:
         """
         Asks the strategy selector for a deployment. Caller handles
@@ -1838,14 +1832,6 @@ class Router:
                     healthy_deployments=healthy_deployments,
                     messages=messages,
                     input=input,
-                )
-            case "usage-based-routing-v2" if isinstance(selector, LowestTPMLoggingHandler_v2):
-                return await selector.async_get_available_deployments(
-                    model_group=model,
-                    healthy_deployments=healthy_deployments,
-                    messages=messages,
-                    input=input,
-                    prefetched_usage=prefetched_usage,
                 )
             case "usage-based-routing-v2" | "cost-based-routing":
                 return await selector.async_get_available_deployments(
@@ -2473,7 +2459,7 @@ class Router:
         ``*.effort`` must not remain beside it and either win or trigger a conflicting-params 400.
         Every changed mapping is copied so the Router's shared deployment config stays immutable.
         """
-        sanitized: Final = dict(deployment_params)  # mutable-ok: request-local copy protects shared Router state
+        sanitized: Final = dict(deployment_params)
         if request_kwargs.get("reasoning_effort") is None:
             return sanitized
 
@@ -2483,7 +2469,7 @@ class Router:
 
         extra_body: Final = sanitized.get("extra_body")
         if isinstance(extra_body, Mapping):
-            sanitized_extra_body: Final = dict(extra_body)  # mutable-ok: request-local nested copy
+            sanitized_extra_body: Final = dict(extra_body)
             sanitized_extra_body.pop("reasoning_effort", None)
             sanitized_extra_body.pop("thinking", None)
             Router._pop_effort_from_nested_carrier(sanitized_extra_body, "output_config")
@@ -3344,7 +3330,7 @@ class Router:
 
             def adopt_fallback_headers(self, fallback_response: object) -> tuple[dict[str, object], dict[str, object]]:
                 prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
-                self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}  # mutable-ok: stream metadata
+                self._hidden_params = {**prepared[0], "additional_headers": prepared[1]}
                 self.fallback_headers_adopted = True
                 return prepared
 
@@ -6956,7 +6942,7 @@ class Router:
                 "avector_store_delete",
             ):
                 vector_store_kwargs: Final = (
-                    {  # mutable-ok: the async routed request requires dynamic keyword arguments
+                    {
                         **kwargs,
                         "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
                             router=self,
@@ -8822,6 +8808,41 @@ class Router:
                     model_info[field] = backend_value
 
     @staticmethod
+    def _cost_map_backend_model(deployment: Deployment) -> str:
+        model_info_base_model: Final = deployment.model_info.base_model
+        if isinstance(model_info_base_model, str) and model_info_base_model:
+            return model_info_base_model
+        params_base_model: Final = deployment.litellm_params.get("base_model")
+        if isinstance(params_base_model, str) and params_base_model:
+            return params_base_model
+        return deployment.litellm_params.model
+
+    @staticmethod
+    def _inherit_builtin_service_tier_pricing(
+        model_info: dict,  # mutable-ok: deployment cost-map entry filled in place
+        backend_model: str,
+        custom_llm_provider: str | None,
+    ) -> None:
+        """Inherit missing tier rates so a standalone entry does not fall back to custom standard rates."""
+        if ptu_terms(model_info) is not None and is_ptu_cost_attribution_enabled():
+            return
+        if all(model_info.get(field) is None for field in ("input_cost_per_token", "output_cost_per_token")):
+            return
+        try:
+            backend_info: Final = litellm.get_model_info(model=backend_model, custom_llm_provider=custom_llm_provider)
+        except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped backend model
+            return
+        backend_entry: Final = litellm.model_cost.get(backend_info.get("key") or "")
+        if not isinstance(backend_entry, dict):
+            return
+        for field, backend_value in backend_entry.items():
+            if not field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES):
+                continue
+            if model_info.get(field) is not None or backend_value is None:
+                continue
+            model_info[field] = copy.deepcopy(backend_value)
+
+    @staticmethod
     def _inherit_builtin_base_rates_for_off_peak(
         model_info: dict,  # mutable-ok: cost-map entry filled in place
         backend_model: str,
@@ -8969,6 +8990,11 @@ class Router:
                     backend_model=deployment.litellm_params.model,
                     custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 )
+            Router._inherit_builtin_service_tier_pricing(
+                model_info=_model_info,
+                backend_model=Router._cost_map_backend_model(deployment),
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
             Router._inherit_builtin_tiered_output_rate(
                 model_info=_model_info,
                 backend_model=deployment.litellm_params.model,
@@ -10009,6 +10035,11 @@ class Router:
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info,
+            backend_model=Router._cost_map_backend_model(deployment),
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
             backend_model=deployment.litellm_params.model,
@@ -10054,9 +10085,7 @@ class Router:
         requests that route to (and bill as) a real deployment.
         """
         if classify_strategy_router_model(model) is not None:
-            model_info = {  # mutable-ok: filtered copy of the caller's entry, handed straight to register_model
-                k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields
-            }
+            model_info = {k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields}
 
         if model_id is not None:
             litellm.register_model(
@@ -10797,7 +10826,7 @@ class Router:
 
         try:
             custom_model_info = (
-                {  # mutable-ok: the legacy model-info merge updates this private copy
+                {
                     **copy.deepcopy(litellm.model_cost.get(model_id) or MappingProxyType({})),
                     **self.get_discovered_model_info(model_id),
                 }
@@ -11880,10 +11909,8 @@ class Router:
         the group, so inheriting them here would let a key holding a member's
         access group list and call the whole group.
         """
-        model_info: Final = {  # mutable-ok: DeploymentTypedDict rows are plain dicts
-            k: v for k, v in (deployment.get("model_info") or {}).items() if k != "access_groups"
-        }
-        return {**deployment, "model_info": model_info}  # mutable-ok: DeploymentTypedDict rows are plain dicts
+        model_info: Final = {k: v for k, v in (deployment.get("model_info") or {}).items() if k != "access_groups"}
+        return {**deployment, "model_info": model_info}
 
     TIER_PARAMS_NEVER_DROPPED: Final = frozenset(all_litellm_params) | frozenset(
         {
@@ -12866,9 +12893,7 @@ class Router:
         self, model: str, deployments: Sequence[DeploymentTypedDict]
     ) -> list[DeploymentTypedDict]:
         """A strategy marker is never a callable deployment, whichever resolution arm produced it."""
-        selectable: Final = [  # mutable-ok: matches _common_checks_available_deployment's list contract
-            d for d in deployments if not self._is_strategy_marker_deployment(d)
-        ]
+        selectable: Final = [d for d in deployments if not self._is_strategy_marker_deployment(d)]
         if deployments and not selectable:
             raise litellm.BadRequestError(
                 message=f"You passed in model={model}. {RouterErrors.only_strategy_marker_deployments.value}",
@@ -12958,7 +12983,6 @@ class Router:
         specific_deployment: bool | None = False,
         parent_otel_span: Span | None = None,
         health_check_probe: bool = False,
-        routing_read_batch: RoutingReadBatch | None = None,
     ) -> list[dict] | dict:
         """
         Get the healthy deployments for a model.
@@ -13011,6 +13035,7 @@ class Router:
             health_check_probe=health_check_probe,
         )
 
+        routing_read_batch: Final = RoutingReadBatch.active()
         cooldown_deployments: Final = (
             await _async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
             if routing_read_batch is None
@@ -13298,15 +13323,15 @@ class Router:
             strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
             routing_read_batch: Final = RoutingReadBatch.for_strategy(strategy, strategy_selector)
 
-            healthy_deployments: Final = await self.async_get_healthy_deployments(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-                parent_otel_span=parent_otel_span,
-                routing_read_batch=routing_read_batch,
-            )
+            with RoutingReadBatch.scoped(routing_read_batch):
+                healthy_deployments: Final = await self.async_get_healthy_deployments(
+                    model=model,
+                    request_kwargs=request_kwargs,
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                    parent_otel_span=parent_otel_span,
+                )
             if isinstance(healthy_deployments, dict):
                 await self._async_override_selector_pre_call_check(
                     strategy, strategy_selector, healthy_deployments, parent_otel_span
@@ -13328,16 +13353,18 @@ class Router:
                     model=model,
                     request_kwargs=request_kwargs,
                 )
-            deployment: Final = await self._select_deployment_async(
-                strategy=strategy,
-                selector=strategy_selector,
-                model=model,
-                healthy_deployments=healthy_deployments,
-                messages=messages,
-                input=input,
-                request_kwargs=request_kwargs,
-                prefetched_usage=routing_read_batch.prefetched_usage if routing_read_batch is not None else None,
-            )
+            with PrefetchedUsage.scoped(
+                routing_read_batch.prefetched_usage if routing_read_batch is not None else None
+            ):
+                deployment: Final = await self._select_deployment_async(
+                    strategy=strategy,
+                    selector=strategy_selector,
+                    model=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
                     litellm_router_instance=self,
@@ -13872,7 +13899,7 @@ class Router:
         # deployment-context filtering key off this field. Compared by value, since
         # pydantic rebuilds the list rather than keeping the object passed in.
         pre_routing_hook_response: Final = (
-            routed.model_copy(update={"messages": messages})  # mutable-ok: pydantic's model_copy takes a dict
+            routed.model_copy(update={"messages": messages})
             if routed is not None and routing_messages is not None and routed.messages == routing_messages
             else routed
         )
@@ -14516,7 +14543,7 @@ class Router:
         ]
 
         if not filtered:
-            return [] if health_check_probe else healthy_deployments  # mutable-ok: empty list signals unavailable probe
+            return [] if health_check_probe else healthy_deployments
 
         return filtered
 

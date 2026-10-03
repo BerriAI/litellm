@@ -178,7 +178,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         Authentication itself happens in sign_request(): bearer token for
         CUSTOM_JWT gateways, AWS SigV4 for AWS_IAM gateways.
         """
-        return {  # mutable-ok: httpx request headers are a dict
+        return {
             **headers,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -234,13 +234,13 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
                 "Other gateway tools cannot be invoked through this provider."
             )
 
-        return {  # mutable-ok: JSON-RPC request bodies are JSON objects
+        return {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {  # mutable-ok: JSON-RPC request bodies are JSON objects
+            "params": {
                 "name": tool_name,
-                "arguments": {  # mutable-ok: JSON-RPC request bodies are JSON objects
+                "arguments": {
                     "query": joined_query[:AGENTCORE_MAX_QUERY_LENGTH],
                     "maxResults": optional_params.get("max_results", AGENTCORE_DEFAULT_MAX_RESULTS),
                 },
@@ -286,7 +286,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             default_api_base=api_base if gateway_host_match else None,
         )
         if bearer_token:
-            bearer_headers: Final = {  # mutable-ok: httpx request headers are a dict
+            bearer_headers: Final = {
                 **headers,
                 "Authorization": f"Bearer {bearer_token}",
             }
@@ -302,7 +302,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         signing_params: Final = (
             optional_params
             if optional_params.get("aws_region_name") is not None
-            else {  # mutable-ok: BaseAWSLLM._sign_request takes optional params as a dict
+            else {
                 **optional_params,
                 "aws_region_name": self._signing_region(api_base),
             }
@@ -398,7 +398,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         structured: Final = result.get("structuredContent") if isinstance(result, Mapping) else None
         items: Final = text_items or _result_items(structured)
 
-        results: Final = [_to_search_result(item) for item in items]  # mutable-ok: pydantic list field
+        results: Final = [_to_search_result(item) for item in items]
 
         return SearchResponse(results=results, object="search")
 

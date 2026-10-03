@@ -83,12 +83,13 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   rust-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: litellm-rust
@@ -121,6 +122,7 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: cargo nextest run --workspace --locked
 
@@ -162,6 +164,7 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: uv build --wheel --out-dir dist
 

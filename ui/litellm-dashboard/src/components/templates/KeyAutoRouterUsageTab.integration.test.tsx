@@ -34,11 +34,11 @@ const stats = {
   spend: 1.25,
   savings_estimated_turns: 4,
   savings_estimated_actual_spend: 1.25,
+  savings_estimated_classifier_cost: 0.25,
   classifier_cost: 0.25,
   saved_spend: 8.75,
   baseline_spend: 10,
   saved_pct: 87.5,
-  saved_per_session: 4.375,
   cache,
 };
 

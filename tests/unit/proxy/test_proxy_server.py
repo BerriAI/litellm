@@ -263,7 +263,7 @@ def test_add_headers_to_request(litellm_key_header_name):
         "X-Stainless-Header": "Stainless-Value",
         "anthropic-beta": "beta-value",
     }
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
     request._body = json.dumps({"model": "gpt-3.5-turbo"}).encode("utf-8")
     request_headers = clean_headers(headers, litellm_key_header_name)
@@ -466,7 +466,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     body = {"metadata": {"guardrails": {"hide_secrets": False}}}
@@ -1347,7 +1347,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
 
     from starlette.datastructures import URL
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": team_route, "headers": []})
     request._url = URL(url=team_route)
 
     body = {}

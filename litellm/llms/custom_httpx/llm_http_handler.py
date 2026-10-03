@@ -363,7 +363,7 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
         _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
     )
 
-    return {  # mutable-ok: logging's curl and raw-request builders take dict
+    return {
         **transformed_request,
         "headers": _get_masked_values(request_headers),
     }
@@ -2559,7 +2559,7 @@ class BaseLLMHTTPHandler:
         )
 
         if self._has_agentic_completion_hook(logging_obj):
-            agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
+            agentic_kwargs: Final = dict(litellm_params)
             final_response: Final = run_async_function(
                 self._call_agentic_completion_hooks,
                 response=initial_response,
@@ -2754,7 +2754,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
-        agentic_kwargs: Final = dict(litellm_params)  # mutable-ok: agentic hooks mutate kwargs in place
+        agentic_kwargs: Final = dict(litellm_params)
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -4735,9 +4735,7 @@ class BaseLLMHTTPHandler:
         files_per_page: Final = self._files_per_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, sync_httpx_client, timeout
         )
-        return [  # mutable-ok: the files contract returns the listing as a list
-            listed_file for page_files in files_per_page for listed_file in page_files
-        ]
+        return [listed_file for page_files in files_per_page for listed_file in page_files]
 
     async def async_list_files(
         self,
@@ -4792,9 +4790,7 @@ class BaseLLMHTTPHandler:
         files_per_page: Final = self._files_per_async_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, async_httpx_client, timeout
         )
-        return [  # mutable-ok: the files contract returns the listing as a list
-            listed_file async for page_files in files_per_page for listed_file in page_files
-        ]
+        return [listed_file async for page_files in files_per_page for listed_file in page_files]
 
     def _files_per_listing_page(
         self,
@@ -9704,7 +9700,7 @@ class BaseLLMHTTPHandler:
         logging_obj.pre_call(
             input="",
             api_key="",
-            additional_args={  # mutable-ok: pre_call's additional_args contract is a dict
+            additional_args={
                 "query": query,
                 "vector_store_id": vector_store_id,
                 "api_base": endpoint,
@@ -9740,7 +9736,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                litellm_params=dict(litellm_params),
                 embedding_executor=embedding_executor,
                 timeout=timeout,
             )
@@ -9880,7 +9876,7 @@ class BaseLLMHTTPHandler:
                 query=query,
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),  # mutable-ok: snapshot GenericLiteLLMParams into the Mapping shape
+                litellm_params=dict(litellm_params),
                 embedding_executor=embedding_executor,
                 timeout=timeout,
             )
