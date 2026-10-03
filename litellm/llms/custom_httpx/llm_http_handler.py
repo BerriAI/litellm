@@ -398,18 +398,13 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 
 
-def _header_value(headers: Mapping[str, str], name: str) -> str | None:
-    """Read a header through the ``Mapping[str, str]`` interface ``httpx.Headers`` implements."""
-    return headers.get(name)
-
-
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
     """
     `aiter_bytes` yields the decoded body, so the upstream transfer headers only
     describe the bytes on the wire when no content-encoding was applied.
     """
-    content_encoding: Final = _header_value(response.headers, "content-encoding")
-    if content_encoding is None or content_encoding.lower() == "identity":
+    headers: Final[Mapping[str, str]] = response.headers
+    if headers.get("content-encoding", "identity").lower() == "identity":
         return response.headers
     return httpx.Headers(
         [
@@ -3299,7 +3294,8 @@ class BaseLLMHTTPHandler:
         """
         if upload_url_location == "headers":
             # Google Cloud Storage style - URL in X-Goog-Upload-URL header
-            upload_url = _header_value(response.headers, "X-Goog-Upload-URL")
+            upload_headers: Final[Mapping[str, str]] = response.headers
+            upload_url = upload_headers.get("X-Goog-Upload-URL")
             return upload_url, None
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
@@ -5996,7 +5992,7 @@ class BaseLLMHTTPHandler:
             error_text = e.response.text
         else:
             error_text = getattr(e, "text", str(e))
-        error_response: Final[object] = getattr(e, "response", None)
+        error_response: Final = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
