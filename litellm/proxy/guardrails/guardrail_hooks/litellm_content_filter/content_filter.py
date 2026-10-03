@@ -77,6 +77,24 @@ GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
 
+def _is_word_char_pattern(s: str) -> bool:
+    """
+    Check if a string consists only of word characters (alphanumeric or underscore).
+
+    Word boundaries (\\b) only work around word characters [a-zA-Z0-9_].
+    Punctuation-only identifiers like ">", "=" require different handling.
+
+    This is a module-level helper for consistent keyword matching in content filter.
+
+    Args:
+        s: String to check
+
+    Returns:
+        True if all characters in s are word characters, False otherwise
+    """
+    return bool(s) and all(c.isalnum() or c == "_" for c in s)
+
+
 WORD_NUMBER_MAP: Final = {
     "zero": "0",
     "oh": "0",
@@ -964,6 +982,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         This implements logic like: if text contains both an identifier word (e.g., "minor")
         AND a block word (e.g., "romantic"), then block it.
 
+        NOTE on inflected forms: Word boundary matching means base forms like "alter"
+        will NOT match inflected forms like "alters", "altered", or "altering".
+        This is an intentional trade-off to avoid false positives (e.g., "alter" in
+        "alternative"). For stronger coverage of SQL keywords, configure multiple
+        related keywords in your policy.
+
         Args:
             text: Text to check
             exceptions: List of exception phrases to ignore
@@ -1028,8 +1052,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                             block_word_found = block_word
                             break
                     else:
-                        # Single word - use word boundary
-                        pattern = r"\b" + re.escape(block_word) + r"\b"
+                        # Single word - use word boundary for alphanumeric words
+                        # Punctuation-only identifiers need substring matching
+                        if _is_word_char_pattern(block_word):
+                            pattern = r"\b" + re.escape(block_word) + r"\b"
+                        else:
+                            pattern = re.escape(block_word)
                         if re.search(pattern, sentence_lower):
                             block_word_found = block_word
                             break
@@ -1200,10 +1228,22 @@ class ContentFilterGuardrail(CustomGuardrail):
             return None
 
         text_lower: Final = text.lower()
+        import re
+
         for keyword, (action, description) in self.blocked_words.items():
-            if keyword in text_lower:
-                verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
-                return (keyword, action, description)
+            # Use word boundaries for word-character keywords to prevent false positives
+            # (e.g., "alternative" matching "alter")
+            # Punctuation-only keywords (e.g., "=", ">") use substring matching
+            if _is_word_char_pattern(keyword):
+                pattern = r"\b" + re.escape(keyword) + r"\b"
+                if re.search(pattern, text_lower):
+                    verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
+                    return (keyword, action, description)
+            else:
+                # Punctuation-only: use substring matching
+                if keyword in text_lower:
+                    verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
+                    return (keyword, action, description)
         return None
 
     def _handle_conditional_match(
@@ -1986,7 +2026,11 @@ class ContentFilterGuardrail(CustomGuardrail):
         cut_sentence: Final = (
             SENTENCE_TERMINATORS.split(head.lower())[-1] + SENTENCE_TERMINATORS.split(tail_lower, maxsplit=1)[0]
         )
-        return any(word in cut_sentence for word in plan.conditional_words)
+        # Check if any conditional word appears in the cut_sentence
+        for word in plan.conditional_words:
+            if word in cut_sentence:
+                return True
+        return False
 
     def _trim_streamed_choice_buffer(
         self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
