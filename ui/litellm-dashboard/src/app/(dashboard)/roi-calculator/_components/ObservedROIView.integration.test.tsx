@@ -81,6 +81,7 @@ describe("observed ROI dashboard", () => {
     const user = userEvent.setup();
     render(<ObservedROIView accessToken="test-only-gateway-token" />);
     expect(await screen.findByRole("tab", { name: "Merge requests", selected: true })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Quality" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Provider temporarily unavailable");
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await user.click(await screen.findByRole("button", { name: "Cancel sync" }));
@@ -90,6 +91,7 @@ describe("observed ROI dashboard", () => {
     expect(await screen.findByRole("button", { name: "Cancel sync" })).toBeEnabled();
     completeOnPoll = true;
     expect(await screen.findByText("org/updated", {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Quality", selected: true })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
   });
 

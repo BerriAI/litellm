@@ -380,6 +380,7 @@ function Report({
   actions: React.ReactNode;
 }) {
   const [comparison, setComparison] = useState<Comparison>("previous");
+  const [activeTab, setActiveTab] = useState(snapshot.people.length ? "people" : "pulls");
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [personEmail, setPersonEmail] = useState<string | null>(null);
   const person = snapshot.people.find((entry) => entry.email === personEmail) ?? null;
@@ -489,7 +490,7 @@ function Report({
           </Button>
         )}
       </div>
-      <Tabs defaultValue={snapshot.people.length ? "people" : "pulls"} className="gap-5">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-5">
         <PageTabsList>
           <PageTabsTrigger value="people">
             Engineers <span className="ml-1.5 text-muted-foreground">{snapshot.people.length}</span>
