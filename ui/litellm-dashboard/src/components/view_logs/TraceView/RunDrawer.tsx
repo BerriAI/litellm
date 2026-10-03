@@ -151,6 +151,7 @@ const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps) {
   const [width, setWidth] = useDrawerWidth();
   const [fullScreen, setFullScreen] = useState(false);
+  if (trace === null && fullScreen) setFullScreen(false);
   const [lastShown, setLastShown] = useState<TraceSummary | null>(trace);
   const [exitedKey, setExitedKey] = useState<string | null>(null);
   if (trace !== null && trace !== lastShown) setLastShown(trace);
