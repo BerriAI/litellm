@@ -1379,6 +1379,10 @@ async def _common_key_generation_helper(
         )
         _budget_id = getattr(_budget, "budget_id", None)
 
+    created_budget_id: Final[str | None] = (
+        _budget_id if prisma_client is not None and data.soft_budget is not None else None
+    )
+
     # ADD METADATA FIELDS
     # Set Management Endpoint Metadata Fields
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
@@ -1484,9 +1488,15 @@ async def _common_key_generation_helper(
             for _op_field, _op_default_value in _default_object_permission.items():
                 _caller_object_permission.setdefault(_op_field, _op_default_value)
 
+    should_create_object_permission: Final = prisma_client is not None and isinstance(
+        data_json.get("object_permission"), dict
+    )
     data_json = await _set_object_permission(
         data_json=data_json,
         prisma_client=prisma_client,
+    )
+    created_object_permission_id: Final[str | None] = (
+        cast(str | None, data_json.get("object_permission_id")) if should_create_object_permission else None
     )
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
@@ -1555,7 +1565,19 @@ async def _common_key_generation_helper(
                 prisma_client=prisma_client,
             )
 
-    response = await generate_key_helper_fn(request_type="key", **data_json, table_name="key", llm_router=llm_router)
+    try:
+        response = await generate_key_helper_fn(
+            request_type="key", **data_json, table_name="key", llm_router=llm_router
+        )
+    except KeyProjectTeamMismatchError:
+        if prisma_client is not None:
+            if created_object_permission_id is not None:
+                await ObjectPermissionRepository(prisma_client).table.delete(
+                    where={"object_permission_id": created_object_permission_id}
+                )
+            if created_budget_id is not None:
+                await BudgetRepository(prisma_client).table.delete(where={"budget_id": created_budget_id})
+        raise
 
     response["soft_budget"] = data.soft_budget  # include the user-input soft budget in the response
 
@@ -1831,7 +1853,7 @@ async def _check_key_project_team(
     if project_obj.team_id is None or project_obj.team_id == key_team_id:
         return
 
-    raise HTTPException(
+    raise KeyProjectTeamMismatchError(
         status_code=400,
         detail={
             "error": (
@@ -1841,6 +1863,10 @@ async def _check_key_project_team(
             )
         },
     )
+
+
+class KeyProjectTeamMismatchError(HTTPException):
+    pass
 
 
 async def _check_key_project_team_on_mutation(

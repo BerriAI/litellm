@@ -56,6 +56,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
+    KeyProjectTeamMismatchError,
     _effective_key_after_update,
     _effective_key_for_generate,
     _enforce_custom_key_policy,
@@ -1821,6 +1822,117 @@ async def test_generate_service_account_works_with_team_id():
             litellm_changed_by=None,
             team_table=None,
         )
+
+
+def _identity_json_object(value: dict[str, object]) -> dict[str, object]:
+    return value
+
+
+def _key_generation_prisma_client(
+    project_record: dict[str, str] | None,
+) -> tuple[MagicMock, MagicMock, MagicMock]:
+    prisma_client: Final = MagicMock()
+    prisma_client.jsonify_object.side_effect = _identity_json_object
+
+    budget_table: Final = MagicMock()
+    budget_table.create = AsyncMock(return_value=MagicMock(budget_id="created-budget-id"))
+    budget_table.delete = AsyncMock()
+    object_permission_table: Final = MagicMock()
+    object_permission_table.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="created-object-permission-id")
+    )
+    object_permission_table.delete = AsyncMock()
+
+    prisma_client.db.litellm_budgettable = budget_table
+    prisma_client.db.litellm_objectpermissiontable = object_permission_table
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=project_record)
+    prisma_client.insert_data = AsyncMock()
+    return prisma_client, budget_table, object_permission_table
+
+
+@pytest.mark.asyncio
+async def test_rejected_key_generation_deletes_created_budget_and_default_permission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma_client, budget_table, object_permission_table = _key_generation_prisma_client(
+        {"project_id": "project-b", "team_id": "team-b"}
+    )
+    monkeypatch.setattr(litellm, "key_generation_settings", None)
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"object_permission": {"vector_stores": ["default-vector-store"]}},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+    with pytest.raises(KeyProjectTeamMismatchError) as exc:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                budget_id="caller-budget-id",
+                project_id="project-b",
+                soft_budget=3.5,
+                team_id="team-a",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert exc.value.status_code == 400
+    budget_table.create.assert_awaited_once()
+    budget_table.delete.assert_awaited_once_with(where={"budget_id": "created-budget-id"})
+    object_permission_table.create.assert_awaited_once_with(data={"vector_stores": ["default-vector-store"]})
+    object_permission_table.delete.assert_awaited_once_with(
+        where={"object_permission_id": "created-object-permission-id"}
+    )
+    prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_key_generation_does_not_delete_rows_for_other_http_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prisma_client, budget_table, object_permission_table = _key_generation_prisma_client(None)
+    monkeypatch.setattr(litellm, "key_generation_settings", None)
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"object_permission": {"vector_stores": ["default-vector-store"]}},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+    with pytest.raises(HTTPException) as exc:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                project_id="project-b",
+                router_settings={"weights": {"gpt-4": {"unknown-deployment": 1.0}}},
+                soft_budget=3.5,
+                team_id="team-a",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert type(exc.value) is HTTPException
+    assert exc.value.status_code == 400
+    budget_table.create.assert_awaited_once()
+    budget_table.delete.assert_not_awaited()
+    object_permission_table.create.assert_awaited_once_with(data={"vector_stores": ["default-vector-store"]})
+    object_permission_table.delete.assert_not_awaited()
 
 
 @pytest.mark.asyncio

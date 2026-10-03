@@ -89,6 +89,13 @@ def _object_permission_table_rows() -> list[dict[str, JsonValue]]:
     )
 
 
+def _budget_table_rows() -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT to_jsonb(b) AS row FROM "LiteLLM_BudgetTable" AS b ORDER BY budget_id',
+        (),
+    )
+
+
 def _budget_rows(budget_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
         'SELECT to_jsonb(b) AS row FROM "LiteLLM_BudgetTable" AS b WHERE budget_id = %s',
@@ -337,13 +344,25 @@ def test_service_account_generate_rejects_foreign_team_project_without_writing_k
         team_b: Final = scenario.team(models=[model])
         project_b: Final = scenario.project(team_b, models=[model])
         alias: Final = f"service-account-{uuid4().hex}"
+        vector_store: Final = f"vector-store-{uuid4().hex}"
+        budget_rows_before: Final = _budget_table_rows()
+        object_permission_rows_before: Final = _object_permission_table_rows()
         response: Final = ownership_gateway.request(
             "POST",
             "/key/service-account/generate",
-            {"team_id": team_a, "project_id": project_b, "key_alias": alias, "models": [model]},
+            {
+                "team_id": team_a,
+                "project_id": project_b,
+                "key_alias": alias,
+                "models": [model],
+                "soft_budget": 3.5,
+                "object_permission": {"vector_stores": [vector_store]},
+            },
         )
         _discard_unexpected_key(ownership_gateway, response)
         assert response.status_code == 400, response.text
+        assert _budget_table_rows() == budget_rows_before
+        assert _object_permission_table_rows() == object_permission_rows_before
         assert (
             read_rows(
                 'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s AND key_alias = %s',
@@ -1082,17 +1101,33 @@ def test_key_generate_rejects_foreign_team_project(ownership_gateway: Gateway) -
         team_a: Final = scenario.team(models=[model])
         team_b: Final = scenario.team(models=[model])
         project_b: Final = scenario.project(team_b, models=[model])
+        alias: Final = f"cross-team-{uuid4().hex}"
+        vector_store: Final = f"vector-store-{uuid4().hex}"
+        budget_rows_before: Final = _budget_table_rows()
+        object_permission_rows_before: Final = _object_permission_table_rows()
         cross_team: Final = ownership_gateway.request(
             "POST",
             "/key/generate",
-            {"team_id": team_a, "project_id": project_b, "models": [model]},
+            {
+                "team_id": team_a,
+                "project_id": project_b,
+                "key_alias": alias,
+                "models": [model],
+                "soft_budget": 3.5,
+                "object_permission": {"vector_stores": [vector_store]},
+            },
         )
         _discard_unexpected_key(ownership_gateway, cross_team)
         assert cross_team.status_code == 400, cross_team.text
-        assert read_rows(
-            'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s AND team_id = %s',
-            (project_b, team_a),
-        ) == []
+        assert _budget_table_rows() == budget_rows_before
+        assert _object_permission_table_rows() == object_permission_rows_before
+        assert (
+            read_rows(
+                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s AND team_id = %s',
+                (project_b, team_a),
+            )
+            == []
+        )
 
 
 def test_key_generate_rejects_missing_team_for_owned_project(ownership_gateway: Gateway) -> None:
