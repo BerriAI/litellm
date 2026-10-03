@@ -119,6 +119,10 @@ class SpendLinkedTable(Protocol[RowT_co]):
 
 
 class FindManyTable(Protocol[RowT_co]):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[RowT_co]: ...
+
+
+class FindManyIncludeTable(Protocol[RowT_co]):
     async def find_many(
         self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
     ) -> Sequence[RowT_co]: ...

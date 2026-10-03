@@ -11,11 +11,17 @@ keeps headroom under the cap), runs them one after another (a transaction handle
 `<> ALL($1::text[])` in raw SQL or a relation filter instead.
 """
 
-from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from itertools import accumulate, chain, repeat, takewhile
-from typing import Final, Literal, TypeAlias, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar, cast
 
-from litellm.repositories.prisma_protocols import CountTable, DeleteManyTable, FindManyTable, UpdateManyTable
+from litellm.repositories.prisma_protocols import (
+    CountTable,
+    DeleteManyTable,
+    FindManyIncludeTable,
+    FindManyTable,
+    UpdateManyTable,
+)
 
 IN_LIST_CHUNK_SIZE: Final = 5_000
 MAX_IN_LIST_CHUNK_SIZE: Final = 30_000
@@ -89,6 +95,18 @@ async def _each_chunk(
     return tuple([await run(_chunk_filter(field, unique[start : start + chunk_size], where)) for start in starts])
 
 
+def _find_many_runner(
+    table: FindManyTable[RowT],
+    include: Mapping[str, object] | None,
+) -> Callable[[Mapping[str, object]], Awaitable[Sequence[RowT]]]:
+    if include is None:
+        return lambda chunk: table.find_many(where=chunk)
+    include_table: Final = cast(  # cast-ok: callers only pass include for include-capable tables
+        FindManyIncludeTable[RowT], table
+    )
+    return lambda chunk: include_table.find_many(where=chunk, include=include)
+
+
 async def find_many_in(
     table: FindManyTable[RowT],
     field: str,
@@ -99,9 +117,7 @@ async def find_many_in(
     chunk_size: int = IN_LIST_CHUNK_SIZE,
 ) -> tuple[RowT, ...]:
     """Rows in chunk order. No take/skip/cursor/order/distinct: none of them survive a split."""
-    pages: Final = await _each_chunk(
-        field, values, where, lambda chunk: table.find_many(where=chunk, include=include), chunk_size
-    )
+    pages: Final = await _each_chunk(field, values, where, _find_many_runner(table, include), chunk_size)
     return tuple(chain.from_iterable(pages))
 
 
