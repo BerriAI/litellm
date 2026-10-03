@@ -200,6 +200,20 @@ def test_a_line_another_worker_is_still_writing_is_read_once_it_is_complete(tmp_
     assert reader.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
 
 
+def test_a_line_cut_short_by_a_full_disk_admits_nothing_and_stops_no_worker(tmp_path: Path):
+    admissions_file: Final = tmp_path / f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}litellm_requests_metric"
+    admissions_file.write_bytes(b'["user-a\n')
+    writer: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+    reader: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
+
+    assert writer.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
+    assert reader.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
+    assert reader.admit_series("litellm_requests_metric", ("user-c",), max_series=2)
+    assert writer.admit_series("litellm_requests_metric", ("user-c",), max_series=2)
+    assert not writer.admit_series("litellm_requests_metric", ("user-a",), max_series=2)
+    assert not reader.admit_series("litellm_requests_metric", ("user-a",), max_series=2)
+
+
 def test_wiping_the_multiprocess_dir_frees_every_admitted_slot(tmp_path: Path):
     before_restart: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
     assert before_restart.admit_series("litellm_requests_metric", ("user-a",), max_series=1)

@@ -4,11 +4,20 @@ import os
 from threading import RLock
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 
 _LABEL_VALUES: Final = TypeAdapter(tuple[str, ...])
+
+
+def _parse_admission(line: bytes) -> tuple[str, ...] | None:
+    """A line a worker could only write part of, which happens when the directory runs out of space, admits
+    nothing for every worker rather than stopping every worker from reading the lines after it."""
+    try:
+        return _LABEL_VALUES.validate_json(line)
+    except ValidationError:
+        return None
 
 
 class _MetricAdmissions:
@@ -54,10 +63,11 @@ class _MetricAdmissions:
         if not newline:
             return
         self._read_offset += len(complete_lines) + len(newline)
-        for line in complete_lines.split(b"\n"):
+        for label_values in map(_parse_admission, complete_lines.split(b"\n")):
             if self._is_full():
                 return
-            self._label_sets.add(_LABEL_VALUES.validate_json(line))
+            if label_values is not None:
+                self._label_sets.add(label_values)
 
 
 class SharedPrometheusSeriesAdmissions:
