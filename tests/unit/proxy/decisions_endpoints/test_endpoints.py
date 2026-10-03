@@ -209,7 +209,7 @@ def test_proxy_decisions_missing_required_field_is_a_client_error(
     assert not upstream.called
 
 
-def test_proxy_decisions_dispatches_unpriced_strands_decider(
+def test_proxy_decisions_dispatches_strands_decider(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
@@ -258,7 +258,9 @@ def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", "decider")
     upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 
-    response: Final = client.post("/v1/decisions", json={key: value for key, value in _REQUEST.items() if key != "model"})
+    response: Final = client.post(
+        "/v1/decisions", json={key: value for key, value in _REQUEST.items() if key != "model"}
+    )
 
     assert response.status_code == 200, response.text
     assert response.json()["answers"] == _RESPONSE["answers"]

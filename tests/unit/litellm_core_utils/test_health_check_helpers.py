@@ -616,3 +616,34 @@ async def test_ahealth_check_evaluation_uses_configured_probe_state_and_question
     sent: Final = json.loads(upstream.calls[0].request.content)
     assert sent["state"] == "custom probe"
     assert set(sent["questions"]) == {"ok"}
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_probes_strands_through_decisions_without_mode(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    monkeypatch.delenv("STRANDS_DECIDER_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("http://strands.local:8080/v1/systemone").respond(
+        json={
+            "model": "strands-decider-2B-hobson-v19",
+            "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {
+            "model": "strands_decider/strands-decider-2B-hobson-v19",
+            "api_base": "http://strands.local:8080",
+        },
+        mode=None,
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    assert "authorization" not in upstream.calls[0].request.headers

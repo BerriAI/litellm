@@ -72701,6 +72701,16 @@
             "notes": "Self-hosted decision model; infrastructure costs are paid separately"
         }
     },
+    "strands_decider/strands-decider-2B-hobson-v19": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "strands_decider",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19",
+        "metadata": {
+            "notes": "Self-hosted decision model; infrastructure costs are paid separately"
+        }
+    },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
