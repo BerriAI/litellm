@@ -2072,21 +2072,23 @@ if MCP_AVAILABLE:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
-            consumed_messages, body = (
-                await _read_request_body_for_routing(receive) if scope.get("method") == "POST" else ([], b"")
+            session_header_present: Final = _get_session_id_from_scope(scope) is not None
+            consumed_messages, connect_body = (
+                await _read_request_body_for_routing(receive)
+                if scope.get("method") == "POST" and not session_header_present
+                else ([], b"")
             )
-            is_initialize: Final = _is_initialize_request(body)
+            connecting: Final = _is_initialize_request(connect_body)
 
             # Replay body messages if we consumed them for peeking
             original_receive: Final = receive
-            if consumed_messages:
 
-                async def wrapped_receive():
-                    if consumed_messages:
-                        return consumed_messages.pop(0)
-                    return await original_receive()
+            async def wrapped_receive():
+                if consumed_messages:
+                    return consumed_messages.pop(0)
+                return await original_receive()
 
-                receive = wrapped_receive
+            receive = wrapped_receive
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
@@ -2100,7 +2102,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
-                connecting=is_initialize,
+                connecting=connecting,
                 allowed_server_ids=toolset_allowed_server_ids,
                 raw_headers=raw_headers,
             )
@@ -2171,6 +2173,15 @@ if MCP_AVAILABLE:
                     # Request was fully handled (e.g., DELETE on non-existent session)
                     return
                 session_id = _get_session_id_from_scope(scope)
+
+            session_messages, session_body = (
+                await _read_request_body_for_routing(receive)
+                if scope.get("method") == "POST" and session_header_present
+                else ([], b"")
+            )
+            consumed_messages.extend(session_messages)
+            body: Final = connect_body or session_body
+            is_initialize: Final = _is_initialize_request(body)
 
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
