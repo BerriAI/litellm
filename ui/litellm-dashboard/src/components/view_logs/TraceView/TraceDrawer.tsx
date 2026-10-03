@@ -6,6 +6,7 @@ import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
@@ -16,6 +17,7 @@ import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
 import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
+import { TraceConversation } from "./TraceConversation";
 import { FrameworkLogo, traceFramework } from "./TraceFramework";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
@@ -152,7 +154,15 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
         <RunIcon summary={summary} failed={failed} />
         <h1 className="min-w-0 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
         <IdChip value={summary.trace_id} label="Copy trace ID" />
-        <div className="ml-auto shrink-0">
+        <TabsList aria-label="Trace view" className="ml-auto shrink-0 group-data-horizontal/tabs:h-8">
+          <TabsTrigger value="steps" className="text-xs">
+            Steps
+          </TabsTrigger>
+          <TabsTrigger value="conversation" className="text-xs">
+            Conversation
+          </TabsTrigger>
+        </TabsList>
+        <div className="shrink-0">
           <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
         </div>
       </div>
@@ -182,14 +192,18 @@ function ignoreStepKey(event: KeyboardEvent): boolean {
   return event.defaultPrevented || modified || Boolean(control);
 }
 
+type TraceView = "steps" | "conversation";
+
 interface RunBodyProps {
   trace: Trace;
   accessToken: string;
   initialSpanId?: string;
   embedded: boolean;
+  view: TraceView;
+  onViewChange: (view: TraceView) => void;
 }
 
-function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) {
+function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChange }: RunBodyProps) {
   const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
   const initial = useMemo(() => initialRunSelection(trace, initialSpanId), [trace, initialSpanId]);
   const [state, setState] = useState<SpanTreeState>(initial.state);
@@ -246,6 +260,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
   );
 
   useEffect(() => {
+    if (view !== "steps") return;
     const setRowExpanded = (row: TreeRow, expand: boolean) => {
       if (row.kind === "span" && row.hasChildren && row.collapsed === expand) toggleSpan(row.id);
       if (row.kind === "group" && row.expanded !== expand) toggleGroup(row.id);
@@ -276,10 +291,25 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup, spanKeys]);
+  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup, spanKeys, view]);
+
+  if (view === "conversation")
+    return (
+      <TabsContent value="conversation" className="flex min-h-0 flex-1">
+        <TraceConversation
+          trace={trace}
+          accessToken={accessToken}
+          onOpenStep={(id) => {
+            select(id);
+            onViewChange("steps");
+          }}
+        />
+      </TabsContent>
+    );
 
   return (
-    <div
+    <TabsContent
+      value="steps"
       className={cn(
         "grid min-h-0 flex-1",
         detailOpen
@@ -323,7 +353,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
           <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
         </div>
       )}
-    </div>
+    </TabsContent>
   );
 }
 
@@ -340,6 +370,7 @@ interface RunViewProps {
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
 export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
   const demo = useLensDemo();
+  const [view, setView] = useState<TraceView>("steps");
   const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
     queryFn: () =>
@@ -383,9 +414,11 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
     );
   }
   return (
-    <div
+    <Tabs
+      value={view}
+      onValueChange={(value) => setView(value as TraceView)}
       className={cn(
-        "@container/trace flex flex-1 flex-col overflow-hidden bg-background",
+        "@container/trace flex flex-1 flex-col gap-0 overflow-hidden bg-background",
         embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
       )}
       data-testid="run-view"
@@ -397,7 +430,9 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
         accessToken={accessToken}
         initialSpanId={initialSpanId}
         embedded={embedded}
+        view={view}
+        onViewChange={setView}
       />
-    </div>
+    </Tabs>
   );
 }

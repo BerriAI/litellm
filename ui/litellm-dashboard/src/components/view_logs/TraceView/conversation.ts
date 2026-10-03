@@ -1,0 +1,153 @@
+import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "./traceTypes";
+import { isFrameworkSpan, parseJson, parseMessages, prettyPayload } from "./traceUtils";
+
+export const CONVERSATION_PAGE_SIZE = 20;
+
+export function conversationSteps(spans: readonly Span[]): Span[] {
+  const parents = new Set(spans.map((span) => span.parent_span_id));
+  return spans
+    .filter((span) => {
+      const isEvent = span.type === "llm" || span.type === "tool" || !parents.has(span.span_id);
+      return !isFrameworkSpan(span) && (span.parent_span_id === null || isEvent);
+    })
+    .sort((a, b) => a.start_offset_ms - b.start_offset_ms);
+}
+
+function contentText(value: string, content?: UIContent): string {
+  if (content?.kind === "text") return content.text;
+  if (content?.kind === "fields")
+    return JSON.stringify(Object.fromEntries(content.fields.map((field) => [field.key, field.value])), null, 2);
+  if (content?.kind === "messages") return content.messages.map((message) => message.content).join("\n");
+  return prettyPayload(value);
+}
+
+function messages(value: string, content: UIContent | undefined, role: string): TraceMessage[] {
+  if (content?.kind === "messages")
+    return content.messages.map((message) => ({
+      ...message,
+      tool_calls: message.tool_calls?.map((call) => ({
+        name: call.name,
+        args: parseJson(call.arguments) ?? call.arguments,
+      })),
+    }));
+  const parsed = !content ? parseMessages(value) : null;
+  if (parsed) return parsed;
+  const text = contentText(value, content);
+  return text ? [{ role, content: text }] : [];
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => [key, stableValue(item)]),
+    );
+  return value;
+}
+
+const messageKey = (message: TraceMessage): string =>
+  JSON.stringify(
+    stableValue({
+      role: message.role,
+      content: message.content,
+      tool_calls: message.tool_calls?.length ? message.tool_calls : undefined,
+    }),
+  );
+
+export function newConversationMessages(
+  previous: readonly TraceMessage[],
+  current: readonly TraceMessage[],
+): TraceMessage[] {
+  const oldKeys = previous.map(messageKey);
+  const newKeys = current.map(messageKey);
+  if (newKeys.every((key, index) => key === oldKeys[index])) return [];
+  for (let overlap = Math.min(oldKeys.length, newKeys.length); overlap > 0; overlap--) {
+    if (oldKeys.slice(-overlap).every((key, index) => key === newKeys[index])) return current.slice(overlap);
+  }
+  return [...current];
+}
+
+export interface ConversationItem {
+  id: string;
+  span: Span;
+  messages: TraceMessage[];
+  toolCall?: TraceToolCall;
+  toolResult?: string;
+}
+
+function toolItem(span: Span, detail: SpanDetail, pending: TraceToolCall[]): ConversationItem {
+  const args =
+    detail.input_ui?.kind === "fields"
+      ? Object.fromEntries(detail.input_ui.fields.map((field) => [field.key, field.value]))
+      : parseJson(detail.input) ?? detail.input;
+  const call = { name: span.name, args };
+  const match = pending.findIndex(
+    (candidate) =>
+      candidate.name === call.name &&
+      JSON.stringify(stableValue(candidate.args)) === JSON.stringify(stableValue(call.args)),
+  );
+  if (match >= 0) pending.splice(match, 1);
+  const result = contentText(detail.output, detail.output_ui);
+  return { id: span.span_id, span, messages: [], toolCall: match < 0 ? call : undefined, toolResult: result };
+}
+
+export function buildConversation(
+  spans: readonly Span[],
+  details: ReadonlyMap<string, SpanDetail>,
+  complete: boolean,
+): ConversationItem[] {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
+  const histories = new Map<string, TraceMessage[]>();
+  const pendingCalls = new Map<string, TraceToolCall[]>();
+  const items: ConversationItem[] = [];
+  const roots: { span: Span; output: TraceMessage[] }[] = [];
+  const branch = (span: Span): string => {
+    let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
+    const visited = new Set<string>();
+    while (parent && !visited.has(parent.span_id)) {
+      visited.add(parent.span_id);
+      if (parent.type === "agent") return parent.span_id;
+      parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
+    }
+    return span.parent_span_id ?? span.span_id;
+  };
+  for (const span of conversationSteps(spans)) {
+    const detail = details.get(span.span_id);
+    if (!detail) continue;
+    const key = branch(span);
+    const history = histories.get(key) ?? [];
+    if (span.type === "tool") {
+      const item = toolItem(span, detail, pendingCalls.get(key) ?? []);
+      items.push(item);
+      histories.set(key, [...history, { role: "tool", name: span.name, content: item.toolResult ?? "" }]);
+      continue;
+    }
+    const input = messages(detail.input, detail.input_ui, "user");
+    const output = messages(detail.output, detail.output_ui, "assistant");
+    const fresh = newConversationMessages(history, input);
+    if (span.parent_span_id === null) {
+      roots.push({ span, output });
+      histories.set(key, input);
+      if (fresh.length) items.push({ id: span.span_id, span, messages: fresh });
+      continue;
+    }
+    const combined = [...fresh, ...output];
+    const retained = input.length && (fresh.length || input.length >= history.length) ? input : history;
+    histories.set(key, [...retained, ...output]);
+    pendingCalls.set(
+      key,
+      output.flatMap((message) => message.tool_calls ?? []),
+    );
+    if (combined.length || span.status === "error") items.push({ id: span.span_id, span, messages: combined });
+  }
+  if (complete) {
+    for (const { span, output } of roots) {
+      const last = items.flatMap((item) => item.messages).at(-1);
+      const fresh = newConversationMessages(last ? [last] : [], output);
+      if (fresh.length) items.push({ id: `${span.span_id}-output`, span, messages: fresh });
+    }
+  }
+  return items;
+}

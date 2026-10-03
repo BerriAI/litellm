@@ -86,7 +86,7 @@ const CARD_COPY =
   "ml-auto size-5 shrink-0 rounded-[3px] text-muted-foreground opacity-60 transition-opacity duration-150 group-hover/header:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none [&_svg]:size-4";
 const INLINE_COPY = "size-4 shrink-0 rounded-[3px] text-muted-foreground";
 
-function ToolCallBlock({ call }: { call: TraceToolCall }) {
+export function ToolCallBlock({ call }: { call: TraceToolCall }) {
   const argEntries = objectEntries(call.args);
   const entries: KeyValue[] = argEntries?.length ? argEntries : [["arguments", displayValue(call.args)]];
   return (
@@ -101,7 +101,14 @@ function ToolCallBlock({ call }: { call: TraceToolCall }) {
   );
 }
 
-export function MessageCard({ message }: { message: TraceMessage; model: string | null }) {
+export function MessageCard({
+  message,
+  conversation = false,
+}: {
+  message: TraceMessage;
+  model: string | null;
+  conversation?: boolean;
+}) {
   const [open, setOpen] = useState(true);
   const label = message.role === "tool" ? message.name ?? "Tool" : ROLE_LABEL[message.role] ?? message.role;
   if (message.role === "tool") return <ToolResultCard name={label} result={message.content} />;
@@ -111,7 +118,13 @@ export function MessageCard({ message }: { message: TraceMessage; model: string 
   const expanded = open && hasBody;
   return (
     <article className="rounded-md">
-      <div className={cn(HEADER, "sticky top-10 z-sticky", expanded ? "rounded-t-[4px] border-b-0" : "rounded-[4px]")}>
+      <div
+        className={cn(
+          HEADER,
+          conversation ? "border-0 bg-transparent" : "sticky top-10 z-sticky",
+          expanded ? "rounded-t-[4px] border-b-0" : "rounded-[4px]",
+        )}
+      >
         <FoldTile label={label} open={open} onToggle={() => setOpen((v) => !v)} />
         <span className={LABEL}>{label}</span>
         <CopyButton value={copyValue} label={`Copy ${label}`} iconOnly className={CARD_COPY} />
@@ -120,6 +133,8 @@ export function MessageCard({ message }: { message: TraceMessage; model: string 
         <div
           className={cn(
             "flex flex-col gap-3 rounded-b-md border border-t-0 border-border bg-background px-3 pt-2 pb-3",
+            conversation && "border-0",
+            conversation && message.role === "user" && "rounded-md bg-muted/40",
             message.role === "system" && "[&_*]:text-muted-foreground",
           )}
         >

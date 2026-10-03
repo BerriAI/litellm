@@ -1,0 +1,155 @@
+"use client";
+
+import { useQueries } from "@tanstack/react-query";
+import { useState } from "react";
+import { ChevronRight, Wrench } from "lucide-react";
+import { cn } from "@/lib/cva.config";
+import { CopyButton } from "./CopyButton";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
+import { Button } from "@/components/ui/button";
+import { agentTraceSpanCall } from "../../networking";
+import { buildConversation, conversationSteps, CONVERSATION_PAGE_SIZE, type ConversationItem } from "./conversation";
+import { ErrorBlock } from "./DetailContent";
+import { MessageCard, ToolCallBlock } from "./MessageCard";
+import type { SpanDetail, Trace } from "./traceTypes";
+import { fmtMs } from "./traceUtils";
+
+export function TraceConversation({
+  trace,
+  accessToken,
+  onOpenStep,
+}: {
+  trace: Trace;
+  accessToken: string;
+  onOpenStep: (id: string) => void;
+}) {
+  const demo = useLensDemo();
+  const [limit, setLimit] = useState(CONVERSATION_PAGE_SIZE);
+  const steps = conversationSteps(trace.spans);
+  const visible = steps.slice(0, limit);
+  const { trace_id: traceId, trace_ref: traceRef } = trace.summary;
+  const queries = useQueries({
+    queries: visible.map((span) => ({
+      queryKey: ["agentTraceSpan", traceId, traceRef, span.span_id, accessToken],
+      queryFn: (): Promise<SpanDetail> =>
+        demo
+          ? demo.client.get<SpanDetail>(
+              `/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(span.span_id)}`,
+            )
+          : agentTraceSpanCall(accessToken, traceId, span.span_id, traceRef),
+      staleTime: Infinity,
+      retry: false,
+    })),
+  });
+  const loading = queries.some((query) => query.isPending);
+  const details = new Map<string, SpanDetail>();
+  const pendingIndex = queries.findIndex((query) => query.isPending);
+  queries.forEach((query, index) => {
+    if (query.data && (pendingIndex < 0 || index < pendingIndex)) details.set(visible[index].span_id, query.data);
+  });
+  const complete = visible.length === steps.length && !loading;
+  const items = buildConversation(trace.spans, details, complete);
+  return (
+    <section aria-label="Trace conversation" className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-3xl space-y-6 px-6 py-5">
+        {items.map((item, itemIndex) => (
+          <section key={item.id} className="space-y-2" aria-label={`Conversation step ${item.span.name}`}>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              {(itemIndex === 0 || items[itemIndex - 1].span.agent !== item.span.agent) && (
+                <span className="min-w-0 truncate">{item.span.agent || item.span.name}</span>
+              )}
+              <span className="shrink-0 tabular-nums">{fmtMs(item.span.start_offset_ms)}</span>
+              <Button
+                variant="ghost"
+                size="xs"
+                className="ml-auto shrink-0 text-muted-foreground"
+                onClick={() => onOpenStep(item.span.span_id)}
+              >
+                View step
+              </Button>
+            </div>
+            {item.span.status === "error" && item.span.type !== "tool" && <ErrorBlock span={item.span} />}
+            {item.messages.map((message, index) => (
+              <MessageCard key={index} message={message} model={item.span.model} conversation />
+            ))}
+            {item.toolResult !== undefined && <ConversationTool item={item} />}
+          </section>
+        ))}
+        {queries.map(
+          (query, index) =>
+            query.isError && (
+              <div key={visible[index].span_id} role="alert" className="rounded-md border p-3 text-sm">
+                Could not load {visible[index].name}. This step is missing from the conversation.
+                <Button variant="outline" size="sm" className="mt-2" onClick={() => query.refetch()}>
+                  Retry step
+                </Button>
+              </div>
+            ),
+        )}
+        {loading && (
+          <p role="status" className="py-4 text-sm text-muted-foreground">
+            Loading conversation…
+          </p>
+        )}
+        {!loading && items.length === 0 && (
+          <p className="text-sm text-muted-foreground">No conversation content recorded.</p>
+        )}
+        <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
+          <span>
+            {visible.length} of {steps.length} steps
+          </span>
+          {visible.length < steps.length && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading}
+              onClick={() => setLimit((current) => current + CONVERSATION_PAGE_SIZE)}
+            >
+              Load next {Math.min(CONVERSATION_PAGE_SIZE, steps.length - visible.length)} steps
+            </Button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ConversationTool({ item }: { item: ConversationItem }) {
+  const [open, setOpen] = useState(false);
+  const failed = item.span.status === "error";
+  return (
+    <div className="rounded-md border">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={`${open ? "Collapse" : "Expand"} ${item.span.name} tool call`}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm hover:bg-muted/40"
+      >
+        <ChevronRight
+          className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
+        />
+        <Wrench className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate font-medium">{item.span.name}</span>
+        <span className={cn("ml-auto shrink-0 text-xs", failed ? "text-destructive" : "text-muted-foreground")}>
+          {failed ? "Failed" : "Completed"}
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-3 border-t px-3 py-3">
+          {item.toolCall && <ToolCallBlock call={item.toolCall} />}
+          {item.span.error && item.span.error !== item.toolResult && (
+            <p className="text-sm text-destructive">{item.span.error}</p>
+          )}
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>Result</span>
+            <CopyButton value={item.toolResult ?? ""} label={`Copy ${item.span.name} result`} iconOnly />
+          </div>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs leading-5">
+            {item.toolResult || "No output recorded"}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
