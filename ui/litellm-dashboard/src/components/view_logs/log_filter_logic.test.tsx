@@ -161,6 +161,9 @@ describe("useLogFilterLogic", () => {
       ["startTime", { startTime: "2025-02-02T00:00:00" }],
       ["columnFilters", { columnFilters: [{ id: LOG_FILTER_IDS.TEAM_ID, value: "team-2" }] }],
       ["excludeInternalHealthChecks", { excludeInternalHealthChecks: true }],
+      ["token", { token: "other-token" }],
+      ["userRole", { userRole: "Internal User" }],
+      ["userID", { userID: "user-2" }],
     ])("refetches when %s changes", async (_label, nextProps) => {
       const { rerender } = renderHook((props: HookOverrides) => useLogFilterLogic({ ...defaultProps, ...props }), {
         wrapper,

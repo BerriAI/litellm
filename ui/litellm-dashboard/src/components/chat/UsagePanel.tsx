@@ -91,11 +91,11 @@ const TIME_RANGE_OPTIONS: { value: TimeRange; label: string }[] = [
 
 const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
-  const { start, end } = getDateRange(timeRange);
 
   const { data, isLoading } = useQuery({
     queryKey: [USAGE_QUERY_KEY, accessToken, userId, timeRange],
     queryFn: () => {
+      const { start, end } = getDateRange(timeRange);
       const request = {
         accessToken,
         startTime: start,

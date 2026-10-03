@@ -5,6 +5,7 @@ import prettier from "eslint-config-prettier/flat";
 import unusedImports from "eslint-plugin-unused-imports";
 import testingLibrary from "eslint-plugin-testing-library";
 import jestDom from "eslint-plugin-jest-dom";
+import pluginQuery from "@tanstack/eslint-plugin-query";
 import local from "./scripts/eslint-rules/index.mjs";
 
 const eslintConfig = [
@@ -14,10 +15,12 @@ const eslintConfig = [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...nextCoreWebVitals,
+  ...pluginQuery.configs["flat/recommended"],
   prettier,
   {
     plugins: { "unused-imports": unusedImports, local },
     rules: {
+      "@tanstack/query/exhaustive-deps": ["error", { allowlist: { variables: ["accessToken", "apiClient", "demo"] } }],
       "unused-imports/no-unused-imports": "error",
       "local/no-large-inline-object-arg": "warn",
       "local/no-long-condition-chain": "warn",

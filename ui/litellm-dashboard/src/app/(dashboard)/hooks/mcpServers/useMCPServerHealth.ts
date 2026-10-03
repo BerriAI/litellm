@@ -52,7 +52,14 @@ export const useMCPServerHealth = () => {
   );
 
   return {
-    ...query,
+    data: query.data,
+    error: query.error,
+    isError: query.isError,
+    isFetching: query.isFetching,
+    isLoading: query.isLoading,
+    isSuccess: query.isSuccess,
+    refetch: query.refetch,
+    status: query.status,
     recheckServerHealth,
     recheckingServerIds,
   };

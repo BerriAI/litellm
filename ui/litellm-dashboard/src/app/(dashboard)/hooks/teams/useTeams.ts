@@ -121,7 +121,12 @@ export const teamKeys = createQueryKeys("teams");
 export const useTeams = (): UseQueryResult<Team[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<Team[]>({
-    queryKey: teamKeys.list({}),
+    queryKey: teamKeys.list({
+      filters: {
+        userId: userId ?? "",
+        userRole: userRole ?? "",
+      },
+    }),
     queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
     enabled: Boolean(accessToken),
   });
@@ -159,7 +164,7 @@ export const useAllTeams = (): UseQueryResult<Team[]> => {
 };
 
 export const useTeam = (teamId?: string) => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userId, userRole } = useAuthorized();
   const queryClient = useQueryClient();
   return useQuery<Team>({
     queryKey: teamKeys.detail(teamId!),
@@ -177,7 +182,14 @@ export const useTeam = (teamId?: string) => {
     initialData: () => {
       if (!teamId) return undefined;
 
-      const teams = queryClient.getQueryData<Team[]>(teamKeys.list({}));
+      const teams = queryClient.getQueryData<Team[]>(
+        teamKeys.list({
+          filters: {
+            userId: userId ?? "",
+            userRole: userRole ?? "",
+          },
+        }),
+      );
 
       return teams?.find((team) => team.team_id === teamId);
     },
@@ -202,6 +214,7 @@ export const useInfiniteTeams = (pageSize: number = 50, search?: string, organiz
         ...(search && { search }),
         ...(organizationId && { organizationId }),
         ...(userId && { userId }),
+        isAdmin: isAdmin ? "true" : "false",
       },
     }),
     queryFn: async ({ pageParam }) => {

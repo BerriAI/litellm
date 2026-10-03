@@ -621,6 +621,30 @@ describe("useSelectedTeamModels", () => {
     expect(modelAvailableCall).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps team model results in separate cache entries", async () => {
+    const teamOneResponse = { data: [{ ...mockProxyModel, id: "team-1-model" }] };
+    const teamTwoResponse = { data: [{ ...mockProxyModel, id: "team-2-model" }] };
+    (modelAvailableCall as any).mockResolvedValueOnce(teamOneResponse).mockResolvedValueOnce(teamTwoResponse);
+
+    const { result, rerender } = renderHook(({ teamID }: { teamID: string }) => useSelectedTeamModels(teamID), {
+      wrapper,
+      initialProps: { teamID: "team-1" },
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual(teamOneResponse));
+
+    rerender({ teamID: "team-2" });
+
+    await waitFor(() => expect(result.current.data).toEqual(teamTwoResponse));
+    expect(modelAvailableCall).toHaveBeenCalledTimes(2);
+    expect(
+      queryClient
+        .getQueriesData<AllProxyModelsResponse>({ queryKey: ["selectedTeamModels", "list"] })
+        .map(([, data]) => data?.data[0]?.id)
+        .sort(),
+    ).toEqual(["team-1-model", "team-2-model"]);
+  });
+
   it("should handle error when modelAvailableCall fails", async () => {
     const errorMessage = "Failed to fetch team models";
     const testError = new Error(errorMessage);

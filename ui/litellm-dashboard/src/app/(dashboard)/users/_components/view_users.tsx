@@ -244,17 +244,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
 
       return await userListCall(
         accessToken,
-        userIdFilter ? [userIdFilter] : null,
-        pagination.pageIndex + 1,
-        pagination.pageSize,
+        userListQueryFilters.userId ? [userListQueryFilters.userId] : null,
+        userListQueryFilters.page,
+        userListQueryFilters.pageSize,
         null,
-        userRoleFilter ?? null,
-        teamFilter ?? null,
-        ssoUserIdFilter ?? null,
-        sortBy,
-        sortOrder,
-        orgAdminOrgIds ? orgAdminOrgIds.map((o) => o.organization_id) : null,
-        searchFilter,
+        userListQueryFilters.role ?? null,
+        userListQueryFilters.team ?? null,
+        userListQueryFilters.ssoUserId ?? null,
+        userListQueryFilters.sortBy,
+        userListQueryFilters.sortOrder,
+        userListQueryFilters.orgAdminOrgIds
+          ? userListQueryFilters.orgAdminOrgIds.map((organization) => organization.organization_id)
+          : null,
+        userListQueryFilters.search,
       );
     },
     enabled: Boolean(accessToken && token && userRole && userID),
