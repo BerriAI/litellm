@@ -8813,12 +8813,6 @@ async def ahealth_check(
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
 
-        if mode is None:
-            return {
-                "error": f"error:{e}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
-                "exception": e,
-            }
-
         error_to_return: Final = str(e) + "\nstack trace: " + stack_trace
 
         raw_request_typed_dict: Final = litellm_logging_obj.model_call_details.get("raw_request_typed_dict")

@@ -789,3 +789,22 @@ async def test_ahealth_check_anthropic_messages_mode_keeps_caller_supplied_messa
     sent: Final = json.loads(upstream.calls.last.request.content)
     assert sent["max_tokens"] == 4
     assert sent["messages"] == [{"role": "user", "content": "operator probe"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_params", "expected_error"),
+    (
+        ({"model": "not-a-provider/some-model"}, "LLM Provider NOT provided"),
+        ({"api_key": "test-bearer"}, "model not set"),
+    ),
+    ids=["unknown_provider", "model_missing"],
+)
+async def test_ahealth_check_without_mode_reports_the_real_failure(
+    model_params: dict[str, str], expected_error: str
+) -> None:
+    result: Final = await ahealth_check(model_params, prompt="test from litellm")
+
+    assert expected_error in result["error"], result["error"]
+    assert "Missing `mode`" not in result["error"]
+    assert "raw_request_typed_dict" in result
