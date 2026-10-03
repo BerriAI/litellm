@@ -213,6 +213,7 @@ def test_guardrail_removal_stops_blocking_without_restart(gateway: Gateway) -> N
 
 MASK_ME: Final = "mask-integration-secret"
 MASKED: Final = "[MASKED]"
+COUNT_MISMATCH: Final = "count-mismatch-marker"
 LOOKUP_DESCRIPTION: Final = "Look up one record"
 LOOKUP_SCHEMA: Final = {
     "type": "object",
@@ -316,7 +317,9 @@ def _guardrail_sink(request: Request) -> Reply:
         return Reply()
     texts: Final = JSON_OBJECT.validate_json(request.body).get("texts")
     assert isinstance(texts, list), texts
-    return Reply(body=json.dumps({"texts": [str(text).replace(MASK_ME, MASKED) for text in texts]}).encode())
+    masked: Final = [str(text).replace(MASK_ME, MASKED) for text in texts]
+    extra: Final = ["extra"] if any(COUNT_MISMATCH in text for text in masked) else []
+    return Reply(body=json.dumps({"texts": [*masked, *extra]}).encode())
 
 
 @pytest.fixture(scope="module")
@@ -554,3 +557,86 @@ def test_call_time_description_and_schema_come_from_the_catalog_of_the_worker_th
             populated: Final = _only(_native(hooks_rig.sunk(), "pre"))
             assert populated["pid"] == second_worker, populated
             assert populated["mcp_tool_description"] == LOOKUP_DESCRIPTION, populated
+
+
+def _nested_schema(levels: int) -> dict[str, object]:
+    if levels == 0:
+        return {"type": "string", "description": "deepest leaf"}
+    return {"type": "object", "properties": {"a": _nested_schema(levels - 1)}}
+
+
+def _failures(key: str, count: int) -> list[dict[str, JsonValue]]:
+    return [row for row in _rows(key, count) if row["status"] == "failure"]
+
+
+def test_a_schema_past_the_scan_depth_is_not_published_while_one_at_the_limit_is_scanned_on_the_call(
+    hooks_rig: HooksRig,
+) -> None:
+    shallow: Final = ScriptedTool("shallow", lambda _: text_result("found"), input_schema=_nested_schema(49))
+    deep: Final = ScriptedTool("deep", lambda _: text_result("found"), input_schema=_nested_schema(50))
+    with (
+        scripted_peer(shallow, deep) as peer,
+        _pinned(hooks_rig.gateway) as (pinned, worker),
+        pinned.scenario() as scenario,
+    ):
+        alias: Final = "depth" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(pinned, key, "mcp", headers={"x-mcp-servers": alias})
+        assert eventually(caller.initialize, lambda outcome: outcome.ok, seconds=30).ok
+        listing: Final = eventually(caller.list_tools, lambda outcome: len(outcome.tools) > 0, seconds=30)
+        assert listing.tools == (f"{alias}-shallow",), listing.raw
+        assert _worker(pinned) == worker
+        hooks_rig.sunk()
+        assert caller.call(f"{alias}-shallow", {"record": "r-1"}).text == "found"
+        scanned: Final = _only(_generic(hooks_rig.sunk(), "request"))
+        assert scanned["texts"] == ["deepest leaf", "r-1"], scanned
+        unpublished: Final = caller.call(f"{alias}-deep", {"record": "r-2"})
+        assert _worker(pinned) == worker
+        assert unpublished.error is not None and "Tool 'deep' not found" in unpublished.raw, unpublished.raw
+        reached: Final = tool_calls(peer.drain())
+        assert [object_value(JSON_OBJECT.validate_python(call["body"])["params"])["name"] for call in reached] == [
+            "shallow"
+        ]
+        relisted: Final = _generic(hooks_rig.sunk(), "request")
+        assert all((scan["mcp_tool_name"], scan["litellm_call_id"]) == ("shallow", None) for scan in relisted), relisted
+        rows: Final = _rows(key, 3)
+        assert [(row["call_type"], row["status"]) for row in rows] == [
+            ("list_mcp_tools", "success"),
+            ("call_mcp_tool", "success"),
+            ("call_mcp_tool", "failure"),
+        ], rows
+        assert [_tool_metadata(row)["name"] for row in rows[1:]] == ["shallow", "deep"], rows
+        failed: Final = object_value(JSON_OBJECT.validate_python(rows[2]["metadata"])["error_information"])
+        assert failed["error_message"] == "404: Tool 'deep' not found", failed
+
+
+def test_an_adapter_returning_the_wrong_number_of_texts_fails_closed_before_the_peer(hooks_rig: HooksRig) -> None:
+    with (
+        scripted_peer(_lookup_tool()) as peer,
+        _pinned(hooks_rig.gateway) as (pinned, worker),
+        pinned.scenario() as scenario,
+    ):
+        alias: Final = "count" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(pinned, key, "mcp", headers={"x-mcp-servers": alias})
+        assert eventually(caller.initialize, lambda outcome: outcome.ok, seconds=30).ok
+        name: Final = next(
+            tool for tool in eventually(caller.list_tools, _has_lookup, seconds=30).tools if "lookup" in tool
+        )
+        assert _worker(pinned) == worker
+        hooks_rig.sunk()
+        blocked: Final = caller.call(name, {"record": COUNT_MISMATCH})
+        assert _worker(pinned) == worker
+        assert blocked.error is not None, blocked.raw
+        assert (
+            "guardrail returned 4 texts for 3 MCP tool strings, so the redaction cannot be mapped back" in blocked.raw
+        )
+        assert tool_calls(peer.drain()) == (), "the blocked call reached the peer"
+        sunk: Final = hooks_rig.sunk()
+        assert _only(_generic(sunk, "request"))["texts"] == [LOOKUP_DESCRIPTION, "record identifier", COUNT_MISMATCH]
+        assert _native(sunk, "post") == (), sunk
+        failures: Final = _failures(key, 1)
+        assert len(failures) == 1, failures
+        assert _tool_metadata(failures[0])["arguments"] == {"record": COUNT_MISMATCH}, failures[0]
