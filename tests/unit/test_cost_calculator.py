@@ -1,4 +1,3 @@
-import copy
 import datetime
 import time
 from pathlib import Path
@@ -1261,7 +1260,7 @@ def test_cost_calculator_with_cache_creation():
             }
         ),
     )
-    model = "claude-sonnet-4-5@20250929"
+    model = "claude-sonnet-4@20250514"
 
     assert litellm_model_response.usage.prompt_tokens_details.cached_tokens == 28491
 
@@ -5694,110 +5693,3 @@ def test_pricing_entry_for_cost_calc_skips_capability_rule_alias(_local_model_co
 
     assert resolved is not None
     assert resolved[0] == "vertex_ai/claude-opus-4-8@default"
-
-
-@pytest.mark.parametrize(
-    "custom_llm_provider,deployment_model,cost_map_key",
-    [
-        ("vertex_ai", "claude-opus-4-8@default", "vertex_ai/claude-opus-4-8@default"),
-        ("anthropic", "claude-opus-4-8", "claude-opus-4-8"),
-    ],
-)
-def test_response_cost_calculator_prices_capability_rule_alias_from_the_deployment(
-    _local_model_cost_map: None, custom_llm_provider: str, deployment_model: str, cost_map_key: str
-) -> None:
-    response: Final = ModelResponse(
-        id="chatcmpl_x",
-        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="claude-opus-4.8",
-        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
-    )
-    row: Final = litellm.model_cost[cost_map_key]
-    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
-    assert expected > 0
-
-    cost: Final = response_cost_calculator(
-        response_object=response,
-        model=deployment_model,
-        custom_llm_provider=custom_llm_provider,
-        call_type="completion",
-        optional_params={},
-        cache_hit=None,
-        base_model=None,
-    )
-
-    assert cost == pytest.approx(expected)
-
-
-def test_cost_per_token_raises_for_capability_rule_only_alias(_local_model_cost_map: None) -> None:
-    """The alias only matches a pricing-free capability rule, so cost lookup must raise
-    (the unmapped contract) rather than bill $0."""
-    with pytest.raises(litellm.ModelNotMappedError):
-        cost_per_token(
-            model="claude-opus-4.8",
-            custom_llm_provider="anthropic",
-            prompt_tokens=30,
-            completion_tokens=40,
-        )
-
-
-def test_completion_cost_bills_rule_only_base_model_at_the_deployment_model(_local_model_cost_map: None) -> None:
-    """A deployment whose base_model only matches a capability rule is billed at the
-    deployment's own price, the same as the same call with no base_model."""
-    response: Final = ModelResponse(
-        id="chatcmpl_x",
-        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="haiku-base-rule-1",
-        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
-    )
-    row: Final = litellm.model_cost["claude-haiku-4-5"]
-    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
-    assert expected > 0
-
-    with_base_model: Final = completion_cost(
-        completion_response=response,
-        model="anthropic/claude-haiku-4-5",
-        custom_llm_provider="anthropic",
-        base_model="claude-opus-9",
-    )
-    response2: Final = ModelResponse(
-        id="chatcmpl_y",
-        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="claude-haiku-4-5",
-        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
-    )
-    without_base_model: Final = completion_cost(
-        completion_response=response2,
-        model="claude-haiku-4-5",
-        custom_llm_provider="anthropic",
-    )
-
-    assert with_base_model == pytest.approx(expected)
-    assert with_base_model == pytest.approx(without_base_model)
-
-
-def test_completion_cost_skips_a_registered_rule_only_base_model_entry(_local_model_cost_map: None) -> None:
-    """Router registration persists base_model info into litellm.model_cost. When that
-    info is capability-rule-derived it carries no pricing, and cost lookup must treat it
-    as unmapped and fall through to the deployment model."""
-    rule_info: Final = litellm.get_model_info(model="anthropic/claude-opus-9", custom_llm_provider="anthropic")
-    litellm.model_cost["anthropic/claude-opus-9"] = copy.deepcopy(rule_info)
-
-    response: Final = ModelResponse(
-        id="chatcmpl_x",
-        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="haiku-base-rule-1",
-        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
-    )
-    row: Final = litellm.model_cost["claude-haiku-4-5"]
-    expected: Final = 30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"]
-
-    cost: Final = completion_cost(
-        completion_response=response,
-        model="anthropic/claude-haiku-4-5",
-        custom_llm_provider="anthropic",
-        base_model="claude-opus-9",
-    )
-
-    assert cost == pytest.approx(expected)
-    assert cost > 0

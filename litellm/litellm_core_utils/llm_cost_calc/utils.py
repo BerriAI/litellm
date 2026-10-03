@@ -34,7 +34,7 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
-from litellm.utils import get_priced_model_info
+from litellm.utils import get_model_info
 
 # Pre-resolved CallTypes enum values for fast membership checks
 _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
@@ -212,7 +212,7 @@ def _generic_cost_per_character(
         Exception if 'input_cost_per_character' or 'output_cost_per_character' is missing from model_info
     """
     ## GET MODEL INFO
-    model_info: Final = litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
     ## CALCULATE INPUT COST
     try:
@@ -880,9 +880,9 @@ def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: M
     a name lookup alone reads the public rate, and a model only the deployment prices has no entry at all.
     """
     if model_info is None:
-        return get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     try:
-        shared_model_info: Final = get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        shared_model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
         return model_info
     resolved: Final[ModelInfo] = {**shared_model_info, **model_info}
@@ -1323,9 +1323,7 @@ def generic_cost_per_token(
     # per-deployment override: those are registered under the deployment id and kept off
     # the shared model-name key, so resolving from the name here reads the public rate.
     resolved_model_info: Final = apply_provider_cache_read_default(
-        get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        if model_info is None
-        else model_info,
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info,
         custom_llm_provider,
     )
 
@@ -1644,7 +1642,7 @@ def get_billed_token_rates(
         return _custom_pricing_rates(custom_cost_per_token)
     try:
         model_info: Final = apply_provider_cache_read_default(
-            get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider),
+            get_model_info(model=model, custom_llm_provider=custom_llm_provider),
             custom_llm_provider,
         )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates

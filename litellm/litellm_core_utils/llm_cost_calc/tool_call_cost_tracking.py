@@ -524,7 +524,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def _safe_get_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
         try:
-            return litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             return None
 
@@ -683,7 +683,7 @@ class StandardBuiltInToolCostTracking:
 
         try:
             container_model: Final = f"{provider}/container"
-            model_info: Final = litellm.get_priced_model_info(model=container_model, custom_llm_provider=provider)
+            model_info: Final = litellm.get_model_info(model=container_model, custom_llm_provider=provider)
             model_key = model_info.get("key") if isinstance(model_info, dict) else getattr(model_info, "key", None)
 
             if model_key and model_key in litellm.model_cost:

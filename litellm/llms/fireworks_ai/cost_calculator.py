@@ -13,7 +13,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import ModelInfo, Usage
-from litellm.utils import get_priced_model_info
+from litellm.utils import get_model_info
 
 
 # Extract the number of billion parameters from the model name
@@ -58,17 +58,17 @@ def get_base_model_for_pricing(model_name: str) -> str:
 
 def _resolve_model_info(model: str) -> ModelInfo:
     try:
-        return get_priced_model_info(model=model, custom_llm_provider="fireworks_ai")
+        return get_model_info(model=model, custom_llm_provider="fireworks_ai")
     except Exception:
         return _resolve_routed_model_info(model)
 
 
 def _resolve_routed_model_info(model: str) -> ModelInfo:
     try:
-        return get_priced_model_info(model=model.removeprefix("fireworks_ai/"))
+        return get_model_info(model=model.removeprefix("fireworks_ai/"))
     except Exception:
         base_model: Final = get_base_model_for_pricing(model_name=model)
-        return get_priced_model_info(model=base_model, custom_llm_provider="fireworks_ai")
+        return get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
 
 def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:

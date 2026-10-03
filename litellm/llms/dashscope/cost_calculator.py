@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     parse_prompt_tokens_details,
 )
 from litellm.types.utils import ModelInfo, Usage
-from litellm.utils import get_priced_model_info
+from litellm.utils import get_model_info
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +126,7 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info: Final = get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     breakdown: Final = _extract_token_breakdown(usage)
     raw_tiers: Final = model_info.get("tiered_pricing")
     tiered_pricing: Final = raw_tiers if isinstance(raw_tiers, list) else None

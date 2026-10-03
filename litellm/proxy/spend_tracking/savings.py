@@ -98,7 +98,7 @@ def _effective_model_info(router: "Router | None", deployment_id: str | None, mo
 def _model_info(model: _ModelIdentity) -> ModelInfo | None:
     """The public rates for ``model``, or ``None`` when it has none."""
     try:
-        return litellm.get_priced_model_info(model=model.model, custom_llm_provider=model.provider)
+        return litellm.get_model_info(model=model.model, custom_llm_provider=model.provider)
     except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
         verbose_proxy_logger.debug("savings: no pricing for provider=%s model=%s (%s)", model.provider, model.model, e)
         return None

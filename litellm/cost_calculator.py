@@ -136,7 +136,9 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionResponse,
     TranscriptionResponse,
-    _cached_get_priced_model_info_helper,
+    _cached_get_model_info_helper,
+    _get_model_info_from_generalization,
+    _get_potential_model_names,
     token_counter,
 )
 
@@ -347,7 +349,7 @@ def _per_second_pricing_cost(
     response_time_ms: float | None,
 ) -> tuple[float, float] | None:
     try:
-        model_info: Final = _cached_get_priced_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
@@ -572,9 +574,7 @@ def cost_per_token(
         )
         if lyria_generation_cost is not None:
             return 0.0, lyria_generation_cost
-        speech_model_info = litellm.get_priced_model_info(
-            model=model_without_prefix, custom_llm_provider=custom_llm_provider
-        )
+        speech_model_info = litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider)
         cost_metric: Final = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0
         completion_cost: float = 0.0
@@ -744,7 +744,7 @@ def cost_per_token(
             service_tier=service_tier,
         )
     else:
-        model_info: Final = _cached_get_priced_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
         if _has_token_or_tiered_pricing(model_info):
             return generic_cost_per_token(
                 model=model,
@@ -924,6 +924,22 @@ def _get_response_model(completion_response: object) -> str | None:
         return completion_response.get("model", None)
 
     return None
+
+
+def _prices_only_via_capability_rule(model: str | None, custom_llm_provider: str | None) -> bool:
+    if model is None or model in litellm.model_cost or f"{custom_llm_provider}/{model}" in litellm.model_cost:
+        return False
+    try:
+        return (
+            _get_model_info_from_generalization(
+                model=model,
+                potential_model_names=_get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider),
+                custom_llm_provider=custom_llm_provider,
+            )
+            is not None
+        )
+    except Exception:
+        return False
 
 
 _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
@@ -1442,12 +1458,10 @@ def completion_cost(
             region_name=region_name,
         )
 
-        potential_model_names: Final = [
-            selected_model,
-            _get_response_model(completion_response),
-        ]
-        if model is not None:
-            potential_model_names.append(model)
+        potential_model_names: Final = sorted(
+            (selected_model, _get_response_model(completion_response), *((model,) if model is not None else ())),
+            key=lambda candidate: _prices_only_via_capability_rule(candidate, cast(str | None, custom_llm_provider)),
+        )
 
         for idx, model in enumerate(potential_model_names):
             try:
@@ -1462,7 +1476,7 @@ def completion_cost(
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
-                        _usage_for_dump = cast(BaseModel, usage_obj)
+                        _usage_for_dump = usage_obj
                         setattr(
                             completion_response,
                             "usage",
@@ -1471,7 +1485,7 @@ def completion_cost(
                     if usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
-                        _usage = cast(BaseModel, usage_obj).model_dump()
+                        _usage = usage_obj.model_dump()
                     else:
                         _usage = usage_obj
 
@@ -2093,7 +2107,7 @@ def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
 
 def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     try:
-        return litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
 
@@ -2126,7 +2140,10 @@ def pricing_entry_for_cost_calc(
         router_model_id=router_model_id,
         region_name=region_name,
     )
-    candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    candidates: Final = sorted(
+        (selected_model, _get_response_model(completion_response), model),
+        key=lambda candidate: _prices_only_via_capability_rule(candidate, custom_llm_provider),
+    )
     resolved: Final = next(
         (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
         None,
@@ -2288,7 +2305,7 @@ def _single_log_line(value: str | None) -> str:
 
 def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     try:
-        return litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; caller logs and bills 0.0
         return None
 
@@ -2351,9 +2368,7 @@ def rerank_cost(
         )
 
         try:
-            model_info: ModelInfo | None = litellm.get_priced_model_info(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
+            model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             model_info = None
 
@@ -2582,7 +2597,7 @@ def batch_cost_calculator(
 
     if model_info is None:
         try:
-            model_info = litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
         except Exception:
             model_info = None
     elif not any(
@@ -2598,7 +2613,7 @@ def batch_cost_calculator(
         # but carries no pricing fields. Fall back to the global pricing table so
         # that standard model pricing is used instead of silently returning $0.
         try:
-            global_info: Final = litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            global_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
             if global_info:
                 model_info = global_info
         except Exception:
@@ -3066,7 +3081,7 @@ def _get_transcription_model_name_from_results(
 
 def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo | None:
     try:
-        return litellm.get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
 

@@ -3208,68 +3208,18 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     return None
 
 
-def _positive_cost_value(value: object) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int | float):
-        return value > 0
-    if isinstance(value, str):
-        try:
-            return float(value) > 0
-        except ValueError:
-            return False
-    return bool(value)
-
-
-def _model_cost_entry_has_pricing(entry: Mapping[str, object] | None) -> bool:
-    """Whether a raw ``litellm.model_cost`` row carries a non-zero rate under any cost field."""
-    if entry is None:
-        return False
-    return any(_positive_cost_value(price) for name, price in entry.items() if "cost" in name)
-
-
-def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
+def is_generalized_model_info(model_info: ModelInfo) -> bool:
     """Whether ``model_info`` came from a fallback-generalization capability rule.
 
-    Detected as the resolved key matching a capability rule without its own pricing:
-    either the key is missing from ``litellm.model_cost``, or the row under it only
-    repeats rule-derived data with zero or absent rates (a router-registered stub).
-    A rule-derived entry carries no pricing and only a conservative
+    Detected as the resolved key missing ``litellm.model_cost`` while matching a
+    capability rule. A rule-derived entry carries no pricing and only a conservative
     family-baseline context window, so callers holding a second candidate name should
     prefer an exact cost-map entry from that name over this one.
     """
     key: Final = cast("Mapping[str, object]", model_info).get("key")  # cast-ok: partial dicts may omit "key"
     if not isinstance(key, str):
         return False
-    raw_entry: Final = cast(  # cast-ok: cost rows are heterogeneous value dicts
-        "Mapping[str, object] | None", litellm.model_cost.get(key)
-    )
-    if _model_cost_entry_has_pricing(raw_entry):
-        return False
-    return match_capability_generalizations(key) is not None
-
-
-def get_priced_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo:
-    """``get_model_info`` that raises ``ModelNotMappedError`` when the only match is a pricing-free capability rule."""
-    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    if is_generalized_model_info(model_info):
-        raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
-    return model_info
-
-
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _cached_get_priced_model_info_helper(
-    model: str,
-    custom_llm_provider: str | None,
-    api_base: str | None = None,
-) -> ModelInfoBase:
-    """``_cached_get_model_info_helper`` that raises ``ModelNotMappedError`` on a capability-rule-only match."""
-    model_info: Final = _cached_get_model_info_helper(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
-    )
-    if is_generalized_model_info(model_info):
-        raise ModelNotMappedError(_model_not_mapped_message(model, custom_llm_provider))
-    return model_info
+    return key not in litellm.model_cost and match_capability_generalizations(key) is not None
 
 
 def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
@@ -5608,7 +5558,6 @@ def _invalidate_model_cost_lowercase_map() -> None:
     # Clear LRU caches that depend on model_cost data
     _cached_get_model_info.cache_clear()
     _cached_get_model_info_helper.cache_clear()
-    _cached_get_priced_model_info_helper.cache_clear()
 
 
 def _rebuild_model_cost_lowercase_map() -> dict[str, str]:

@@ -8,7 +8,7 @@ from typing import Final
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
-from litellm.utils import get_priced_model_info
+from litellm.utils import get_model_info
 
 
 def is_azure_model_router(model: str) -> bool:
@@ -56,7 +56,7 @@ def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> fl
     """
     if not is_azure_model_router(model):
         return 0.0
-    model_info: Final = get_priced_model_info(model=_router_fee_entry_name(model), custom_llm_provider="azure_ai")
+    model_info: Final = get_model_info(model=_router_fee_entry_name(model), custom_llm_provider="azure_ai")
     router_flat_cost_per_token: Final = model_info.get("input_cost_per_token", 0)
     if router_flat_cost_per_token and router_flat_cost_per_token > 0:
         return prompt_tokens * router_flat_cost_per_token

@@ -330,7 +330,7 @@ def test_image_tokens_with_custom_pricing():
     )
 
     with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_priced_model_info",
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
         prompt_cost, completion_cost = generic_cost_per_token(
@@ -376,7 +376,7 @@ def test_image_tokens_fallback_to_base_cost():
     )
 
     with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_priced_model_info",
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
         prompt_cost, completion_cost = generic_cost_per_token(
@@ -439,7 +439,7 @@ def test_video_tokens_fallback_to_base_cost():
     )
 
     with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_priced_model_info",
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
         prompt_cost, completion_cost = generic_cost_per_token(
@@ -1678,7 +1678,7 @@ def test_string_cost_values():
 
     # Mock get_model_info to return our mock model info
     with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_priced_model_info",
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
         prompt_cost, completion_cost = generic_cost_per_token(
@@ -1838,7 +1838,7 @@ def test_string_cost_values_edge_cases():
     )
 
     with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_priced_model_info",
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
         prompt_cost, completion_cost = generic_cost_per_token(
@@ -1875,7 +1875,7 @@ def test_string_cost_values_with_threshold():
     )
 
     with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_priced_model_info",
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
         prompt_cost, completion_cost = generic_cost_per_token(
@@ -3079,7 +3079,7 @@ def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict)
     )
 
     with patch(
-        "litellm.litellm_core_utils.llm_cost_calc.utils.get_priced_model_info",
+        "litellm.litellm_core_utils.llm_cost_calc.utils.get_model_info",
         return_value=mock_model_info,
     ):
         cost = calculate_image_response_cost_from_usage(

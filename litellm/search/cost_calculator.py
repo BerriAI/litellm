@@ -8,7 +8,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.utils import get_priced_model_info
+from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
@@ -61,7 +61,7 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
-    model_info: Final = get_priced_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
     # Check for tiered pricing (e.g., Exa AI based on max_results)
     tiered_pricing: Final = model_info.get("tiered_pricing")

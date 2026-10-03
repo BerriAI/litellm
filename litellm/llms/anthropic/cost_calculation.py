@@ -47,7 +47,7 @@ def cost_per_token(
         effective_info: Final = (
             model_info
             if model_info is not None
-            else litellm.get_priced_model_info(model=model, custom_llm_provider="anthropic")
+            else litellm.get_model_info(model=model, custom_llm_provider="anthropic")
         )
         provider_specific_entry: Final = effective_info.get("provider_specific_entry")
 

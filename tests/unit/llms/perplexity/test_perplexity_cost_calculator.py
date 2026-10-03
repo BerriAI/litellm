@@ -74,7 +74,7 @@ class TestPerplexityCostCalculator:
         usage.citation_tokens = 25
 
         # Mock get_model_info to return incomplete model info
-        with patch("litellm.llms.perplexity.cost_calculator.get_priced_model_info") as mock_get_model_info:
+        with patch("litellm.llms.perplexity.cost_calculator.get_model_info") as mock_get_model_info:
             mock_get_model_info.return_value = {
                 "input_cost_per_token": 2e-6,
                 "output_cost_per_token": 8e-6,
