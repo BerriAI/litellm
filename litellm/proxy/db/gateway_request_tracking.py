@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REDIS_GATEWAY_REQUESTS_BUFFER_KEY
@@ -38,6 +39,8 @@ from litellm.types.proxy.gateway_requests import (
     GatewayRequestKey,
     GatewayRequestSnapshot,
 )
+
+_GATEWAY_REQUEST_QUEUE_TARGET: Final = "gateway_request_queue"
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -166,6 +169,7 @@ class GatewayRequestRedisBuffer:
         self._redis_cache: Final = redis_cache
         self._pod_lock_manager: Final = pod_lock_manager
 
+    @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
     async def push(self, snapshot: GatewayRequestSnapshot) -> None:
         if not snapshot:
             return
@@ -175,6 +179,7 @@ class GatewayRequestRedisBuffer:
         )
         await self._redis_cache.async_rpush(key=REDIS_GATEWAY_REQUESTS_BUFFER_KEY, values=(json.dumps(rows),))
 
+    @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
     async def _pop_batch(self) -> tuple[str | bytes, ...]:
         popped: Final[object] = await self._redis_cache.async_lpop(  # pyright: ignore[reportAny]  # redis returns Any
             key=REDIS_GATEWAY_REQUESTS_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT

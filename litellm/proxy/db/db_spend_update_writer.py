@@ -24,6 +24,7 @@ from pydantic import TypeAdapter
 from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
@@ -50,7 +51,7 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
-from litellm.proxy.common_utils.user_api_key_cache import project_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
@@ -2182,12 +2183,13 @@ class DBSpendUpdateWriter:
             if team_memberships_to_invalidate and proxy_logging_obj is not None:
                 user_api_key_cache: Final = proxy_logging_obj.call_details.get("user_api_key_cache")
                 if user_api_key_cache is not None:
-                    for user_id, team_id in team_memberships_to_invalidate:
-                        cache_key = f"team_membership:{user_id}:{team_id}"
-                        await user_api_key_cache.async_delete_cache(key=cache_key)
-                        verbose_proxy_logger.debug(
-                            "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
-                        )
+                    with service_target(AUTH_OBJECTS_TARGET):
+                        for user_id, team_id in team_memberships_to_invalidate:
+                            cache_key = f"team_membership:{user_id}:{team_id}"
+                            await user_api_key_cache.async_delete_cache(key=cache_key)
+                            verbose_proxy_logger.debug(
+                                "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
+                            )
         elif on_table_committed is not None:
             on_table_committed("team_member_list_transactions")
 
@@ -2306,6 +2308,7 @@ class DBSpendUpdateWriter:
             on_table_committed("agent_list_transactions")
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _invalidate_project_caches(project_ids: Sequence[str], proxy_logging_obj: ProxyLogging | None) -> None:
         if not project_ids or proxy_logging_obj is None:
             return
