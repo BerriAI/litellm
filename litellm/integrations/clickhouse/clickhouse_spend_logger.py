@@ -137,9 +137,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     response_cost: Final = payload.get("response_cost")
     unknown_success_cost: Final[bool] = payload.get("status") == "success" and kwargs.get("response_cost") is None
     spend: Final = (
-        None
-        if unknown_success_cost or response_cost is None or not isfinite(response_cost)
-        else response_cost
+        None if unknown_success_cost or response_cost is None or not isfinite(response_cost) else response_cost
     )
     litellm_params: Final = _METADATA_MAPPING.validate_python(kwargs.get("litellm_params") or {})
     request_metadata: Final = (
