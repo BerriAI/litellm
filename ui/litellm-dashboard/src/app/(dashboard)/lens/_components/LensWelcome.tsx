@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { Check, ArrowRight, Loader2 } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { LensPreviewButton } from "@/components/lens/LensPreviewButton";
 import { uiHref } from "@/utils/uiHref";
 
 export function LensWelcome({
@@ -13,7 +14,7 @@ export function LensWelcome({
   onConnect,
   onCreate,
   onRetry,
-  onExample,
+  onDemo,
 }: {
   tracesReady: boolean;
   requestsReady?: boolean;
@@ -24,7 +25,7 @@ export function LensWelcome({
   onConnect: () => void;
   onCreate: () => void;
   onRetry: () => void;
-  onExample: () => void;
+  onDemo?: () => void;
 }) {
   const activityReady = tracesReady || requestsReady;
   const workerReady = activityReady && connected;
@@ -39,16 +40,14 @@ export function LensWelcome({
     className: "col-start-2 w-fit sm:col-start-auto",
   });
   return (
-    <section aria-labelledby="lens-welcome" className="max-w-3xl py-4 sm:py-6">
+    <section aria-labelledby="lens-welcome" className="max-w-3xl pb-6">
+      {onDemo && <LensPreviewButton onClick={onDemo} />}
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
         Find what needs attention
       </h2>
       <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
         Check how your agents behave. Get findings you can trace back to what happened.
       </p>
-      <Button variant="link" className="mt-3 h-auto px-0 text-sm" onClick={onExample}>
-        View an example <ArrowRight className="size-3.5" />
-      </Button>
       <ol className="mt-8 divide-y border-y">
         <li className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto]">
           <Step number={1} complete={activityReady} checking={checking} active={!activityReady} />

@@ -4,11 +4,10 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.lens.models import Scope, MetadataFilter
-from litellm.proxy.lens.sources import SourceReader
+from litellm.proxy.lens.models import MetadataFilter, Scope
+from litellm.proxy.lens.sources import SourceReader, execution_id, parse_execution
+from litellm.rust_bridge.trace_queries import ActivityAvailability, AgentRow, ExecutionRow
 from tests.unit.proxy.lens.test_state import lens
-
-from litellm.proxy.lens.sources import execution_id, parse_execution
 
 
 def test_same_trace_id_from_different_keys_is_a_distinct_execution() -> None:
@@ -36,24 +35,24 @@ def test_previous_saved_findings_keep_their_execution_links() -> None:
 async def test_sample_never_returns_authentication_attributes() -> None:
     class StorageResponse:
         async def lens_sample(self, parameters):
-            assert parameters["team"] == "alpha"
+            assert parameters.team == "alpha"
             return [
-                {
-                    "source": "traces",
-                    "trace_id": "trace",
-                    "team_id": "alpha",
-                    "name": "run",
-                    "start_time": "",
-                    "span_count": 1,
-                    "root_seen": 1,
-                    "eligible": 1,
-                    "attributes": [
-                        ["litellm.api_key_hash", "opaque-oauth-bearer"],
-                        ["environment", "production"],
-                        ["", "invalid"],
-                        ["oversized", "x" * 501],
-                    ],
-                }
+                ExecutionRow(
+                    source="traces",
+                    trace_id="trace",
+                    team_id="alpha",
+                    name="run",
+                    start_time="",
+                    span_count=1,
+                    root_seen=1,
+                    eligible=1,
+                    attributes=(
+                        ("litellm.api_key_hash", "opaque-oauth-bearer"),
+                        ("environment", "production"),
+                        ("", "invalid"),
+                        ("oversized", "x" * 501),
+                    ),
+                )
             ]
 
     reader: Final = SourceReader(StorageResponse())
@@ -67,10 +66,10 @@ async def test_sample_never_returns_authentication_attributes() -> None:
 async def test_agents_use_the_same_team_and_key_scope_as_samples() -> None:
     class AgentStorage:
         async def lens_agents(self, parameters):
-            assert parameters["all_teams"] == 0
-            assert parameters["team"] == "alpha"
-            assert parameters["key_hash"] == "key-hash"
-            return [{"agent_name": "research_agent"}, {"agent_name": "support_agent"}]
+            assert parameters.all_teams == 0
+            assert parameters.team == "alpha"
+            assert parameters.key_hash == "key-hash"
+            return (AgentRow(agent_name="research_agent"), AgentRow(agent_name="support_agent"))
 
     names: Final = await SourceReader(AgentStorage()).agents(Scope(team_id="alpha", api_key_hash="key-hash"))
     assert names == ("research_agent", "support_agent")
@@ -80,8 +79,8 @@ async def test_agents_use_the_same_team_and_key_scope_as_samples() -> None:
 async def test_request_only_storage_is_available_for_investigation() -> None:
     class RequestStorage:
         async def lens_availability(self, parameters):
-            assert parameters["team"] == "alpha"
-            return [{"traces": 0, "requests": 1}]
+            assert parameters.team == "alpha"
+            return (ActivityAvailability(traces=False, requests=True),)
 
     available: Final = await SourceReader(RequestStorage()).availability(Scope(team_id="alpha"))
     assert available.requests
@@ -92,10 +91,10 @@ async def test_request_only_storage_is_available_for_investigation() -> None:
 async def test_agent_filter_is_independent_of_service_and_metadata() -> None:
     class SampleStorage:
         async def lens_sample(self, parameters):
-            assert parameters["agent_name"] == "research_agent"
-            assert parameters["service"] == "shared-app"
-            assert parameters["filter_keys"] == ("enduser.id",)
-            assert parameters["filter_values"] == ("user-42",)
+            assert parameters.agent_name == "research_agent"
+            assert parameters.service == "shared-app"
+            assert parameters.filter_keys == ("enduser.id",)
+            assert parameters.filter_values == ("user-42",)
             return []
 
     settings: Final = lens().settings.model_copy(

@@ -9,7 +9,7 @@ use serde::{
 };
 
 use super::limits::{Budget, MAX_ATTRIBUTES};
-use crate::DecodeError;
+use crate::Error;
 
 struct AttributeWriter<'a> {
     body: Vec<u8>,
@@ -32,9 +32,9 @@ impl Write for AttributeWriter<'_> {
 pub(super) fn attributes(
     values: Vec<KeyValue>,
     budget: &mut Budget,
-) -> Result<BTreeMap<String, String>, DecodeError> {
+) -> Result<BTreeMap<String, String>, Error> {
     if values.len() > MAX_ATTRIBUTES {
-        return Err(DecodeError::TooLarge);
+        return Err(Error::TooLarge);
     }
     values
         .into_iter()
@@ -59,8 +59,8 @@ pub(super) fn attributes(
                         budget,
                     };
                     serde_json::to_writer(&mut writer, &AttributeJson(value.as_ref()))
-                        .map_err(|_| DecodeError::TooLarge)?;
-                    String::from_utf8(writer.body).map_err(|_| DecodeError::InvalidPayload)?
+                        .map_err(|_| Error::TooLarge)?;
+                    String::from_utf8(writer.body).map_err(|_| Error::InvalidPayload)?
                 }
             };
             Ok((entry.key, text))
