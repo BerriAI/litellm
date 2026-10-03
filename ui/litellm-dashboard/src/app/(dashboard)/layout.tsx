@@ -149,7 +149,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
         <UpgradeBanner accessToken={accessToken} />
-        <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
         {!isPlayground && <LiteAdmin />}
       </div>
     </div>

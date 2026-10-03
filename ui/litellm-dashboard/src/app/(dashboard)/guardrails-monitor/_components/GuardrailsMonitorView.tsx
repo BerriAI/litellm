@@ -1,3 +1,4 @@
+import { Page } from "@/components/shared/Page";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
@@ -48,7 +49,7 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
   );
 
   return (
-    <main className="w-full min-w-0 flex-1 p-8">
+    <Page>
       {!selectedGuardrailId ? (
         <GuardrailsOverview
           accessToken={accessToken}
@@ -69,6 +70,6 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
           />
         </>
       )}
-    </main>
+    </Page>
   );
 }

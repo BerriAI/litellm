@@ -792,15 +792,15 @@ describe("RequestLogsPanel", () => {
   });
 
   describe("live tail", () => {
-    it("shows the auto-refresh banner on the first page and hides it once stopped", async () => {
+    it("shows the refresh status on the first page and hides it when live tail is disabled", async () => {
       const user = userEvent.setup();
       renderPanel();
 
-      expect(await screen.findByText("Auto-refreshing every 15 seconds")).toBeInTheDocument();
+      expect(await screen.findByText("Refreshing every 15s")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Stop" }));
+      await user.click(screen.getByRole("switch", { name: "Live Tail" }));
 
-      expect(screen.queryByText("Auto-refreshing every 15 seconds")).not.toBeInTheDocument();
+      expect(screen.queryByText("Refreshing every 15s")).not.toBeInTheDocument();
     });
   });
 });
