@@ -9,9 +9,17 @@ import random
 import traceback
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Final
+from types import MappingProxyType
+from typing import Any, Final, Protocol
 
 from litellm._logging import verbose_router_logger
+from litellm.types.router import SearchToolLiteLLMParams, SearchToolTypedDict
+
+
+class _SearchToolsRouter(Protocol):
+    """The one router attribute the search-tool helpers read and replace."""
+
+    search_tools: list[SearchToolTypedDict]
 
 
 class SearchAPIRouter:
@@ -24,7 +32,7 @@ class SearchAPIRouter:
     @staticmethod
     def _resolve_search_provider_credentials(
         *,
-        tool_litellm_params: dict[str, Any],
+        tool_litellm_params: SearchToolLiteLLMParams,
     ) -> tuple[str | None, str | None]:
         """
         Resolve search provider credentials from tool configuration ONLY.
@@ -44,7 +52,7 @@ class SearchAPIRouter:
         return resolved_api_key, resolved_api_base
 
     @staticmethod
-    async def update_router_search_tools(router_instance: Any, search_tools: list):
+    async def update_router_search_tools(router_instance: _SearchToolsRouter, search_tools: list):
         """
         Update the router with search tools from the database.
 
@@ -55,8 +63,6 @@ class SearchAPIRouter:
             search_tools: List of search tool configurations from the database
         """
         try:
-            from litellm.types.router import SearchToolTypedDict
-
             verbose_router_logger.debug("Adding %s search tools to router", len(search_tools))
 
             # Convert search tools to the format expected by the router
@@ -82,7 +88,7 @@ class SearchAPIRouter:
 
     @staticmethod
     def get_matching_search_tools(
-        router_instance: Any,
+        router_instance: _SearchToolsRouter,
         search_tool_name: str,
     ) -> list:
         """
@@ -174,7 +180,7 @@ class SearchAPIRouter:
 
     @staticmethod
     async def async_search_with_fallbacks_helper(
-        router_instance: Any,
+        router_instance: _SearchToolsRouter,
         model: str,
         original_generic_function: Callable,
         **kwargs,
@@ -214,6 +220,15 @@ class SearchAPIRouter:
             api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
                 tool_litellm_params=litellm_params,
             )
+            protected_params: Final = frozenset(("search_provider", "api_key", "api_base"))
+            search_params: Final = MappingProxyType(
+                {
+                    key: value
+                    for params in (litellm_params, kwargs)
+                    for key, value in params.items()
+                    if key not in protected_params and value is not None
+                }
+            )
 
             verbose_router_logger.debug("Selected search tool with provider: %s", search_provider)
 
@@ -222,7 +237,7 @@ class SearchAPIRouter:
                 search_provider=search_provider,
                 api_key=api_key,
                 api_base=api_base,
-                **kwargs,
+                **search_params,
             )
 
             return response

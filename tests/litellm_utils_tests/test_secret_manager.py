@@ -1,6 +1,5 @@
 import base64
 import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -9,13 +8,9 @@ from dotenv import load_dotenv
 import json
 
 load_dotenv()
-import os
 import tempfile
 from uuid import uuid4
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.llms.azure.azure import get_azure_ad_token_from_oidc

@@ -14,8 +14,13 @@ vi.mock("@/app/(dashboard)/hooks/logDetails/useLogDetails", () => ({
   useLogDetails: () => ({ data: null, isLoading: false }),
 }));
 
+const mockUseUserLookup = vi.fn(() => ({ data: undefined }));
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useUserLookup: (userId: string | null) => mockUseUserLookup(userId),
+}));
+
 vi.mock("./LogDetailContent", () => ({
-  LogDetailContent: () => null,
+  LogDetailContent: ({ userEmail }: { userEmail?: string }) => <span>user-email:{userEmail ?? "none"}</span>,
   GuardrailJumpLink: () => null,
 }));
 
@@ -124,6 +129,38 @@ describe("LogDetailsDrawer session sidebar sorting", () => {
   });
 });
 
+describe("LogDetailsDrawer internal user email", () => {
+  const renderSingleLog = (user: string | undefined) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <LogDetailsDrawer
+          open
+          onClose={() => {}}
+          logEntry={makeLog({ request_id: "single", user })}
+          accessToken="token"
+        />
+      </QueryClientProvider>,
+    );
+  };
+
+  it("looks up the log's internal user and hands the resolved email to the detail content", () => {
+    mockUseUserLookup.mockReturnValue({ data: { user_id: "u-1", user_email: "alice@example.com" } });
+    renderSingleLog("u-1");
+
+    expect(mockUseUserLookup).toHaveBeenCalledWith("u-1");
+    expect(screen.getByText("user-email:alice@example.com")).toBeInTheDocument();
+  });
+
+  it("skips the lookup and passes no email when the log has no internal user", () => {
+    mockUseUserLookup.mockReturnValue({ data: undefined });
+    renderSingleLog(undefined);
+
+    expect(mockUseUserLookup).toHaveBeenCalledWith(null);
+    expect(screen.getByText("user-email:none")).toBeInTheDocument();
+  });
+});
+
 describe("LogDetailsDrawer session sidebar auto-router icon", () => {
   const routedSessionLogs = [
     makeLog({ request_id: "routed", model: "claude-opus-4-8", model_group: "smart-router" }),
@@ -153,7 +190,7 @@ describe("LogDetailsDrawer session sidebar auto-router icon", () => {
   it("marks the auto-routed entry with the router icon and leaves a direct call on the default icon", async () => {
     renderRoutedSession();
 
-    await waitFor(() => expect(screen.queryByText("claude-opus-4-8")).not.toBeNull());
+    expect(await screen.findByText("claude-opus-4-8")).toBeInTheDocument();
 
     const routedRow = rowFor("claude-opus-4-8");
     const directRow = rowFor("claude-haiku-4-5");

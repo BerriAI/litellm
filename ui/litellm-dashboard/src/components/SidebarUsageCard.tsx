@@ -2,7 +2,7 @@ import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 import { formatExpirationStatus } from "@/utils/licenseUtils";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterLabel, MeterTrack } from "@/components/shared/Meter";
 import { useQuery } from "@tanstack/react-query";
 import { Award, ChevronDown, Loader2 } from "lucide-react";
 import { getRemainingUsers } from "./networking";
@@ -85,7 +85,7 @@ export default function SidebarUsageCard({ accessToken, collapsed, onExpandRail 
         variant="outline"
         onClick={onExpandRail}
         title="Enterprise usage"
-        className="h-9 w-full rounded-lg border-sidebar-border bg-sidebar text-sidebar-primary shadow-none hover:bg-sidebar-accent hover:text-sidebar-primary"
+        className="h-9 w-full rounded-lg border-sidebar-border bg-sidebar text-sidebar-primary shadow-none hover:bg-sidebar-accent hover:text-sidebar-primary/80"
       >
         <Award className="size-[18px]" strokeWidth={1.75} />
       </Button>

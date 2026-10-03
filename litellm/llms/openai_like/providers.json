@@ -1,4 +1,15 @@
 {
+  "bitdeer-ai": {
+    "base_url": "https://api-inference.bitdeer.ai/v1",
+    "api_key_env": "BITDEER_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "special_handling": {
+      "require_api_key_for_custom_base": true
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
@@ -173,6 +184,17 @@
     "api_key_env": "META_API_KEY",
     "api_base_env": "META_API_BASE",
     "base_class": "openai_gpt",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/realtime"]
+  },
+  "cognition": {
+    "base_url": "https://api.cognition.ai/v1",
+    "api_key_env": "COGNITION_API_KEY",
+    "api_base_env": "COGNITION_API_BASE"
+  },
+  "cortecs": {
+    "base_url": "https://api.cortecs.ai/v1",
+    "api_key_env": "CORTECS_API_KEY",
+    "api_base_env": "CORTECS_API_BASE",
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
   "pinstripes": {
@@ -184,11 +206,28 @@
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
   },
-  "bitdeer-ai": {
-    "base_url": "https://api-inference.bitdeer.ai/v1",
-    "api_key_env": "BITDEER_API_KEY",
+  "scx-ai": {
+    "base_url": "https://api.scx.ai/v1",
+    "api_key_env": "SCX_API_KEY",
+    "api_base_env": "SCX_API_BASE",
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
-    }
+    },
+    "constraints": {
+      "temperature_max": 1.99
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "prism": {
+    "base_url": "https://api.prisminference.com/v1",
+    "api_key_env": "PRISM_API_KEY",
+    "api_base_env": "PRISM_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
+  "sail": {
+    "base_url": "https://api.sailresearch.com/v1",
+    "api_key_env": "SAIL_API_KEY",
+    "api_base_env": "SAIL_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }

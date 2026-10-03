@@ -18,8 +18,7 @@ if typing.TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from fastapi import Request
-    from mcp.client.session import ClientSession
-    from mcp.shared.context import RequestContext
+    from mcp.client.session import ClientRequestContext
     from mcp.types import (
         ContentBlock,
         CreateMessageResult,
@@ -333,14 +332,14 @@ def _convert_single_content(
         return {"type": "text", "text": content.text}
     elif content_type == "image":
         image_data: Final[str] = getattr(content, "data", "")
-        image_mime_type: Final[str] = getattr(content, "mimeType", "image/png")
+        image_mime_type: Final[str] = getattr(content, "mime_type", "image/png")
         return {
             "type": "image_url",
             "image_url": {"url": f"data:{image_mime_type};base64,{image_data}"},
         }
     elif content_type == "audio":
         audio_data: Final[str] = getattr(content, "data", "")
-        audio_mime_type: Final[str] = getattr(content, "mimeType", "audio/wav")
+        audio_mime_type: Final[str] = getattr(content, "mime_type", "audio/wav")
         # Map MIME type to OpenAI audio format
         format_map: Final = {
             "audio/wav": "wav",
@@ -375,7 +374,7 @@ def _convert_single_content(
         # ToolResultContent → proper OpenAI tool-role message.
         # Marked so the message-level converter can emit it as a
         # separate ``{"role": "tool", ...}`` message.
-        tool_result_use_id: Final = getattr(content, "toolUseId", "")
+        tool_result_use_id: Final = getattr(content, "tool_use_id", "")
         nested_content: Final[Sequence[ContentBlock]] = getattr(content, "content", [])
         if isinstance(nested_content, list):
             text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
@@ -538,7 +537,7 @@ def _extract_tool_results(
     results: Final = []
     for item in items:
         if getattr(item, "type", None) == "tool_result":
-            tool_use_id = getattr(item, "toolUseId", "")
+            tool_use_id = getattr(item, "tool_use_id", "")
             # Extract text from nested content
             nested_content: Sequence[ContentBlock] = getattr(item, "content", [])
             if isinstance(nested_content, list):
@@ -573,7 +572,7 @@ def _convert_mcp_tools_to_openai(
             "function": {
                 "name": tool.name,
                 "description": tool.description or "",
-                "parameters": tool.inputSchema
+                "parameters": tool.input_schema
                 or {
                     "type": "object",
                     "properties": {},
@@ -718,7 +717,7 @@ def _convert_openai_response_to_mcp_result(
             role="assistant",
             content=content_parts,
             model=actual_model,
-            stopReason=stop_reason,
+            stop_reason=stop_reason,
         )
     # Simple text response
     text: Final = message.content or ""
@@ -726,7 +725,7 @@ def _convert_openai_response_to_mcp_result(
         role="assistant",
         content=TextContent(type="text", text=text),
         model=actual_model,
-        stopReason=stop_reason,
+        stop_reason=stop_reason,
     )
 
 
@@ -771,6 +770,7 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
 
     try:
         import litellm
+        from litellm.proxy._types import ModelAccessDeniedProxyException
         from litellm.proxy.auth.auth_checks import (
             _check_team_member_model_access,
             can_key_call_model,
@@ -884,11 +884,14 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
         )
         return None
     except Exception as access_err:
-        verbose_logger.warning(
-            "MCP sampling: model access denied for model=%s: %s",
-            model,
-            access_err,
-        )
+        if isinstance(access_err, ModelAccessDeniedProxyException):
+            verbose_logger.warning(
+                "MCP sampling: model access denied for model=%s: %s",
+                model,
+                access_err.sanitized_internal_message(),
+            )
+            return ErrorData(code=-1, message=access_err.message)
+        verbose_logger.warning("MCP sampling: model access denied for model=%s: %s", model, access_err)
         return ErrorData(
             code=-1,
             message=(f"Model access denied: the API key is not authorized to use model '{model}'. {access_err}"),
@@ -1042,100 +1045,15 @@ def _build_sampling_request(
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
 ) -> "Request":
-    """Build a synthetic FastAPI Request for sampling sub-calls.
+    """The synthetic FastAPI Request for sampling sub-calls, carrying the original
+    MCP connection's headers and client IP."""
+    from litellm.proxy._experimental.mcp_server.utils import build_synthetic_mcp_request
 
-    Converts the original MCP connection's HTTP headers into ASGI
-    scope format so that ``add_litellm_data_to_request`` can apply
-    header-dependent guardrails, tag-based routing, trace correlation,
-    and ``forward_llm_provider_auth_headers``.
-
-    Key fields populated:
-    - **headers**: All original HTTP headers are forwarded (except
-      hop-by-hop: content-length, transfer-encoding).  This ensures
-      ``traceparent``, ``authorization``, ``user-agent``, and
-      ``x-litellm-api-key`` are visible to pre-call utils.
-    - **client**: The ASGI ``(host, port)`` tuple so that
-      ``request.client.host`` returns the real client IP for
-      IP-based routing and guardrails.
-    - **server**: Derived from the running proxy's ``server_host``
-      / ``server_port`` when available, avoiding the misleading
-      ``127.0.0.1:0`` placeholder.
-    - **x-forwarded-for**: Injected from ``client_ip`` if the
-      original headers don't already carry it, as a fallback for
-      IP attribution.
-    """
-    from fastapi import Request
-
-    # --- Build ASGI headers ---
-    _scope_headers: Final[list[tuple[bytes, bytes]]] = [(b"content-type", b"application/json")]
-    # Hop-by-hop headers that must NOT be forwarded into the
-    # synthetic request (they describe the original HTTP framing,
-    # not the logical request).
-    _HOP_BY_HOP: Final = frozenset(
-        {
-            "content-length",
-            "transfer-encoding",
-            "connection",
-            "keep-alive",
-            "upgrade",
-            "te",
-            "trailer",
-        }
+    return build_synthetic_mcp_request(
+        path="/mcp/sampling/createMessage",
+        raw_headers=raw_headers,
+        client_ip=client_ip,
     )
-    if raw_headers:
-        for hdr_name, hdr_value in raw_headers.items():
-            _key = hdr_name.lower()
-            # Skip content-type (already set), x-forwarded-for (use resolved
-            # client_ip instead to prevent spoofing), and hop-by-hop headers
-            if _key in {"content-type", "x-forwarded-for"} or _key in _HOP_BY_HOP:
-                continue
-            _scope_headers.append(
-                (
-                    _key.encode("latin-1", errors="replace"),
-                    hdr_value.encode("utf-8"),
-                )
-            )
-
-    # Inject x-forwarded-for from captured client_ip if the
-    # original headers don't already carry it
-    if client_ip and not any(h[0] == b"x-forwarded-for" for h in _scope_headers):
-        _scope_headers.append((b"x-forwarded-for", client_ip.encode("utf-8")))
-
-    # --- Derive server (host, port) from the running proxy ---
-    _server_host = "127.0.0.1"
-    _server_port = 4000  # LiteLLM default
-    try:
-        from litellm.proxy import proxy_server
-
-        _proxy_host: Final[str | None] = getattr(proxy_server, "server_host", None)
-        _proxy_port: Final[str | int | None] = getattr(proxy_server, "server_port", None)
-
-        if _proxy_host:
-            _server_host = str(_proxy_host)
-        if _proxy_port:
-            _server_port = int(_proxy_port)
-    except (ImportError, AttributeError, TypeError, ValueError):
-        pass
-
-    # --- Build ASGI client tuple for request.client.host ---
-    _client_tuple = None
-    if client_ip:
-        _client_tuple = (client_ip, 0)
-
-    scope: Final[dict[str, object]] = {
-        "type": "http",
-        "method": "POST",
-        "path": "/mcp/sampling/createMessage",
-        "scheme": "http",
-        "server": (_server_host, _server_port),
-        "query_string": b"",
-        "root_path": "",
-        "headers": _scope_headers,
-    }
-    if _client_tuple is not None:
-        scope["client"] = _client_tuple
-
-    return Request(scope=scope)
 
 
 async def _build_completion_kwargs(
@@ -1147,21 +1065,21 @@ async def _build_completion_kwargs(
 ) -> dict[str, Any]:
     openai_messages: Final = _convert_mcp_messages_to_openai(
         messages=params.messages,
-        system_prompt=params.systemPrompt,
+        system_prompt=params.system_prompt,
     )
     completion_kwargs: Final[dict[str, object]] = {
         "model": model,
         "messages": openai_messages,
-        "max_tokens": params.maxTokens,
+        "max_tokens": params.max_tokens,
     }
     if params.temperature is not None:
         completion_kwargs["temperature"] = params.temperature
-    if params.stopSequences:
-        completion_kwargs["stop"] = params.stopSequences
+    if params.stop_sequences:
+        completion_kwargs["stop"] = params.stop_sequences
     openai_tools: Final = _convert_mcp_tools_to_openai(params.tools)
     if openai_tools:
         completion_kwargs["tools"] = openai_tools
-    openai_tool_choice: Final = _convert_mcp_tool_choice_to_openai(params.toolChoice)
+    openai_tool_choice: Final = _convert_mcp_tool_choice_to_openai(params.tool_choice)
     if openai_tool_choice is not None:
         completion_kwargs["tool_choice"] = openai_tool_choice
     completion_kwargs["metadata"] = {"mcp_metadata": params.metadata} if params.metadata else {}
@@ -1218,7 +1136,7 @@ async def _run_guardrails_and_call_llm(
 
 
 async def handle_sampling_create_message(
-    context: "RequestContext[ClientSession, object]",
+    context: "ClientRequestContext",
     params: "CreateMessageRequestParams",
     default_model: str | None = None,
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
@@ -1261,13 +1179,13 @@ async def handle_sampling_create_message(
 
     try:
         model: Final = _resolve_model_from_preferences(
-            model_preferences=params.modelPreferences,
+            model_preferences=params.model_preferences,
             default_model=default_model,
         )
         verbose_logger.info(
             "MCP sampling: resolved model=%s from preferences=%s",
             model,
-            params.modelPreferences,
+            params.model_preferences,
         )
 
         access_denial: Final = await _check_model_access(model, user_api_key_auth)
@@ -1309,7 +1227,7 @@ async def handle_sampling_create_message(
         verbose_logger.info(
             "MCP sampling: completed successfully, model=%s, stopReason=%s",
             getattr(result, "model", "unknown"),
-            getattr(result, "stopReason", "unknown"),
+            getattr(result, "stop_reason", "unknown"),
         )
         return result
     except Exception as e:

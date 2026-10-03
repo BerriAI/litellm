@@ -1,13 +1,10 @@
 import React from "react";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { Form } from "antd";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
+import { McpFormHarness } from "./McpFormTestHarness";
 
-const WithForm: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [form] = Form.useForm();
-  return <Form form={form}>{children}</Form>;
-};
+const WithForm = McpFormHarness;
 
 const noopFlow = { startOAuthFlow: () => {}, status: "idle", error: null, tokenResponse: null };
 

@@ -1,5 +1,7 @@
 import mimetypes
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import quote
 
@@ -26,6 +28,7 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -100,6 +103,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
             api_base = "https://api.openai.com/v1"
 
         return f"{api_base.rstrip('/')}/videos"
+
+    def use_multipart_form_data(self) -> bool:
+        return True
 
     def transform_video_create_request(
         self,
@@ -232,7 +238,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video remix request for OpenAI API.
@@ -247,7 +253,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         url: Final = f"{api_base.rstrip('/')}/{encoded_video_id}/remix"
 
         # Prepare the request data
-        data: Final = {"prompt": prompt}
+        data: Final[dict[str, object]] = {"prompt": prompt}
 
         # Add any extra body parameters
         if extra_body:
@@ -300,7 +306,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video list request for OpenAI API.
@@ -432,6 +438,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         """
         Transform the OpenAI video retrieve response.
@@ -499,15 +506,26 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        video_file: FileContent | None = None,
         extra_body: dict[str, object] | None = None,
         prefetched_source_data: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
-        original_video_id: Final = extract_original_video_id(video_id)
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         url: Final = f"{api_base.rstrip('/')}/edits"
+
+        if video_file is not None:
+            files: Final[RequestFiles] = (self._video_file_tuple(video_file, "video"),)
+            form_data: Final = (
+                MappingProxyType({"prompt": prompt, **extra_body})
+                if extra_body
+                else MappingProxyType({"prompt": prompt})
+            )
+            return url, form_data, files
+
+        original_video_id: Final = extract_original_video_id(video_id)
         data: Final[dict[str, object]] = {"prompt": prompt, "video": {"id": original_video_id}}
         if extra_body:
             data.update(extra_body)
-        return url, data
+        return url, data, None
 
     def transform_video_edit_response(
         self,
@@ -555,8 +573,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
     def _add_image_to_files(
         self,
-        files_list: list[tuple[str, Any]],
-        image: Any,
+        files_list: list[tuple[str, FileTypes]],
+        image: FileContent,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""
@@ -567,21 +585,22 @@ class OpenAIVideoConfig(BaseVideoConfig):
         else:
             files_list.append((field_name, ("input_reference.png", image, image_content_type)))
 
+    def _video_file_tuple(self, video: FileContent, field_name: str) -> tuple[str, FileTypes]:
+        """
+        Build a multipart field tuple for a video upload with proper video MIME
+        type detection: these paths must send video/mp4, not image/* content types.
+        """
+        filename: Final = getattr(video, "name", None) or "input_video.mp4"
+        content_type: Final = self._get_video_content_type(video=video, filename=filename)
+        return (field_name, (filename, video, content_type))
+
     def _add_video_to_files(
         self,
         files_list: list[tuple[str, FileTypes]],
         video: FileContent,
         field_name: str,
     ) -> None:
-        """
-        Add a video to files with proper video MIME type detection.
-
-        This path is used by POST /videos/characters and must send video/mp4,
-        not image/* content types.
-        """
-        filename: Final = getattr(video, "name", None) or "input_video.mp4"
-        content_type: Final = self._get_video_content_type(video=video, filename=filename)
-        files_list.append((field_name, (filename, video, content_type)))
+        files_list.append(self._video_file_tuple(video, field_name))
 
     def _get_video_content_type(self, video: FileContent, filename: str) -> str:
         guessed_content_type, _ = mimetypes.guess_type(filename)

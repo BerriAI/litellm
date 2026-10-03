@@ -1,9 +1,11 @@
 import React from "react";
-import { Typography, Select, Table, Tag, Button } from "antd";
-import { DeleteOutlined } from "@ant-design/icons";
-
-const { Text } = Typography;
-const { Option } = Select;
+import { Trash2 } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/shared/DataTable";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ACTION_ITEMS } from "./action_options";
 
 interface Pattern {
   id: string;
@@ -21,58 +23,58 @@ interface PatternTableProps {
 }
 
 const PatternTable: React.FC<PatternTableProps> = ({ patterns, onActionChange, onRemove }) => {
-  const columns = [
+  const columns: ColumnDef<Pattern>[] = [
     {
-      title: "Type",
-      dataIndex: "type",
-      key: "type",
-      width: 100,
-      render: (type: string) => (
-        <Tag color={type === "prebuilt" ? "blue" : "green"}>{type === "prebuilt" ? "Prebuilt" : "Custom"}</Tag>
-      ),
+      header: "Type",
+      accessorKey: "type",
+      size: 100,
+      cell: ({ row }) => <Badge variant="secondary">{row.original.type === "prebuilt" ? "Prebuilt" : "Custom"}</Badge>,
     },
     {
-      title: "Pattern name",
-      dataIndex: "name",
-      key: "name",
-      render: (_: string, record: Pattern) => record.display_name || record.name,
+      header: "Pattern name",
+      accessorKey: "name",
+      cell: ({ row }) => row.original.display_name || row.original.name,
     },
     {
-      title: "Regex pattern",
-      dataIndex: "pattern",
-      key: "pattern",
-      render: (pattern: string) =>
-        pattern ? (
-          <Text code style={{ fontSize: 12 }}>
-            {pattern.substring(0, 40)}...
-          </Text>
+      header: "Regex pattern",
+      accessorKey: "pattern",
+      cell: ({ row }) =>
+        row.original.pattern ? (
+          <code className="rounded-sm bg-muted px-1 py-0.5 text-xs">{row.original.pattern.substring(0, 40)}...</code>
         ) : (
           "-"
         ),
     },
     {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: Pattern) => (
+      header: "Action",
+      accessorKey: "action",
+      size: 150,
+      cell: ({ row }) => (
         <Select
-          value={action}
-          onChange={(value) => onActionChange(record.id, value as "BLOCK" | "MASK")}
-          style={{ width: 120 }}
-          size="small"
+          items={ACTION_ITEMS}
+          value={row.original.action}
+          onValueChange={(value: string | null) => value && onActionChange(row.original.id, value as "BLOCK" | "MASK")}
         >
-          <Option value="BLOCK">Block</Option>
-          <Option value="MASK">Mask</Option>
+          <SelectTrigger size="sm" className="w-[120px]" aria-label="Action">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ACTION_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
         </Select>
       ),
     },
     {
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: Pattern) => (
-        <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove(record.id)}>
+      header: "",
+      id: "actions",
+      size: 100,
+      cell: ({ row }) => (
+        <Button variant="ghost" size="sm" onClick={() => onRemove(row.original.id)}>
+          <Trash2 />
           Delete
         </Button>
       ),
@@ -80,10 +82,10 @@ const PatternTable: React.FC<PatternTableProps> = ({ patterns, onActionChange, o
   ];
 
   if (patterns.length === 0) {
-    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No patterns added.</div>;
+    return <div className="py-10 text-center text-muted-foreground">No patterns added.</div>;
   }
 
-  return <Table dataSource={patterns} columns={columns} rowKey="id" pagination={false} size="small" />;
+  return <DataTable data={patterns} columns={columns} getRowId={(row) => row.id} size="compact" />;
 };
 
 export default PatternTable;

@@ -3,6 +3,7 @@ Mock LLM server for UI e2e tests.
 Responds to OpenAI-format endpoints with canned responses.
 """
 
+import os
 import time
 import json
 import uuid
@@ -117,4 +118,12 @@ async def embeddings(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8090)
+    # The port is overridable so two checkouts can run the harness at the same
+    # time; the default keeps every existing caller (run_e2e.sh, the CircleCI
+    # job, the e2e chart's sidecar) working untouched.
+    #
+    # The HOST is deliberately NOT configurable. Binding loopback is what makes
+    # this reachable at 127.0.0.1:8090 from inside the proxy's own pod, which is
+    # the contract the deployed config.yml and the e2e values file are written
+    # against.
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("MOCK_LLM_PORT", "8090")))

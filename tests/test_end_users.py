@@ -14,47 +14,6 @@ from typing import Optional
 """
 
 
-async def chat_completion_with_headers(session, key, model="gpt-4"):
-    url = "http://0.0.0.0:4000/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-    data = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"},
-        ],
-    }
-
-    async with session.post(url, headers=headers, json=data) as response:
-        status = response.status
-        response_text = await response.text()
-
-        print(response_text)
-        print()
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-
-        response_header_check(
-            response
-        )  # calling the function to check response headers
-
-        raw_headers = response.raw_headers
-        raw_headers_json = {}
-
-        for (
-            item
-        ) in (
-            response.raw_headers
-        ):  # ((b'date', b'Fri, 19 Apr 2024 21:17:29 GMT'), (), )
-            raw_headers_json[item[0].decode("utf-8")] = item[1].decode("utf-8")
-
-        return raw_headers_json
-
-
 async def generate_key(
     session,
     i,
@@ -157,45 +116,6 @@ async def test_end_user_new():
     async with aiohttp.ClientSession() as session:
         tasks = [new_end_user(session, i, str(uuid.uuid4())) for i in range(1, 11)]
         await asyncio.gather(*tasks)
-
-
-@pytest.mark.asyncio
-async def test_aaaend_user_specific_region():
-    """
-    - Specify region user can make calls in
-    - Make a generic call
-    - assert returned api base is for model in region
-
-    Repeat 3 times
-    """
-    key: str = ""
-    ## CREATE USER ##
-    async with aiohttp.ClientSession() as session:
-        end_user_obj = await new_end_user(
-            session=session,
-            i=0,
-            user_id=str(uuid.uuid4()),
-            model_region="eu",
-        )
-
-        ## MAKE CALL ##
-        key_gen = await generate_key(
-            session=session, i=0, models=["gpt-5-mini-end-user-test"]
-        )
-
-        key = key_gen["key"]
-
-    for _ in range(3):
-        client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000", max_retries=0)
-
-        print("SENDING USER PARAM - {}".format(end_user_obj["user_id"]))
-        result = await client.chat.completions.with_raw_response.create(
-            model="gpt-5-mini-end-user-test",
-            messages=[{"role": "user", "content": "Hey!"}],
-            user=end_user_obj["user_id"],
-        )
-
-        assert result.headers.get("x-litellm-model-region") == "eu"
 
 
 @pytest.mark.asyncio

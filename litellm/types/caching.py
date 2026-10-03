@@ -1,8 +1,9 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class LiteLLMCacheType(str, Enum):
@@ -15,6 +16,11 @@ class LiteLLMCacheType(str, Enum):
     QDRANT_SEMANTIC = "qdrant-semantic"
     AZURE_BLOB = "azure-blob"
     GCS = "gcs"
+
+
+class SemanticCacheScope(str, Enum):
+    KEY = "key"
+    END_USER = "end_user"
 
 
 CachingSupportedCallTypes = Literal[
@@ -30,7 +36,26 @@ CachingSupportedCallTypes = Literal[
     "rerank",
     "responses",
     "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
 ]
+
+DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
+    "completion",
+    "acompletion",
+    "embedding",
+    "aembedding",
+    "atranscription",
+    "transcription",
+    "atext_completion",
+    "text_completion",
+    "arerank",
+    "rerank",
+    "responses",
+    "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
+)
 
 
 class RedisPipelineIncrementOperation(TypedDict):
@@ -59,7 +84,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: list[Any]
+    values: Sequence[Any]
 
 
 class RedisPipelineLpopOperation(TypedDict):
@@ -112,12 +137,16 @@ class HealthCheckCacheParams(BaseModel):
     redis_version: str | int | float | None = None
 
 
+EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
+
+
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
 
-    embedding: list[float] | None
-    index: int | None
-    object: str | None
-    model: str | None
-    prompt_tokens: int | None
-    prompt_tokens_details: dict | None
+    embedding: ReadOnly[list[float] | str | None]
+    index: ReadOnly[int | None]
+    object: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    prompt_tokens: ReadOnly[int | None]
+    prompt_tokens_details: ReadOnly[dict | None]
+    format_version: ReadOnly[int]

@@ -3,13 +3,14 @@ Tests for the Semantic Guard guardrail — embedding-based prompt injection dete
 """
 
 import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
+
+from litellm.proxy.guardrails.content_filter_data import POLICY_TEMPLATES_DIR
 
 
 class TestRouteLoader:
@@ -245,13 +246,7 @@ class TestContentFilterSqlInjectionTemplate:
             ContentFilterCategoryConfig,
         )
 
-        content_filter_dir = os.path.join(
-            os.path.dirname(__file__),
-            "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
-        )
-        policy_template_path = os.path.abspath(
-            os.path.join(content_filter_dir, "policy_templates/sql_injection.yaml")
-        )
+        policy_template_path = os.path.join(POLICY_TEMPLATES_DIR, "sql_injection.yaml")
 
         categories = [
             ContentFilterCategoryConfig(
@@ -307,7 +302,7 @@ class TestContentFilterSqlInjectionTemplate:
     @pytest.mark.asyncio
     async def test_sql_always_block(self, sql_injection_guardrail, sentence, reason):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await sql_injection_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -343,7 +338,7 @@ class TestContentFilterSqlInjectionTemplate:
         self, sql_injection_guardrail, sentence, reason
     ):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await sql_injection_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
@@ -497,13 +492,7 @@ class TestContentFilterPromptInjectionTemplate:
             ContentFilterCategoryConfig,
         )
 
-        content_filter_dir = os.path.join(
-            os.path.dirname(__file__),
-            "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
-        )
-        policy_template_path = os.path.abspath(
-            os.path.join(content_filter_dir, "policy_templates/prompt_injection.yaml")
-        )
+        policy_template_path = os.path.join(POLICY_TEMPLATES_DIR, "prompt_injection.yaml")
 
         categories = [
             ContentFilterCategoryConfig(
@@ -552,7 +541,7 @@ class TestContentFilterPromptInjectionTemplate:
     @pytest.mark.asyncio
     async def test_always_block(self, content_filter_guardrail, sentence, reason):
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException):
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
