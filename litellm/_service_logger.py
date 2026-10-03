@@ -134,6 +134,18 @@ class ServiceLogging(CustomLogger):
         except Exception as e:
             verbose_logger.exception("Error emitting service event - %s", e)
 
+    def _has_service_event_observers(self) -> bool:
+        """Whether anything would receive a service event sent from a blocking caller.
+
+        Sending one runs an event loop on the calling thread. Under gevent, every
+        greenlet on that thread then sees a running loop, and Django rejects their
+        database queries with ``SynchronousOnlyOperation``. So skip it when there is
+        no service callback (or test counter) to receive the event.
+        """
+        if litellm.service_callback:
+            return True
+        return self.mock_testing
+
     @staticmethod
     def _dispatch_from_sync(hook: Callable[[], Coroutine[object, object, None]]) -> None:
         """Run an async service hook from a blocking caller, whatever event loop it holds.
@@ -168,6 +180,8 @@ class ServiceLogging(CustomLogger):
 
         if self.mock_testing:
             self.mock_testing_sync_success_hook += 1
+        if not self._has_service_event_observers():
+            return
 
         self._dispatch_from_sync(
             lambda: self.async_service_success_hook(
@@ -197,6 +211,8 @@ class ServiceLogging(CustomLogger):
         """
         if self.mock_testing:
             self.mock_testing_sync_failure_hook += 1
+        if not self._has_service_event_observers():
+            return
 
         self._dispatch_from_sync(
             lambda: self.async_service_failure_hook(
