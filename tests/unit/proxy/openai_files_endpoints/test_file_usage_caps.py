@@ -3,7 +3,9 @@ from typing import Final
 import pytest
 
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.openai_files_endpoints.file_usage_caps import (
     FileUsageLimit,
     ScopedFileUsageLimit,
@@ -13,7 +15,7 @@ from litellm.proxy.openai_files_endpoints.file_usage_caps import (
     enforce_file_download_limit,
     resolve_scoped_limits,
 )
-from litellm.proxy.utils import InternalUsageCache
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 
 DAY: Final = 86400
 MIDDAY: Final = 20_000 * DAY + DAY / 2
@@ -146,6 +148,21 @@ async def test_download_counters_are_per_file():
     assert await consume_file_usage(cache, limits, 60, "file-a", MIDDAY) is None
     assert await consume_file_usage(cache, limits, 60, "file-a", MIDDAY) is not None
     assert await consume_file_usage(cache, limits, 60, "file-b", MIDDAY) is None
+
+
+async def test_the_proxy_counter_store_keeps_a_counter_while_more_counters_are_live_than_a_default_cache_holds():
+    cache: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache()).file_usage_cache
+    limits: Final = (_scoped("key", "hashed", 1, setting="max_file_downloads_per_minute"),)
+    other_files: Final = DEFAULT_MAX_SIZE_IN_MEMORY + 10
+
+    first: Final = await consume_file_usage(cache, limits, 60, "file-first", MIDDAY)
+    others: Final = [
+        await consume_file_usage(cache, limits, 60, f"file-{index}", MIDDAY) for index in range(other_files)
+    ]
+
+    assert first is None
+    assert others == [None] * other_files
+    assert await consume_file_usage(cache, limits, 60, "file-first", MIDDAY) is not None
 
 
 async def test_upload_limit_error_names_the_setting_value_scope_and_reset():
