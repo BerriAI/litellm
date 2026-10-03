@@ -323,3 +323,58 @@ async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
     assert len(trace_ids) == 1, f"Expected single trace, got {len(trace_ids)} traces"
 
     phoenix_exporter.clear()
+
+
+def test_otel_error_span_carries_status_description():
+    from opentelemetry.trace import StatusCode
+
+    test_exporter = InMemorySpanExporter()
+    otel_logger = OpenTelemetry(config=OpenTelemetryConfig(exporter=test_exporter))
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "exception": ValueError("upstream connection timeout"),
+        "standard_logging_object": {
+            "error_information": {
+                "error_message": "upstream connection timeout",
+                "error_class": "ValueError",
+            }
+        },
+    }
+
+    otel_logger._handle_failure(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    spans = test_exporter.get_finished_spans()
+    assert len(spans) == 1
+    error_span = spans[0]
+    assert error_span.status.status_code == StatusCode.ERROR
+    assert error_span.status.description == "upstream connection timeout"
+
+    kwargs_fallback = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "standard_logging_object": {
+            "error_str": "service unavailable",
+        },
+    }
+    otel_logger._handle_failure(
+        kwargs=kwargs_fallback,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    all_spans = test_exporter.get_finished_spans()
+    assert len(all_spans) == 2
+    fallback_span = all_spans[1]
+    assert fallback_span.status.status_code == StatusCode.ERROR
+    assert fallback_span.status.description == "service unavailable"
+
+    test_exporter.clear()
+
