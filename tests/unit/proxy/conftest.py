@@ -7,6 +7,7 @@ import os
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,15 @@ from litellm._service_logger import ServiceTypes
 from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
+
+
+@pytest.fixture
+def packaged_favicon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> bytes:
+    payload: Final = b"\x00\x00\x01\x00packaged-icon"
+    (tmp_path / "ui").mkdir()
+    (tmp_path / "ui" / "favicon.ico").write_bytes(payload)
+    monkeypatch.setattr("litellm.proxy.common_utils.static_asset_utils.package_files", lambda package: tmp_path)
+    return payload
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):

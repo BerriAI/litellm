@@ -347,20 +347,17 @@ def test_get_image_invalid_local_path_falls_back(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_get_favicon_returns_file(client):
+def test_get_favicon_returns_file(client, monkeypatch, packaged_favicon: bytes):
+    monkeypatch.delenv("LITELLM_FAVICON_URL", raising=False)
     response = client.get("/get_favicon")
     assert response.status_code == 200
-    shape = {
-        "status": response.status_code,
-        "has_body": len(response.content) > 0,
-        "content_type_set": bool(response.headers.get("content-type")),
-    }
-    assert shape == {"status": 200, "has_body": True, "content_type_set": True}
+    assert response.headers["content-type"] == "image/x-icon"
+    assert response.content == packaged_favicon
 
 
-def test_get_favicon_invalid_custom_path_falls_back(client, monkeypatch):
-    """Bad UI_FAVICON_PATH (error/edge path) falls back to default — still 200."""
-    monkeypatch.setenv("UI_FAVICON_PATH", "/nonexistent/favicon.ico")
+def test_get_favicon_invalid_custom_path_falls_back(client, monkeypatch, packaged_favicon: bytes):
+    monkeypatch.setenv("LITELLM_FAVICON_URL", "/nonexistent/favicon.ico")
     response = client.get("/get_favicon")
     assert response.status_code == 200
-    assert len(response.content) > 0
+    assert response.headers["content-type"] == "image/x-icon"
+    assert response.content == packaged_favicon
