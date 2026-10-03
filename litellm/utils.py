@@ -8862,7 +8862,6 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
         elif provider in (litellm.LlmProviders.JINA_AI, litellm.LlmProviders.SCALEWAY):
-            # Scaleway's rerank API matches Jina's, so its config extends Jina's.
             return (
                 litellm.ScalewayRerankConfig()
                 if provider == litellm.LlmProviders.SCALEWAY

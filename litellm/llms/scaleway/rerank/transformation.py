@@ -46,6 +46,5 @@ class ScalewayRerankConfig(JinaAIRerankConfig):
             "content-type": "application/json",
             "authorization": f"Bearer {key}",
         }
-        # Header names are case-insensitive, so match on the lowercase name.
         caller_headers: Final = {name: value for name, value in headers.items() if name.lower() not in provider_headers}
         return {**caller_headers, **provider_headers}

@@ -2490,7 +2490,7 @@ class Logging(LiteLLMLoggingBaseClass):
         response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
         model: Final = self.client_facing_stream_model
-        if model is None or getattr(response, "model", None) in (None, model):
+        if model is None or response.model in (None, model):
             return response
         return response.model_copy(update={"model": model})
 
