@@ -363,11 +363,16 @@ def check_tokenizer_fallback() -> str:
     import litellm
     from litellm.rust_bridge import tokenizer
 
+    from litellm.litellm_core_utils.tokenizer import HuggingFace, HuggingFaceTokenizer, OpenAIEncoding, Tokenizer
+
+    _require(isinstance(litellm.encoding, Tokenizer), "core encoding is excluded from runtime Tokenizer alias")
+    _require(isinstance(OpenAIEncoding.from_tiktoken("cl100k_base"), Tokenizer), "native encoding is excluded from runtime alias")
+    native: Final = HuggingFaceTokenizer.from_str(litellm.utils.claude_json_str)
+    _require(isinstance(native, HuggingFace) and isinstance(native, Tokenizer), "native Hugging Face runtime aliases failed")
     if importlib.util.find_spec("tokenizers") is not None:
         custom: Final = litellm.create_tokenizer(litellm.utils.claude_json_str)
         tokens: Final = litellm.encode(text="hello world", custom_tokenizer=custom)
         _require(litellm.decode(tokens=tokens, custom_tokenizer=custom) == "hello world", "tokenizer round trip failed")
-        from litellm.litellm_core_utils.tokenizer import HuggingFace, Tokenizer
         _require(isinstance(custom["tokenizer"], HuggingFace), "runtime HuggingFace alias is incompatible")
         _require(isinstance(custom["tokenizer"], Tokenizer), "runtime Tokenizer alias is incompatible")
         return "custom Hugging Face tokenizer round-trips and runtime aliases resolve"

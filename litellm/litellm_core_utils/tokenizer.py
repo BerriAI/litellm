@@ -375,12 +375,17 @@ if TYPE_CHECKING:
     Tokenizer: TypeAlias = Encoding | HuggingFace
 
 
-def __getattr__(name: str) -> UnionType:
+def __getattr__(name: str) -> UnionType | type[HuggingFaceTokenizer]:
     if name not in ("HuggingFace", "Tokenizer"):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from litellm.rust_bridge.tokenizer import _python_huggingface_tokenizer
+    try:
+        from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
+    except ModuleNotFoundError as error:
+        if error.name != "tokenizers":
+            raise
+        return HuggingFaceTokenizer if name == "HuggingFace" else Encoding | HuggingFaceTokenizer
 
-    huggingface: Final = _python_huggingface_tokenizer() | HuggingFaceTokenizer
+    huggingface: Final = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
     return huggingface if name == "HuggingFace" else Encoding | huggingface
 
 

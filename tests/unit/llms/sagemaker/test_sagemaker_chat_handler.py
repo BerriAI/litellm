@@ -1,5 +1,6 @@
 import pytest
 import datetime
+from typing import Final
 from unittest.mock import patch
 
 import boto3
@@ -99,3 +100,32 @@ def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pyte
     monkeypatch.setitem(sys.modules, missing, None)
     with pytest.raises(ImportError, match=r"litellm\[aws\]"):
         SagemakerChatHandler()._load_credentials({})
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_prepare_request_signs_payload_with_installed_aws_extra(stream: bool) -> None:
+    import json
+    from botocore.credentials import Credentials
+
+    payload: Final = {"inputs": "héllo"}
+    request: Final = SagemakerChatHandler()._prepare_request(
+        Credentials("test-key", "test-secret", "test-session"), "test-endpoint", payload,
+        {"stream": stream}, "us-east-1",
+    )
+    assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-key/")
+    assert "/us-east-1/sagemaker/aws4_request" in request.headers["Authorization"]
+    assert request.headers["X-Amz-Security-Token"] == "test-session"
+    assert json.loads(request.body) == payload
+    suffix: Final = "invocations-response-stream" if stream else "invocations"
+    assert request.url == f"https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/test-endpoint/{suffix}"
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_prepare_request_without_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r'Install AWS support with pip install "litellm\[aws\]"') as caught:
+        SagemakerChatHandler()._prepare_request(None, "test-endpoint", {"inputs": "hello"}, {}, "us-east-1")
+    assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+    assert caught.value.__cause__.name == missing

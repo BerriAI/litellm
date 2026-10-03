@@ -12,7 +12,7 @@ inflating TTFT and turning a steady provider stream into gap-then-burst delivery
 import binascii
 import json
 import struct
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator, Final, Iterator
 from unittest.mock import MagicMock
 
 import httpx
@@ -277,3 +277,31 @@ def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pyte
     monkeypatch.setitem(sys.modules, missing, None)
     with pytest.raises(ImportError, match=r"litellm\[aws\]"):
         SagemakerLLM()._load_credentials({})
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_prepare_request_signs_payload_with_installed_aws_extra(stream: bool) -> None:
+    from botocore.credentials import Credentials
+
+    payload: Final = {"inputs": "héllo"}
+    request: Final = SagemakerLLM()._prepare_request(
+        Credentials("test-key", "test-secret", "test-session"), "test-endpoint", payload,
+        [], {}, {"stream": stream}, "us-east-1",
+    )
+    assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=test-key/")
+    assert "/us-east-1/sagemaker/aws4_request" in request.headers["Authorization"]
+    assert request.headers["X-Amz-Security-Token"] == "test-session"
+    assert json.loads(request.body) == payload
+    suffix: Final = "invocations-response-stream" if stream else "invocations"
+    assert request.url == f"https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/test-endpoint/{suffix}"
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_prepare_request_without_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r'Install AWS support with pip install "litellm\[aws\]"') as caught:
+        SagemakerLLM()._prepare_request(None, "test-endpoint", {"inputs": "hello"}, [], {}, {}, "us-east-1")
+    assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+    assert caught.value.__cause__.name == missing

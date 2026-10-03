@@ -430,6 +430,40 @@ def test_runtime_tokenizer_aliases_preserve_python_and_native_types() -> None:
     assert isinstance(tiktoken.get_encoding("cl100k_base"), Tokenizer)
 
 
+def test_runtime_tokenizer_aliases_support_core_types_without_python_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "tokenizers", None)
+    from litellm.litellm_core_utils.tokenizer import HuggingFace, Tokenizer
+
+    assert HuggingFace is HuggingFaceTokenizer
+    assert isinstance(tiktoken.get_encoding("cl100k_base"), Tokenizer)
+    assert isinstance(OpenAIEncoding.from_tiktoken("cl100k_base"), Tokenizer)
+    native: Final = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    assert isinstance(native, HuggingFace)
+    assert isinstance(native, Tokenizer)
+
+
+@pytest.mark.parametrize("alias", ("HuggingFace", "Tokenizer"))
+def test_runtime_tokenizer_aliases_preserve_nested_import_failure(
+    alias: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None],
+) -> None:
+    from litellm.litellm_core_utils import tokenizer
+
+    failure: Final = ModuleNotFoundError("broken tokenizer installation", name="tokenizers_dependency")
+    fail_optional_import("tokenizers", failure)
+    with pytest.raises(ModuleNotFoundError) as caught:
+        getattr(tokenizer, alias)
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize("alias", ("HuggingFace", "Tokenizer"))
+def test_runtime_tokenizer_aliases_preserve_broken_class_import(alias: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import tokenizer
+
+    monkeypatch.delattr("tokenizers.Tokenizer")
+    with pytest.raises(ImportError, match="Tokenizer"):
+        getattr(tokenizer, alias)
+
+
 def test_missing_tokenizer_extra_warns_once_and_preserves_fallback(
     fail_optional_import: Callable[[str, ModuleNotFoundError], None],
 ) -> None:
