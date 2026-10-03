@@ -36269,6 +36269,11 @@ export interface components {
              */
             disable_exception_on_block: boolean | null;
             /**
+             * Enable Thinking
+             * @description Whether MLS should render the chat template in thinking mode. Defaults to False.
+             */
+            enable_thinking?: boolean | null;
+            /**
              * End Session After N Fails
              * @description For /v1/realtime sessions: automatically close the session after this many guardrail violations.
              */
@@ -36340,6 +36345,11 @@ export interface components {
              * @description Enable hallucination detection to detect factual inaccuracies.
              */
             hallucinations_check?: boolean | null;
+            /**
+             * Hazard Threshold
+             * @description Block the request when the hazard_prompt probe scores strictly above this value. Defaults to 0.703, the threshold MLS reports for that probe. Note the probe also responds to instruction-style phrasing such as "repeat this back verbatim", so raise this if benign traffic is being blocked.
+             */
+            hazard_threshold?: number | null;
             /**
              * Include Evidence
              * @description Include detailed evidence payloads in responses (sets `plr_evidence` header).
@@ -36502,6 +36512,11 @@ export interface components {
              */
             persist_session?: boolean | null;
             /**
+             * Pii
+             * @description Whether to run MLS's PII detection head. Defaults to True.
+             */
+            pii?: boolean | null;
+            /**
              * Pii Check
              * @description Enable PII (Personally Identifiable Information) detection.
              */
@@ -36519,6 +36534,11 @@ export interface components {
             pii_entities_config?: {
                 [key: string]: components["schemas"]["PiiAction"];
             } | null;
+            /**
+             * Pii Mask
+             * @description What to do with detected PII. True (default) rewrites each span as its type in brackets, e.g. "My name is Alex" -> "My name is [name]", and lets the request through. False blocks the request instead.
+             */
+            pii_mask?: boolean | null;
             /**
              * Policy Id
              * @description Policy ID for Zscaler AI Guard. Can also be set via ZSCALER_AI_GUARD_POLICY_ID environment variable
@@ -36592,6 +36612,11 @@ export interface components {
             presidio_score_thresholds?: {
                 [key: string]: number;
             } | null;
+            /**
+             * Probes
+             * @description Which classifier probes to run: a list of probe names, or "all". Defaults to ["hazard_prompt"] - the only probe whose score this guardrail enforces. An unknown probe name makes MLS return 404.
+             */
+            probes?: string[] | string | null;
             /**
              * Project Id
              * @description Project ID for the Lakera AI project
