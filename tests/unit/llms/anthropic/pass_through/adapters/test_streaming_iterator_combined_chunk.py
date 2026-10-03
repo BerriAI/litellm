@@ -31,9 +31,7 @@ from litellm.types.utils import (
 )
 
 
-def _build_fake_stream(
-    content: str, finish_reason: str = "stop"
-) -> MockResponseIterator:
+def _build_fake_stream(content: str, finish_reason: str = "stop") -> MockResponseIterator:
     """Mimic a Vertex Gemma `:predict` fake stream: one collapsed chunk."""
     model_response = ModelResponse()
     model_response.choices = [
@@ -133,9 +131,7 @@ def test_delayed_usage_chunk_preserves_cache_tokens():
     wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="gpt-4o")
     events = list(wrapper)
 
-    message_delta = next(
-        event for event in events if event.get("type") == "message_delta"
-    )
+    message_delta = next(event for event in events if event.get("type") == "message_delta")
 
     assert message_delta["usage"]["input_tokens"] == 70
     assert message_delta["usage"]["output_tokens"] == 5
@@ -145,13 +141,7 @@ def test_delayed_usage_chunk_preserves_cache_tokens():
 
 def test_splitter_passes_through_non_combined_chunks():
     """A chunk with content but no finish_reason is not split."""
-    chunk = ModelResponseStream(
-        choices=[
-            StreamingChoices(
-                index=0, delta=Delta(content="partial"), finish_reason=None
-            )
-        ]
-    )
+    chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="partial"), finish_reason=None)])
     chunks = list(_CombinedChunkSplitter(iter([chunk])))
     assert len(chunks) == 1
     assert chunks[0].choices[0].delta.content == "partial"
@@ -159,11 +149,7 @@ def test_splitter_passes_through_non_combined_chunks():
 
 def test_splitter_splits_combined_chunk_into_content_then_finish():
     """A chunk with both content and finish_reason becomes two chunks."""
-    chunk = ModelResponseStream(
-        choices=[
-            StreamingChoices(index=0, delta=Delta(content="done"), finish_reason="stop")
-        ]
-    )
+    chunk = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="done"), finish_reason="stop")])
     content_chunk, finish_chunk = list(_CombinedChunkSplitter(iter([chunk])))
 
     assert content_chunk.choices[0].delta.content == "done"
@@ -193,9 +179,7 @@ def test_split_clears_reasoning_and_thinking_on_finish_chunk():
         reasoning_content="some reasoning",
         thinking_blocks=[{"type": "thinking"}],
     )
-    chunk = SimpleNamespace(
-        choices=[SimpleNamespace(finish_reason="stop", delta=delta)]
-    )
+    chunk = SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", delta=delta)])
 
     content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
 
@@ -289,3 +273,182 @@ def test_thinking_then_signature_chunk_does_not_crash_stream():
 
     assert "message_stop" in sse
     assert "Done" in sse
+
+
+def _tool_call(index, call_id=None, name=None, arguments=""):
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    return ChatCompletionDeltaToolCall(
+        id=call_id,
+        index=index,
+        type="function",
+        function=Function(name=name, arguments=arguments),
+    )
+
+
+def _tool_chunk(tool_calls, finish_reason=None):
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", tool_calls=tool_calls),
+                finish_reason=finish_reason,
+            )
+        ]
+    )
+
+
+def _finish_chunk():
+    return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")])
+
+
+def _text_chunk(text):
+    return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content=text), finish_reason=None)])
+
+
+def _tool_blocks(chunks):
+    """The tool_use blocks the Anthropic wrapper writes for these chunks: (name, id, input JSON)."""
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="mistral-small")
+    raw = "".join(b.decode() if isinstance(b, bytes) else b for b in wrapper.anthropic_sse_wrapper())
+    events = []
+    for block in raw.split("\n\n"):
+        for line in block.splitlines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: ") :]))
+    blocks = {}
+    for event in events:
+        if event["type"] == "content_block_start" and event["content_block"]["type"] == "tool_use":
+            blocks[event["index"]] = [event["content_block"]["name"], event["content_block"]["id"], ""]
+        elif event["type"] == "content_block_delta" and event["delta"]["type"] == "input_json_delta":
+            blocks[event["index"]][2] += event["delta"]["partial_json"]
+    return [(name, call_id, json.loads(args)) for name, call_id, args in blocks.values()]
+
+
+def test_parallel_tool_calls_in_one_chunk_become_separate_blocks():
+    """Several whole calls in one chunk must yield one tool_use block each (#44029)."""
+    chunks = [
+        _tool_chunk(
+            [
+                _tool_call(0, "call_a", "Read", '{"file_path": "a.md"}'),
+                _tool_call(1, "call_b", "Read", '{"file_path": "b.md"}'),
+                _tool_call(2, "call_c", "Glob", '{"pattern": "*.yml"}'),
+            ]
+        ),
+        _finish_chunk(),
+    ]
+
+    blocks = _tool_blocks(chunks)
+
+    assert [(name, args) for name, _, args in blocks] == [
+        ("Read", {"file_path": "a.md"}),
+        ("Read", {"file_path": "b.md"}),
+        ("Glob", {"pattern": "*.yml"}),
+    ]
+    assert len({call_id for _, call_id, _ in blocks}) == 3
+
+
+def test_calls_opened_together_with_empty_arguments_get_their_own_fragments():
+    """Open both, then interleave the argument fragments by index: no fragment may land on the wrong call."""
+    chunks = [
+        _tool_chunk([_tool_call(0, "call_a", "Read", ""), _tool_call(1, "call_b", "Glob", "")]),
+        _tool_chunk([_tool_call(0, None, None, '{"file_path":')]),
+        _tool_chunk([_tool_call(1, None, None, '{"pattern": "*.yml"}')]),
+        _tool_chunk([_tool_call(0, None, None, ' "a.md"}')]),
+        _finish_chunk(),
+    ]
+
+    blocks = _tool_blocks(chunks)
+
+    assert [(name, call_id, args) for name, call_id, args in blocks] == [
+        ("Read", blocks[0][1], {"file_path": "a.md"}),
+        ("Glob", blocks[1][1], {"pattern": "*.yml"}),
+    ]
+    assert blocks[0][1] != blocks[1][1]
+
+
+def test_one_whole_call_and_one_partial_call_in_the_opening_chunk():
+    chunks = [
+        _tool_chunk(
+            [_tool_call(0, "call_a", "Read", '{"file_path": "a.md"}'), _tool_call(1, "call_b", "Glob", '{"pat')]
+        ),
+        _tool_chunk([_tool_call(1, None, None, 'tern": "*.yml"}')]),
+        _finish_chunk(),
+    ]
+
+    assert [(name, args) for name, _, args in _tool_blocks(chunks)] == [
+        ("Read", {"file_path": "a.md"}),
+        ("Glob", {"pattern": "*.yml"}),
+    ]
+
+
+def test_held_calls_are_written_when_the_stream_ends_without_a_finish_chunk():
+    chunks = [
+        _tool_chunk([_tool_call(0, "call_a", "Read", '{"file_path"'), _tool_call(1, "call_b", "Glob", "")]),
+        _tool_chunk([_tool_call(0, None, None, ': "a.md"}')]),
+        _tool_chunk([_tool_call(1, None, None, '{"pattern": "*"}')]),
+    ]
+
+    assert [(name, args) for name, _, args in _tool_blocks(chunks)] == [
+        ("Read", {"file_path": "a.md"}),
+        ("Glob", {"pattern": "*"}),
+    ]
+
+
+def test_text_after_held_calls_comes_after_their_blocks():
+    chunks = [
+        _tool_chunk([_tool_call(0, "call_a", "Read", ""), _tool_call(1, "call_b", "Glob", "")]),
+        _tool_chunk([_tool_call(0, None, None, "{}")]),
+        _tool_chunk([_tool_call(1, None, None, "{}")]),
+        _text_chunk("done"),
+        _finish_chunk(),
+    ]
+
+    assert [(name, args) for name, _, args in _tool_blocks(chunks)] == [("Read", {}), ("Glob", {})]
+
+
+def test_a_single_call_with_fragments_stays_one_block():
+    chunks = [
+        _tool_chunk([_tool_call(0, "call_a", "Read", "")]),
+        _tool_chunk([_tool_call(0, None, None, '{"file_path":')]),
+        _tool_chunk([_tool_call(0, None, None, ' "a.md"}')]),
+        _finish_chunk(),
+    ]
+
+    assert [(name, args) for name, _, args in _tool_blocks(chunks)] == [("Read", {"file_path": "a.md"})]
+
+
+def test_two_entries_for_the_same_index_stay_one_call():
+    chunks = [
+        _tool_chunk([_tool_call(0, "call_a", "Read", '{"file_path":'), _tool_call(0, None, None, ' "a.md"}')]),
+        _finish_chunk(),
+    ]
+
+    assert [(name, args) for name, _, args in _tool_blocks(chunks)] == [("Read", {"file_path": "a.md"})]
+
+
+def test_an_opening_chunk_over_the_bound_is_not_held(monkeypatch):
+    from litellm.llms.anthropic.pass_through.adapters import streaming_iterator
+
+    monkeypatch.setattr(streaming_iterator, "_MAX_PENDING_ARGUMENT_CHARS", 10)
+    splitter = _CombinedChunkSplitter(iter(()))
+    oversized = _tool_chunk(
+        [_tool_call(0, "call_a", "Read", '{"file_path": "' + "a" * 50), _tool_call(1, "call_b", "Glob", "")]
+    )
+
+    assert splitter._expand(oversized) == (oversized,)
+    assert not splitter._pending
+
+
+def test_fragments_that_push_held_calls_over_the_bound_flush_them(monkeypatch):
+    from litellm.llms.anthropic.pass_through.adapters import streaming_iterator
+
+    monkeypatch.setattr(streaming_iterator, "_MAX_PENDING_ARGUMENT_CHARS", 10)
+    splitter = _CombinedChunkSplitter(iter(()))
+    opening = _tool_chunk([_tool_call(0, "call_a", "Read", ""), _tool_call(1, "call_b", "Glob", "")])
+    fragment = _tool_chunk([_tool_call(0, None, None, '{"file_path": "' + "a" * 50)])
+
+    assert splitter._expand(opening) == ()
+    flushed = splitter._expand(fragment)
+
+    assert [c.choices[0].delta.tool_calls[0].function.name for c in flushed] == ["Read", "Glob"]
+    assert not splitter._pending
