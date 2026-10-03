@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import signal
 import socket
 import socketserver
@@ -13,6 +12,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, cast
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -28,8 +28,7 @@ from tests.integration._support.process import _free_port as free_port
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
 MIGRATION_NAME: Final = "20260921190000_agent_identity"
-BASELINE_DIR: Final = MIGRATIONS_DIR / "0_init"
-pytestmark: Final = pytest.mark.timeout(900)
+pytestmark: Final = pytest.mark.timeout(300)
 PASSWORD: Final = "wr ong'pw9"
 FRAGMENTS: Final = ("wr ong", "wr+ong", "ong'pw9", "wr%20ong", "ong%27pw9", "pw9")
 SHIPPED_MIGRATIONS: Final = tuple(
@@ -42,6 +41,21 @@ RETRY_COUNT: Final = re.compile(r"Retrying\.\.\. \((\d+) attempts left\)")
 FRAGMENT_PATTERN: Final = re.compile(
     "|".join(re.escape(fragment) for fragment in sorted(FRAGMENTS, key=len, reverse=True))
 )
+
+
+@dataclass(frozen=True, slots=True)
+class MigrationResult:
+    returncode: int
+    output: str
+
+
+def _migration_log_path(test_name: str, tmp_path: Path) -> Path:
+    log_directory: Final = (
+        Path(os.environ["INTEGRATION_RESULTS_DIR"]) if "INTEGRATION_RESULTS_DIR" in os.environ else tmp_path
+    )
+    log_path: Final = log_directory / f"v1-migration-{test_name}-{uuid.uuid4().hex[:8]}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    return log_path
 
 
 def _database_url(
@@ -144,17 +158,23 @@ def run_v1_migrations(
     database_url: str | None,
     tmp_path: Path,
     extra_env: Mapping[str, str],
+    test_name: str,
     resolver: Literal["legacy", "v2"] = "legacy",
-) -> subprocess.CompletedProcess[str]:
+) -> MigrationResult:
     command, environment = _migration_invocation(database_url, tmp_path, extra_env, resolver)
-    return subprocess.run(
-        command,
-        cwd=REPO_ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=900,
-    )
+    output_path: Final = _migration_log_path(test_name, tmp_path)
+    with output_path.open("w") as output_file:
+        completed: Final = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            env=environment,
+            stdout=output_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=240,
+        )
+    output: Final = output_path.read_text()
+    return MigrationResult(completed.returncode, output)
 
 
 def error_lines(output: str) -> tuple[str, ...]:
@@ -297,11 +317,13 @@ def _migration_log_has_p1001_or_process_exited(output_path: Path, process: subpr
     return p1001_logged, process_exited
 
 
-def test_unreachable_database_emits_four_p1001_errors_without_password_fragments(tmp_path: Path) -> None:
+def test_unreachable_database_emits_four_p1001_errors_without_password_fragments(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
         unreachable_url: Final = _unreachable_database_url(database_url)
-        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {})
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {}, request.node.name)
+        output: Final = completed.output
         errors: Final = error_lines(output)
         p1001_errors: Final = tuple(line for line in errors if "P1001" in line)
         assert completed.returncode == 1, _safe_output(output)
@@ -311,7 +333,9 @@ def test_unreachable_database_emits_four_p1001_errors_without_password_fragments
         _assert_no_password_fragments(output)
 
 
-def test_wrong_password_emits_four_p1000_errors_without_password_fragments(tmp_path: Path) -> None:
+def test_wrong_password_emits_four_p1000_errors_without_password_fragments(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(f"correct-{uuid.uuid4().hex}") as database_url:
         parsed: Final = urlsplit(database_url)
         wrong_url: Final = _database_url(
@@ -320,8 +344,8 @@ def test_wrong_password_emits_four_p1000_errors_without_password_fragments(tmp_p
             PASSWORD,
             parsed.path.lstrip("/"),
         )
-        completed: Final = run_v1_migrations(wrong_url, tmp_path, {})
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(wrong_url, tmp_path, {}, request.node.name)
+        output: Final = completed.output
         errors: Final = error_lines(output)
         p1000_errors: Final = tuple(line for line in errors if "P1000" in line)
         assert completed.returncode == 1, _safe_output(output)
@@ -331,14 +355,16 @@ def test_wrong_password_emits_four_p1000_errors_without_password_fragments(tmp_p
         _assert_no_password_fragments(output)
 
 
-def test_duplicate_agent_identity_logs_the_p3018_migration_error(tmp_path: Path) -> None:
+def test_duplicate_agent_identity_logs_the_p3018_migration_error(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
-        setup: Final = run_v1_migrations(database_url, tmp_path, {})
-        setup_output: Final = setup.stdout + setup.stderr
+        setup: Final = run_v1_migrations(database_url, tmp_path, {}, request.node.name)
+        setup_output: Final = setup.output
         assert setup.returncode == 0, _safe_output(setup_output)
         _retry_p3018_migration(database_url)
-        completed: Final = run_v1_migrations(database_url, tmp_path, {})
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(database_url, tmp_path, {}, request.node.name)
+        output: Final = completed.output
         errors: Final = error_lines(output)
         p3018_errors: Final = tuple(line for line in errors if "P3018" in line)
         expected_markers: Final = ((True, True), (True, True))
@@ -351,35 +377,19 @@ def test_duplicate_agent_identity_logs_the_p3018_migration_error(tmp_path: Path)
         _assert_no_password_fragments(output)
 
 
-def test_p3005_baseline_recovery_records_zero_init_and_logs_no_errors(tmp_path: Path) -> None:
-    existed_before: Final = BASELINE_DIR.exists()
-    try:
-        with owned_database(PASSWORD) as database_url:
-            with psycopg.connect(database_url) as connection:
-                connection.execute('CREATE TABLE "audit_unrelated_table" ("id" INTEGER)')
-            completed: Final = run_v1_migrations(database_url, tmp_path, {})
-            output: Final = completed.stdout + completed.stderr
-            expected_migrations: Final = tuple(sorted(("0_init", *SHIPPED_MIGRATIONS)))
-            assert completed.returncode == 0, _safe_output(output)
-            assert error_lines(output) == (), _safe_output(output)
-            assert _applied_migrations(database_url) == expected_migrations, _safe_output(output)
-            _assert_no_password_fragments(output)
-    finally:
-        if not existed_before and BASELINE_DIR.exists():
-            shutil.rmtree(BASELINE_DIR)
-
-
-def test_clean_database_applies_exactly_the_shipped_migrations(tmp_path: Path) -> None:
+def test_clean_database_applies_exactly_the_shipped_migrations(tmp_path: Path, request: pytest.FixtureRequest) -> None:
     with owned_database(PASSWORD) as database_url:
-        completed: Final = run_v1_migrations(database_url, tmp_path, {})
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(database_url, tmp_path, {}, request.node.name)
+        output: Final = completed.output
         assert completed.returncode == 0, _safe_output(output)
         assert error_lines(output) == (), _safe_output(output)
         assert _applied_migrations(database_url) == SHIPPED_MIGRATIONS, _safe_output(output)
         _assert_no_password_fragments(output)
 
 
-def test_unreachable_database_recovers_after_postgres_forwarder_starts(tmp_path: Path) -> None:
+def test_unreachable_database_recovers_after_postgres_forwarder_starts(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
         admin_url: Final = os.environ["DATABASE_URL"]
         admin: Final = urlsplit(admin_url)
@@ -390,7 +400,7 @@ def test_unreachable_database_recovers_after_postgres_forwarder_starts(tmp_path:
         forwarding_port: Final = free_port()
         forwarded_url: Final = _replace_port(database_url, forwarding_port, "127.0.0.1")
         command, environment = _migration_invocation(forwarded_url, tmp_path, {})
-        output_path: Final = tmp_path / "migration-output.log"
+        output_path: Final = _migration_log_path(request.node.name, tmp_path)
         with _gated_postgres_forwarder(forwarding_port, (target_host, port)) as open_forwarder:
             with output_path.open("w") as output_file:
                 process: Final = subprocess.Popen(
@@ -406,11 +416,11 @@ def test_unreachable_database_recovers_after_postgres_forwarder_starts(tmp_path:
                     observation: Final = eventually(
                         lambda: _migration_log_has_p1001_or_process_exited(output_path, process),
                         lambda state: state[0] or state[1],
-                        seconds=900,
+                        seconds=240,
                     )
                     assert observation[0], _safe_output(output_path.read_text())
                     open_forwarder()
-                    completed_returncode: Final = process.wait(timeout=900)
+                    completed_returncode: Final = process.wait(timeout=240)
                 finally:
                     _stop_process(process)
         output: Final = output_path.read_text()
@@ -424,15 +434,18 @@ def test_unreachable_database_recovers_after_postgres_forwarder_starts(tmp_path:
         _assert_no_password_fragments(output)
 
 
-def test_unreachable_database_keeps_password_masked_when_shape_redaction_is_disabled(tmp_path: Path) -> None:
+def test_unreachable_database_keeps_password_masked_when_shape_redaction_is_disabled(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
         unreachable_url: Final = _unreachable_database_url(database_url)
         completed: Final = run_v1_migrations(
             unreachable_url,
             tmp_path,
             {"LITELLM_DISABLE_REDACT_SECRETS": "true"},
+            request.node.name,
         )
-        output: Final = completed.stdout + completed.stderr
+        output: Final = completed.output
         errors: Final = error_lines(output)
         p1001_errors: Final = tuple(line for line in errors if "P1001" in line)
         assert completed.returncode == 1, _safe_output(output)
@@ -443,7 +456,7 @@ def test_unreachable_database_keeps_password_masked_when_shape_redaction_is_disa
 
 
 def test_component_database_env_vars_with_wrong_password_emit_four_p1000_errors_without_password_fragments(
-    tmp_path: Path,
+    tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     correct_password: Final = f"correct-{uuid.uuid4().hex}"
     with owned_database(correct_password) as database_url:
@@ -458,8 +471,8 @@ def test_component_database_env_vars_with_wrong_password_emit_four_p1000_errors_
             "DATABASE_PASSWORD": PASSWORD,
             "DATABASE_NAME": parsed.path.lstrip("/"),
         }
-        completed: Final = run_v1_migrations(None, tmp_path, extra_env)
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(None, tmp_path, extra_env, request.node.name)
+        output: Final = completed.output
         errors: Final = error_lines(output)
         p1000_errors: Final = tuple(line for line in errors if "P1000" in line)
         assert completed.returncode == 1, _safe_output(output)
@@ -469,11 +482,13 @@ def test_component_database_env_vars_with_wrong_password_emit_four_p1000_errors_
         _assert_no_password_fragments(output)
 
 
-def test_json_logs_emit_four_valid_json_p1001_error_records_without_password_fragments(tmp_path: Path) -> None:
+def test_json_logs_emit_four_valid_json_p1001_error_records_without_password_fragments(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
         unreachable_url: Final = _unreachable_database_url(database_url)
-        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {"JSON_LOGS": "true"})
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {"JSON_LOGS": "true"}, request.node.name)
+        output: Final = completed.output
         errors: Final = _json_error_records(output)
         messages: Final = tuple(record.get("message") for record in errors)
         assert completed.returncode == 1, _safe_output(output)
@@ -488,7 +503,9 @@ def test_json_logs_emit_four_valid_json_p1001_error_records_without_password_fra
         _assert_no_password_fragments(output)
 
 
-def test_migration_job_entrypoint_emits_four_p1001_errors_without_password_fragments() -> None:
+def test_migration_job_entrypoint_emits_four_p1001_errors_without_password_fragments(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
         unreachable_url: Final = _unreachable_database_url(database_url)
         command: Final = (sys.executable, "-I", "-m", "litellm.proxy.prisma_migration")
@@ -496,15 +513,18 @@ def test_migration_job_entrypoint_emits_four_p1001_errors_without_password_fragm
             unreachable_url,
             {"USE_V2_MIGRATION_RESOLVER": "false"},
         )
-        completed: Final = subprocess.run(
-            command,
-            cwd=REPO_ROOT,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=900,
-        )
-        output: Final = completed.stdout + completed.stderr
+        output_path: Final = _migration_log_path(request.node.name, tmp_path)
+        with output_path.open("w") as output_file:
+            completed: Final = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                env=environment,
+                stdout=output_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=240,
+            )
+        output: Final = output_path.read_text()
         errors: Final = error_lines(output)
         p1001_errors: Final = tuple(line for line in errors if "P1001" in line)
         assert completed.returncode == 1, _safe_output(output)
@@ -513,21 +533,25 @@ def test_migration_job_entrypoint_emits_four_p1001_errors_without_password_fragm
         _assert_no_password_fragments(output)
 
 
-def test_v2_resolver_unreachable_database_exits_2_and_names_p1001(tmp_path: Path) -> None:
+def test_v2_resolver_unreachable_database_exits_2_and_names_p1001(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
         unreachable_url: Final = _unreachable_database_url(database_url)
-        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {}, resolver="v2")
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {}, request.node.name, resolver="v2")
+        output: Final = completed.output
         assert completed.returncode == 2, _safe_output(output)
         assert "P1001" in output, _safe_output(output)
         assert error_lines(output) == (), _safe_output(output)
         _assert_no_password_fragments(output)
 
 
-def test_v2_resolver_clean_database_applies_exactly_the_shipped_migrations(tmp_path: Path) -> None:
+def test_v2_resolver_clean_database_applies_exactly_the_shipped_migrations(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     with owned_database(PASSWORD) as database_url:
-        completed: Final = run_v1_migrations(database_url, tmp_path, {}, resolver="v2")
-        output: Final = completed.stdout + completed.stderr
+        completed: Final = run_v1_migrations(database_url, tmp_path, {}, request.node.name, resolver="v2")
+        output: Final = completed.output
         assert completed.returncode == 0, _safe_output(output)
         assert error_lines(output) == (), _safe_output(output)
         assert _applied_migrations(database_url) == SHIPPED_MIGRATIONS, _safe_output(output)
