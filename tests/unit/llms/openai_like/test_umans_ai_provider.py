@@ -191,6 +191,7 @@ UMANS_PRICING: Final = (
     # model, then USD per token for input, output and cache read (app.umans.ai/pricing)
     ("umans-ai/umans-deepseek-v4-flash-0731", 1.4e-07, 2.8e-07, 2.8e-08),
     ("umans-ai/umans-deepseek-v4.1-flash", 1.5e-07, 6e-07, 2.8e-08),
+    ("umans-ai/umans-glm-5.3", 1.4e-06, 4.4e-06, 2.6e-07),
     ("umans-ai/umans-glm-5.3-flash", 1.5e-07, 5e-07, 3e-08),
     ("umans-ai/umans-kimi-k3", 3e-06, 1.5e-05, 3e-07),
     ("umans-ai/umans-flash", 1.5e-07, 1e-06, 5e-08),
