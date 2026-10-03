@@ -24,6 +24,8 @@ pub struct ListTracesParams {
     pub cursor_ms: i64,
     pub cursor_trace_id: String,
     pub limit: u32,
+    #[serde(default)]
+    pub snapshot_ms: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

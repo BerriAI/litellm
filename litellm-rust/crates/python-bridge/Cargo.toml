@@ -66,6 +66,7 @@ url.workspace = true
 
 [dev-dependencies]
 tracing.workspace = true
+litellm-pagination.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-secrets-aws.workspace = true
 serde.workspace = true

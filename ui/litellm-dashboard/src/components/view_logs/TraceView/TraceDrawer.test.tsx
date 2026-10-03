@@ -3,6 +3,8 @@ import { focusManager, onlineManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "@/lib/http/client";
+
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import researchTrace from "./__fixtures__/research_trace.json";
 import swarmTrace from "./__fixtures__/swarm_trace.json";
@@ -188,6 +190,30 @@ describe("RunView", () => {
     expect(screen.getByRole("banner")).toHaveTextContent(before ?? "");
     expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
     expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page", "next-page"]);
+  });
+
+  it("offers only a refresh when the server reports the trace changed while paging", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 2 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "old-second" };
+    const fresh: Trace = { ...first, spans: [{ ...research.spans[0], name: "fresh-root" }], next_cursor: null };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(
+        new ApiError("Conflict", 409, { detail: { code: "traversal_changed", message: "Trace changed" } }),
+      )
+      .mockResolvedValueOnce(fresh);
+    renderWithProviders(<RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Load more steps" }));
+    expect(
+      await screen.findByText("This trace changed while loading. Refresh to continue from the latest version."),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    await user.click(screen.getByRole("button", { name: "Refresh trace" }));
+    expect(await screen.findByText("fresh-root")).toBeVisible();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "old-second", null]);
   });
 
   it("refreshes a failed later page from one new snapshot", async () => {

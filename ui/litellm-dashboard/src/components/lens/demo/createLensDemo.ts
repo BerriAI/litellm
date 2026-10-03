@@ -376,10 +376,11 @@ function demoTracesApi(data: LensDemoData): TracesApi {
   const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
   return {
     list: async ({ startMs, endMs }) => ({
-      data: data.runs
+      items: data.runs
         .map((item) => item.trace.summary)
         .filter((trace) => Date.parse(trace.start_time) >= startMs && Date.parse(trace.start_time) <= endMs),
       next_cursor: null,
+      traversal: { id: "demo", published_at: new Date(endMs).toISOString(), expires_at: new Date(endMs).toISOString() },
     }),
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),

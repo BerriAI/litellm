@@ -38,6 +38,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 
 pytestmark = pytest.mark.requires_rust_extension
 QUERY_ROWS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+CURSOR_KEYS: Final = ("test-cursor-key",)
 
 
 class CapturedSpendRow(BaseModel):
@@ -54,7 +55,7 @@ class CapturedSpendQuery(BaseModel):
 
 
 def _native_storage(database: str, url: str, retention_days: int = 14) -> NativeTraceStorage:
-    return NativeTraceStorage(NativeTraceConfig(database, url, retention_days, OTLP_MAX_ATTRIBUTE_VALUE_BYTES))
+    return NativeTraceStorage(NativeTraceConfig(database, url, retention_days, OTLP_MAX_ATTRIBUTE_VALUE_BYTES, CURSOR_KEYS))
 
 
 @pytest.fixture
@@ -129,18 +130,18 @@ async def test_reader_rejects_arbitrary_sql_before_sending(recording_server: Rec
 @pytest.mark.asyncio
 async def test_schema_binding_rejects_invalid_database() -> None:
     with pytest.raises(ValueError, match=r"database.*retention"):
-        NativeTraceConfig("db; DROP DATABASE default", "http://localhost:8123", 14, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
+        NativeTraceConfig("db; DROP DATABASE default", "http://localhost:8123", 14, OTLP_MAX_ATTRIBUTE_VALUE_BYTES, CURSOR_KEYS)
 
 
 @pytest.mark.asyncio
 async def test_schema_binding_rejects_non_positive_retention() -> None:
     with pytest.raises(ValueError, match=r"database.*retention"):
-        NativeTraceConfig("traces", "http://localhost:8123", 0, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
+        NativeTraceConfig("traces", "http://localhost:8123", 0, OTLP_MAX_ATTRIBUTE_VALUE_BYTES, CURSOR_KEYS)
 
 
 def test_invalid_url_error_does_not_expose_credentials() -> None:
     with pytest.raises(RuntimeError, match="invalid ClickHouse HTTP URL") as error:
-        NativeTraceConfig("traces", "secret://writer:password@example.com", 7, OTLP_MAX_ATTRIBUTE_VALUE_BYTES)
+        NativeTraceConfig("traces", "secret://writer:password@example.com", 7, OTLP_MAX_ATTRIBUTE_VALUE_BYTES, CURSOR_KEYS)
     assert "password" not in str(error.value)
 
 
@@ -150,10 +151,12 @@ async def test_from_env_reads_with_clickhouse_url(
 ) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": []}))
     monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt")
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
     scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": ()}
     page: Final = await TraceReceiver.from_env().list_traces(scope, 0, 1)
-    assert page == {"data": (), "next_cursor": None}
+    assert (page["items"], page["next_cursor"]) == ((), None)
+    assert page["traversal"]["published_at"] <= page["traversal"]["expires_at"]
     assert len(recording_server.requests) == 1
 
 
@@ -239,7 +242,7 @@ def _resource_export(attribute_bytes: int, span_count: int, groups: int = 1) -> 
 @pytest.mark.asyncio
 async def test_resource_fanout_reaches_insert_with_identical_values(recording_server: RecordingServer) -> None:
     body: Final = _resource_export(16 * 1024, 1024)
-    receiver: Final = TraceReceiver(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
+    receiver: Final = TraceReceiver(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test", cursor_keys=CURSOR_KEYS)))
     tenant: Final = Tenant("team-a", "key-a", "org-a")
     assert await receiver.ingest(body, "application/json", None, tenant) == 1024
     encoded: Final = gzip.decompress(recording_server.requests[0].raw_body)
@@ -256,7 +259,7 @@ async def test_resource_fanout_reaches_insert_with_identical_values(recording_se
 async def test_shared_resource_still_hits_insert_limit_before_transport(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = 0
     body: Final = _resource_export(64 * 1024, 1024)
-    receiver: Final = TraceReceiver(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test")))
+    receiver: Final = TraceReceiver(ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test", cursor_keys=CURSOR_KEYS)))
     with pytest.raises(TracingPayloadTooLargeError, match="encoded size limit"):
         await receiver.ingest(body, "application/json", None, Tenant("team-a", "key-a"))
     assert recording_server.requests == []
@@ -264,7 +267,7 @@ async def test_shared_resource_still_hits_insert_limit_before_transport(recordin
 
 @pytest.mark.asyncio
 async def test_insert_validates_values_without_pydantic_copy(recording_server: RecordingServer) -> None:
-    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test", cursor_keys=CURSOR_KEYS))
     invalid: Final = object()
     with pytest.raises(ValueError, match=type(invalid).__name__):
         await storage.insert_rows("otel_traces", [{"ResourceAttributes": invalid}])
@@ -310,7 +313,7 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         for _ in range(11):
             recording_server.enqueue(ResponseSpec(body=""))
         recording_server.enqueue(ResponseSpec(body=envelope))
-    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test", cursor_keys=CURSOR_KEYS))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
@@ -361,7 +364,7 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(
     recording_server.enqueue(metadata)
     recording_server.enqueue(ResponseSpec(body={"data": [{"key": "custom.span"}]}))
     recording_server.enqueue(ResponseSpec(body={"data": [{"key": "custom.resource"}]}))
-    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test", cursor_keys=CURSOR_KEYS))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
@@ -418,7 +421,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
     }
     recording_server.enqueue(ResponseSpec(body=envelope))
-    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test", cursor_keys=CURSOR_KEYS))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "test-master-secret"
@@ -441,6 +444,7 @@ async def test_trace_receiver_reads_with_only_one_clickhouse_url(
     span_params: dict[str, str | int | list[str]],
 ) -> None:
     monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt")
     monkeypatch.setenv("CLICKHOUSE_DATABASE", "trace_test")
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
     recording_server.enqueue(ResponseSpec(body={"data": [span_row]}))
@@ -459,7 +463,7 @@ async def test_lens_read_uses_the_shared_native_query_and_returns_typed_rows(
     recording_server: RecordingServer,
 ) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [{"traces": 0, "requests": 1}]}))
-    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test", cursor_keys=CURSOR_KEYS))
     rows: Final = await storage.lens_availability(LensAccessParams(all_teams=0, team="team-a", key_hash="key-a"))
     assert rows == (ActivityAvailability(traces=False, requests=True),)
     parameters: Final = parse_qs(urlsplit(recording_server.requests[0].path).query)
@@ -512,7 +516,7 @@ def _fixture_trace_api(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    storage: Final = ClickHouseStorage(TraceStorageConfig(clickhouse_url, "trace_test"))
+    storage: Final = ClickHouseStorage(TraceStorageConfig(clickhouse_url, "trace_test", cursor_keys=CURSOR_KEYS))
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[provide_trace_query_secret] = lambda: "fixture-secret"

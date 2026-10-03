@@ -17,6 +17,7 @@ import { DetailPane } from "./DetailPane";
 import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
 import { SpanIcon } from "./SpanIcon";
+import { restartsTraversal } from "./readFailure";
 import { SpanTree } from "./SpanTree";
 import { TraceConversation } from "./TraceConversation";
 import { FrameworkLogo, traceFramework } from "./TraceFramework";
@@ -372,6 +373,12 @@ function initialSpanMissing(trace: Trace | undefined, spanId?: string): boolean 
   return Boolean(spanId && trace && !trace.spans.some((span) => span.span_id === spanId));
 }
 
+const loadMoreStatus = (trace: Trace, failed: boolean, mustRestart: boolean): string => {
+  if (mustRestart) return "This trace changed while loading. Refresh to continue from the latest version.";
+  if (failed) return "Could not load more steps. Your loaded steps are still available.";
+  return `Showing ${trace.spans.length.toLocaleString()} of ${trace.summary.span_count.toLocaleString()} steps`;
+};
+
 export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
@@ -400,6 +407,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
   useEffect(() => {
     if (canSeek && !isFetching && !isError) void fetchNextPage();
   }, [canSeek, isFetching, isError, fetchNextPage]);
+  const mustRestart = restartsTraversal(traceQuery.error);
   const pageAction = isError ? "Retry" : "Load more steps";
 
   if (traceQuery.isLoading) {
@@ -450,24 +458,27 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
       <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
       {(traceQuery.hasNextPage || traceQuery.isError) && (
         <div className="flex items-center justify-between gap-3 border-b px-3 py-2 text-xs" role="status">
-          <span>
-            {traceQuery.isError
-              ? "Could not load more steps. Your loaded steps are still available."
-              : `Showing ${trace.spans.length.toLocaleString()} of ${trace.summary.span_count.toLocaleString()} steps`}
-          </span>
+          <span>{loadMoreStatus(trace, traceQuery.isError, mustRestart)}</span>
           {traceQuery.isError && (
-            <Button size="xs" variant="ghost" disabled={traceQuery.isFetching} onClick={() => void refreshTrace()}>
+            <Button
+              size="xs"
+              variant={mustRestart ? "outline" : "ghost"}
+              disabled={traceQuery.isFetching}
+              onClick={() => void refreshTrace()}
+            >
               Refresh trace
             </Button>
           )}
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={traceQuery.isFetching}
-            onClick={() => void (traceQuery.hasNextPage ? traceQuery.fetchNextPage() : refreshTrace())}
-          >
-            {traceQuery.isFetching ? "Loading…" : pageAction}
-          </Button>
+          {!mustRestart && (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={traceQuery.isFetching}
+              onClick={() => void (traceQuery.hasNextPage ? traceQuery.fetchNextPage() : refreshTrace())}
+            >
+              {traceQuery.isFetching ? "Loading…" : pageAction}
+            </Button>
+          )}
         </div>
       )}
       <RunBody

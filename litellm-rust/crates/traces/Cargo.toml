@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "litellm-pagination/schema"]
 
 [dependencies]
 askama.workspace = true
@@ -14,6 +14,7 @@ macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }
 indexmap = { version = "2", features = ["serde"] }
 litellm-llms-types.workspace = true
+litellm-pagination.workspace = true
 opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
 prost.workspace = true
 serde = { workspace = true, features = ["rc"] }

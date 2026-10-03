@@ -9,6 +9,7 @@ import traceList from "./__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
+import { RESULTS_CHANGED_MESSAGE } from "./useAgentTraces";
 
 vi.mock("../../networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
@@ -30,7 +31,7 @@ vi.mock("./TraceDrawer", () => ({
 
 import { agentTraceListCall, apiClient } from "../../networking";
 
-const runs = (traceList as TracePage).data as TraceSummary[];
+const runs = (traceList as TracePage).items as TraceSummary[];
 
 const renderSection = () =>
   renderWithProviders(
@@ -82,13 +83,44 @@ describe("AgentTracesSection", () => {
     } as DOMRect);
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
-    vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+    vi.mocked(apiClient.get).mockResolvedValue({ ...(traceList as TracePage), items: [] });
+  });
+
+  it("restarts from a fresh first page when the server reports the results changed", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({
+      ...(traceList as TracePage),
+      items: runs.slice(0, 1),
+      next_cursor: "next",
+    });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    vi.mocked(agentTraceListCall).mockRejectedValueOnce(
+      new ApiError("Conflict", 409, { detail: { code: "traversal_changed", message: "Results changed" } }),
+    );
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(RESULTS_CHANGED_MESSAGE);
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(vi.mocked(agentTraceListCall)).toHaveBeenCalledTimes(2);
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({
+      ...(traceList as TracePage),
+      items: runs.slice(0, 2),
+      next_cursor: null,
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
+    expect(vi.mocked(agentTraceListCall).mock.calls[2][0]).not.toHaveProperty("cursor");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps the original time window and loaded rows when another page fails", async () => {
     const user = userEvent.setup();
     const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-01T00:00Z"));
-    vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" });
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({
+      ...(traceList as TracePage),
+      items: runs.slice(0, 1),
+      next_cursor: "next",
+    });
     renderSection();
     expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
     const first = vi.mocked(agentTraceListCall).mock.calls[0][0];
@@ -98,7 +130,11 @@ describe("AgentTracesSection", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more runs");
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
     expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toEqual({ ...first, cursor: "next" });
-    vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: null });
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({
+      ...(traceList as TracePage),
+      items: runs.slice(1, 2),
+      next_cursor: null,
+    });
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -147,7 +183,7 @@ describe("AgentTracesSection", () => {
   });
 
   it("shows the waiting guide when tracing is on but no runs have arrived", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
+    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), items: [] });
     renderSection();
 
     const card = await screen.findByTestId("tracing-setup-card");
@@ -158,7 +194,7 @@ describe("AgentTracesSection", () => {
   });
 
   it("keeps the trace list available when traces exist outside the current time window", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
+    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), items: [] });
     vi.mocked(apiClient.get).mockResolvedValue(traceList);
     renderSection();
     expect(await screen.findByText("No runs match these filters.")).toBeVisible();
@@ -171,7 +207,7 @@ describe("AgentTracesSection", () => {
     vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Tracing is not enabled", 501, {}));
     renderSection();
     const checkSetup = await screen.findByRole("button", { name: "Check setup" });
-    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
+    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), items: [] });
     fireEvent.click(checkSetup);
     expect(await screen.findByRole("heading", { name: "Connect your agent" })).toBeVisible();
     expect(screen.getByText("Waiting for your first trace")).toBeVisible();
@@ -231,7 +267,7 @@ describe("AgentTracesSection", () => {
   });
 
   it("separates a failed history check from the empty list and retries that check", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
+    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), items: [] });
     vi.mocked(apiClient.get).mockRejectedValue(new ApiError("History unavailable", 503, {}));
     renderSection();
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not check earlier traces. History unavailable");
@@ -272,7 +308,7 @@ describe("AgentTracesSection", () => {
   it("shows the spend returned for a run", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
-      data: [{ ...runs[0], spend: 0.025 }],
+      items: [{ ...runs[0], spend: 0.025 }],
     });
     renderSection();
 
@@ -299,7 +335,7 @@ describe("AgentTracesSection", () => {
   it("uses recorded agent names for the column and filter even when services are shared", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
-      data: [
+      items: [
         ...runs.slice(1).map((run) => ({ ...run, service: "shared-app", agent_names: ["research-agent"] })),
         { ...runs[0], service: "shared-app", agent_names: ["billing-agent", "review-agent"] },
       ],
@@ -328,7 +364,7 @@ describe("AgentTracesSection", () => {
   it("shows each run's agent name with the logo of the SDK that produced it", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
-      data: [
+      items: [
         { ...runs[0], agent_names: ["research-bot"], frameworks: ["claude-agent-sdk", "claude-code"] },
         { ...runs[1], agent_names: [], frameworks: ["claude-code"] },
         { ...runs[2], frameworks: [] },
@@ -466,7 +502,7 @@ describe("AgentTracesPage", () => {
   beforeEach(() => {
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
-    vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+    vi.mocked(apiClient.get).mockResolvedValue({ ...(traceList as TracePage), items: [] });
   });
 
   it("shows the actual range, switches presets from the popover, and toggles Live", async () => {
@@ -507,7 +543,7 @@ describe("AgentTracesPage", () => {
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
     await screen.findByTestId("runs-table");
 
-    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
+    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), items: [] });
     fireEvent.click(screen.getByRole("button", { name: "Time range" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last hour" }));
 

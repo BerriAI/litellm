@@ -32,8 +32,13 @@ fn named_requests_preserve_all_access_cases(
         )
     };
     round_trip::<ListTracesParams>(request(
-        json!({"start_ms": -1, "end_ms": 10, "cursor_ms": 0, "cursor_trace_id": "", "limit": 100}),
+        json!({"start_ms": -1, "end_ms": 10, "cursor_ms": 0, "cursor_trace_id": "", "limit": 100, "snapshot_ms": u64::MAX}),
     ));
+    let unfenced: ListTracesParams = serde_json::from_value(request(
+        json!({"start_ms": -1, "end_ms": 10, "cursor_ms": 0, "cursor_trace_id": "", "limit": 100}),
+    ))
+    .unwrap();
+    assert_eq!(unfenced.snapshot_ms, 0);
     round_trip::<TraceIdentityParams>(request(json!({"trace_id": "trace"})));
     round_trip::<TraceSpansParams>(request(json!({"trace_id": "trace", "trace_ref": "ref"})));
     round_trip::<SpanDetailParams>(request(

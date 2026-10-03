@@ -32,12 +32,10 @@ pub enum Error {
     ProvisionFailed(u16),
     #[error("ClickHouse reader provisioning transport failed")]
     ProvisionTransport,
-    #[error("Invalid {0} cursor")]
-    InvalidCursor(&'static str),
     #[error("Multiple traces have this ID; provide trace_ref")]
     AmbiguousTrace,
-    #[error("Trace changed while paging; refresh the trace to continue")]
-    TraceChanged,
+    #[error(transparent)]
+    Pagination(#[from] litellm_pagination::Error),
     #[error(transparent)]
     Decode(#[from] litellm_traces::Error),
     #[error("trace ingestion task failed")]
@@ -53,6 +51,57 @@ impl From<litellm_traces_cache::Error> for Error {
         match error {
             litellm_traces_cache::Error::Serialization(_) => Self::InvalidResponse,
             litellm_traces_cache::Error::ReadTooLarge => Self::ReadTooLarge,
+        }
+    }
+}
+
+impl Error {
+    /// The stable public failure code for a read that failed with this error.
+    pub fn failure_code(&self) -> litellm_pagination::FailureCode {
+        use litellm_pagination::FailureCode;
+        use litellm_storage_clickhouse::Error as StorageError;
+
+        match self {
+            Self::Pagination(error) => error.code(),
+            Self::Cached(source) => source.failure_code(),
+            Self::ReadTooLarge
+            | Self::InsertTooLarge
+            | Self::Decode(litellm_traces::Error::TooLarge)
+            | Self::Storage(StorageError::InsertTooLarge | StorageError::ResponseTooLarge) => {
+                FailureCode::ResourceTooLarge
+            }
+            Self::Busy => FailureCode::Busy,
+            Self::InvalidRow
+            | Self::InvalidTable
+            | Self::InvalidSchema
+            | Self::InvalidQuery
+            | Self::InvalidParameters
+            | Self::InvalidScope
+            | Self::AmbiguousTrace
+            | Self::Decode(_)
+            | Self::Storage(
+                StorageError::InvalidRow
+                | StorageError::InvalidTable
+                | StorageError::InvalidSchema
+                | StorageError::EmptySql
+                | StorageError::InvalidParameters
+                | StorageError::InvalidQuery,
+            ) => FailureCode::InvalidRequest,
+            Self::InvalidResponse
+            | Self::SchemaFailed(_)
+            | Self::SchemaTransport
+            | Self::MissingSecret
+            | Self::ProvisionFailed(_)
+            | Self::ProvisionTransport
+            | Self::Task
+            | Self::Storage(
+                StorageError::InvalidUrl
+                | StorageError::QueryFailed(_)
+                | StorageError::InsertFailed(_)
+                | StorageError::SchemaFailed(_)
+                | StorageError::InvalidResponse
+                | StorageError::Transport,
+            ) => FailureCode::Unavailable,
         }
     }
 }

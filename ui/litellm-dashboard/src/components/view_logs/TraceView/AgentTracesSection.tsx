@@ -230,7 +230,8 @@ export function AgentTracesSection({
         error={traces.error}
         hasMore={traces.hasMore}
         isFetching={traces.isFetching}
-        onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
+        onRetry={traces.retry}
+        retryLabel={traces.retryLabel}
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}
         selectedKey={openTrace === null ? null : runKey(openTrace)}

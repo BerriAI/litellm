@@ -14,6 +14,10 @@ mod support;
 use fixtures::{DATABASE, SeededDatabase, migrated_database, seeded_database};
 use support::TestResult;
 
+fn keys() -> litellm_pagination::KeyRing {
+    litellm_pagination::KeyRing::new(["fixture-cursor-secret"]).unwrap()
+}
+
 #[rstest]
 #[case::api_key("key-a", "")]
 #[case::user("", "user-a")]
@@ -82,11 +86,21 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
         user_id: user_id.into(),
         team_ids: vec!["team-a".into()],
     };
-    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
-    assert_eq!(page.data.len(), runs.len());
+    let page = list_traces(
+        client,
+        &reader,
+        &keys(),
+        &access,
+        0,
+        2_000_000_000_000,
+        None,
+        50,
+    )
+    .await?;
+    assert_eq!(page.items.len(), runs.len());
     for (trace_id, _, cost) in runs {
         let summary = page
-            .data
+            .items
             .iter()
             .find(|summary| summary.trace_id == trace_id)
             .ok_or("missing run")?;
@@ -199,10 +213,20 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         user_id: String::new(),
         team_ids: vec!["team-a".into()],
     };
-    let page = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 500).await?;
-    assert_eq!(page.data.len(), runs);
+    let page = list_traces(
+        client,
+        &reader,
+        &keys(),
+        &access,
+        0,
+        2_000_000_000_000,
+        None,
+        500,
+    )
+    .await?;
+    assert_eq!(page.items.len(), runs);
     assert!(
-        page.data
+        page.items
             .windows(2)
             .all(|runs| runs[0].trace_ref > runs[1].trace_ref)
     );
@@ -252,7 +276,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             );
         }
     }
-    for summary in &page.data {
+    for summary in &page.items {
         assert_eq!(summary.span_count, steps as u64);
         assert_eq!(
             if costed {
@@ -267,7 +291,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         }
     }
     let trace_ref = &page
-        .data
+        .items
         .iter()
         .find(|run| run.trace_id == "trace-0000")
         .ok_or("missing run")?
@@ -304,6 +328,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         let page = get_trace_page(
             client,
             &reader,
+            &keys(),
             &access,
             "trace-0000",
             trace_ref,
@@ -319,19 +344,26 @@ async fn large_runs_remain_complete_under_default_reader_limits(
                 <= litellm_storage_clickhouse::READ_LIMITS.response_bytes
         );
         if ids.is_empty() {
-            assert!(
-                get_trace_page(
-                    client,
-                    &reader,
-                    &denied,
-                    "trace-0000",
-                    trace_ref,
-                    page.next_cursor.as_deref(),
-                    200,
-                )
-                .await?
-                .is_none()
-            );
+            let reused = get_trace_page(
+                client,
+                &reader,
+                &keys(),
+                &denied,
+                "trace-0000",
+                trace_ref,
+                page.next_cursor.as_deref(),
+                200,
+            )
+            .await;
+            match page.next_cursor {
+                Some(_) => assert!(matches!(
+                    reused,
+                    Err(litellm_traces_clickhouse::Error::Pagination(
+                        litellm_pagination::Error::InvalidCursor
+                    ))
+                )),
+                None => assert!(reused?.is_none()),
+            }
             client
                 .post(writer.url().clone())
                 .body(format!("TRUNCATE TABLE {DATABASE}.otel_traces"))
@@ -372,15 +404,26 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         user_id: String::new(),
         team_ids: Vec::new(),
     };
-    let listed = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 10).await?;
+    let listed = list_traces(
+        client,
+        &reader,
+        &keys(),
+        &access,
+        0,
+        2_000_000_000_000,
+        None,
+        10,
+    )
+    .await?;
     let summary = listed
-        .data
+        .items
         .iter()
         .find(|summary| summary.span_count == 3)
         .ok_or("missing fixture")?;
     let first = get_trace_page(
         client,
         &reader,
+        &keys(),
         &access,
         &summary.trace_id,
         &summary.trace_ref,
@@ -424,19 +467,22 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         user_id: String::new(),
         team_ids: vec!["not-this-team".into()],
     };
-    assert!(
+    assert!(matches!(
         get_trace_page(
             client,
             &reader,
+            &keys(),
             &denied,
             &summary.trace_id,
             &summary.trace_ref,
             first.next_cursor.as_deref(),
             1
         )
-        .await?
-        .is_none()
-    );
+        .await,
+        Err(litellm_traces_clickhouse::Error::Pagination(
+            litellm_pagination::Error::InvalidCursor
+        ))
+    ));
     let first_cursor = first.next_cursor.clone();
     let mut cursor = first.next_cursor;
     let mut ids = first
@@ -448,6 +494,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         let next = get_trace_page(
             client,
             &reader,
+            &keys(),
             &access,
             &summary.trace_id,
             &summary.trace_ref,
@@ -475,6 +522,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         get_trace_page(
             client,
             &reader,
+            &keys(),
             &access,
             &summary.trace_id,
             &summary.trace_ref,
@@ -482,7 +530,9 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
             1
         )
         .await,
-        Err(litellm_traces_clickhouse::Error::InvalidCursor("span"))
+        Err(litellm_traces_clickhouse::Error::Pagination(
+            litellm_pagination::Error::InvalidCursor
+        ))
     ));
     let backdated = json!({
         "Timestamp": "2026-09-01 00:00:00.000000000",
@@ -505,6 +555,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
     let changed = get_trace_page(
         client,
         &uncached_reader,
+        &keys(),
         &access,
         &summary.trace_id,
         &summary.trace_ref,
@@ -513,7 +564,12 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
     )
     .await;
     assert!(
-        matches!(changed, Err(litellm_traces_clickhouse::Error::TraceChanged)),
+        matches!(
+            changed,
+            Err(litellm_traces_clickhouse::Error::Pagination(
+                litellm_pagination::Error::TraversalChanged
+            ))
+        ),
         "{changed:?}"
     );
     Ok(())
@@ -535,9 +591,19 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         user_id: String::new(),
         team_ids: Vec::new(),
     };
-    let before = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
+    let before = list_traces(
+        client,
+        &reader,
+        &keys(),
+        &access,
+        0,
+        2_000_000_000_000,
+        None,
+        50,
+    )
+    .await?;
     let run = before
-        .data
+        .items
         .iter()
         .find(|run| run.span_count == 3)
         .ok_or("missing fixture")?;
@@ -562,10 +628,20 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         ])],
     )
     .await?;
-    let after = list_traces(client, &reader, &access, 0, 2_000_000_000_000, None, 50).await?;
-    assert_eq!(after.data.len(), before.data.len());
+    let after = list_traces(
+        client,
+        &reader,
+        &keys(),
+        &access,
+        0,
+        2_000_000_000_000,
+        None,
+        50,
+    )
+    .await?;
+    assert_eq!(after.items.len(), before.items.len());
     let limited = after
-        .data
+        .items
         .iter()
         .find(|item| item.trace_ref == run.trace_ref)
         .ok_or("missing run")?;
@@ -573,7 +649,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
     assert_eq!(limited.span_count, 4);
     assert!(
         after
-            .data
+            .items
             .iter()
             .filter(|item| item.trace_ref != run.trace_ref)
             .all(|item| !item.resolution_limited)
@@ -582,6 +658,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         get_trace_page(
             client,
             &reader,
+            &keys(),
             &access,
             &run.trace_id,
             &run.trace_ref,

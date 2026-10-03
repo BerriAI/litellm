@@ -1993,6 +1993,7 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
             cursor_ms: 0,
             cursor_trace_id: "".into(),
             limit: 10,
+            snapshot_ms: 0,
         },
     );
     let reader = Connection::reader(&database.url, "trace_test")?;

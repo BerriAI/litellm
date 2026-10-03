@@ -17,6 +17,7 @@ litellm-traces-cache = { path = "crates/traces-cache" }
 litellm-traces-clickhouse = { path = "crates/traces-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
 litellm-migrate = { path = "crates/migrate" }
+litellm-pagination = { path = "crates/pagination" }
 litellm-migrate-macros = { path = "crates/migrate-macros" }
 litellm-core = { path = "crates/core" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }

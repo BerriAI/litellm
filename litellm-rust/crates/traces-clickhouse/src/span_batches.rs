@@ -122,6 +122,7 @@ pub(crate) async fn read_list_spans(
     client: &Client,
     connection: &Connection,
     runs: crate::query::named::TracePageSpansParams,
+    snapshot_ms: u64,
 ) -> Result<Vec<contracts::TraceSpansRow>, Error> {
     let parameters = ListParameters {
         runs,
@@ -130,7 +131,7 @@ pub(crate) async fn read_list_spans(
         after_trace: String::new(),
         after_span: String::new(),
         page_size: PAGE_SIZE,
-        snapshot_ms: (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64,
+        snapshot_ms,
     };
     let pages = stream::try_unfold(
         (Some(parameters), ReadBudget::default()),

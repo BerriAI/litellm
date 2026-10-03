@@ -24,6 +24,7 @@ HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
    AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})
    AND ({cursor_ms:Int64} = 0 OR (toUnixTimestamp64Milli(min(StartTs)), trace_ref)
         < ({cursor_ms:Int64}, {cursor_trace_id:String}))
+   AND ({snapshot_ms:UInt64} = 0 OR min(ReceivedMs) <= {snapshot_ms:UInt64})
 ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
 )
@@ -41,6 +42,7 @@ LEFT JOIN (
       AND Timestamp <= (SELECT max(trace_end) FROM page)
       AND TraceId IN (SELECT trace_id FROM page)
       AND (TeamId, ApiKeyHash, TraceId) IN (SELECT team_id, api_key_hash, trace_id FROM page)
+      AND ({snapshot_ms:UInt64} = 0 OR EngineReceivedMs <= {snapshot_ms:UInt64})
     GROUP BY TeamId, ApiKeyHash, TraceId
 ) AS identities
 ON page.team_id = identities.TeamId AND page.api_key_hash = identities.ApiKeyHash

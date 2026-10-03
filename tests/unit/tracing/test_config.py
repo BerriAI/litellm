@@ -32,12 +32,15 @@ def test_yaml_values_override_defaults_and_resolve_nested_references() -> None:
             "TRACING_DATABASE": "analytics",
             "TRACING_RETENTION_DAYS": "7",
             "CLICKHOUSE_URL": "https://other.example:8443",
+            "LITELLM_SALT_KEY": "salt",
         },
     )
     assert config.url == "https://writer:password@clickhouse.example:8443"
     assert config.database == "analytics"
     assert config.retention_days == 7
+    assert config.cursor_keys == ("salt",)
     assert "password" not in repr(config)
+    assert "salt" not in repr(config)
 
 
 def test_omitted_fields_use_environment() -> None:
@@ -47,6 +50,7 @@ def test_omitted_fields_use_environment() -> None:
             "CLICKHOUSE_URL": "http://localhost:8123",
             "CLICKHOUSE_DATABASE": "env_database",
             "AGENT_TRACING_RETENTION_DAYS": "11",
+            "LITELLM_MASTER_KEY": "sk-master",
         },
     )
     assert (config.url, config.database, config.retention_days) == ("http://localhost:8123", "env_database", 11)
@@ -56,12 +60,13 @@ def test_environment_is_read_when_config_is_resolved(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("CLICKHOUSE_URL", "http://localhost:8123")
     monkeypatch.setenv("CLICKHOUSE_DATABASE", "late_database")
     monkeypatch.setenv("AGENT_TRACING_RETENTION_DAYS", "9")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "salt")
     config = trace_storage_config({})
     assert (config.database, config.retention_days) == ("late_database", 9)
 
 
 def test_omitted_fields_without_environment_use_constant_defaults() -> None:
-    config = trace_storage_config({}, {"CLICKHOUSE_URL": "http://localhost:8123"})
+    config = trace_storage_config({}, {"CLICKHOUSE_URL": "http://localhost:8123", "LITELLM_SALT_KEY": "salt"})
     assert (config.database, config.retention_days) == (
         constants.DEFAULT_CLICKHOUSE_DATABASE,
         constants.DEFAULT_AGENT_TRACING_RETENTION_DAYS,
@@ -114,3 +119,33 @@ def test_legacy_reader_and_split_retention_fields_are_rejected() -> None:
             },
             {},
         )
+
+
+@pytest.mark.parametrize(
+    ("store_keys", "environ", "expected"),
+    [
+        (["os.environ/NEW_KEY", "literal-old"], {"NEW_KEY": "rotated", "LITELLM_SALT_KEY": "salt"}, ("rotated", "literal-old")),
+        ("single-key", {"LITELLM_SALT_KEY": "salt"}, ("single-key",)),
+        (None, {"LITELLM_SALT_KEY": "salt", "LITELLM_MASTER_KEY": "sk-master"}, ("salt",)),
+        (None, {"LITELLM_MASTER_KEY": "sk-master"}, ("sk-master",)),
+    ],
+)
+def test_cursor_keys_prefer_config_then_salt_then_master_key(
+    store_keys: object, environ: dict[str, str], expected: tuple[str, ...]
+) -> None:
+    store: dict[str, object] = {"type": "clickhouse", "url": "http://localhost:8123"}
+    if store_keys is not None:
+        store["cursor_keys"] = store_keys
+    assert trace_storage_config({"store": store}, environ).cursor_keys == expected
+
+
+@pytest.mark.parametrize("store_keys", [[], [""], [1], "", ["os.environ/MISSING"]])
+def test_invalid_cursor_keys_are_rejected(store_keys: object) -> None:
+    store: dict[str, object] = {"type": "clickhouse", "url": "http://localhost:8123", "cursor_keys": store_keys}
+    with pytest.raises(ValueError, match=r"cursor_keys|resolved to no value"):
+        trace_storage_config({"store": store}, {"LITELLM_SALT_KEY": "salt"})
+
+
+def test_missing_cursor_key_source_is_rejected() -> None:
+    with pytest.raises(ValueError, match="cursor_keys, LITELLM_SALT_KEY or LITELLM_MASTER_KEY is required"):
+        trace_storage_config({"store": {"type": "clickhouse", "url": "http://localhost:8123"}}, {})

@@ -27,3 +27,5 @@ export type TraceMessage = Omit<UIMessage, "role" | "tool_calls"> & {
   role: string;
   tool_calls?: TraceToolCall[];
 };
+export type FailureCode = components["schemas"]["ReadFailure"]["code"];
+export type Traversal = TracePage["traversal"];

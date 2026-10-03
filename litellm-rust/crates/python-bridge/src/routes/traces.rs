@@ -5,10 +5,17 @@ use litellm_traces::{QueryScope, ReadQuery, Tenant, query::named::ReadAccessPara
 use litellm_traces_clickhouse::{Config, Error, InsertTable, Parameter, QueryReaders};
 use prost::Message;
 use pyo3::{
-    exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
+    exceptions::{PyException, PyOverflowError, PyRuntimeError, PyValueError},
     prelude::*,
     types::PyBytes,
 };
+
+pyo3::create_exception!(
+    _native,
+    TraceReadError,
+    PyException,
+    "A trace read failed with a stable pagination failure code; args are (code, message)."
+);
 
 #[derive(Message)]
 struct OtlpErrorStatus {
@@ -40,9 +47,8 @@ fn map_error_ref(error: &Error) -> PyErr {
         | Error::ReadTooLarge => PyOverflowError::new_err(error.to_string()),
         Error::InvalidRow
         | Error::InvalidTable
-        | Error::InvalidCursor(_)
+        | Error::Pagination(_)
         | Error::AmbiguousTrace
-        | Error::TraceChanged
         | Error::Decode(_)
         | Error::InvalidSchema
         | Error::InvalidQuery
@@ -76,6 +82,10 @@ fn map_error_ref(error: &Error) -> PyErr {
     }
 }
 
+fn map_read_error(error: Error) -> PyErr {
+    TraceReadError::new_err((error.failure_code().as_str(), error.to_string()))
+}
+
 fn map_sql_error(error: Error) -> PyErr {
     match error {
         Error::Storage(litellm_storage_clickhouse::Error::QueryFailed(400 | 404)) => {
@@ -98,10 +108,17 @@ impl NativeTraceConfig {
         url: &str,
         retention_days: u32,
         max_attribute_value_bytes: usize,
+        cursor_keys: Vec<String>,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: Config::new(database, url, retention_days, max_attribute_value_bytes)
-                .map_err(map_error)?,
+            inner: Config::new(
+                database,
+                url,
+                retention_days,
+                max_attribute_value_bytes,
+                cursor_keys,
+            )
+            .map_err(map_error)?,
         })
     }
 }
@@ -216,12 +233,14 @@ impl NativeTraceStorage {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
+        let config = self.config.clone();
         crate::execution::run_async(
             py,
             async move {
                 litellm_traces_clickhouse::list_traces(
                     &client,
                     &connection,
+                    config.cursor_keys(),
                     &scope,
                     start_ms,
                     end_ms,
@@ -230,11 +249,11 @@ impl NativeTraceStorage {
                 )
                 .await
             },
-            map_error,
+            map_read_error,
         )
     }
 
-    #[pyo3(signature = (trace_id, scope, trace_ref, cursor=None, page_size=None))]
+    #[pyo3(signature = (trace_id, scope, trace_ref, cursor, page_size))]
     fn get_trace<'py>(
         &self,
         py: Python<'py>,
@@ -242,38 +261,27 @@ impl NativeTraceStorage {
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
         trace_ref: String,
         cursor: Option<String>,
-        page_size: Option<u32>,
+        page_size: u32,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
+        let config = self.config.clone();
         crate::execution::run_async(
             py,
             async move {
-                if let Some(page_size) = page_size {
-                    litellm_traces_clickhouse::get_trace_page(
-                        &client,
-                        &connection,
-                        &scope,
-                        &trace_id,
-                        &trace_ref,
-                        cursor.as_deref(),
-                        page_size,
-                    )
-                    .await
-                } else if cursor.is_some() {
-                    Err(Error::InvalidParameters)
-                } else {
-                    litellm_traces_clickhouse::get_trace(
-                        &client,
-                        &connection,
-                        &scope,
-                        &trace_id,
-                        &trace_ref,
-                    )
-                    .await
-                }
+                litellm_traces_clickhouse::get_trace_page(
+                    &client,
+                    &connection,
+                    config.cursor_keys(),
+                    &scope,
+                    &trace_id,
+                    &trace_ref,
+                    cursor.as_deref(),
+                    page_size,
+                )
+                .await
             },
-            map_error,
+            map_read_error,
         )
     }
 
@@ -300,7 +308,7 @@ impl NativeTraceStorage {
                 )
                 .await
             },
-            map_error,
+            map_read_error,
         )
     }
 
@@ -316,12 +324,14 @@ impl NativeTraceStorage {
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
+        let config = self.config.clone();
         crate::execution::run_async(
             py,
             async move {
                 litellm_traces_clickhouse::get_span_error(
                     &client,
                     &connection,
+                    config.cursor_keys(),
                     &scope,
                     &trace_id,
                     &span_id,
@@ -330,7 +340,7 @@ impl NativeTraceStorage {
                 )
                 .await
             },
-            map_error,
+            map_read_error,
         )
     }
 
@@ -482,9 +492,15 @@ mod tests {
     #[rstest]
     #[case::decode_budget(Error::Decode(litellm_traces::Error::TooLarge), "OverflowError")]
     #[case::invalid_export(Error::Decode(litellm_traces::Error::InvalidPayload), "ValueError")]
-    #[case::cursor(Error::InvalidCursor("trace"), "ValueError")]
+    #[case::cursor(
+        Error::Pagination(litellm_pagination::Error::InvalidCursor),
+        "ValueError"
+    )]
     #[case::ambiguous(Error::AmbiguousTrace, "ValueError")]
-    #[case::changed_snapshot(Error::TraceChanged, "ValueError")]
+    #[case::changed_snapshot(
+        Error::Pagination(litellm_pagination::Error::TraversalChanged),
+        "ValueError"
+    )]
     #[case::read_budget(Error::ReadTooLarge, "OverflowError")]
     fn trace_read_and_ingest_failures_preserve_public_exception_types(
         #[case] error: Error,
@@ -496,6 +512,41 @@ mod tests {
                 map_error(error).get_type(py).name().unwrap(),
                 exception_name
             );
+        });
+    }
+
+    #[rstest]
+    #[case::cursor(
+        Error::Pagination(litellm_pagination::Error::InvalidCursor),
+        "invalid_cursor"
+    )]
+    #[case::changed(
+        Error::Pagination(litellm_pagination::Error::TraversalChanged),
+        "traversal_changed"
+    )]
+    #[case::expired(
+        Error::Pagination(litellm_pagination::Error::TraversalExpired),
+        "traversal_expired"
+    )]
+    #[case::read_budget(Error::ReadTooLarge, "resource_too_large")]
+    #[case::busy(Error::Busy, "busy")]
+    #[case::cached(
+        Error::Cached(std::sync::Arc::new(Error::ReadTooLarge)),
+        "resource_too_large"
+    )]
+    fn read_failures_carry_stable_codes(#[case] error: Error, #[case] code: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let message = error.to_string();
+            let exception = map_read_error(error);
+            assert_eq!(exception.get_type(py).name().unwrap(), "TraceReadError");
+            let args: (String, String) = exception
+                .value(py)
+                .getattr("args")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(args, (code.to_owned(), message));
         });
     }
 }

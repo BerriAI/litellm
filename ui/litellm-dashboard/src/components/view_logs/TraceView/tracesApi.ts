@@ -30,7 +30,7 @@ export function liveTracesApi(accessToken: string): TracesApi {
     list: (window) => agentTraceListCall({ accessToken, ...window }),
     anyRecorded: async () => {
       const page = await apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } });
-      return page.data.length > 0;
+      return page.items.length > 0;
     },
     trace: (traceId, traceRef, cursor) => agentTraceCall(accessToken, traceId, traceRef, cursor),
     span: (traceId, spanId, traceRef) => agentTraceSpanCall(accessToken, traceId, spanId, traceRef),

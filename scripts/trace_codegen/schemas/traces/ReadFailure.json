@@ -1,0 +1,35 @@
+{
+  "$defs": {
+    "FailureCode": {
+      "description": "Stable, machine readable failure codes shared by every paginated read and every adapter.",
+      "enum": [
+        "invalid_request",
+        "invalid_cursor",
+        "traversal_expired",
+        "traversal_changed",
+        "resource_too_large",
+        "budget_exceeded",
+        "view_not_ready",
+        "unavailable",
+        "busy"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A public read failure: the stable code plus a message safe to show to the caller.",
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/FailureCode"
+    },
+    "message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "title": "ReadFailure",
+  "type": "object"
+}

@@ -67,13 +67,7 @@ impl SnapshotCache {
             return Err(Error::ReadTooLarge);
         }
 
-        let span_ids: Vec<&str> = trace
-            .spans
-            .iter()
-            .map(|span| span.span_id.as_str())
-            .collect();
-
-        let version = format!("{:x}", Sha256::digest(serde_json::to_vec(&span_ids)?));
+        let version = format!("{:x}", Sha256::digest(&encoded));
 
         let snapshot = Arc::new(Snapshot {
             trace,

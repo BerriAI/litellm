@@ -3,7 +3,7 @@ import { filterRuns } from "./AgentTracesSection";
 import traceList from "./__fixtures__/trace_list.json";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
-const runs = (traceList as TracePage).data as TraceSummary[];
+const runs = (traceList as TracePage).items as TraceSummary[];
 
 describe("filterRuns", () => {
   it("status filter 'Failed' keeps only runs with errors", () => {

@@ -26,6 +26,7 @@ mod view;
 pub mod wire;
 
 pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope};
+pub use litellm_pagination::{Failure, FailureCode, Page, Traversal};
 pub use normalize::{
     AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
     ObservationType,

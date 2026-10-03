@@ -58,9 +58,9 @@ describe("Lens demo data", () => {
     const { services } = createLensDemo(now);
     const all = await services.traces.list({ startMs: 0, endMs: now });
     const recent = await services.traces.list({ startMs: now - 3600_000, endMs: now });
-    expect(recent.data.length).toBeGreaterThan(0);
-    expect(recent.data.length).toBeLessThan(all.data.length);
-    expect(recent.data.every((trace) => Date.parse(trace.start_time) >= now - 3600_000)).toBe(true);
+    expect(recent.items.length).toBeGreaterThan(0);
+    expect(recent.items.length).toBeLessThan(all.items.length);
+    expect(recent.items.every((trace) => Date.parse(trace.start_time) >= now - 3600_000)).toBe(true);
     const settings = services.lens.lenses().then((list) => list.lenses[0].settings);
     await expect(services.lens.saveLens(undefined, await settings)).rejects.toMatchObject({ status: 403 });
     await expect(services.lens.run("real-investigation", "job")).rejects.toMatchObject({ status: 404 });

@@ -1,5 +1,5 @@
 {
-  "data": [
+  "items": [
     {
       "trace_id": "e309a123963901e74c29cd2d3c86ff9e",
       "name": "research_lead",
@@ -55,5 +55,10 @@
       "agent_invocations": 1
     }
   ],
-  "next_cursor": null
+  "next_cursor": null,
+  "traversal": {
+    "id": "d41d8cd98f00b204e9800998ecf8427e",
+    "published_at": "2026-02-18T15:00:00.000Z",
+    "expires_at": "2026-02-18T15:30:00.000Z"
+  }
 }

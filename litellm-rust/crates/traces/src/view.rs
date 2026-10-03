@@ -90,14 +90,11 @@ pub struct Trace {
     pub spans: Vec<Span>,
     #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub next_cursor: Option<String>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub traversal: Option<litellm_pagination::Traversal>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
-#[derive(Debug, PartialEq)]
-pub struct TracePage {
-    pub data: Vec<TraceSummary>,
-    pub next_cursor: Option<String>,
-}
+pub type TracePage = litellm_pagination::Page<TraceSummary>;
 
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Debug, PartialEq)]

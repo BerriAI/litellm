@@ -44,6 +44,12 @@ fn emitted<T: JsonSchema>() -> Schema {
         .into_root_schema_for::<T>()
 }
 
+fn emitted_as<T: JsonSchema>(title: &str) -> Schema {
+    let mut schema = emitted::<T>();
+    schema.insert("title".into(), title.into());
+    schema
+}
+
 pub fn schemas() -> BTreeMap<&'static str, Schema> {
     BTreeMap::from([
         (
@@ -52,9 +58,13 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ),
         ("QueryScope", received::<crate::QueryScope>()),
         ("Tenant", received::<crate::Tenant>()),
-        ("TracePage", emitted::<crate::TracePage>()),
+        ("TracePage", emitted_as::<crate::TracePage>("TracePage")),
         ("Trace", emitted::<crate::Trace>()),
         ("SpanDetail", emitted::<crate::SpanDetail>()),
         ("SpanErrorPage", emitted::<crate::SpanErrorPage>()),
+        (
+            "ReadFailure",
+            emitted_as::<litellm_pagination::Failure>("ReadFailure"),
+        ),
     ])
 }

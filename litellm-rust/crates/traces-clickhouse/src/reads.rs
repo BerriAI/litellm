@@ -1,12 +1,13 @@
 //! Scoped trace reads: the trace list, one trace resolved with its spend, and span payloads.
 
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use base64::{Engine, engine::general_purpose::URL_SAFE};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use itertools::Itertools;
 use litellm_http::Client;
+use litellm_pagination::{Binding, Cursor, KeyRing, Page, Traversal};
 use litellm_storage_clickhouse::{Query, fetch};
 use litellm_traces::{
     SpanDetail, SpanErrorPage, SpendLookup, Trace, TracePage, listed_summary,
@@ -14,6 +15,7 @@ use litellm_traces::{
 };
 use litellm_traces_cache::{SnapshotCache, SnapshotKey};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::{
     Connection, Error,
@@ -47,52 +49,121 @@ static TRACE_SNAPSHOTS: LazyLock<SnapshotCache> = LazyLock::new(|| {
 const NANOS_PER_MS: i64 = 1_000_000;
 const SPEND_WINDOW_MS: i64 = 30 * 60 * 1000;
 const SPEND_CONCURRENCY: usize = 4;
+const LIST_RESOURCE: &str = "traces:list";
+const DETAIL_RESOURCE: &str = "traces:detail";
+const DIAGNOSTIC_RESOURCE: &str = "traces:diagnostic";
+const LIST_LIMIT: u32 = 500;
+const CURSOR_TTL: time::Duration = time::Duration::minutes(30);
+const RESPONSE_BYTES: usize = litellm_storage_clickhouse::READ_LIMITS.response_bytes;
 
-fn encode_cursor<T: Serialize>(position: &T) -> String {
-    URL_SAFE.encode(serde_json::to_vec(position).unwrap_or_default())
+fn now_ms(now: OffsetDateTime) -> u64 {
+    (now.unix_timestamp_nanos() / i128::from(NANOS_PER_MS)) as u64
 }
 
-fn decode_cursor<T: for<'de> Deserialize<'de>>(
-    cursor: &str,
-    kind: &'static str,
-) -> Result<T, Error> {
-    URL_SAFE
-        .decode(cursor)
-        .ok()
-        .and_then(|json| serde_json::from_slice(&json).ok())
-        .ok_or(Error::InvalidCursor(kind))
+fn scope_binding(
+    resource: &str,
+    access: &ReadAccessParams,
+    query: &impl Serialize,
+) -> Result<Binding, Error> {
+    Ok(Binding::new(
+        resource,
+        &(&access.user_id, &access.team_ids, access.all_teams),
+        query,
+    )?)
 }
 
-fn trace_position(cursor: Option<&str>) -> Result<(i64, String), Error> {
-    let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
-        return Ok((0, String::new()));
-    };
-    match decode_cursor::<(i64, String)>(cursor, "trace")? {
-        (start_ms, trace_ref) if start_ms > 0 && !trace_ref.is_empty() => Ok((start_ms, trace_ref)),
-        _ => Err(Error::InvalidCursor("trace")),
+/// A continuation that starts a fresh traversal when no cursor was supplied, or verifies and
+/// resumes the pinned one.
+fn open_cursor<P: for<'de> Deserialize<'de>>(
+    keys: &KeyRing,
+    binding: &Binding,
+    cursor: Option<&str>,
+    first: P,
+    now: OffsetDateTime,
+) -> Result<Cursor<P>, Error> {
+    match cursor.filter(|cursor| !cursor.is_empty()) {
+        None => Ok(Cursor {
+            position: first,
+            revision: String::new(),
+            published_ms: now_ms(now),
+            expires_at: now + CURSOR_TTL,
+        }),
+        Some(cursor) => Ok(keys.decode(binding, cursor, now)?),
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ListPosition {
+    start_ms: i64,
+    trace_ref: String,
+}
+
+/// Where a list traversal starts and which publication instant it is pinned to.
+struct ListTraversal {
+    cursor: Cursor<ListPosition>,
+    binding: Binding,
+}
+
+impl ListTraversal {
+    fn open(
+        keys: &KeyRing,
+        access: &ReadAccessParams,
+        window: (i64, i64),
+        cursor: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Result<Self, Error> {
+        let binding = scope_binding(LIST_RESOURCE, access, &window)?;
+        let first = ListPosition {
+            start_ms: 0,
+            trace_ref: String::new(),
+        };
+        let resumed = cursor.is_some_and(|cursor| !cursor.is_empty());
+        let cursor = open_cursor(keys, &binding, cursor, first, now)?;
+        if resumed && (cursor.position.start_ms <= 0 || cursor.position.trace_ref.is_empty()) {
+            return Err(litellm_pagination::Error::InvalidCursor.into());
+        }
+        Ok(Self { cursor, binding })
+    }
+
+    fn traversal(&self) -> Traversal {
+        Traversal::new(
+            &self.binding,
+            self.cursor.published_ms,
+            self.cursor.expires_at,
+        )
+    }
+
+    fn continue_after(
+        &self,
+        keys: &KeyRing,
+        starts: &BTreeMap<String, i64>,
+        last: &litellm_traces::TraceSummary,
+    ) -> Result<String, litellm_pagination::Error> {
+        let position = ListPosition {
+            start_ms: *starts
+                .get(&last.trace_ref)
+                .ok_or(litellm_pagination::Error::InvalidCursor)?,
+            trace_ref: last.trace_ref.clone(),
+        };
+        keys.encode(&self.binding, &self.cursor.advance(position))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct SpanPosition {
+    offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ErrorPosition {
     offset: u64,
-    version: String,
 }
 
-fn error_position(cursor: Option<&str>) -> Result<Option<ErrorPosition>, Error> {
-    let Some(cursor) = cursor else {
-        return Ok(None);
-    };
-    let position = decode_cursor::<ErrorPosition>(cursor, "diagnostic")?;
-    let valid_version = position.version.len() == 64
-        && position
-            .version
+fn valid_error_version(version: &str) -> bool {
+    version.len() == 64
+        && version
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte));
-    if i64::try_from(position.offset).is_err() || !valid_version {
-        return Err(Error::InvalidCursor("diagnostic"));
-    }
-    Ok(Some(position))
+            .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
 }
 
 /// The stored run a trace id names for this caller; ids can repeat across tenants and runs.
@@ -154,26 +225,39 @@ async fn spend(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per public read parameter"
+)]
 pub async fn list_traces(
     client: &Client,
     connection: &Connection,
+    keys: &KeyRing,
     access: &ReadAccessParams,
     start_ms: i64,
     end_ms: i64,
     cursor: Option<&str>,
     limit: u32,
 ) -> Result<TracePage, Error> {
-    if limit == 0 {
+    if limit == 0 || start_ms >= end_ms {
         return Err(Error::InvalidParameters);
     }
-    let (cursor_ms, cursor_trace_id) = trace_position(cursor)?;
+    let traversal = ListTraversal::open(
+        keys,
+        access,
+        (start_ms, end_ms),
+        cursor,
+        OffsetDateTime::now_utc(),
+    )?;
+    let snapshot_ms = traversal.cursor.published_ms;
     let mut params = ListTracesParams::from(contracts::ListTracesParams {
         access: access.clone(),
         start_ms,
         end_ms,
-        cursor_ms,
-        cursor_trace_id,
-        limit: limit.min(500),
+        cursor_ms: traversal.cursor.position.start_ms,
+        cursor_trace_id: traversal.cursor.position.trace_ref.clone(),
+        limit: limit.min(LIST_LIMIT),
+        snapshot_ms,
     });
     let page: Vec<contracts::ListTracesRow> = loop {
         match fetch::<RunCandidates>(client, connection, &params).await {
@@ -186,18 +270,31 @@ pub async fn list_traces(
             result => break result?.into_iter().map(|row| row.0).collect(),
         }
     };
-    let next_cursor = page
-        .last()
-        .filter(|_| page.len() == params.0.limit as usize)
-        .map(|last| encode_cursor(&(last.start_ms, &last.trace_ref)));
-    let data = stream::iter(page.chunks(16))
-        .then(|batch| list_summaries(client, connection, access, batch))
+    let exhausted = page.len() < params.0.limit as usize;
+    let starts: BTreeMap<String, i64> = page
+        .iter()
+        .map(|row| (row.trace_ref.clone(), row.start_ms))
+        .collect();
+    let items: Vec<litellm_traces::TraceSummary> = stream::iter(page.chunks(16))
+        .then(|batch| list_summaries(client, connection, access, batch, snapshot_ms))
         .try_collect::<Vec<_>>()
         .await?
         .into_iter()
         .flatten()
         .collect();
-    Ok(TracePage { data, next_cursor })
+    let next_cursor = items
+        .last()
+        .filter(|_| !exhausted)
+        .map(|last| traversal.continue_after(keys, &starts, last))
+        .transpose()?;
+    let page = Page {
+        items,
+        next_cursor,
+        traversal: traversal.traversal(),
+    };
+    Ok(page.bounded(RESPONSE_BYTES, |last| {
+        traversal.continue_after(keys, &starts, last)
+    })?)
 }
 
 async fn list_summaries(
@@ -205,6 +302,7 @@ async fn list_summaries(
     connection: &Connection,
     access: &ReadAccessParams,
     runs: &[contracts::ListTracesRow],
+    snapshot_ms: u64,
 ) -> Result<Vec<litellm_traces::TraceSummary>, Error> {
     let (Some(start_ms), Some(end_ms)) = (
         runs.iter().map(|row| row.start_ms).min(),
@@ -220,7 +318,9 @@ async fn list_summaries(
         start_ms,
         end_ms: end_ms.saturating_add(1),
     });
-    let spans = match crate::span_batches::read_list_spans(client, connection, params).await {
+    let spans = match crate::span_batches::read_list_spans(client, connection, params, snapshot_ms)
+        .await
+    {
         Ok(spans) => spans,
         Err(Error::ReadTooLarge) => {
             return stream::iter(runs)
@@ -293,17 +393,14 @@ pub async fn get_trace(
     Ok(resolve_trace(trace_id, &trace_ref, &rows, &spend_rows))
 }
 
-#[derive(Deserialize, Serialize)]
-struct SpanPosition {
-    trace_ref: String,
-    snapshot_ms: u64,
-    offset: usize,
-    version: String,
-}
-
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per public read parameter"
+)]
 pub async fn get_trace_page(
     client: &Client,
     connection: &Connection,
+    keys: &KeyRing,
     access: &ReadAccessParams,
     trace_id: &str,
     trace_ref: &str,
@@ -316,28 +413,20 @@ pub async fn get_trace_page(
     let Some(trace_ref) = reference(client, connection, access, trace_id, trace_ref).await? else {
         return Ok(None);
     };
-    let position = match cursor {
-        Some(cursor) => {
-            let position: SpanPosition = decode_cursor(cursor, "span")?;
-            if position.trace_ref != trace_ref || position.snapshot_ms == 0 {
-                return Err(Error::InvalidCursor("span"));
-            }
-            position
-        }
-        None => SpanPosition {
-            trace_ref: trace_ref.clone(),
-            snapshot_ms: (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
-                as u64,
-            offset: 0,
-            version: String::new(),
-        },
-    };
+    let binding = scope_binding(DETAIL_RESOURCE, access, &(trace_id, &trace_ref))?;
+    let position = open_cursor(
+        keys,
+        &binding,
+        cursor,
+        SpanPosition { offset: 0 },
+        OffsetDateTime::now_utc(),
+    )?;
     let key = SnapshotKey::new(
         connection.url().as_str(),
         access,
         trace_id,
         &trace_ref,
-        position.snapshot_ms,
+        position.published_ms,
     )
     .map_err(|_| Error::InvalidParameters)?;
     let snapshot = match TRACE_SNAPSHOTS.get(&key).await {
@@ -349,7 +438,7 @@ pub async fn get_trace_page(
                 trace_ref: trace_ref.clone(),
             };
             let rows =
-                crate::span_batches::read_spans(client, connection, params, position.snapshot_ms)
+                crate::span_batches::read_spans(client, connection, params, position.published_ms)
                     .await?;
             let spend_rows = spend(client, connection, access, &rows).await;
             let Some(trace) = resolve_trace(trace_id, &trace_ref, &rows, &spend_rows) else {
@@ -358,46 +447,48 @@ pub async fn get_trace_page(
             TRACE_SNAPSHOTS.insert(key, trace).await?
         }
     };
-    let spans = &snapshot.trace().spans;
-    if cursor.is_some() && position.version != snapshot.version() {
-        return Err(Error::TraceChanged);
+    if !position.revision.is_empty() {
+        position.require_revision(snapshot.version())?;
     }
+    let spans = &snapshot.trace().spans;
+    if position.position.offset > spans.len() {
+        return Err(litellm_pagination::Error::InvalidCursor.into());
+    }
+    let pinned = Cursor {
+        position: position.position,
+        revision: snapshot.version().to_owned(),
+        published_ms: position.published_ms,
+        expires_at: position.expires_at,
+    };
+    let continue_at = |offset: usize| -> Result<Option<String>, Error> {
+        (offset < spans.len())
+            .then(|| keys.encode(&binding, &pinned.advance(SpanPosition { offset })))
+            .transpose()
+            .map_err(Error::from)
+    };
+    let start = pinned.position.offset;
+    let end = start.saturating_add(page_size as usize).min(spans.len());
     let mut trace = Trace {
         summary: snapshot.trace().summary.clone(),
         agents: snapshot.trace().agents.clone(),
-        spans: Vec::new(),
-        next_cursor: None,
+        spans: spans[start..end].to_vec(),
+        next_cursor: continue_at(end)?,
+        traversal: Some(Traversal::new(
+            &binding,
+            pinned.published_ms,
+            pinned.expires_at,
+        )),
     };
-    if position.offset > spans.len() {
-        return Err(Error::InvalidCursor("span"));
-    }
-    let end = position
-        .offset
-        .saturating_add(page_size as usize)
-        .min(spans.len());
-    trace.next_cursor = (end < spans.len()).then(|| {
-        encode_cursor(&SpanPosition {
-            offset: end,
-            version: snapshot.version().to_owned(),
-            ..position
-        })
-    });
-    trace.spans = spans[position.offset..end].to_vec();
     while serde_json::to_vec(&trace)
         .map_err(|_| Error::InvalidResponse)?
         .len()
-        > litellm_storage_clickhouse::READ_LIMITS.response_bytes
+        > RESPONSE_BYTES
     {
         if trace.spans.len() <= 1 {
             return Err(Error::ReadTooLarge);
         }
         trace.spans.truncate(trace.spans.len() / 2);
-        trace.next_cursor = Some(encode_cursor(&SpanPosition {
-            trace_ref: trace_ref.clone(),
-            snapshot_ms: position.snapshot_ms,
-            offset: position.offset + trace.spans.len(),
-            version: snapshot.version().to_owned(),
-        }));
+        trace.next_cursor = continue_at(start + trace.spans.len())?;
     }
     Ok(Some(trace))
 }
@@ -433,29 +524,49 @@ pub async fn get_span(
     }))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per public read parameter"
+)]
 pub async fn get_span_error(
     client: &Client,
     connection: &Connection,
+    keys: &KeyRing,
     access: &ReadAccessParams,
     trace_id: &str,
     span_id: &str,
     trace_ref: &str,
     cursor: Option<&str>,
 ) -> Result<Option<SpanErrorPage>, Error> {
-    let position = error_position(cursor)?;
     let Some(trace_ref) = reference(client, connection, access, trace_id, trace_ref).await? else {
         return Ok(None);
     };
-    let offset = position.as_ref().map_or(0, |position| position.offset);
+    let binding = scope_binding(
+        DIAGNOSTIC_RESOURCE,
+        access,
+        &(trace_id, span_id, &trace_ref),
+    )?;
+    let position = open_cursor(
+        keys,
+        &binding,
+        cursor,
+        ErrorPosition { offset: 0 },
+        OffsetDateTime::now_utc(),
+    )?;
+    let resumed = !position.revision.is_empty();
+    if resumed && !valid_error_version(&position.revision)
+        || i64::try_from(position.position.offset).is_err()
+    {
+        return Err(litellm_pagination::Error::InvalidCursor.into());
+    }
+    let offset = position.position.offset;
     let params = SpanErrorParams::from(contracts::SpanErrorParams {
         access: access.clone(),
         trace_id: trace_id.to_owned(),
         trace_ref,
         span_id: span_id.to_owned(),
         error_offset: offset,
-        error_version: position
-            .map(|position| position.version)
-            .unwrap_or_default(),
+        error_version: position.revision.clone(),
     });
     let Some(row) = fetch::<SpanError>(client, connection, &params)
         .await?
@@ -465,13 +576,25 @@ pub async fn get_span_error(
         return Ok(None);
     };
     let row = row.0;
+    if resumed {
+        position.require_revision(&row.version)?;
+    }
     let next_offset = offset + row.message.chars().count() as u64;
-    let next_cursor = (next_offset < row.total_chars).then(|| {
-        encode_cursor(&ErrorPosition {
-            offset: next_offset,
-            version: row.version,
+    let next_cursor = (next_offset < row.total_chars)
+        .then(|| {
+            keys.encode(
+                &binding,
+                &Cursor {
+                    position: ErrorPosition {
+                        offset: next_offset,
+                    },
+                    revision: row.version,
+                    published_ms: position.published_ms,
+                    expires_at: position.expires_at,
+                },
+            )
         })
-    });
+        .transpose()?;
     Ok(Some(SpanErrorPage {
         span_id: row.span_id,
         message: row.message,
@@ -486,51 +609,176 @@ mod tests {
 
     use super::*;
 
+    fn keys() -> KeyRing {
+        KeyRing::new(["list-secret"]).unwrap()
+    }
+
+    fn access() -> ReadAccessParams {
+        ReadAccessParams {
+            all_teams: false,
+            user_id: "user-a".into(),
+            team_ids: vec!["team-a".into()],
+        }
+    }
+
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap()
+    }
+
     #[rstest]
-    fn trace_cursor_round_trips_the_last_listed_run() {
-        let cursor = encode_cursor(&(1_790_742_989_377_i64, "4bad42b84e9de3ba46fc870185f8f023"));
-        assert_eq!(
-            trace_position(Some(&cursor)).unwrap(),
-            (
-                1_790_742_989_377,
-                "4bad42b84e9de3ba46fc870185f8f023".to_owned()
+    fn list_traversal_pins_publication_and_continues_after_the_last_run() {
+        let keys = keys();
+        let first = ListTraversal::open(&keys, &access(), (0, 100), None, now()).unwrap();
+        assert_eq!(first.cursor.published_ms, 1_790_000_000_000);
+        let last = listed_summary(&contracts::ListTracesRow {
+            trace_id: "t".into(),
+            trace_ref: "4bad42b84e9de3ba46fc870185f8f023".into(),
+            team_id: "team-a".into(),
+            api_key_hash: String::new(),
+            user_id: "user-a".into(),
+            name: String::new(),
+            service: String::new(),
+            input_preview: String::new(),
+            status: litellm_traces::SpanStatus::Ok,
+            start_ms: 1_790_742_989_377,
+            duration_ms: 1,
+            span_count: 1,
+            agent_count: 0,
+            agent_invocations: 0,
+            llm_calls: 0,
+            tool_calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            models: Vec::new(),
+            agent_names: Vec::new(),
+            frameworks: Vec::new(),
+            error_count: 0,
+            request_ids: Vec::new(),
+        });
+        let starts = BTreeMap::from([(last.trace_ref.clone(), 1_790_742_989_377_i64)]);
+        let token = first.continue_after(&keys, &starts, &last).unwrap();
+        let next = ListTraversal::open(
+            &keys,
+            &access(),
+            (0, 100),
+            Some(&token),
+            now() + time::Duration::minutes(5),
+        )
+        .unwrap();
+        assert_eq!(next.cursor.position.start_ms, 1_790_742_989_377);
+        assert_eq!(next.cursor.position.trace_ref, last.trace_ref);
+        assert_eq!(next.cursor.published_ms, first.cursor.published_ms);
+        assert_eq!(next.traversal(), first.traversal());
+    }
+
+    #[rstest]
+    #[case::other_window((0, 200))]
+    fn list_cursors_are_bound_to_their_window(#[case] window: (i64, i64)) {
+        let keys = keys();
+        let first = ListTraversal::open(&keys, &access(), (0, 100), None, now()).unwrap();
+        let token = keys
+            .encode(
+                &first.binding,
+                &first.cursor.advance(ListPosition {
+                    start_ms: 5,
+                    trace_ref: "r".into(),
+                }),
             )
-        );
-        assert_eq!(trace_position(None).unwrap(), (0, String::new()));
-        assert_eq!(trace_position(Some("")).unwrap(), (0, String::new()));
-    }
-
-    #[rstest]
-    #[case::not_base64("abc")]
-    #[case::not_json("bm90LWpzb24=")]
-    #[case::numeric_reference("WzEsIDJd")]
-    #[case::zero_start("WzAsICJ0Il0=")]
-    fn malformed_trace_cursors_are_rejected(#[case] cursor: &str) {
+            .unwrap();
         assert!(matches!(
-            trace_position(Some(cursor)),
-            Err(Error::InvalidCursor("trace"))
+            ListTraversal::open(&keys, &access(), window, Some(&token), now()),
+            Err(Error::Pagination(litellm_pagination::Error::InvalidCursor))
+        ));
+        let other_access = ReadAccessParams {
+            team_ids: vec!["team-b".into()],
+            ..access()
+        };
+        assert!(matches!(
+            ListTraversal::open(&keys, &other_access, (0, 100), Some(&token), now()),
+            Err(Error::Pagination(litellm_pagination::Error::InvalidCursor))
+        ));
+        assert!(matches!(
+            ListTraversal::open(&keys, &access(), (0, 100), Some(&token), now() + CURSOR_TTL),
+            Err(Error::Pagination(
+                litellm_pagination::Error::TraversalExpired
+            ))
         ));
     }
 
     #[rstest]
-    #[case::not_base64("garbage")]
-    #[case::missing_fields("e30=")]
-    #[case::not_an_object("WzEsMl0=")]
+    #[case::not_a_token("abc")]
+    #[case::legacy_base64_json("WzEsICJ0Il0=")]
+    fn malformed_list_cursors_are_invalid(#[case] cursor: &str) {
+        assert!(matches!(
+            ListTraversal::open(&keys(), &access(), (0, 100), Some(cursor), now()),
+            Err(Error::Pagination(litellm_pagination::Error::InvalidCursor))
+        ));
+    }
+
+    #[rstest]
+    #[case::not_a_token("garbage")]
+    #[case::legacy_base64_json("e30=")]
     fn malformed_diagnostic_cursors_are_rejected(#[case] cursor: &str) {
+        let binding = scope_binding(DIAGNOSTIC_RESOURCE, &access(), &("t", "s", "r")).unwrap();
         assert!(matches!(
-            error_position(Some(cursor)),
-            Err(Error::InvalidCursor("diagnostic"))
+            open_cursor::<ErrorPosition>(
+                &keys(),
+                &binding,
+                Some(cursor),
+                ErrorPosition { offset: 0 },
+                now()
+            ),
+            Err(Error::Pagination(litellm_pagination::Error::InvalidCursor))
         ));
     }
 
     #[rstest]
-    #[case::lowercase_version("a".repeat(64))]
-    #[case::short_version("A".repeat(63))]
-    fn diagnostic_cursor_requires_a_content_version(#[case] version: String) {
-        let cursor = encode_cursor(&ErrorPosition { offset: 1, version });
+    #[case::lowercase_hex("a".repeat(64), false)]
+    #[case::short("A".repeat(63), false)]
+    #[case::uppercase_hex("A".repeat(64), true)]
+    fn diagnostic_versions_are_uppercase_sha256_hex(#[case] version: String, #[case] valid: bool) {
+        assert_eq!(valid_error_version(&version), valid);
+    }
+
+    #[rstest]
+    fn detail_cursors_are_bound_to_the_trace_and_its_content() {
+        let keys = keys();
+        let binding = scope_binding(DETAIL_RESOURCE, &access(), &("t", "ref")).unwrap();
+        let first = open_cursor(&keys, &binding, None, SpanPosition { offset: 0 }, now()).unwrap();
+        let token = keys
+            .encode(
+                &binding,
+                &Cursor {
+                    revision: "content-v1".into(),
+                    ..first.advance(SpanPosition { offset: 200 })
+                },
+            )
+            .unwrap();
+        let resumed: Cursor<SpanPosition> = open_cursor(
+            &keys,
+            &binding,
+            Some(&token),
+            SpanPosition { offset: 0 },
+            now(),
+        )
+        .unwrap();
+        assert_eq!(resumed.position.offset, 200);
+        assert_eq!(resumed.published_ms, first.published_ms);
+        assert!(resumed.require_revision("content-v1").is_ok());
         assert!(matches!(
-            error_position(Some(&cursor)),
-            Err(Error::InvalidCursor("diagnostic"))
+            resumed.require_revision("content-v2"),
+            Err(litellm_pagination::Error::TraversalChanged)
+        ));
+        let other_run = scope_binding(DETAIL_RESOURCE, &access(), &("t", "other-ref")).unwrap();
+        assert!(matches!(
+            open_cursor::<SpanPosition>(
+                &keys,
+                &other_run,
+                Some(&token),
+                SpanPosition { offset: 0 },
+                now()
+            ),
+            Err(Error::Pagination(litellm_pagination::Error::InvalidCursor))
         ));
     }
 }

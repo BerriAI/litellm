@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import OTLP_RETRY_AFTER_SECONDS
+from litellm.constants import AGENT_TRACING_DETAIL_PAGE_SIZE, OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
@@ -29,8 +29,10 @@ from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import (
     AllQueryScope,
+    FailureCode,
     OwnedQueryScope,
     QueryScope,
+    ReadFailure,
     SpanDetail,
     SpanErrorPage,
     Trace,
@@ -38,13 +40,47 @@ from litellm.rust_bridge.trace.generated.types import (
     TraceScope,
 )
 from litellm.rust_bridge.trace.queries import TraceSQLResponse
-from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant, TraceReadError
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, encode_otlp_response
 
 router = APIRouter(tags=["agent tracing"])
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
+READ_FAILURE_STATUS: Final[Mapping[FailureCode, int]] = MappingProxyType(
+    {
+        "invalid_request": 400,
+        "invalid_cursor": 400,
+        "traversal_changed": 409,
+        "traversal_expired": 410,
+        "resource_too_large": 413,
+        "budget_exceeded": 413,
+        "view_not_ready": 503,
+        "unavailable": 503,
+        "busy": 503,
+    }
+)
+_RETRYABLE_READ_FAILURES: Final = frozenset({"view_not_ready", "unavailable", "busy"})
+
+
+class ReadFailureResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    detail: ReadFailure
+
+
+def _read_failure_responses() -> dict[int | str, dict[str, object]]:
+    return {status: {"model": ReadFailureResponse} for status in (400, 409, 410, 413, 503)}
+
+
+def _read_failure(error: TraceReadError) -> HTTPException:
+    if error.code in _RETRYABLE_READ_FAILURES:
+        verbose_proxy_logger.warning("Trace read %s: %s", error.code, error.message)
+    failure: Final[ReadFailure] = {"code": error.code, "message": error.message}
+    return HTTPException(
+        status_code=READ_FAILURE_STATUS[error.code],
+        detail=failure,
+        headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)} if error.code in _RETRYABLE_READ_FAILURES else None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +171,7 @@ async def ingest_otlp_traces(
     return Response(content=body, media_type=media_type)
 
 
-@router.get("/v1/traces", response_model=TracePage)
+@router.get("/v1/traces", response_model=TracePage, responses=_read_failure_responses())
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
@@ -151,12 +187,8 @@ async def list_agent_traces(
             end_ms=end_ms if end_ms is not None else now_ms,
             cursor=cursor,
         )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OverflowError as error:
-        raise HTTPException(
-            status_code=413, detail="Trace is too large for this view. Use a filtered trace query."
-        ) from error
+    except TraceReadError as error:
+        raise _read_failure(error) from error
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace read unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Traces are temporarily unavailable. Please try again.") from error
@@ -230,23 +262,19 @@ async def help_agent_trace_queries(
         raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error
 
 
-@router.get("/v1/traces/{trace_id}", response_model=Trace)
+@router.get("/v1/traces/{trace_id}", response_model=Trace, responses=_read_failure_responses())
 async def get_agent_trace(
     trace_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     trace_ref: Annotated[str, Query()] = "",
     cursor: Annotated[str | None, Query(max_length=512)] = None,
-    page_size: Annotated[int | None, Query(ge=1, le=500)] = None,
+    page_size: Annotated[int, Query(ge=1, le=500)] = AGENT_TRACING_DETAIL_PAGE_SIZE,
 ) -> Trace:
     tracing, scope = context.reader()
     try:
         trace: Final = await tracing.get_trace(trace_id, scope, trace_ref, cursor, page_size)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OverflowError as error:
-        raise HTTPException(
-            status_code=413, detail="Trace is too large for this view. Use a filtered trace query."
-        ) from error
+    except TraceReadError as error:
+        raise _read_failure(error) from error
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace read unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Traces are temporarily unavailable. Please try again.") from error
@@ -255,7 +283,7 @@ async def get_agent_trace(
     return trace
 
 
-@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=SpanDetail)
+@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=SpanDetail, responses=_read_failure_responses())
 async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
@@ -265,12 +293,8 @@ async def get_agent_trace_span(
     tracing, scope = context.reader()
     try:
         span: Final = await tracing.get_span(trace_id, span_id, scope, trace_ref)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OverflowError as error:
-        raise HTTPException(
-            status_code=413, detail="Trace is too large for this view. Use a filtered trace query."
-        ) from error
+    except TraceReadError as error:
+        raise _read_failure(error) from error
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace read unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Traces are temporarily unavailable. Please try again.") from error
@@ -279,7 +303,9 @@ async def get_agent_trace_span(
     return span
 
 
-@router.get("/v1/traces/{trace_id}/spans/{span_id}/error", response_model=SpanErrorPage)
+@router.get(
+    "/v1/traces/{trace_id}/spans/{span_id}/error", response_model=SpanErrorPage, responses=_read_failure_responses()
+)
 async def get_agent_trace_span_error(
     trace_id: str,
     span_id: str,
@@ -290,12 +316,8 @@ async def get_agent_trace_span_error(
     try:
         tracing, scope = context.reader()
         page: Final = await tracing.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except OverflowError as error:
-        raise HTTPException(
-            status_code=413, detail="Trace is too large for this view. Use a filtered trace query."
-        ) from error
+    except TraceReadError as error:
+        raise _read_failure(error) from error
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace read unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Traces are temporarily unavailable. Please try again.") from error

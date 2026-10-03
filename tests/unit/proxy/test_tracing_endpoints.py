@@ -2,7 +2,7 @@
 Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from types import ModuleType
 from typing import Final, Literal
@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from litellm.constants import AGENT_TRACING_DETAIL_PAGE_SIZE
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, ReadScope
@@ -22,7 +23,7 @@ from litellm.rust_bridge import loader
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
 from litellm.rust_bridge.trace.queries import TraceSQLResponse
-from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceReadError, TraceStorageConfig
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 
 SQL_ENVELOPE: Final = {
@@ -87,6 +88,8 @@ TRACE_RESPONSE: Final = {
     "agents": [],
     "spans": [],
 }
+TRAVERSAL: Final = {"id": "traversal", "published_at": "2026-01-01T00:00:00Z", "expires_at": "2026-01-01T00:30:00Z"}
+TRACE_PAGE_RESPONSE: Final = {"items": [], "next_cursor": None, "traversal": TRAVERSAL}
 SPAN_DETAIL_RESPONSE: Final = {
     "span_id": "s1",
     "input": "",
@@ -162,7 +165,7 @@ def test_trace_read_and_write_permissions(
 def receiver(client) -> MagicMock:
     fake = MagicMock()
     fake.ingest = AsyncMock(return_value=1)
-    fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
+    fake.list_traces = AsyncMock(return_value=TRACE_PAGE_RESPONSE)
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
@@ -244,7 +247,7 @@ def test_post_too_large_is_413(client, receiver):
 def test_list_traces_passes_scope_window_and_cursor(client, receiver):
     response = client.get("/v1/traces", params={"start_ms": 1, "end_ms": 2, "cursor": "abc"})
     assert response.status_code == 200
-    assert response.json() == {"data": [], "next_cursor": None}
+    assert response.json() == TRACE_PAGE_RESPONSE
     receiver.list_traces.assert_awaited_once_with(
         scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
         start_ms=1,
@@ -266,7 +269,9 @@ def test_get_trace_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
     assert response.json() == TRACE_RESPONSE
-    receiver.get_trace.assert_awaited_with("t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "", None, None)
+    receiver.get_trace.assert_awaited_with(
+        "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "", None, AGENT_TRACING_DETAIL_PAGE_SIZE
+    )
 
 
 def test_get_span_404_and_200(client, receiver):
@@ -278,7 +283,10 @@ def test_get_span_404_and_200(client, receiver):
     receiver.get_span.assert_awaited_with("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "")
 
 
-@pytest.mark.parametrize("suffix,cursor,page_size", [("", None, None), ("&cursor=next&page_size=200", "next", 200)])
+@pytest.mark.parametrize(
+    "suffix,cursor,page_size",
+    [("", None, AGENT_TRACING_DETAIL_PAGE_SIZE), ("&cursor=next&page_size=25", "next", 25)],
+)
 def test_trace_detail_passes_scoped_reference(client, receiver, suffix, cursor, page_size):
     receiver.get_trace.return_value = TRACE_RESPONSE
     assert client.get(f"/v1/traces/t1?trace_ref=run-one{suffix}").status_code == 200
@@ -297,19 +305,39 @@ def test_trace_detail_passes_scoped_reference(client, receiver, suffix, cursor, 
     ),
 )
 @pytest.mark.parametrize(
-    "error,status,message",
+    "error,status,detail,retry_after",
     (
-        (RuntimeError("private database details"), 503, "Traces are temporarily unavailable. Please try again."),
-        (OverflowError("private query details"), 413, "Trace is too large for this view. Use a filtered trace query."),
+        (
+            RuntimeError("private database details"),
+            503,
+            "Traces are temporarily unavailable. Please try again.",
+            False,
+        ),
+        (TraceReadError("invalid_cursor", "restart"), 400, {"code": "invalid_cursor", "message": "restart"}, False),
+        (TraceReadError("traversal_changed", "refresh"), 409, {"code": "traversal_changed", "message": "refresh"}, False),
+        (TraceReadError("traversal_expired", "expired"), 410, {"code": "traversal_expired", "message": "expired"}, False),
+        (TraceReadError("resource_too_large", "big"), 413, {"code": "resource_too_large", "message": "big"}, False),
+        (TraceReadError("budget_exceeded", "budget"), 413, {"code": "budget_exceeded", "message": "budget"}, False),
+        (TraceReadError("busy", "later"), 503, {"code": "busy", "message": "later"}, True),
+        (TraceReadError("unavailable", "down"), 503, {"code": "unavailable", "message": "down"}, True),
+        (TraceReadError("view_not_ready", "soon"), 503, {"code": "view_not_ready", "message": "soon"}, True),
     ),
 )
-def test_read_failures_are_actionable_without_exposing_database_details(
-    client: TestClient, receiver: MagicMock, path: str, method: str, error: Exception, status: int, message: str
+def test_read_failures_map_stable_codes_without_exposing_database_details(
+    client: TestClient,
+    receiver: MagicMock,
+    path: str,
+    method: str,
+    error: Exception,
+    status: int,
+    detail: object,
+    retry_after: bool,
 ) -> None:
     getattr(receiver, method).side_effect = error
     response: Final = client.get(path)
     assert response.status_code == status
-    assert response.json() == {"detail": message}
+    assert response.json() == {"detail": detail}
+    assert ("Retry-After" in response.headers) is retry_after
 
 
 @pytest.mark.parametrize("query", ("page_size=0", "page_size=501", "cursor=" + "x" * 513))
@@ -324,7 +352,7 @@ def test_invalid_export_and_cursor_are_client_errors(client, receiver):
 
     receiver.ingest.side_effect = InvalidOTLPPayloadError("invalid OTLP trace payload")
     assert client.post("/v1/traces", content=b"broken").status_code == 400
-    receiver.list_traces.side_effect = ValueError("Invalid trace cursor")
+    receiver.list_traces.side_effect = TraceReadError("invalid_cursor", "Invalid trace cursor")
     assert client.get("/v1/traces?cursor=broken").status_code == 400
 
 
@@ -722,8 +750,14 @@ def test_trace_storage_permissions_map_owned_rows(
 
 
 class _NativeConfig:
-    def __init__(self, database: str, url: str, retention_days: int, max_attribute_value_bytes: int) -> None:
+    def __init__(
+        self, database: str, url: str, retention_days: int, max_attribute_value_bytes: int, cursor_keys: Sequence[str]
+    ) -> None:
         pass
+
+
+class _NativeReadError(Exception):
+    pass
 
 
 class _NativeReturningHelp(ModuleType):
@@ -740,15 +774,16 @@ class _NativeReturningHelp(ModuleType):
             get_trace = AsyncMock(return_value=trace_payload)
 
         self.trace_read: Final = Storage.get_trace
+        self.TraceReadError: Final = _NativeReadError
         self.NativeTraceConfig: Final = _NativeConfig
         self.NativeTraceStorage: Final = Storage
         self.trace_encode_error: Final = bytes
         self.trace_span_rows: Final = list
 
 
-@pytest.mark.parametrize("cursor,page_size", ((None, None), ("next", 200)))
+@pytest.mark.parametrize("cursor,page_size", ((None, AGENT_TRACING_DETAIL_PAGE_SIZE), ("next", 200)))
 async def test_storage_preserves_page_cursor_and_normalizes_native_trace_data(
-    monkeypatch: pytest.MonkeyPatch, cursor: str | None, page_size: int | None
+    monkeypatch: pytest.MonkeyPatch, cursor: str | None, page_size: int
 ) -> None:
     native: Final = _NativeReturningHelp(QUERY_HELP, {**TRACE_RESPONSE, "next_cursor": "more"})
     monkeypatch.setattr(loader, "_cached_bridge", native)
@@ -760,6 +795,28 @@ async def test_storage_preserves_page_cursor_and_normalizes_native_trace_data(
     assert trace["spans"] == ()
     assert trace["summary"]["span_count"] == 0
     native.trace_read.assert_awaited_once_with("t1", scope, "run", cursor, page_size)
+
+
+@pytest.mark.parametrize(
+    "args,expected",
+    (
+        (("traversal_changed", "refresh"), TraceReadError("traversal_changed", "refresh")),
+        (("not-a-code", "x"), None),
+        (("busy",), None),
+    ),
+)
+async def test_storage_converts_native_read_failures_into_stable_codes(
+    monkeypatch: pytest.MonkeyPatch, args: tuple[object, ...], expected: TraceReadError | None
+) -> None:
+    native: Final = _NativeReturningHelp(QUERY_HELP)
+    native.trace_read.side_effect = _NativeReadError(*args)
+    monkeypatch.setattr(loader, "_cached_bridge", native)
+    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "owner", "team_ids": ()}
+    with pytest.raises(TraceReadError if expected else RuntimeError) as raised:
+        await storage.get_trace("t1", scope, "run")
+    if expected is not None:
+        assert (raised.value.code, raised.value.message) == (expected.code, expected.message)
 
 
 async def test_storage_validates_the_native_query_help_value(monkeypatch: pytest.MonkeyPatch) -> None:

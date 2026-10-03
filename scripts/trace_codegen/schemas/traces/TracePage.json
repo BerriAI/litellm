@@ -140,11 +140,32 @@
         "spend"
       ],
       "type": "object"
+    },
+    "Traversal": {
+      "description": "The pinned traversal a page belongs to. Every page of one traversal shares `id`, sees the\ndata as published at `published_at`, and can be continued until `expires_at`.",
+      "properties": {
+        "expires_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "published_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "published_at",
+        "expires_at"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One page of an ordered traversal: a complete ordered prefix of what remains, and either the\nopaque cursor for the rest or `None` when the traversal is exhausted.",
   "properties": {
-    "data": {
+    "items": {
       "items": {
         "$ref": "#/$defs/TraceSummary"
       },
@@ -155,11 +176,15 @@
         "string",
         "null"
       ]
+    },
+    "traversal": {
+      "$ref": "#/$defs/Traversal"
     }
   },
   "required": [
-    "data",
-    "next_cursor"
+    "items",
+    "next_cursor",
+    "traversal"
   ],
   "title": "TracePage",
   "type": "object"

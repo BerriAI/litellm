@@ -4121,6 +4121,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-pagination"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hmac 0.12.1",
+ "rstest",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.19",
+ "time",
+]
+
+[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
@@ -4150,6 +4166,7 @@ dependencies = [
  "litellm-http",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-pagination",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
@@ -4457,6 +4474,7 @@ dependencies = [
  "criterion",
  "indexmap 2.14.0",
  "litellm-llms-types",
+ "litellm-pagination",
  "macro_rules_attribute",
  "opentelemetry-proto",
  "prost",
@@ -4495,6 +4513,7 @@ dependencies = [
  "jsonschema",
  "litellm-http",
  "litellm-migrate",
+ "litellm-pagination",
  "litellm-storage-clickhouse",
  "litellm-traces",
  "litellm-traces-cache",

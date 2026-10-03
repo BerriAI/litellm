@@ -20,6 +20,7 @@ itertools = "0.14.0"
 litellm-http.workspace = true
 litellm-migrate.workspace = true
 litellm-storage-clickhouse.workspace = true
+litellm-pagination.workspace = true
 litellm-traces.workspace = true
 litellm-traces-cache.workspace = true
 moka.workspace = true

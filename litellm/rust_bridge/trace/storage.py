@@ -4,7 +4,11 @@ from typing import Final, Protocol, TypeVar, runtime_checkable
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
-from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+from litellm.constants import (
+    AGENT_TRACING_DETAIL_PAGE_SIZE,
+    AGENT_TRACING_LIST_PAGE_SIZE,
+    OTLP_MAX_ATTRIBUTE_VALUE_BYTES,
+)
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.trace.generated.models import (
     ActivityAvailability,
@@ -31,6 +35,7 @@ from litellm.rust_bridge.trace.queries import (
 
 from .generated.models import TraceQueryHelp
 from .generated.types import (
+    FailureCode,
     QueryScope,
     SpanDetail,
     SpanErrorPage,
@@ -68,7 +73,7 @@ class NativeStore(Protocol):
     ) -> Awaitable[JsonValue]: ...
 
     def get_trace(
-        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
+        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None, page_size: int
     ) -> Awaitable[JsonValue]: ...
 
     def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
@@ -88,6 +93,7 @@ class NativeStore(Protocol):
 
 @runtime_checkable
 class NativeTraces(Protocol):
+    TraceReadError: type[Exception]
     NativeTraceConfig: type["NativeConfig"]
     NativeTraceStorage: type[NativeStore]
 
@@ -112,7 +118,14 @@ _NATIVE_ADAPTER: Final[TypeAdapter[NativeTraces]] = TypeAdapter(
 
 
 class NativeConfig(Protocol):
-    def __init__(self, database: str, url: str, retention_days: int, max_attribute_value_bytes: int) -> None: ...
+    def __init__(
+        self,
+        database: str,
+        url: str,
+        retention_days: int,
+        max_attribute_value_bytes: int,
+        cursor_keys: Sequence[str],
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -121,6 +134,27 @@ class TraceStorageConfig:
     database: str = "litellm"
     retention_days: int = 14
     max_attribute_value_bytes: int = OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+    cursor_keys: tuple[str, ...] = ()
+
+
+_READ_FAILURE: Final = TypeAdapter(tuple[FailureCode, str])
+
+
+class TraceReadError(Exception):
+    """A trace read failed with a stable pagination failure code; `code` drives the public response."""
+
+    def __init__(self, code: FailureCode, message: str) -> None:
+        super().__init__(code, message)
+        self.code: Final = code
+        self.message: Final = message
+
+    @classmethod
+    def from_native(cls, error: BaseException) -> "TraceReadError":
+        try:
+            code, message = _READ_FAILURE.validate_python(error.args)
+        except ValidationError as invalid:
+            raise RuntimeError("Native trace read failed with an invalid failure") from invalid
+        return cls(code, message)
 
 
 def _native() -> NativeTraces:
@@ -168,8 +202,17 @@ class ClickHouseStorage:
             config.url,
             config.retention_days,
             config.max_attribute_value_bytes,
+            config.cursor_keys,
         )
         self._native: Final = native.NativeTraceStorage(validated)
+        self._read_error: Final = native.TraceReadError
+
+    async def _read(self, adapter: TypeAdapter[_ResponseT], call: Awaitable[JsonValue]) -> _ResponseT:
+        try:
+            result: Final = await call
+        except self._read_error as error:
+            raise TraceReadError.from_native(error) from error
+        return _validate_query_response(adapter, result)
 
     async def ensure_schema(self) -> None:
         await self._native.ensure_schema()
@@ -188,8 +231,7 @@ class ClickHouseStorage:
         cursor: str | None = None,
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
     ) -> TracePage:
-        result: Final = await self._native.list_traces(scope, start_ms, end_ms, cursor, limit)
-        return _validate_query_response(_TRACE_PAGE, result)
+        return await self._read(_TRACE_PAGE, self._native.list_traces(scope, start_ms, end_ms, cursor, limit))
 
     async def get_trace(
         self,
@@ -197,20 +239,19 @@ class ClickHouseStorage:
         scope: TraceScope,
         trace_ref: str = "",
         cursor: str | None = None,
-        page_size: int | None = None,
+        page_size: int = AGENT_TRACING_DETAIL_PAGE_SIZE,
     ) -> Trace | None:
-        result: Final = await self._native.get_trace(trace_id, scope, trace_ref, cursor, page_size)
-        return _validate_query_response(_TRACE, result)
+        return await self._read(_TRACE, self._native.get_trace(trace_id, scope, trace_ref, cursor, page_size))
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
-        result: Final = await self._native.get_span(trace_id, span_id, scope, trace_ref)
-        return _validate_query_response(_SPAN_DETAIL, result)
+        return await self._read(_SPAN_DETAIL, self._native.get_span(trace_id, span_id, scope, trace_ref))
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
     ) -> SpanErrorPage | None:
-        result: Final = await self._native.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
-        return _validate_query_response(_SPAN_ERROR_PAGE, result)
+        return await self._read(
+            _SPAN_ERROR_PAGE, self._native.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
+        )
 
     async def query(self, query: ReadQuery[ParamsT, RowT], parameters: ParamsT) -> tuple[RowT, ...]:
         validated: Final = query.parameters.model_validate(parameters)

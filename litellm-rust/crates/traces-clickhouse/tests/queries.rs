@@ -157,6 +157,7 @@ async fn typed_queries_read_normalized_spans_and_keep_trace_identities_separate(
         end_ms: i64::MAX / 1_000_000,
         cursor_ms: 0,
         cursor_trace_id: String::new(),
+        snapshot_ms: 0,
         limit: 10,
     });
     let traces = fetch::<ListTraces>(&fixture.database.client, &reader, &params).await?;
@@ -226,6 +227,7 @@ async fn typed_trace_cursor_returns_the_next_fixture_trace(
         end_ms: i64::MAX / 1_000_000,
         cursor_ms: 0,
         cursor_trace_id: String::new(),
+        snapshot_ms: 0,
         limit: 1,
     });
     let first = fetch::<ListTraces>(&fixture.database.client, &reader, &params).await?;
@@ -234,6 +236,7 @@ async fn typed_trace_cursor_returns_the_next_fixture_trace(
     let next_params = ListTracesParams::from(contracts::ListTracesParams {
         cursor_ms: first[0].0.start_ms,
         cursor_trace_id: first[0].0.trace_ref.clone(),
+        snapshot_ms: 0,
         ..params.0
     });
     let next = fetch::<ListTraces>(&fixture.database.client, &reader, &next_params).await?;
@@ -271,6 +274,7 @@ async fn captured_deeplite_exports_round_trip_through_clickhouse(
         end_ms: i64::MAX / 1_000_000,
         cursor_ms: 0,
         cursor_trace_id: String::new(),
+        snapshot_ms: 0,
         limit: 10,
     });
     let traces = fetch::<ListTraces>(&fixture.database.client, &reader, &list_params).await?;

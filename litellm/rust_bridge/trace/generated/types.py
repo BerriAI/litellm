@@ -23,6 +23,24 @@ class OwnedQueryScope(typing_extensions.TypedDict):
 QueryScope: TypeAlias = AllQueryScope | OwnedQueryScope
 
 
+FailureCode: TypeAlias = Literal[
+    "invalid_request",
+    "invalid_cursor",
+    "traversal_expired",
+    "traversal_changed",
+    "resource_too_large",
+    "budget_exceeded",
+    "view_not_ready",
+    "unavailable",
+    "busy",
+]
+
+
+class ReadFailure(typing_extensions.TypedDict):
+    code: ReadOnly[FailureCode]
+    message: ReadOnly[str]
+
+
 class UIText(typing_extensions.TypedDict):
     text: ReadOnly[str]
     kind: ReadOnly[Literal["text"]]
@@ -75,6 +93,12 @@ SpanType: TypeAlias = Literal[
     "prompt",
     "decision",
 ]
+
+
+class Traversal(typing_extensions.TypedDict):
+    id: ReadOnly[str]
+    published_at: ReadOnly[str]
+    expires_at: ReadOnly[str]
 
 
 class TraceScope(typing_extensions.TypedDict):
@@ -147,11 +171,13 @@ class Trace(typing_extensions.TypedDict):
     agents: ReadOnly[tuple[AgentNode, ...]]
     spans: ReadOnly[tuple[Span, ...]]
     next_cursor: ReadOnly[NotRequired[str | None]]
+    traversal: ReadOnly[NotRequired[Traversal | None | None]]
 
 
 class TracePage(typing_extensions.TypedDict):
-    data: ReadOnly[tuple[TraceSummary, ...]]
+    items: ReadOnly[tuple[TraceSummary, ...]]
     next_cursor: ReadOnly[str | None]
+    traversal: ReadOnly[Traversal]
 
 
 class UIMessages(typing_extensions.TypedDict):
@@ -171,4 +197,6 @@ class SpanDetail(typing_extensions.TypedDict):
     attributes: ReadOnly[Mapping[str, str]]
 
 
-TraceWireTypes: TypeAlias = QueryScope | SpanDetail | SpanErrorPage | Trace | TracePage | TraceScope | ReadQueryName
+TraceWireTypes: TypeAlias = (
+    QueryScope | ReadFailure | SpanDetail | SpanErrorPage | Trace | TracePage | TraceScope | ReadQueryName
+)

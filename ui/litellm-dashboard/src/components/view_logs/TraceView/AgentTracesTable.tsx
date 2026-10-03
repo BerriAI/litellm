@@ -18,6 +18,7 @@ interface AgentTracesTableProps {
   hasMore: boolean;
   isFetching?: boolean;
   onRetry?: () => void;
+  retryLabel?: string;
   onLoadMore: () => void;
   onOpenTrace: (trace: TraceSummary) => void;
   selectedKey?: string | null;
@@ -57,6 +58,7 @@ export function AgentTracesTable({
   hasMore,
   isFetching = false,
   onRetry,
+  retryLabel = "Retry",
   onLoadMore,
   onOpenTrace,
   selectedKey = null,
@@ -150,7 +152,7 @@ export function AgentTracesTable({
           </span>
           {onRetry && (
             <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
-              Retry
+              {retryLabel}
             </Button>
           )}
         </div>

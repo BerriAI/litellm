@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { ApiError } from "@/lib/http/client";
 
 import { LIVE_TAIL_INTERVAL_MS } from "../log_filter_logic";
+import { restartsTraversal } from "./readFailure";
 import type { TracePage, TraceSummary } from "./traceTypes";
 import type { TraceWindow } from "./tracesApi";
 
@@ -26,10 +27,13 @@ const requiresUserAction = (error: unknown): boolean => {
   return isTracingNotEnabled(error) || error.status === 401 || error.status === 403;
 };
 
+export const RESULTS_CHANGED_MESSAGE = "Results changed while loading. Refresh to start from the latest runs.";
+
 const displayError = (error: Error | null): Error | null => {
   if (!(error instanceof ApiError)) return error;
   if (error.status === 401) return new Error("Your session is no longer valid. Sign out and sign in again.");
   if (error.status === 403) return new Error("Your account does not have access to these traces.");
+  if (restartsTraversal(error)) return new Error(RESULTS_CHANGED_MESSAGE);
   return error;
 };
 
@@ -49,9 +53,14 @@ export interface AgentTracesResult {
   /** Set when the proxy answered 501: tracing isn't configured. */
   notEnabledDetail: string | null;
   error: Error | null;
+  /** The failed page cannot be retried from its cursor; `refetch` restarts from a fresh first page. */
+  mustRestart: boolean;
   hasMore: boolean;
   loadMore: () => void;
   refetch: () => void;
+  /** Resumes a retryable failure from its cursor, or restarts when the traversal is gone. */
+  retry: () => void;
+  retryLabel: "Retry" | "Refresh";
 }
 
 /** Start of the fetch window: a preset range rolls with "now", so live tail keeps a fixed-length window. */
@@ -87,7 +96,7 @@ export function useAgentTraces({
       lastPage.next_cursor ? { ...lastPage.window, cursor: lastPage.next_cursor } : undefined,
     enabled,
     staleTime: LIVE_TAIL_INTERVAL_MS,
-    retry: (failureCount, error) => !requiresUserAction(error) && failureCount < 1,
+    retry: (failureCount, error) => !requiresUserAction(error) && !restartsTraversal(error) && failureCount < 1,
     refetchInterval: (q) => (isLiveTail && !requiresUserAction(q.state.error) ? LIVE_TAIL_INTERVAL_MS : false),
     refetchOnWindowFocus: (q) => !requiresUserAction(q.state.error),
     refetchOnReconnect: (q) => !requiresUserAction(q.state.error),
@@ -95,8 +104,13 @@ export function useAgentTraces({
   };
   const query = useInfiniteQuery<LoadedTracePage, Error>(queryOptions);
 
-  const loaded = useMemo(() => query.data?.pages.flatMap((page) => page.data) ?? [], [query.data]);
+  const loaded = useMemo(() => query.data?.pages.flatMap((page) => page.items) ?? [], [query.data]);
   const notEnabled = isTracingNotEnabled(query.error);
+  const mustRestart = restartsTraversal(query.error);
+  const loadMore = () => {
+    if (!query.isFetching) void query.fetchNextPage();
+  };
+  const refetch = () => void query.refetch();
 
   return {
     traces: loaded,
@@ -104,11 +118,12 @@ export function useAgentTraces({
     isFetching: query.isFetching,
     notEnabledDetail: notEnabled ? query.error?.message || "Agent tracing is not enabled" : null,
     error: notEnabled ? null : displayError(query.error),
+    mustRestart,
     hasMore: query.hasNextPage,
-    loadMore: () => {
-      if (!query.isFetching) void query.fetchNextPage();
-    },
-    refetch: () => void query.refetch(),
+    loadMore,
+    refetch,
+    retry: query.hasNextPage && !mustRestart ? loadMore : refetch,
+    retryLabel: mustRestart ? "Refresh" : "Retry",
   };
 }
 

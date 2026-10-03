@@ -41757,6 +41757,20 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** ReadFailure */
+        ReadFailure: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "invalid_request" | "invalid_cursor" | "traversal_expired" | "traversal_changed" | "resource_too_large" | "budget_exceeded" | "view_not_ready" | "unavailable" | "busy";
+            /** Message */
+            message: string;
+        };
+        /** ReadFailureResponse */
+        ReadFailureResponse: {
+            detail: components["schemas"]["ReadFailure"];
+        };
         /**
          * RealtimeClientSecretResponse
          * @description Response from POST /v1/realtime/client_secrets.
@@ -47136,13 +47150,15 @@ export interface components {
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
+            traversal?: components["schemas"]["Traversal"] | null;
         };
         /** TracePage */
         TracePage: {
-            /** Data */
-            data: components["schemas"]["TraceSummary"][];
+            /** Items */
+            items: components["schemas"]["TraceSummary"][];
             /** Next Cursor */
             next_cursor: string | null;
+            traversal: components["schemas"]["Traversal"];
         };
         /** TracePart */
         TracePart: {
@@ -47445,6 +47461,15 @@ export interface components {
             request_body: {
                 [key: string]: unknown;
             };
+        };
+        /** Traversal */
+        Traversal: {
+            /** Expires At */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /** Published At */
+            published_at: string;
         };
         /**
          * Type
@@ -80275,6 +80300,42 @@ export interface operations {
                     "application/json": components["schemas"]["TracePage"];
                 };
             };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -80282,6 +80343,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
                 };
             };
         };
@@ -80364,7 +80434,7 @@ export interface operations {
             query?: {
                 trace_ref?: string;
                 cursor?: string | null;
-                page_size?: number | null;
+                page_size?: number;
             };
             header?: never;
             path: {
@@ -80383,6 +80453,42 @@ export interface operations {
                     "application/json": components["schemas"]["Trace"];
                 };
             };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -80390,6 +80496,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
                 };
             };
         };
@@ -80417,6 +80532,42 @@ export interface operations {
                     "application/json": components["schemas"]["SpanDetail"];
                 };
             };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -80424,6 +80575,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
                 };
             };
         };
@@ -80452,6 +80612,42 @@ export interface operations {
                     "application/json": components["schemas"]["SpanErrorPage"];
                 };
             };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Gone */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -80459,6 +80655,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadFailureResponse"];
                 };
             };
         };

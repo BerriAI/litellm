@@ -2,12 +2,13 @@ import os
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import DEFAULT_AGENT_TRACING_RETENTION_DAYS, DEFAULT_CLICKHOUSE_DATABASE
 from litellm.rust_bridge.trace.storage import TraceStorageConfig
 
 STORE_SETTINGS: Final = TypeAdapter(dict[str, object])
+CURSOR_KEYS: Final = TypeAdapter(tuple[str, ...])
 
 
 def is_clickhouse_tracing_enabled(settings: object) -> bool:
@@ -46,6 +47,30 @@ def _retention_days(value: object) -> int:
     return days
 
 
+def _cursor_key(candidate: str, environ: Mapping[str, str]) -> str:
+    resolved: Final = _value({"cursor_keys": candidate}, "cursor_keys", environ, None)
+    if not isinstance(resolved, str) or not resolved:
+        raise ValueError("tracing.store.cursor_keys must be a nonempty string or list of strings")
+    return resolved
+
+
+def _cursor_keys(store: Mapping[str, object], environ: Mapping[str, str]) -> tuple[str, ...]:
+    supplied: Final = _value(store, "cursor_keys", environ, None)
+    if supplied is None:
+        fallback: Final = environ.get("LITELLM_SALT_KEY") or environ.get("LITELLM_MASTER_KEY")
+        if not fallback:
+            raise ValueError("tracing.store.cursor_keys, LITELLM_SALT_KEY or LITELLM_MASTER_KEY is required")
+        return (fallback,)
+    try:
+        candidates: Final = CURSOR_KEYS.validate_python((supplied,) if isinstance(supplied, str) else supplied)
+    except ValidationError as error:
+        raise ValueError("tracing.store.cursor_keys must be a nonempty string or list of strings") from error
+    keys: Final = tuple(_cursor_key(candidate, environ) for candidate in candidates)
+    if not keys:
+        raise ValueError("tracing.store.cursor_keys must be a nonempty string or list of strings")
+    return keys
+
+
 def _clickhouse_store(settings: Mapping[str, object]) -> Mapping[str, object]:
     raw_store: Final = settings.get("store")
     if raw_store is None:
@@ -59,7 +84,7 @@ def _clickhouse_store(settings: Mapping[str, object]) -> Mapping[str, object]:
 
 def trace_storage_config(settings: Mapping[str, object], environ: Mapping[str, str] = os.environ) -> TraceStorageConfig:
     store: Final = _clickhouse_store(settings)
-    unknown: Final = store.keys() - {"type", "url", "database", "retention_days"}
+    unknown: Final = store.keys() - {"type", "url", "database", "retention_days", "cursor_keys"}
     if unknown:
         raise ValueError(f"unsupported tracing.store settings: {', '.join(sorted(unknown))}")
     url: Final = _value(store, "url", environ, environ.get("CLICKHOUSE_URL"))
@@ -81,4 +106,5 @@ def trace_storage_config(settings: Mapping[str, object], environ: Mapping[str, s
                 environ.get("AGENT_TRACING_RETENTION_DAYS", DEFAULT_AGENT_TRACING_RETENTION_DAYS),
             )
         ),
+        cursor_keys=_cursor_keys(store, environ),
     )

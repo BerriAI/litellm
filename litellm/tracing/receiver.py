@@ -18,7 +18,12 @@ from io import BytesIO
 from threading import BoundedSemaphore
 from typing import Final
 
-from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_BODY_BYTES, OTLP_MAX_CONCURRENT_INGESTS
+from litellm.constants import (
+    AGENT_TRACING_DETAIL_PAGE_SIZE,
+    AGENT_TRACING_LIST_PAGE_SIZE,
+    OTLP_MAX_BODY_BYTES,
+    OTLP_MAX_CONCURRENT_INGESTS,
+)
 from litellm.rust_bridge.trace.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing.config import trace_storage_config
@@ -105,7 +110,7 @@ class TraceReceiver:
         scope: TraceScope,
         trace_ref: str = "",
         cursor: str | None = None,
-        page_size: int | None = None,
+        page_size: int = AGENT_TRACING_DETAIL_PAGE_SIZE,
     ) -> Trace | None:
         return await self.storage.get_trace(trace_id, scope, trace_ref, cursor, page_size)
 

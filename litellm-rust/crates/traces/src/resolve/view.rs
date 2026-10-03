@@ -211,6 +211,7 @@ pub fn resolve_trace(
         agents,
         spans,
         next_cursor: None,
+        traversal: None,
     })
 }
 
