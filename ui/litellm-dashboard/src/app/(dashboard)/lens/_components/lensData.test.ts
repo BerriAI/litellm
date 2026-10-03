@@ -7,6 +7,7 @@ import {
   analysisFraction,
   analysisPace,
   remainingLabel,
+  stageDurations,
   normalizeFilters,
   sortedFindings,
   type Finding,
@@ -168,7 +169,7 @@ describe("Analysis pace", () => {
       perMinute: null,
       secondsLeft: null,
     });
-    expect(remainingLabel(null)).toBe("Estimating time left");
+    expect(remainingLabel(null)).toBe("estimating");
   });
 
   it("lengthens the estimate while progress stalls", () => {
@@ -183,8 +184,26 @@ describe("Analysis pace", () => {
   });
 
   it("rounds remaining time up so the label never promises less than the estimate", () => {
-    expect(remainingLabel(61)).toBe("About 2 min left");
-    expect(remainingLabel(30)).toBe("Less than a minute left");
+    expect(remainingLabel(61)).toBe("~2m");
+    expect(remainingLabel(30)).toBe("<1m");
+  });
+});
+
+describe("Stage durations", () => {
+  const start = Date.parse("2026-09-30T12:00:00Z");
+  const createdAt = "2026-09-30T12:00:00Z";
+
+  it("times finished stages from the transitions it saw and the active stage up to now", () => {
+    const samples = [
+      { at: start + 5000, step: 0, done: 10, fraction: 0.1 },
+      { at: start + 124000, step: 1, done: 0, fraction: 0.6 },
+    ];
+    expect(stageDurations(samples, createdAt, start + 145000)).toEqual([124, 21, null]);
+  });
+
+  it("does not guess when a stage started before the page was opened", () => {
+    const samples = [{ at: start + 90000, step: 1, done: 2, fraction: 0.7 }];
+    expect(stageDurations(samples, createdAt, start + 100000)).toEqual([null, null, null]);
   });
 });
 
