@@ -4,6 +4,8 @@ import { ChevronRight, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 import { lensStatus } from "../model/status";
+import { scheduleLabel } from "../model/inbox";
+import { useNow } from "@/hooks/useNow";
 import { runTime, scopeLabel } from "../model/format";
 import { type Lens } from "../model/types";
 
@@ -17,6 +19,7 @@ export function InvestigationList({
   onSelect: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
+  const now = useNow(15000);
   const shown = lenses.filter((lens) =>
     `${lens.settings.name} ${scopeLabel(lens.settings)}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -42,6 +45,13 @@ export function InvestigationList({
             <div className="col-start-1 row-start-1 min-w-0">
               <p className="text-sm font-medium">{lens.settings.name}</p>
               <p className="mt-1 truncate text-xs text-muted-foreground">{scopeLabel(lens.settings)}</p>
+              <p className="mt-1 font-mono text-[11px] text-muted-foreground" data-testid="investigation-schedule">
+                <span className={lens.settings.enabled ? "text-[#0011b3] dark:text-[#8b9bff]" : ""}>
+                  {lens.settings.enabled ? "● watching" : "○ paused"}
+                </span>
+                {lens.settings.enabled && ` · ${scheduleLabel(lens, now)}`} ·{" "}
+                {lens.findings.filter((f) => f.status === "open").length} open
+              </p>
             </div>
             <div className="col-start-1 row-start-2 text-xs sm:col-start-2 sm:row-start-1 sm:text-right">
               <p
