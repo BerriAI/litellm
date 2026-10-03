@@ -2051,7 +2051,6 @@ class BaseLLMHTTPHandler:
             model=model,
             optional_params=dict(anthropic_messages_optional_request_params),
             litellm_params={
-                "preset_cache_key": None,
                 "stream_response": {},
                 "model_info": kwargs.get("model_info"),
                 **vertex_location_params,

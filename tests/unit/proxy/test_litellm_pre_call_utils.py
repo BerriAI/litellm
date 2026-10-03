@@ -4,7 +4,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -869,6 +869,33 @@ def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> No
 
     assert logging_obj.shadow_eval_request_snapshot is None
     assert proxy_request == {"body": {"messages": [{"role": "user", "content": "new request"}]}}
+
+
+def test_post_guardrail_snapshot_is_skipped_once_no_shadow_eval_job_is_active() -> None:
+    from litellm.integrations.shadow_eval_logger import _JOBS_CACHE_KEY, _jobs_cache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    messages: Final = [{"role": "user", "content": "copied only while a shadow eval could read it"}]
+    metadata: Final = {"standard_logging_guardrail_information": [{"guardrail_mode": "pre_call"}]}
+    proxy_request: Final = {}
+    data: Final = {"messages": messages, "metadata": metadata, "proxy_server_request": proxy_request}
+    logging_obj: Final = Logging(
+        model="test-model", messages=messages, stream=True, call_type="anthropic_messages",
+        start_time=datetime.now(), litellm_call_id="no-job", function_id="no-job", kwargs=data,
+    )
+    data["litellm_logging_obj"] = logging_obj
+    _jobs_cache.set_cache(_JOBS_CACHE_KEY, MappingProxyType({}))
+    try:
+        refresh_proxy_server_request_body_snapshot(data, guardrails_applied=True)
+    finally:
+        _jobs_cache.delete_cache(_JOBS_CACHE_KEY)
+    assert logging_obj.shadow_eval_request_snapshot is None
+    assert proxy_request["body"]["messages"] == messages
+
+    refresh_proxy_server_request_body_snapshot(data, guardrails_applied=True)
+    assert logging_obj.shadow_eval_request_snapshot is not None
+
 
 
 def test_body_snapshot_excludes_team_callback_credentials() -> None:

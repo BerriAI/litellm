@@ -2015,7 +2015,7 @@ def refresh_proxy_server_request_body_snapshot(
     ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
     and ``proxy_server_request`` are.
     """
-    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot, shadow_eval_snapshot_needed
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     logging_obj: Final = data.get("litellm_logging_obj")
@@ -2031,7 +2031,7 @@ def refresh_proxy_server_request_body_snapshot(
     )
     body: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     proxy_server_request["body"] = body
-    if guardrails_applied and isinstance(logging_obj, Logging):
+    if guardrails_applied and isinstance(logging_obj, Logging) and shadow_eval_snapshot_needed():
         metadata: Final = data.get(get_metadata_variable_name_from_kwargs(data))
         logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
             body, metadata if isinstance(metadata, Mapping) else MappingProxyType({})
