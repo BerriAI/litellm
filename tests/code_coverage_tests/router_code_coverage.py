@@ -104,7 +104,6 @@ ignored_function_names = [
     "_anthropic_messages_should_retry",  # Tested through every mid-stream retry test in test_router.py
     "_aanthropic_messages_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py
     "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
-    "_anthropic_stream_frame_error",  # Tested through the error-frame retry policy tests in test_router.py
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
 ]
 

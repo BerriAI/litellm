@@ -14871,9 +14871,14 @@ async def test_anthropic_messages_hop_stream_failure_reaches_second_fallback_ent
 _ANTHROPIC_MESSAGES_RETRY_GROUP: Final = ("anthropic/glm-a", "anthropic/glm-b")
 
 
-def _anthropic_messages_retry_router(deployment_params: dict | None = None, **router_kwargs) -> Router:
+def _anthropic_messages_retry_router(
+    num_retries: int,
+    deployment_params: Mapping[str, object] | None = None,
+    fallbacks: list[dict[str, list[str]]] | None = None,
+    context_window_fallbacks: list[dict[str, list[str]]] | None = None,
+    retry_policy: RetryPolicy | None = None,
+) -> Router:
     """Two deployments in the group, so a same-group retry waits for no backoff; no fallbacks unless asked."""
-    router_kwargs.setdefault("fallbacks", None)
     group_deployments = [
         {"model_name": "glm", "litellm_params": {"model": model, "api_key": "sk-test", **(deployment_params or {})}}
         for model in _ANTHROPIC_MESSAGES_RETRY_GROUP
@@ -14884,7 +14889,10 @@ def _anthropic_messages_retry_router(deployment_params: dict | None = None, **ro
             {"model_name": "fb", "litellm_params": {"model": "anthropic/fb-model", "api_key": "sk-test"}},
             {"model_name": "cw", "litellm_params": {"model": "anthropic/cw-model", "api_key": "sk-test"}},
         ],
-        **router_kwargs,
+        num_retries=num_retries,
+        fallbacks=fallbacks or [],
+        context_window_fallbacks=context_window_fallbacks or [],
+        retry_policy=retry_policy,
     )
 
 

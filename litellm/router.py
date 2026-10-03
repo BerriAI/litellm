@@ -107,7 +107,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -592,27 +592,6 @@ def _anthropic_stream_fallback_error_for_raised(
         return _anthropic_stream_pre_content_error(error, model)
     retriable: Final = litellm._should_retry(status_code)  # pyright: ignore[reportPrivateUsage]  # shared retry rule
     return _anthropic_stream_pre_content_error(error, model) if retriable else None
-
-
-def _anthropic_stream_frame_error(message: str, status_code: int, model: str) -> Exception:
-    """The exception the pre-stream mapping raises for an HTTP answer with the frame's status, so a retry
-    policy's per-class budget governs an `event: error` frame the way it governs the error before the stream
-    opened; the frame's status stays the one the client sees."""
-    match status_code:
-        case 429:
-            return litellm.exceptions.RateLimitError(message=message, llm_provider="anthropic", model=model)
-        case 500 | 529:
-            return litellm.exceptions.InternalServerError(message=message, llm_provider="anthropic", model=model)
-        case 503:
-            return litellm.exceptions.ServiceUnavailableError(message=message, llm_provider="anthropic", model=model)
-        case 504:
-            return litellm.exceptions.Timeout(
-                message=message, model=model, llm_provider="anthropic", exception_status_code=status_code
-            )
-        case _:
-            return litellm.exceptions.APIError(
-                status_code=status_code, message=message, llm_provider="anthropic", model=model
-            )
 
 
 def _anthropic_stream_pre_content_error(error: Exception, model: str) -> "MidStreamFallbackError":
@@ -5678,7 +5657,7 @@ class Router:
                             message=message,
                             model=model,
                             llm_provider="anthropic",
-                            original_exception=_anthropic_stream_frame_error(message, status_code, model),
+                            original_exception=anthropic_error_frame_exception(message, status_code, model),
                             is_pre_first_chunk=True,
                         )
                     for buffered_chunk in buffered_lifecycle_chunks:

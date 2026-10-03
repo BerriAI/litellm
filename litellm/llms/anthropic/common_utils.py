@@ -19,7 +19,14 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import (
+    APIError,
+    InternalServerError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    UnsupportedParamsError,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -72,6 +79,24 @@ ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
         "timeout_error": 504,
     }
 )
+
+
+def anthropic_error_frame_exception(message: str, status_code: int, model: str) -> Exception:
+    """The exception the pre-stream mapping raises for an HTTP answer with the frame's status, so a retry
+    policy's per-class budget governs an `event: error` frame the way it governs the error before the stream
+    opened; the frame's status stays the one the client sees."""
+    match status_code:
+        case 429:
+            return RateLimitError(message=message, llm_provider="anthropic", model=model)
+        case 500 | 529:
+            return InternalServerError(message=message, llm_provider="anthropic", model=model)
+        case 503:
+            return ServiceUnavailableError(message=message, llm_provider="anthropic", model=model)
+        case 504:
+            return Timeout(message=message, model=model, llm_provider="anthropic", exception_status_code=status_code)
+        case _:
+            return APIError(status_code=status_code, message=message, llm_provider="anthropic", model=model)
+
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
