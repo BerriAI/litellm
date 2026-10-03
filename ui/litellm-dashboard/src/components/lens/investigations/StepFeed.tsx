@@ -15,7 +15,6 @@ const STEP_TONE = {
   error: "text-[#e5484d]",
 } as const;
 
-/** Claude Code-style live feed for one run: what it is doing, with which model, at what cost. */
 export function StepFeed({ job }: { job: Job }) {
   const [open, setOpen] = useState(true);
   const steps = job.steps ?? [];
