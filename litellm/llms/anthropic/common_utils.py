@@ -57,6 +57,11 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
     "thinking blocks, and those thinking tokens are billed as output tokens."
 )
+REMAP_DISABLED_TO_BETWEEN_TOOLS_WARNING: Final = (
+    "Replacing `thinking={'type': 'disabled'}` with `thinking={'type': 'between_tools'}` for model=%s: this model "
+    "400s on `disabled`, and `between_tools` is its lowest thinking setting. The model will not think before "
+    "responding; progress notes it writes between tool calls still come back as `thinking` blocks."
+)
 
 # Anthropic error `type` (both the JSON error body and SSE `event: error`
 # payloads use this field) mapped to the HTTP status code it corresponds to.
@@ -714,6 +719,28 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo._supports_model_capability(model, "thinking_always_on", custom_llm_provider)
 
     @staticmethod
+    def _supports_between_tools_thinking(model: str, custom_llm_provider: str) -> bool:
+        """Whether ``model`` accepts ``thinking.type=between_tools`` as its off-equivalent
+        setting for an always-on-thinking model. The model cost map is authoritative: an
+        explicit ``supports_between_tools_thinking`` entry resolved under
+        ``custom_llm_provider``. Sonnet 5.5 is the only family with this entry today;
+        other always-on-thinking families fall back to the drop-and-warn path in
+        ``maybe_drop_disabled_thinking`` until their own off-equivalent is confirmed.
+        """
+        return AnthropicModelInfo._supports_model_capability(
+            model, "supports_between_tools_thinking", custom_llm_provider
+        )
+
+    @staticmethod
+    def _effort_rejects_between_tools(optional_params: Mapping[str, object]) -> bool:
+        """``thinking.type=between_tools`` 400s at ``xhigh``/``max`` effort; those levels
+        keep adaptive thinking as their only valid off-equivalent."""
+        output_config: Final = optional_params.get("output_config")
+        if not isinstance(output_config, dict):
+            return False
+        return output_config.get("effort") in ("xhigh", "max")
+
+    @staticmethod
     def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` is an adaptive-thinking model that still accepts legacy
         ``thinking.type=enabled`` with ``budget_tokens`` (the Claude 4.6 family).
@@ -729,13 +756,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
         custom_llm_provider: str,
     ) -> None:
-        """Omit ``thinking={'type': 'disabled'}`` for always-on-thinking models
-        (Fable 5 / Mythos 5), which 400 on it; omission is the API-documented
-        remedy and yields the model's default adaptive thinking."""
+        """Replace ``thinking={'type': 'disabled'}`` for always-on-thinking models
+        (Fable 5 / Mythos 5, Sonnet 5.5, Opus 5.5), which 400 on it. Sonnet 5.5 has a
+        real off-equivalent, ``between_tools``, valid at `low`/`medium`/`high` effort;
+        remap to that instead of silently leaving thinking on at whatever effort the
+        caller set. Every other always-on-thinking family falls back to omitting
+        ``thinking``, the API-documented remedy, which yields the model's default
+        adaptive thinking."""
         thinking: Final = optional_params.get("thinking")
         if not isinstance(thinking, dict) or thinking.get("type") != "disabled":
             return
         if not AnthropicModelInfo._is_always_on_thinking_model(model, custom_llm_provider):
+            return
+        if AnthropicModelInfo._supports_between_tools_thinking(
+            model, custom_llm_provider
+        ) and not AnthropicModelInfo._effort_rejects_between_tools(optional_params):
+            litellm.verbose_logger.warning(REMAP_DISABLED_TO_BETWEEN_TOOLS_WARNING, model)
+            optional_params["thinking"] = {"type": "between_tools"}
             return
         litellm.verbose_logger.warning(
             DROP_DISABLED_THINKING_WARNING,
