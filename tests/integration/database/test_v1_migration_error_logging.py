@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -13,7 +14,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, Literal, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import psycopg
@@ -29,7 +30,7 @@ MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extr
 MIGRATION_NAME: Final = "20260921190000_agent_identity"
 BASELINE_DIR: Final = MIGRATIONS_DIR / "0_init"
 PASSWORD: Final = "wr ong'pw9"
-FRAGMENTS: Final = ("wr ong", "ong'pw9", "wr%20ong", "ong%27pw9", "pw9")
+FRAGMENTS: Final = ("wr ong", "wr+ong", "ong'pw9", "wr%20ong", "ong%27pw9", "pw9")
 SHIPPED_MIGRATIONS: Final = tuple(
     sorted(path.name for path in MIGRATIONS_DIR.iterdir() if path.is_dir() and path.name != "0_init")
 )
@@ -66,6 +67,18 @@ def _replace_port(database_url: str, port: int, hostname: str | None = None) -> 
     return urlunsplit(parsed._replace(netloc=f"{userinfo}@{host}:{port}"))
 
 
+def _unreachable_database_url(database_url: str) -> str:
+    parsed: Final = urlsplit(database_url)
+    url: Final = _database_url(
+        database_url,
+        parsed.username or "",
+        PASSWORD,
+        parsed.path.lstrip("/"),
+        encode_password=False,
+    )
+    return _replace_port(url, free_port())
+
+
 @contextmanager
 def owned_database(password: str) -> Iterator[str]:
     admin_url: Final = os.environ["DATABASE_URL"]
@@ -85,13 +98,33 @@ def owned_database(password: str) -> Iterator[str]:
             admin.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
 
 
+def _migration_environment(database_url: str | None, extra_env: Mapping[str, str]) -> dict[str, str]:
+    excluded_variables: Final = (
+        ("DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
+        if database_url is not None
+        else ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
+    )
+    inherited_environment: Final = {key: value for key, value in os.environ.items() if key not in excluded_variables}
+    database_environment: Final = {"DATABASE_URL": database_url} if database_url is not None else {}
+    return {
+        **inherited_environment,
+        **database_environment,
+        "LITELLM_LOG": "ERROR",
+        **extra_env,
+    }
+
+
 def _migration_invocation(
-    database_url: str, tmp_path: Path, extra_env: Mapping[str, str]
+    database_url: str | None,
+    tmp_path: Path,
+    extra_env: Mapping[str, str],
+    resolver: Literal["legacy", "v2"] = "legacy",
 ) -> tuple[tuple[str, ...], dict[str, str]]:
     config_path: Final = tmp_path / "config.yaml"
     config_path.write_text(
         "model_list:\n  - model_name: integration-fake\n    litellm_params:\n      model: openai/integration-fake\n"
     )
+    resolver_flag: Final = "--use_legacy_migration_resolver" if resolver == "legacy" else "--use_v2_migration_resolver"
     command: Final = (
         sys.executable,
         "-I",
@@ -99,22 +132,20 @@ def _migration_invocation(
         "litellm.proxy.proxy_cli",
         "--config",
         str(config_path),
-        "--use_legacy_migration_resolver",
+        resolver_flag,
         "--skip_server_startup",
     )
-    environment: Final = {
-        **{key: value for key, value in os.environ.items() if key not in ("DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")},
-        "DATABASE_URL": database_url,
-        "LITELLM_LOG": "ERROR",
-        **extra_env,
-    }
+    environment: Final = _migration_environment(database_url, extra_env)
     return command, environment
 
 
 def run_v1_migrations(
-    database_url: str, tmp_path: Path, extra_env: Mapping[str, str]
+    database_url: str | None,
+    tmp_path: Path,
+    extra_env: Mapping[str, str],
+    resolver: Literal["legacy", "v2"] = "legacy",
 ) -> subprocess.CompletedProcess[str]:
-    command, environment = _migration_invocation(database_url, tmp_path, extra_env)
+    command, environment = _migration_invocation(database_url, tmp_path, extra_env, resolver)
     return subprocess.run(
         command,
         cwd=REPO_ROOT,
@@ -127,6 +158,20 @@ def run_v1_migrations(
 
 def error_lines(output: str) -> tuple[str, ...]:
     return tuple(match.group(1) for match in ERROR_RECORD.finditer(output))
+
+
+def _json_error_records(output: str) -> tuple[dict[str, object], ...]:
+    records: Final = tuple(_parse_json_record(line, output) for line in output.splitlines() if line.startswith("{"))
+    return tuple(record for record in records if record.get("level") == "ERROR")
+
+
+def _parse_json_record(line: str, output: str) -> dict[str, object]:
+    try:
+        record: Final = json.loads(line)
+    except json.JSONDecodeError:
+        pytest.fail(_safe_output(output))
+    assert isinstance(record, dict), _safe_output(output)
+    return cast(dict[str, object], record)
 
 
 def _retry_count_texts(lines: tuple[str, ...]) -> tuple[str, ...]:
@@ -251,17 +296,7 @@ def _migration_log_has_p1001_or_process_exited(output_path: Path, process: subpr
 
 def test_unreachable_database_emits_four_p1001_errors_without_password_fragments(tmp_path: Path) -> None:
     with owned_database(PASSWORD) as database_url:
-        parsed: Final = urlsplit(database_url)
-        unreachable_url: Final = _replace_port(
-            _database_url(
-                database_url,
-                parsed.username or "",
-                PASSWORD,
-                parsed.path.lstrip("/"),
-                encode_password=False,
-            ),
-            free_port(),
-        )
+        unreachable_url: Final = _unreachable_database_url(database_url)
         completed: Final = run_v1_migrations(unreachable_url, tmp_path, {})
         output: Final = completed.stdout + completed.stderr
         errors: Final = error_lines(output)
@@ -389,17 +424,7 @@ def test_unreachable_database_recovers_after_postgres_forwarder_starts(tmp_path:
 
 def test_unreachable_database_keeps_password_masked_when_shape_redaction_is_disabled(tmp_path: Path) -> None:
     with owned_database(PASSWORD) as database_url:
-        parsed: Final = urlsplit(database_url)
-        unreachable_url: Final = _replace_port(
-            _database_url(
-                database_url,
-                parsed.username or "",
-                PASSWORD,
-                parsed.path.lstrip("/"),
-                encode_password=False,
-            ),
-            free_port(),
-        )
+        unreachable_url: Final = _unreachable_database_url(database_url)
         completed: Final = run_v1_migrations(
             unreachable_url,
             tmp_path,
@@ -412,4 +437,96 @@ def test_unreachable_database_keeps_password_masked_when_shape_redaction_is_disa
         assert len(errors) == 4, _safe_output(output)
         assert len(p1001_errors) == 4, _safe_output(output)
         assert _retry_count_texts(errors) == (), _safe_output(output)
+        _assert_no_password_fragments(output)
+
+
+def test_component_database_env_vars_with_wrong_password_emit_four_p1000_errors_without_password_fragments(
+    tmp_path: Path,
+) -> None:
+    correct_password: Final = f"correct-{uuid.uuid4().hex}"
+    with owned_database(correct_password) as database_url:
+        parsed: Final = urlsplit(database_url)
+        host: Final = parsed.hostname
+        port: Final = parsed.port
+        username: Final = parsed.username
+        assert host is not None and port is not None and username is not None
+        extra_env: Final = {
+            "DATABASE_HOST": f"{host}:{port}",
+            "DATABASE_USERNAME": username,
+            "DATABASE_PASSWORD": PASSWORD,
+            "DATABASE_NAME": parsed.path.lstrip("/"),
+        }
+        completed: Final = run_v1_migrations(None, tmp_path, extra_env)
+        output: Final = completed.stdout + completed.stderr
+        errors: Final = error_lines(output)
+        p1000_errors: Final = tuple(line for line in errors if "P1000" in line)
+        assert completed.returncode == 1, _safe_output(output)
+        assert len(errors) == 4, _safe_output(output)
+        assert len(p1000_errors) == 4, _safe_output(output)
+        assert _retry_count_texts(errors) == (), _safe_output(output)
+        _assert_no_password_fragments(output)
+
+
+def test_json_logs_emit_four_valid_json_p1001_error_records_without_password_fragments(tmp_path: Path) -> None:
+    with owned_database(PASSWORD) as database_url:
+        unreachable_url: Final = _unreachable_database_url(database_url)
+        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {"JSON_LOGS": "true"})
+        output: Final = completed.stdout + completed.stderr
+        errors: Final = _json_error_records(output)
+        messages: Final = tuple(record.get("message") for record in errors)
+        assert completed.returncode == 1, _safe_output(output)
+        assert len(errors) == 4, _safe_output(output)
+        assert tuple(isinstance(message, str) and "P1001" in message for message in messages) == (
+            True,
+            True,
+            True,
+            True,
+        ), _safe_output(output)
+        assert error_lines(output) == (), _safe_output(output)
+        _assert_no_password_fragments(output)
+
+
+def test_migration_job_entrypoint_emits_four_p1001_errors_without_password_fragments() -> None:
+    with owned_database(PASSWORD) as database_url:
+        unreachable_url: Final = _unreachable_database_url(database_url)
+        command: Final = (sys.executable, "-I", "-m", "litellm.proxy.prisma_migration")
+        environment: Final = _migration_environment(
+            unreachable_url,
+            {"USE_V2_MIGRATION_RESOLVER": "false"},
+        )
+        completed: Final = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        output: Final = completed.stdout + completed.stderr
+        errors: Final = error_lines(output)
+        p1001_errors: Final = tuple(line for line in errors if "P1001" in line)
+        assert completed.returncode == 1, _safe_output(output)
+        assert len(errors) == 4, _safe_output(output)
+        assert len(p1001_errors) == 4, _safe_output(output)
+        _assert_no_password_fragments(output)
+
+
+def test_v2_resolver_unreachable_database_exits_2_and_names_p1001(tmp_path: Path) -> None:
+    with owned_database(PASSWORD) as database_url:
+        unreachable_url: Final = _unreachable_database_url(database_url)
+        completed: Final = run_v1_migrations(unreachable_url, tmp_path, {}, resolver="v2")
+        output: Final = completed.stdout + completed.stderr
+        assert completed.returncode == 2, _safe_output(output)
+        assert "P1001" in output, _safe_output(output)
+        assert error_lines(output) == (), _safe_output(output)
+        _assert_no_password_fragments(output)
+
+
+def test_v2_resolver_clean_database_applies_exactly_the_shipped_migrations(tmp_path: Path) -> None:
+    with owned_database(PASSWORD) as database_url:
+        completed: Final = run_v1_migrations(database_url, tmp_path, {}, resolver="v2")
+        output: Final = completed.stdout + completed.stderr
+        assert completed.returncode == 0, _safe_output(output)
+        assert error_lines(output) == (), _safe_output(output)
+        assert _applied_migrations(database_url) == SHIPPED_MIGRATIONS, _safe_output(output)
         _assert_no_password_fragments(output)
