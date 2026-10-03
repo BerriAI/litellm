@@ -14,6 +14,7 @@ from litellm.proxy.roi_calculator.estimator import CompletionCaller
 from litellm.proxy.roi_calculator.github import GitHubPullListItem
 from litellm.proxy.roi_calculator.sync import SpendReader, SyncManager, read_spend
 from litellm.types.roi_calculator import (
+    ROIBranchSpend,
     ROICompletionRequest,
     ROIReport,
     ROISettings,
@@ -28,7 +29,7 @@ _PULL_LIST_JSON: Final = """[
     "body": "Preserve UTC behavior.",
     "merged_at": "2026-09-12T12:00:00Z",
     "updated_at": "2026-09-12T12:00:00Z",
-    "head": {"sha": "abcdef"},
+    "head": {"sha": "abcdef", "ref": "feature", "repo": {"full_name": "org/repo"}},
     "user": {"login": "alice"}
   }
 ]"""
@@ -39,7 +40,7 @@ _PULL_DETAIL_JSON: Final = """{
   "html_url": "https://github.com/org/repo/pull/42",
   "user": {"login": "alice"},
   "merged_at": "2026-09-12T12:00:00Z",
-  "head": {"sha": "abcdef"},
+  "head": {"sha": "abcdef", "ref": "feature", "repo": {"full_name": "org/repo"}},
   "additions": 1,
   "deletions": 1,
   "changed_files": 1,
@@ -242,8 +243,114 @@ async def test_unchanged_estimated_pull_refreshes_identity_without_model_call() 
     assert manager.status.reused == 1
     report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
     assert report["pulls"][0]["estimate"].get("cached") is True
+    assert report["pulls"][0]["source_branch"] == "feature"
+    assert report["pulls"][0]["source_repo"] == "github.com/org/repo"
     assert report["pulls"][0]["profile_email"] == "new@example.com"
     assert report["pulls"][0]["emails"] == ("alice@example.com", "new@example.com")
+
+
+def _gitlab_transport(source_path: str | None, *, details_fail: bool = False) -> httpx.MockTransport:
+    detail: Final = {
+        "iid": 42,
+        "title": "Fix timezone conversion",
+        "description": "Preserve UTC behavior.",
+        "web_url": "https://gitlab.com/org/repo/-/merge_requests/42",
+        "author": {"username": "alice"},
+        "merged_at": "2026-09-12T12:00:00Z",
+        "updated_at": "2026-09-12T12:00:00Z",
+        "sha": "abcdef",
+        "source_branch": "feature",
+        "source_project_id": 2,
+        "changes_count": "1",
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        path: Final = request.url.path
+        if path.endswith("/projects/org/repo"):
+            return httpx.Response(200, json={"id": 1, "path_with_namespace": "org/repo"})
+        if path.endswith("/projects/2"):
+            return (
+                httpx.Response(200, json={"id": 2, "path_with_namespace": source_path})
+                if source_path
+                else httpx.Response(404)
+            )
+        if path.endswith("/merge_requests"):
+            return httpx.Response(
+                200, json=[detail, {**detail, "iid": 43, "source_branch": "other"}] if details_fail else [detail]
+            )
+        if path.endswith("/merge_requests/43"):
+            return httpx.Response(200, json={**detail, "iid": 43, "source_branch": "other"})
+        if path.endswith("/merge_requests/42"):
+            return httpx.Response(404) if details_fail else httpx.Response(200, json=detail)
+        if path.endswith("/diffs"):
+            return httpx.Response(200, json=[{"new_path": "time.py", "old_path": "time.py", "diff": "+fixed"}])
+        if path.endswith("/commits"):
+            return httpx.Response(200, json=[{"id": "abcdef", "message": "Fix timezone conversion"}])
+        if path.endswith("/users"):
+            return httpx.Response(200, json=[{"username": "alice", "public_email": "alice@example.com"}])
+        raise AssertionError(path)
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before,after", [(None, "dev/fork"), ("dev/fork", None), ("dev/fork", "dev/renamed")])
+async def test_gitlab_cache_refreshes_branch_attribution_when_source_access_changes(
+    before: str | None, after: str | None
+) -> None:
+    settings: Final = _settings().model_copy(update={"source_provider": "gitlab"})
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+
+    async def branch_spend(start: date, end: date, repos: tuple[str, ...]) -> tuple[ROIBranchSpend, ...]:
+        return (ROIBranchSpend(repo="gitlab.com/" + (after or "dev/fork"), branch="feature", spend=2.5, requests=3),)
+
+    assert await manager.start(settings, repository, _spend_reader(), _completion(), _gitlab_transport(before))
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "complete"
+    assert await manager.start(
+        settings, repository, _spend_reader(), _completion(), _gitlab_transport(after), branch_spend_reader=branch_spend
+    )
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "complete"
+    report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert report["pulls"][0]["source_repo"] == ("gitlab.com/" + after if after else "")
+    result: Final = summarize(report, {})
+    assert result["pulls"][0]["branch_cost"].status == ("matched" if after else "unattributed")
+
+    async def unexpected_completion(request: ROICompletionRequest) -> object:
+        raise AssertionError("Unchanged source metadata must reuse the estimate")
+
+    assert await manager.start(settings, repository, _spend_reader(), unexpected_completion, _gitlab_transport(after))
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "complete"
+    assert manager.status.reused == 1
+
+
+@pytest.mark.asyncio
+async def test_unreadable_gitlab_details_keep_known_branch_costs() -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    settings: Final = _settings().model_copy(update={"source_provider": "gitlab"})
+
+    async def branch_spend(start: date, end: date, repos: tuple[str, ...]) -> tuple[ROIBranchSpend, ...]:
+        return (ROIBranchSpend(repo="gitlab.com/dev/fork", branch="feature", spend=2.5, requests=3),)
+
+    assert await manager.start(
+        settings,
+        repository,
+        _spend_reader(),
+        _completion(),
+        _gitlab_transport("dev/fork", details_fail=True),
+        branch_spend_reader=branch_spend,
+    )
+    await _wait_until_finished(manager)
+    report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    result: Final = summarize(report, {})
+    assert result["pulls"][0]["branch_cost"].spend == 2.5
+    assert result["pulls"][0]["estimate"]["status"] == "needs_review"
+    assert result["branch_metrics"].matched_pulls == 1
+    assert result["branch_metrics"].cost_per_hour is None
 
 
 @pytest.mark.asyncio
@@ -461,6 +568,8 @@ async def test_one_unreadable_pr_preserves_other_estimates_in_report() -> None:
     assert manager.status.phase == "complete"
     assert manager.status.estimated == 1
     assert manager.status.needs_attention == 1
+    assert report["pulls"][1]["source_repo"] == "github.com/org/repo"
+    assert report["pulls"][1]["source_branch"] == "feature"
 
 
 def _repository_outage_transport(

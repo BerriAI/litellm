@@ -3531,6 +3531,24 @@ def test_get_spend_logs_metadata_keeps_user_agent():
 
 
 @pytest.mark.parametrize(
+    "metadata,expected",
+    (
+        (None, False),
+        ({}, False),
+        ({"tags": ["litellm-roi-estimator"]}, False),
+        ({"litellm_roi_estimator": None}, False),
+        ({"litellm_roi_estimator": "true"}, False),
+        ({"litellm_roi_estimator": False}, False),
+        ({"litellm_roi_estimator": True}, True),
+    ),
+)
+def test_new_spend_logs_always_have_an_explicit_roi_estimator_marker(
+    metadata: dict[str, object] | None, expected: bool
+) -> None:
+    assert _get_spend_logs_metadata(metadata)["litellm_roi_estimator"] is expected
+
+
+@pytest.mark.parametrize(
     "client_sent_oauth_token, custom_llm_provider, expected",
     [
         (True, "anthropic", True),
