@@ -71874,6 +71874,29 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "umans-ai/umans-glm-5.3": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "umans-ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131071,
+        "max_tokens": 131071,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://app.umans.ai/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "umans-ai/umans-glm-5.3-flash": {
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 1.5e-07,
