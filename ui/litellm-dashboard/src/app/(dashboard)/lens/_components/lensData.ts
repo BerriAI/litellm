@@ -161,11 +161,19 @@ export function analysisFraction({
   return before + stageWeights[step] * (total ? Math.min(1, done / total) : 0);
 }
 
+function windowStart(samples: readonly ProgressSample[], now: number): ProgressSample | undefined {
+  return samples.findLast((sample) => now - sample.at >= 60000) ?? samples[0];
+}
+
 export function analysisPace(samples: readonly ProgressSample[], now: number) {
   const latest = samples.at(-1);
-  const first = samples.find((sample) => sample.step === latest?.step && now - sample.at <= 60000);
-  const anchor = samples.find((sample) => now - sample.at <= 60000);
-  if (!latest || !first || !anchor) return { perMinute: null, secondsLeft: null };
+  if (!latest) return { perMinute: null, secondsLeft: null };
+  const first = windowStart(
+    samples.filter((sample) => sample.step === latest.step),
+    now,
+  );
+  const anchor = windowStart(samples, now);
+  if (!first || !anchor) return { perMinute: null, secondsLeft: null };
   const stepMinutes = (now - first.at) / 60000;
   const perMinute = stepMinutes >= 1 / 6 ? (latest.done - first.done) / stepMinutes : null;
   const spanSeconds = (now - anchor.at) / 1000;
