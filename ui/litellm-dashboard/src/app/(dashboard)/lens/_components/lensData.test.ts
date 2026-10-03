@@ -183,6 +183,29 @@ describe("Analysis pace", () => {
     expect(stalled).toBeGreaterThan(moving);
   });
 
+  it("still estimates when the worker reports progress less than once a minute", () => {
+    const start = Date.parse("2026-09-30T12:00:00Z");
+    const pace = analysisPace(
+      [
+        { at: start, step: 2, done: 0, fraction: 0.8 },
+        { at: start + 90000, step: 2, done: 1, fraction: 0.85 },
+      ],
+      start + 90000,
+    );
+    expect(pace.secondsLeft).toBeCloseTo(270);
+    expect(pace.perMinute).toBeCloseTo(2 / 3);
+  });
+
+  it("measures from the last minute rather than the whole run once updates are frequent", () => {
+    const start = Date.parse("2026-09-30T12:00:00Z");
+    const samples = [
+      { at: start, step: 0, done: 0, fraction: 0 },
+      { at: start + 120000, step: 0, done: 12, fraction: 0.06 },
+      { at: start + 180000, step: 0, done: 72, fraction: 0.36 },
+    ];
+    expect(analysisPace(samples, start + 180000).perMinute).toBe(60);
+  });
+
   it("rounds remaining time up so the label never promises less than the estimate", () => {
     expect(remainingLabel(61)).toBe("~2m");
     expect(remainingLabel(30)).toBe("<1m");
