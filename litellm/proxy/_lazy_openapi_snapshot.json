@@ -49856,6 +49856,18 @@
               "title": "Api Url",
               "type": "string"
             },
+            "connection_id": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connection Id"
+            },
             "repos": {
               "items": {
                 "type": "string"
@@ -49883,11 +49895,17 @@
               "title": "Token"
             },
             "update_interval_minutes": {
-              "default": 1440,
-              "maximum": 43200.0,
-              "minimum": 0.0,
-              "title": "Update Interval Minutes",
-              "type": "number"
+              "anyOf": [
+                {
+                  "maximum": 43200.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Update Interval Minutes"
             }
           },
           "required": [
@@ -50642,6 +50660,15 @@
               "title": "Ready",
               "type": "boolean"
             },
+            "report_mode": {
+              "default": "legacy",
+              "enum": [
+                "legacy",
+                "observed"
+              ],
+              "title": "Report Mode",
+              "type": "string"
+            },
             "repos": {
               "items": {
                 "type": "string"
@@ -50772,6 +50799,21 @@
                 }
               ],
               "title": "Gitlab Token"
+            },
+            "report_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "legacy",
+                    "observed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Report Mode"
             },
             "repos": {
               "anyOf": [

@@ -32,6 +32,7 @@ from litellm.proxy.roi_calculator.settings import (
     StoredConnection,
     active_connection,
     connection_id,
+    enable_observed_reporting,
     get_roi_config_repository,
     load_settings,
     load_stored_settings,
@@ -147,8 +148,17 @@ async def save_observed_settings(
     if (status := await SyncStore(repository.prisma_client, "roi_observed").status()) and status.running:
         raise HTTPException(409, "Cancel the running sync before changing the connection.")
     original: Final = await load_stored_settings(repository)
-    selected_id: Final = connection_id(patch.source_provider, patch.api_url)
+    target_id: Final = connection_id(patch.source_provider, patch.api_url)
+    selected_id: Final = patch.connection_id or target_id
     selected: Final = next((entry for entry in stored_connections(original) if entry.id == selected_id), None)
+    if patch.connection_id and selected is None:
+        raise HTTPException(404, "This connection no longer exists. Reload Connections.")
+    if (
+        patch.connection_id
+        and selected_id != target_id
+        and any(entry.id == target_id for entry in stored_connections(original))
+    ):
+        raise HTTPException(409, "This provider and host are already connected. Edit that connection instead.")
     if patch.token is None and selected:
         await connected_settings(repository, transport, selected_id)
     refreshed: Final = await load_stored_settings(repository)
@@ -162,9 +172,12 @@ async def save_observed_settings(
     existing_token: Final = current.gitlab_token if patch.source_provider == "gitlab" else current.github_token
     token: Final = patch.token if patch.token is not None else "" if changed else existing_token.get_secret_value()
     updates: Final[Mapping[str, object]] = {
+        "report_mode": "observed",
         "source_provider": patch.source_provider,
         "repos": patch.repos,
-        "update_interval_minutes": patch.update_interval_minutes,
+        "update_interval_minutes": patch.update_interval_minutes
+        if patch.update_interval_minutes is not None
+        else current.update_interval_minutes,
         "identity_map": {} if changed else current.identity_map,
         "ignored_logins": () if changed else current.ignored_logins,
         "connection_type": "token" if patch.token is not None or changed else current.connection_type,
@@ -195,6 +208,7 @@ async def save_observed_settings(
         stored.estimator_key,
         encrypted if settings.source_provider == "gitlab" else stored.gitlab_token,
         revision=stored.revision,
+        replace_connection_id=patch.connection_id,
     )
     return await workspace_settings(repository)
 
@@ -335,6 +349,7 @@ async def _start_sync(
     if not entries:
         raise HTTPException(409, "Select at least one repository.")
     settings: Final = tuple([await connected_settings(repository, transport, entry.id) for entry in entries])
+    await enable_observed_reporting(repository)
 
     async def build(progress: Progress) -> ObservedData:
         from litellm.proxy.management_endpoints.roi_calculator_endpoints import gateway_user_reader, spend_reader

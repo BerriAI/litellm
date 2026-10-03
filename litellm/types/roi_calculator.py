@@ -25,6 +25,7 @@ def normalize_source_login(value: str, provider: str = "github") -> str:
 class ROISettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    report_mode: Literal["legacy", "observed"] = "legacy"
     source_provider: Literal["github", "gitlab"] = "github"
     connection_type: Literal["token", "app"] = "token"
     oauth_refresh_token: SecretStr = SecretStr("")
@@ -131,6 +132,7 @@ class ROISettings(BaseModel):
 class ROISettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    report_mode: Literal["legacy", "observed"] | None = None
     source_provider: Literal["github", "gitlab"] | None = None
     gitlab_api_url: str | None = None
     gitlab_token: str | None = None
@@ -150,6 +152,7 @@ class ROIEstimatorModel(BaseModel):
 
 
 class ROISettingsResponse(BaseModel):
+    report_mode: Literal["legacy", "observed"] = "legacy"
     source_provider: Literal["github", "gitlab"] = "github"
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     has_gitlab_token: bool = False

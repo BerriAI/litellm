@@ -39647,6 +39647,8 @@ export interface components {
         ObservedSettingsUpdate: {
             /** Api Url */
             api_url: string;
+            /** Connection Id */
+            connection_id?: string | null;
             /** Repos */
             repos: string[];
             /**
@@ -39656,11 +39658,8 @@ export interface components {
             source_provider: "github" | "gitlab";
             /** Token */
             token?: string | null;
-            /**
-             * Update Interval Minutes
-             * @default 1440
-             */
-            update_interval_minutes: number;
+            /** Update Interval Minutes */
+            update_interval_minutes?: number | null;
         };
         /** ObservedSource */
         ObservedSource: {
@@ -42044,6 +42043,12 @@ export interface components {
             };
             /** Ready */
             ready: boolean;
+            /**
+             * Report Mode
+             * @default legacy
+             * @enum {string}
+             */
+            report_mode: "legacy" | "observed";
             /** Repos */
             repos: string[];
             /**
@@ -42073,6 +42078,8 @@ export interface components {
             gitlab_api_url?: string | null;
             /** Gitlab Token */
             gitlab_token?: string | null;
+            /** Report Mode */
+            report_mode?: ("legacy" | "observed") | null;
             /** Repos */
             repos?: string[] | null;
             /** Source Provider */

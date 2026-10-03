@@ -304,6 +304,7 @@ async def save_grant(
         else previous.oauth_refresh_token
     )
     fields: Final[Mapping[str, object]] = {
+        "report_mode": "observed" if previous is None else current.report_mode,
         "source_provider": config.provider,
         "connection_type": "app",
         "repos": () if changed else current.repos,

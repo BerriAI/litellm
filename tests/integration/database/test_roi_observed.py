@@ -649,3 +649,124 @@ async def test_http_sync_combines_providers_retains_period_and_recovers_invalid_
             rebuilt is not None
             and (rebuilt.periods.current.window.end - rebuilt.periods.current.window.start).days == 27
         )
+
+
+@pytest.mark.asyncio
+async def test_connection_edits_replace_only_the_selected_host_and_keep_the_workspace_schedule(
+    repository: ConfigRepository,
+) -> None:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.roi_observed_endpoints import get_observed_transport, router
+    from litellm.proxy.roi_calculator.settings import get_roi_config_repository, stored_connections
+    from litellm.types.roi_calculator import ROISettings
+    from litellm.types.roi_observed import ObservedSettings
+
+    legacy: Final = ROISettings(repos=("org/service",), estimator_model="legacy-model", update_interval_minutes=60)
+    await save_settings(repository, legacy, "", "")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if "/repos/" in request.url.path:
+            return httpx.Response(200, json={"full_name": "org/service"})
+        if "/projects/" in request.url.path:
+            return httpx.Response(200, json={"id": 1, "path_with_namespace": "org/service"})
+        raise AssertionError(str(request.url))
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_roi_config_repository] = lambda: repository
+    app.dependency_overrides[get_observed_transport] = lambda: httpx.MockTransport(respond)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test") as client:
+        assert (await client.get("/roi-calculator/observed/settings")).status_code == 200
+        assert (await load_settings(repository)) == legacy
+        github: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "source_provider": "github",
+                "api_url": "https://api.github.com",
+                "token": "github-token",
+                "repos": ["org/service"],
+                "update_interval_minutes": 30,
+            },
+        )
+        assert github.status_code == 200, github.text
+        gitlab: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "source_provider": "gitlab",
+                "api_url": "https://gitlab.com/api/v4",
+                "token": "gitlab-token",
+                "repos": ["org/service"],
+            },
+        )
+        assert gitlab.status_code == 200, gitlab.text
+        before: Final = stored_connections(await load_stored_settings(repository))
+        edited: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "connection_id": github.json()["id"],
+                "source_provider": "github",
+                "api_url": "https://git.example.test/api/v3",
+                "token": "enterprise-token",
+                "repos": ["org/service"],
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        settings: Final = ObservedSettings.model_validate(edited.json())
+        assert len(settings.connections) == 2
+        assert {entry.api_url for entry in settings.connections} == {
+            "https://git.example.test/api/v3",
+            "https://gitlab.com/api/v4",
+        }
+        assert all(entry.update_interval_minutes == 30 for entry in settings.connections)
+        after: Final = stored_connections(await load_stored_settings(repository))
+        assert next(entry for entry in after if entry.source_provider == "gitlab") == next(
+            entry for entry in before if entry.source_provider == "gitlab"
+        )
+        assert (await load_settings(repository)).report_mode == "observed"
+        stale: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "connection_id": github.json()["id"],
+                "source_provider": "github",
+                "api_url": "https://api.github.com",
+                "repos": [],
+            },
+        )
+        assert stale.status_code == 404, stale.text
+        duplicate: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "connection_id": settings.id,
+                "source_provider": "gitlab",
+                "api_url": "https://gitlab.com/api/v4",
+                "repos": [],
+            },
+        )
+        assert duplicate.status_code == 409, duplicate.text
+        assert stored_connections(await load_stored_settings(repository)) == after
+        manual: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "source_provider": "gitlab",
+                "api_url": "https://gitlab.com/api/v4",
+                "repos": ["org/service"],
+                "update_interval_minutes": 0,
+            },
+        )
+        assert manual.status_code == 200, manual.text
+        reselected: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "connection_id": settings.id,
+                "source_provider": "github",
+                "api_url": "https://git.example.test/api/v3",
+                "repos": ["org/service"],
+            },
+        )
+        assert reselected.status_code == 200, reselected.text
+        assert all(
+            entry.update_interval_minutes == 0
+            for entry in ObservedSettings.model_validate(reselected.json()).connections
+        )

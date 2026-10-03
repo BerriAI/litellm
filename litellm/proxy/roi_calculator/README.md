@@ -12,7 +12,7 @@ For GitHub tokens, grant read access to metadata, pull requests and issues. GitL
 
 ## Configure app authorization
 
-Register a GitHub App with read-only repository permissions for metadata, pull requests and issues. Enable expiring user access tokens and leave authorization during installation disabled, since the gateway starts authorization after installation
+Register a GitHub App with read-only repository permissions for metadata, pull requests and issues. Enable expiring user access tokens and leave authorization during installation disabled, since the gateway starts authorization after installation. Generate a private key in the app settings to allow installation and store it securely. The gateway uses a generated client secret for authorization and does not need the private key
 
 Register a confidential GitLab OAuth application with `read_api` and `read_user` scopes
 
@@ -32,7 +32,9 @@ Agent-authored changes count for a person only when the supported agent metadata
 
 ## Sync behavior
 
-The default refresh interval is daily. The observed settings API accepts `update_interval_minutes: 0` for manual updates. A cancelled or failed sync preserves the last complete report
+The default refresh interval is daily and applies to every connection in the workspace. Adding or editing a connection preserves it unless `update_interval_minutes` is supplied. The observed settings API accepts `update_interval_minutes: 0` for manual updates. A cancelled or failed sync preserves the last complete report
+
+Existing settings retain `report_mode: legacy` and their scheduled reports until an administrator saves a connection, authorizes an app, or starts an observed sync. Reading the new dashboard alone does not change the mode. The legacy settings API can explicitly select `report_mode: legacy` again
 
 GitHub collection splits large searches into smaller date ranges to avoid its search-result limit. Both providers validate pagination and reject incomplete responses instead of publishing partial counts
 

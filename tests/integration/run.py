@@ -80,7 +80,6 @@ def main() -> int:
         "INTEGRATION_RESULTS_DIR": str(output),
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
     }
-    coverage_path: Final = os.environ.get("INTEGRATION_TEST_COVERAGE")
     result: Final = subprocess.call(
         [
             sys.executable,
@@ -97,7 +96,6 @@ def main() -> int:
             "--timeout=90",
             "--durations=15",
             "--tb=short",
-            *(("--cov=litellm", f"--cov-report=xml:{coverage_path}") if coverage_path else ()),
             f"--hypothesis-seed={options.seed}",
             f"--integration-order-seed={options.order_seed}",
             f"--junitxml={output / 'junit.xml'}",

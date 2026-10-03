@@ -30,6 +30,7 @@ from litellm.proxy.roi_calculator.branch_spend import BranchSpendDatabase, read_
 from litellm.proxy.roi_calculator.estimator import CompletionCaller, EstimatorModel
 from litellm.proxy.roi_calculator.github import SourceError
 from litellm.proxy.roi_calculator.settings import (
+    active_connection,
     get_roi_config_repository,
     load_settings,
     load_stored_settings,
@@ -202,6 +203,7 @@ def _public_settings(settings: ROISettings) -> ROISettingsResponse:
     choices: Final = _router_estimator_choices()
     models: Final = tuple(choice.model_name for choice in choices)
     return ROISettingsResponse(
+        report_mode=settings.report_mode,
         source_provider=settings.source_provider,
         gitlab_api_url=settings.gitlab_api_url,
         has_gitlab_token=bool(settings.gitlab_token.get_secret_value()),
@@ -391,6 +393,7 @@ async def update_roi_calculator_settings(
     )
     try:
         settings: Final = ROISettings(
+            report_mode=patch.report_mode or current.report_mode,
             connection_type="token"
             if source_changed or token_was_supplied or "gitlab_token" in patch.model_fields_set
             else current.connection_type,
@@ -421,7 +424,13 @@ async def update_roi_calculator_settings(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from None
     await save_settings(
-        repository, settings, encrypted_token, encrypted_estimator_key, encrypted_gitlab, revision=stored.revision
+        repository,
+        settings,
+        encrypted_token,
+        encrypted_estimator_key,
+        encrypted_gitlab,
+        revision=stored.revision,
+        replace_connection_id=active_connection(stored).id,
     )
     if source_changed:
         await repository.set_param(_REPORT_KEY, None)
@@ -569,6 +578,7 @@ async def update_roi_calculator_identity_map(
         else MappingProxyType({**current.identity_map, login: new_email})
     )
     settings: Final = ROISettings(
+        report_mode=current.report_mode,
         connection_type=current.connection_type,
         oauth_refresh_token=current.oauth_refresh_token,
         oauth_expires_at=current.oauth_expires_at,
@@ -604,7 +614,8 @@ async def update_roi_calculator_identity_map(
 
 def _next_update(settings: ROISettings, status: ROISyncStatus, report: ROIReport | None) -> datetime | None:
     if (
-        not report
+        settings.report_mode != "legacy"
+        or not report
         or not settings.repos
         or not settings.estimator_model
         or not settings.update_interval_minutes
@@ -632,8 +643,34 @@ def register_scheduled_sync(scheduler: AsyncIOScheduler) -> None:
 
 async def run_scheduled_sync() -> None:
     from litellm.proxy.management_endpoints.roi_observed_endpoints import run_observed_schedule
+    from litellm.proxy.proxy_server import prisma_client
 
-    await run_observed_schedule()
+    if prisma_client is None:
+        return
+    repository: Final = ConfigRepository(prisma_client, use_writer=True)
+    settings: Final = await load_settings(repository)
+    if settings.report_mode == "observed":
+        await run_observed_schedule()
+        return
+    if not settings.update_interval_minutes or not _public_settings(settings).ready:
+        return
+    store: Final = SyncStore(prisma_client)
+    status: Final = await store.status() or _SYNC_MANAGER.status
+    report: Final = await _load_report(repository, settings)
+    next_update: Final = _next_update(settings, status, report)
+    if next_update is None or next_update > datetime.now(timezone.utc):
+        return
+    await _SYNC_MANAGER.start(
+        settings,
+        repository,
+        spend_reader(repository),
+        _completion_caller(settings),
+        estimator_models=_router_estimator_models(settings.estimator_model),
+        coordinator=store,
+        scheduled_interval=settings.update_interval_minutes,
+        branch_spend_reader=branch_spend_reader(repository, settings),
+        gateway_user_reader=gateway_user_reader(repository),
+    )
 
 
 @router.post("/roi-calculator/connections/test", tags=_ROI_TAGS)

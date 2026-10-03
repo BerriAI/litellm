@@ -42,6 +42,7 @@ class StoredROISettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     revision: int = 0
+    report_mode: Literal["legacy", "observed"] = "legacy"
     source_provider: Literal["github", "gitlab"] = "github"
     connection_type: Literal["token", "app"] = "token"
     oauth_refresh_token: str = ""
@@ -155,6 +156,7 @@ async def load_settings(
     token: Final = decrypt_value_helper(stored.github_token, _SETTINGS_KEY) if stored.github_token else ""
     try:
         return ROISettings(
+            report_mode=stored.report_mode,
             source_provider=stored.source_provider,
             connection_type=stored.connection_type,
             oauth_refresh_token=SecretStr(decrypt_value_helper(stored.oauth_refresh_token, _SETTINGS_KEY) or "")
@@ -189,10 +191,12 @@ async def save_settings(
     encrypted_estimator_key: str,
     encrypted_gitlab_token: str = "",
     revision: int = 0,
+    replace_connection_id: str | None = None,
 ) -> None:
     previous: Final = await load_stored_settings(repository)
     stored: Final = StoredROISettings(
         revision=revision + 1,
+        report_mode=settings.report_mode,
         source_provider=settings.source_provider,
         connection_type=settings.connection_type,
         oauth_refresh_token=TypeAdapter(str).validate_python(
@@ -218,12 +222,24 @@ async def save_settings(
     combined: Final = stored.model_copy(
         update={
             "connections": tuple(
-                {**{entry.id: entry for entry in stored_connections(previous)}, active.id: active}.values()
+                {
+                    **{entry.id: entry for entry in stored_connections(previous) if entry.id != replace_connection_id},
+                    active.id: active,
+                }.values()
             )
         }
     )
     if not await repository.set_param_if_revision(_SETTINGS_KEY, combined.model_dump(mode="json"), revision):
         raise HTTPException(409, "Settings changed while you were editing. Reload and try again.")
+
+
+async def enable_observed_reporting(repository: ConfigRepository) -> None:
+    stored: Final = await load_stored_settings(repository)
+    if stored.report_mode == "observed":
+        return
+    updated: Final = stored.model_copy(update={"report_mode": "observed", "revision": stored.revision + 1})
+    if not await repository.set_param_if_revision(_SETTINGS_KEY, updated.model_dump(mode="json"), stored.revision):
+        raise HTTPException(409, "Settings changed while starting the report. Reload and try again.")
 
 
 async def save_connection_identities(

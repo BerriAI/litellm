@@ -213,11 +213,6 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-test_coverage=""
-if [ "$suite" = database ] && [ "$mode" = standard ]; then
-  test_coverage="$PWD/$results/coverage.xml"
-fi
-
 node_files=()
 if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
   split="$(.venv/bin/python tests/integration/run.py "$suite" --list \
@@ -241,7 +236,6 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
-  INTEGRATION_TEST_COVERAGE="$test_coverage" \
   .venv/bin/python tests/integration/run.py "$suite" --results "$results" "${node_files[@]}"
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then

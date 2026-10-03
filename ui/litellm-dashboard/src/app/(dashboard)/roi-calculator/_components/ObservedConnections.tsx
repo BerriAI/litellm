@@ -186,6 +186,8 @@ function ConnectionMethod({
   connect: () => void;
 }) {
   const connectLabel = method === "app" ? `Connect ${label}` : "Continue";
+  const sameSource = connected.source_provider === provider && connected.api_url === apiUrl;
+  const hasSavedToken = sameSource && connected.has_token && connected.connection_type === "token";
   return (
     <>
       <div className="grid grid-cols-2 gap-2">
@@ -213,12 +215,7 @@ function ConnectionMethod({
           onToken={setToken}
           apiUrl={apiUrl}
           onUrl={setApiUrl}
-          hasToken={
-            connected.source_provider === provider &&
-            connected.api_url === apiUrl &&
-            connected.has_token &&
-            connected.connection_type === "token"
-          }
+          hasToken={hasSavedToken}
         />
       )}
       {method === "app" && <AppMessage configured={Boolean(apps?.[provider].configured)} label={label} />}
@@ -430,6 +427,7 @@ export default function ObservedConnections({
         await apiClient.put<unknown>("/roi-calculator/observed/settings", {
           accessToken,
           body: {
+            connection_id: savedSettings.connections?.find((entry) => entry.id === connected.id)?.id,
             source_provider: provider,
             api_url: apiUrl,
             token: token || (keepToken ? undefined : ""),
@@ -458,6 +456,7 @@ export default function ObservedConnections({
         await apiClient.put<unknown>("/roi-calculator/observed/settings", {
           accessToken,
           body: {
+            connection_id: connected.id,
             source_provider: connected.source_provider,
             api_url: connected.api_url,
             repos: repositoryNames(repos),

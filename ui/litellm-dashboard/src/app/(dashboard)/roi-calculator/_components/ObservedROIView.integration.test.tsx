@@ -124,7 +124,7 @@ describe("observed ROI dashboard", () => {
     const user = userEvent.setup();
     render(<ObservedROIView accessToken="test-only-gateway-token" />);
     await user.click(await screen.findByRole("combobox", { name: "Reporting period" }));
-    await user.click(screen.getByRole("option", { name: "Last 7 days" }));
+    await user.click(await screen.findByRole("option", { name: "Last 7 days" }));
     await waitFor(() => expect(requested).toEqual(["7"]));
     expect(await screen.findByText(/Comparing with Sep 15.*Sep 21/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Reporting period" })).toHaveTextContent("Last 7 days");

@@ -189,11 +189,12 @@ class ObservedSettings(ObservedConnection):
 class ObservedSettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    connection_id: str | None = Field(default=None, max_length=100)
     source_provider: Literal["github", "gitlab"]
     api_url: str
     token: str | None = None
     repos: tuple[str, ...]
-    update_interval_minutes: float = Field(default=1440, ge=0, le=43200, allow_inf_nan=False)
+    update_interval_minutes: float | None = Field(default=None, ge=0, le=43200, allow_inf_nan=False)
 
 
 class ObservedApp(ObservedModel):

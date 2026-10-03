@@ -5,6 +5,7 @@ import ObservedConnections from "./ObservedConnections";
 import type { ObservedSettings } from "./observedData";
 
 const settings: ObservedSettings = {
+  id: "initial-github",
   source_provider: "github",
   api_url: "https://api.github.com",
   repos: [],
@@ -17,6 +18,49 @@ const app = { configured: true, api_url: null, callback_url: null };
 afterEach(() => vi.unstubAllGlobals());
 
 describe("observed ROI connections", () => {
+  it("identifies the saved connection when editing its host", async () => {
+    const writes: unknown[] = [];
+    const existing = { ...settings, id: "saved-github", has_token: true, repos: ["org/service"], ready: true };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const path = new URL(input, "http://localhost").pathname;
+        if (path.endsWith("/apps")) return Response.json({ github: app, gitlab: app });
+        if (path.endsWith("/repositories")) return Response.json({ repositories: [], has_more: false });
+        if (path.endsWith("/settings")) {
+          writes.push(JSON.parse(String(init.body)));
+          return Response.json({ ...existing, id: "enterprise-github", api_url: "https://git.example.test/api/v3" });
+        }
+        throw new Error(path);
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <ObservedConnections
+        accessToken="gateway-test-token"
+        settings={{ ...existing, connections: [existing] }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Edit GitHub api.github.com" }));
+    await user.click(screen.getByRole("button", { name: "Change connection" }));
+    await user.click(screen.getByText("Self-hosted instance"));
+    fireEvent.change(screen.getByLabelText("API URL"), { target: { value: "https://git.example.test/api/v3" } });
+    fireEvent.change(screen.getByLabelText("GitHub access token"), { target: { value: "enterprise-test-token" } });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("heading", { name: "Choose repositories" })).toBeInTheDocument();
+    expect(writes).toEqual([
+      {
+        connection_id: "saved-github",
+        source_provider: "github",
+        api_url: "https://git.example.test/api/v3",
+        token: "enterprise-test-token",
+        repos: [],
+        update_interval_minutes: 1440,
+      },
+    ]);
+  });
   it("starts a GitHub installation when switching from a GitLab app connection", async () => {
     const starts = vi.fn();
     vi.stubGlobal(
@@ -70,6 +114,7 @@ describe("observed ROI connections", () => {
             const request = JSON.parse(String(init.body)) as { repos: string[] };
             const connected = {
               ...settings,
+              id: `saved-${provider}`,
               source_provider: provider,
               api_url: apiUrl,
               has_token: true,
@@ -107,7 +152,13 @@ describe("observed ROI connections", () => {
         },
         {
           path: "/roi-calculator/observed/settings",
-          body: { source_provider: provider, api_url: apiUrl, repos: ["org/service"], update_interval_minutes: 1440 },
+          body: {
+            connection_id: `saved-${provider}`,
+            source_provider: provider,
+            api_url: apiUrl,
+            repos: ["org/service"],
+            update_interval_minutes: 1440,
+          },
         },
         { path: "/roi-calculator/observed/sync", body: undefined },
       ]);

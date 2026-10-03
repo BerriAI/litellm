@@ -331,8 +331,14 @@ def test_schedule_rejects_intervals_under_five_minutes(interval: float) -> None:
 
 
 @pytest.mark.parametrize("anchor", ("2026-09-30T12:00:00", "2026-09-30T12:00:00Z", "2026-09-30T14:00:00+02:00"))
-def test_schedule_normalizes_legacy_and_offset_timestamps(anchor: str) -> None:
-    settings: Final = ROISettings(repos=("example/repo",), estimator_model="estimator", update_interval_minutes=60)
+@pytest.mark.parametrize("observed", (False, True))
+def test_schedule_normalizes_timestamps_and_respects_report_mode(anchor: str, observed: bool) -> None:
+    settings: Final = ROISettings(
+        repos=("example/repo",),
+        estimator_model="estimator",
+        update_interval_minutes=60,
+        report_mode="observed" if observed else "legacy",
+    )
     status: Final = ROISyncStatus(
         running=False,
         phase="error",
@@ -346,7 +352,8 @@ def test_schedule_normalizes_legacy_and_offset_timestamps(anchor: str) -> None:
         finished_at=anchor,
     )
     report: Final = sample_report(datetime(2026, 9, 30, tzinfo=timezone.utc))
-    assert _next_update(settings, status, report) == datetime(2026, 9, 30, 13, tzinfo=timezone.utc)
+    expected: Final = None if observed else datetime(2026, 9, 30, 13, tzinfo=timezone.utc)
+    assert _next_update(settings, status, report) == expected
 
 
 def test_manual_match_recalculates_saved_report_and_removal_restores_cohort() -> None:
