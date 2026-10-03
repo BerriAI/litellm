@@ -128,15 +128,17 @@ export function InvestigationsView({
     void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
     void client.invalidateQueries({ queryKey: lensKeys.histories() });
   };
-  const update = async (write: LensWrite) => {
+  const update = async (write: LensWrite): Promise<boolean> => {
     setBusy(true);
     setError("");
     try {
       await updateLens.mutateAsync(write);
-      await client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not update lens");
+      return false;
     } finally {
+      await client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
       setBusy(false);
     }
   };
@@ -170,10 +172,10 @@ export function InvestigationsView({
   };
   const changeFinding = async (status: Finding["status"], reason: string) => {
     if (peeked) {
-      await update((current) =>
+      const saved = await update((current) =>
         Promise.all(peeked.sources.map((s) => current.reviewFinding(s.lens.id, s.finding.id, status, reason))),
       );
-      closeFinding();
+      if (saved) closeFinding();
       return;
     }
     if (!lens || !finding) return;
