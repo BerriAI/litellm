@@ -46,6 +46,7 @@ def patched_models(monkeypatch):
     deployment = MagicMock()
     deployment.litellm_params.model = "gpt-4"
     router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
+    router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
 
@@ -461,10 +462,14 @@ def test_codex_format_carries_configured_service_tiers(client, auth_as, patched_
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
 def test_codex_service_tiers_are_read_for_the_key_team(client, auth_as, patched_models, params):
-    """A tier is read off the deployments the key's team can route to, so both listing paths hand the
-    router the key's team; a key without one reads every deployment of the name."""
+    """A tier and the upstream model that picks Codex's stock entry are read off the deployments the
+    key's team can route to, so both listing paths hand the router the key's team, and no team for a
+    key without one."""
     patched_models.get_configured_service_tiers = MagicMock(
         side_effect=lambda model_name, team_id=None: (["ultrafast"],) if team_id == "team-1" else (None,)
+    )
+    patched_models.get_routable_upstream_model = MagicMock(
+        side_effect=lambda model_name, team_id=None: "openai/gpt-5.5" if team_id == "team-1" else "gpt-4"
     )
 
     with auth_as(team_id="team-1"):
@@ -474,6 +479,8 @@ def test_codex_service_tiers_are_read_for_the_key_team(client, auth_as, patched_
 
     assert [[t["id"] for t in m["service_tiers"]] for m in team_response.json()["models"]] == [["ultrafast"]] * 2
     assert [m["service_tiers"] for m in teamless_response.json()["models"]] == [[], []]
+    assert all(m["supported_reasoning_levels"] for m in team_response.json()["models"])
+    assert [m["supported_reasoning_levels"] for m in teamless_response.json()["models"]] == [[], []]
 
 
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])

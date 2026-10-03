@@ -472,6 +472,34 @@ def test_a_tiered_model_listed_last_survives_the_byte_cut(gateway: Gateway) -> N
         assert [entry["priority"] for entry in entries] == [listing.index(slug) for slug in slugs], slugs
 
 
+def test_an_oversized_tiered_model_is_left_out_alone(gateway: Gateway) -> None:
+    """A tier description longer than Codex's whole byte limit makes an entry that can never fit;
+    it is taken first as a tiered entry, so the cut passes over it and still keeps the models after it."""
+    with gateway.scenario() as scenario:
+        plain: Final = scenario.model()
+        oversized_tier: Final = {"id": "huge", "name": "Huge", "description": "x" * (1024 * 1024)}
+        oversized: Final = scenario.model(model_info={"service_tiers": [oversized_tier]})
+        tiered: Final = scenario.model(model_info={"service_tiers": ["ultrafast"]})
+        key: Final = scenario.key(models=[plain, oversized, tiered])
+        listing: Final = eventually(
+            lambda: _plain_ids(gateway, key=key),
+            lambda ids: set(ids) == {plain, oversized, tiered},
+            seconds=CONVERGENCE_SECONDS,
+        )
+        assert listing == [plain, oversized, tiered], listing
+
+        def kept() -> tuple[int, tuple[tuple[JsonValue, JsonValue, tuple[str, ...]], ...]]:
+            response: Final = _catalog_response(gateway, key=key)
+            return len(response.content), tuple(
+                (entry["slug"], entry["priority"], _tier_ids(entry)) for entry in _entries(response)
+            )
+
+        expected: Final = ((plain, 0, ()), (tiered, 2, ("ultrafast",)))
+        size, entries = _settled(kept, lambda value: value[1] == expected)
+        assert entries == expected, entries
+        assert size <= 1024 * 1024, size
+
+
 def test_model_info_echoes_configured_tiers(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         configured: Final = ["priority", {"id": "ultrafast", "name": "Ultra", "description": "fast lane"}]

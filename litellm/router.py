@@ -10576,30 +10576,54 @@ class Router:
         target: Final = self._get_model_from_alias(model_name)
         return target if target is not None else model_name
 
-    def get_configured_service_tiers(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
+    def _routable_deployments(self, model_name: str, team_id: str | None) -> tuple[DeploymentTypedDict, ...]:
         """
-        Return the service_tiers value each routable deployment of model_name
-        configures in its model_info, unvalidated and in model_list order, None
-        for a deployment that sets none, via the same O(1) index lookup as
-        get_configured_display_name; the caller validates the shape it expects
-        and decides how the deployments combine.
-
-        Routable means what a request from team_id can reach, selected the way
-        routing selects deployments: a `model_group_alias` reads its target's
-        deployments, another team's deployment of the name is left out, and so
-        is one an admin paused via `LiteLLM_ProxyModelTable.blocked`.
+        The deployments a request from team_id to model_name can route to, in
+        model_list order and via the same O(1) index lookup as
+        get_configured_display_name, selected the way routing selects them: a
+        `model_group_alias` reads its target's deployments, another team's
+        deployment of the name is left out, a caller with no team reads the
+        deployments no team owns (every deployment of the name when a team owns
+        each one, which is what an admin's request routes to), and one an admin
+        paused via `LiteLLM_ProxyModelTable.blocked` is left out.
 
         Returns an empty tuple for wildcard-expanded or unknown names.
         """
-        model_infos: Final = tuple(
-            _configured_model_info(deployment)
-            for deployment in self._get_all_deployments(
-                model_name=self.routable_model_group(model_name), team_id=team_id
-            )
+        named: Final = self._get_all_deployments(model_name=self.routable_model_group(model_name), team_id=team_id)
+        usable: Final = tuple(
+            deployment for deployment in named if self._deployment_usable_by_team(deployment, team_id)
         )
         return tuple(
-            model_info.get("service_tiers") for model_info in model_infos if model_info.get("blocked") is not True
+            deployment
+            for deployment in (usable or named)
+            if _configured_model_info(deployment).get("blocked") is not True
         )
+
+    def get_configured_service_tiers(self, model_name: str, team_id: str | None = None) -> tuple[object, ...]:
+        """
+        Return the service_tiers value each deployment a request from team_id
+        to model_name can route to (see _routable_deployments) configures in
+        its model_info, unvalidated and in model_list order, None for a
+        deployment that sets none; the caller validates the shape it expects
+        and decides how the deployments combine.
+
+        Returns an empty tuple for wildcard-expanded or unknown names.
+        """
+        return tuple(
+            _configured_model_info(deployment).get("service_tiers")
+            for deployment in self._routable_deployments(model_name, team_id)
+        )
+
+    def get_routable_upstream_model(self, model_name: str, team_id: str | None = None) -> str | None:
+        """
+        Return the `litellm_params.model` of the first deployment a request
+        from team_id to model_name can route to (see _routable_deployments).
+
+        Returns None for wildcard-expanded or unknown names, and when the team
+        can route to no deployment of the name.
+        """
+        deployment: Final = next(iter(self._routable_deployments(model_name, team_id)), None)
+        return deployment["litellm_params"].get("model") if deployment is not None else None
 
     def get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
         """

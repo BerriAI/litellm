@@ -129,6 +129,101 @@ def test_yaml_tiers_and_alias_in_owned_proxy(gateway: Gateway, tmp_path: Path) -
         assert string_value(catalog[alias]["base_instructions"]), alias
 
 
+ROOT: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+BUNDLED_STOCK_PATH: Final = ROOT / "litellm" / "proxy" / "common_utils" / "codex_bundled_models_0.159.3.json"
+STOCK_UPSTREAM: Final = "gpt-5.5"
+
+
+def _bundled_stock_entry(slug: str) -> dict[str, JsonValue]:
+    models: Final = JSON_OBJECT.validate_json(BUNDLED_STOCK_PATH.read_bytes())["models"]
+    assert isinstance(models, list), slug
+    (entry,) = (object_value(model) for model in models if object_value(model)["slug"] == slug)
+    return entry
+
+
+def _write_team_owned_config(
+    directory: Path, upstream_url: str, stock_team: str, plain_team: str, owned: str, mixed: str, alias: str
+) -> Path:
+    config: Final = directory / f"codex_catalog_teams_{uuid.uuid4().hex}.yaml"
+    plain_params: Final = {
+        "model": "openai/gpt-4o-mini",
+        "api_base": f"{upstream_url}/v1",
+        "api_key": "integration-provider-key",
+    }
+    stock_params: Final = {**plain_params, "model": f"openai/{STOCK_UPSTREAM}"}
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [
+                    {"model_name": owned, "litellm_params": stock_params, "model_info": {"team_id": stock_team}},
+                    {
+                        "model_name": owned,
+                        "litellm_params": plain_params,
+                        "model_info": {"team_id": plain_team, "service_tiers": ["flex"]},
+                    },
+                    {"model_name": mixed, "litellm_params": stock_params, "model_info": {"team_id": stock_team}},
+                    {"model_name": mixed, "litellm_params": plain_params, "model_info": {"service_tiers": ["flex"]}},
+                ],
+                "router_settings": {"model_group_alias": {alias: owned}},
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                },
+            }
+        )
+    )
+    return config
+
+
+@pytest.mark.timeout(240)
+def test_team_owned_deployments_of_one_name_serve_each_team_its_own_upstream(gateway: Gateway, tmp_path: Path) -> None:
+    """Two teams own a deployment of one model name (and of a `model_group_alias` of it): Codex's stock
+    entry for the first deployment's upstream goes only to the team whose requests reach it, and a
+    caller outside the owning team reads the deployment no team owns."""
+    owned: Final = f"codex-team-owned-{uuid.uuid4().hex}"
+    mixed: Final = f"codex-team-mixed-{uuid.uuid4().hex}"
+    alias: Final = f"codex-team-alias-{uuid.uuid4().hex}"
+    stock: Final = _bundled_stock_entry(STOCK_UPSTREAM)
+    assert stock["supported_reasoning_levels"] != [] and stock["service_tiers"] != [], stock
+    with gateway.scenario() as scenario:
+        stock_team: Final = scenario.team()
+        plain_team: Final = scenario.team()
+        stock_key: Final = scenario.key(team_id=stock_team, models=[owned, alias, mixed])
+        plain_key: Final = scenario.key(team_id=plain_team, models=[owned, alias, mixed])
+        teamless_key: Final = scenario.key(models=[mixed])
+        config: Final = _write_team_owned_config(
+            tmp_path, gateway.upstream_url, stock_team, plain_team, owned, mixed, alias
+        )
+        with owned_proxy(gateway, tmp_path, {"STORE_MODEL_IN_DB": "False"}, config=config, workers=2) as candidate:
+
+            def stable_catalog(key: str) -> dict[str, dict[str, JsonValue]]:
+                readings: Final = tuple(
+                    _entries(_catalog_response(candidate, key=key)) for _ in range(CONSISTENT_READS)
+                )
+                assert all(reading == readings[0] for reading in readings), readings
+                return _by_slug(readings[0])
+
+            for_stock_team: Final = stable_catalog(stock_key)
+            for_plain_team: Final = stable_catalog(plain_key)
+            for_teamless: Final = stable_catalog(teamless_key)
+        assert sorted(for_stock_team) == sorted(for_plain_team) == sorted((owned, alias, mixed)), sorted(for_stock_team)
+        assert sorted(for_teamless) == [mixed], sorted(for_teamless)
+        for slug in (owned, alias):
+            assert for_stock_team[slug]["supported_reasoning_levels"] == stock["supported_reasoning_levels"], slug
+            assert for_stock_team[slug]["model_messages"] == stock["model_messages"], slug
+            assert for_stock_team[slug]["service_tiers"] == stock["service_tiers"], slug
+            assert for_plain_team[slug]["supported_reasoning_levels"] == [], for_plain_team[slug]
+            assert "model_messages" not in for_plain_team[slug], slug
+            assert string_value(for_plain_team[slug]["base_instructions"]), slug
+            assert for_plain_team[slug]["service_tiers"] == [_generic_tier("flex")], for_plain_team[slug]
+        assert for_stock_team[mixed]["supported_reasoning_levels"] == stock["supported_reasoning_levels"], mixed
+        assert for_stock_team[mixed]["service_tiers"] == [], for_stock_team[mixed]
+        for outsider in (for_plain_team, for_teamless):
+            assert outsider[mixed]["supported_reasoning_levels"] == [], outsider[mixed]
+            assert "model_messages" not in outsider[mixed], mixed
+            assert outsider[mixed]["service_tiers"] == [_generic_tier("flex")], outsider[mixed]
+
+
 def _worker_pids(root_pid: int) -> frozenset[int]:
     def is_worker(process: psutil.Process) -> bool:
         try:

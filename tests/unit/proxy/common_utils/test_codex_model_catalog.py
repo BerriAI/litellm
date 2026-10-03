@@ -296,7 +296,7 @@ def test_non_chat_and_wildcard_rows_are_left_out_of_the_catalog():
     assert body.left_out == ()
 
 
-def test_body_stops_before_the_entry_that_would_cross_the_byte_limit():
+def test_body_leaves_out_the_entry_that_would_cross_the_byte_limit():
     rows = tuple(_row(f"model-{index}") for index in range(6))
     unlimited = _body(*rows, byte_limit=None)
     limit = len(unlimited.json.encode()) - 1
@@ -328,6 +328,36 @@ def test_entries_offering_a_tier_survive_the_byte_limit_ahead_of_the_rest_and_ke
     assert [entry["priority"] for entry in models] == [1, 3]
     assert models == [unlimited[1], unlimited[3]]
     assert len(body.json.encode()) <= two_entries_only
+
+
+def test_an_entry_too_large_for_the_bytes_left_is_passed_over_and_the_smaller_ones_after_it_are_kept():
+    """A tier description longer than the whole byte limit sorts first (tiered) and can never fit,
+    and a long display name fits an empty body but not what is left after the entries ahead of it."""
+    kept_rows = (
+        _row("plain-first"),
+        _row("tiered-small", service_tiers=["ultrafast"]),
+        _row("plain-last"),
+    )
+    limit = len(_body(*kept_rows, byte_limit=None).json.encode())
+    oversized_tier = {"id": "huge", "name": "Huge", "description": "x" * limit}
+    rows = (
+        kept_rows[0],
+        _row("tiered-oversized", service_tiers=[oversized_tier]),
+        kept_rows[1],
+        _row("plain-wide", display_name="w" * 200),
+        kept_rows[2],
+    )
+    unlimited = _models(*rows, byte_limit=None)
+    assert len(_body(rows[3], byte_limit=None).json.encode()) < limit
+
+    body = _body(*rows, byte_limit=limit)
+    models = json.loads(body.json)["models"]
+
+    assert body.listed == ("plain-first", "tiered-small", "plain-last")
+    assert body.left_out == ("tiered-oversized", "plain-wide")
+    assert models == [unlimited[0], unlimited[2], unlimited[4]]
+    assert [entry["priority"] for entry in models] == [0, 2, 4]
+    assert len(body.json.encode()) <= limit
 
 
 def test_unlimited_body_keeps_every_entry():
@@ -457,7 +487,46 @@ def test_model_list_body_offers_a_tier_only_off_the_deployments_the_key_team_can
 
     assert offered("team-1") == ["ultrafast"]
     assert offered("team-2") == []
-    assert offered(None) == []
+    assert offered(None) == ["ultrafast"]
+
+
+def test_model_list_body_takes_stock_metadata_off_the_deployment_the_key_team_routes_to():
+    """Two teams own a deployment of one name: Codex's stock gpt-5.5 entry goes only to the team whose
+    requests reach gpt-5.5, under the name and under a `model_group_alias` of it."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "coding-model",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {"team_id": "team-1"},
+            },
+            {
+                "model_name": "coding-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["flex"]},
+            },
+        ],
+        model_group_alias={"coding": "coding-model"},
+    )
+    listing = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"}
+        for name in ("coding-model", "coding")
+    )
+    entries = (("coding-model", "coding-model"), ("coding", "coding"))
+    stock = bundled_codex_models()["gpt-5.5"].model_dump(mode="json")
+
+    def served(team_id):
+        return json.loads(codex_model_list_body(listing, entries, router, team_id))["models"]
+
+    for entry in served("team-1"):
+        assert entry["model_messages"] == stock["model_messages"]
+        assert entry["supported_reasoning_levels"] == stock["supported_reasoning_levels"] != []
+        assert entry["service_tiers"] == stock["service_tiers"] != []
+    for entry in served("team-2"):
+        assert "model_messages" not in entry and entry["base_instructions"]
+        assert entry["supported_reasoning_levels"] == []
+        assert [tier["id"] for tier in entry["service_tiers"]] == ["flex"]
+    assert [entry["slug"] for entry in served("team-2")] == ["coding-model", "coding"]
 
 
 def test_catalog_rows_without_a_router_carry_only_the_listing():

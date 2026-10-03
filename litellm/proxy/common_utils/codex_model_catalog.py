@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
-from itertools import accumulate
+from itertools import accumulate, pairwise
 from pathlib import Path
 from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Annotated, Final, Literal
@@ -306,25 +306,33 @@ def _serialized(entry: CodexCatalogEntry) -> str:
     return entry.model_dump_json(exclude_unset=isinstance(entry, CodexStockModel))
 
 
-def _fitting_count(serialized: Sequence[str], byte_limit: int | None) -> int:
-    """How many leading entries fit in a body of at most `byte_limit` bytes, each entry counted
-    with its separating comma and the last one's comma given back."""
+def _bytes_left_after(left: int, size: int) -> int:
+    return left - size if size <= left else left
+
+
+def _fits(serialized: Sequence[str], byte_limit: int | None) -> tuple[bool, ...]:
+    """Whether each entry, taken in order, fits in what is left of a body of at most `byte_limit`
+    bytes: an entry larger than the bytes left is passed over and a smaller one after it is still
+    taken, each entry counted with its separating comma and the last one's comma given back."""
     if byte_limit is None:
-        return len(serialized)
-    running: Final = tuple(accumulate(len(entry.encode()) + 1 for entry in serialized))
+        return (True,) * len(serialized)
     budget: Final = byte_limit - len(_BODY_PREFIX) - len(_BODY_SUFFIX) + 1
-    return sum(1 for total in running if total <= budget)
+    left: Final = tuple(
+        accumulate((len(entry.encode()) + 1 for entry in serialized), _bytes_left_after, initial=budget)
+    )
+    return tuple(after < before for before, after in pairwise(left))
 
 
 def _kept_positions(
     entries: Sequence[CodexCatalogEntry], serialized: Sequence[str], byte_limit: int | None
 ) -> frozenset[int]:
-    """The listing positions that survive the byte limit: an entry offering a service tier is kept
+    """The listing positions that survive the byte limit: an entry offering a service tier is taken
     ahead of one offering none, each group in listing order, since a model without a tier is driven
-    by name just as well off Codex's bundled catalog."""
+    by name just as well off Codex's bundled catalog; an entry too large for the bytes left never
+    costs the smaller ones after it their place."""
     survival: Final = sorted(range(len(entries)), key=lambda position: (not entries[position].service_tiers, position))
-    kept: Final = _fitting_count(tuple(serialized[position] for position in survival), byte_limit)
-    return frozenset(survival[:kept])
+    fits: Final = _fits(tuple(serialized[position] for position in survival), byte_limit)
+    return frozenset(position for position, fit in zip(survival, fits, strict=True) if fit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,8 +356,9 @@ def codex_models_response_json(
     Only chat-capable rows are listed (Codex cannot drive an embedding or image model, and a
     wildcard id is no model), their order is their `priority`. Codex drops a catalog over its
     byte limit silently and keeps its bundled one, so the body holds only the entries that fit,
-    the ones offering a service tier kept first and the rest in listing order, every kept entry
-    at its listing position; `byte_limit=None` keeps every entry.
+    the ones offering a service tier taken first and the rest in listing order, an entry too large
+    for the bytes left passed over, every kept entry at its listing position; `byte_limit=None`
+    keeps every entry.
     """
     known: Final = bundled_codex_models() if stock is None else stock
     prompt: Final = codex_base_instructions() if instructions is None else instructions
@@ -368,16 +377,11 @@ def codex_models_response_json(
 def _catalog_row(
     row: ModelInfoResponse, lookup_id: str, llm_router: Router | None, team_id: str | None
 ) -> CodexCatalogRow:
-    deployment: Final = (
-        llm_router.get_deployment_by_model_group_name(model_group_name=llm_router.routable_model_group(lookup_id))
-        if llm_router is not None
-        else None
-    )
     return CodexCatalogRow(
         id=row["id"],
         mode=row.get("mode"),
         max_input_tokens=row.get("max_input_tokens"),
-        upstream_model=deployment.litellm_params.model if deployment is not None else None,
+        upstream_model=llm_router.get_routable_upstream_model(lookup_id, team_id) if llm_router is not None else None,
         display_name=llm_router.get_configured_display_name(lookup_id) if llm_router is not None else None,
         service_tiers=llm_router.get_configured_service_tiers(lookup_id, team_id) if llm_router is not None else (),
     )
@@ -391,8 +395,9 @@ def codex_catalog_rows(
 ) -> tuple[CodexCatalogRow, ...]:
     """`rows` joined with the router's configured metadata, looked up by each entry's internal id so
     team-scoped rows resolve the way the Anthropic listing's display names do, a `model_group_alias`
-    reading its target's deployments under its own name; `team_id` is the requesting key's team, so a
-    tier is read only off the deployments its requests can route to."""
+    reading its target's deployments under its own name; `team_id` is the requesting key's team, so the
+    upstream model that picks Codex's stock entry and the tiers are read only off the deployments its
+    requests can route to."""
     lookup_ids: Final = MappingProxyType(dict(entries))
     return tuple(_catalog_row(row, lookup_ids.get(row["id"], row["id"]), llm_router, team_id) for row in rows)
 

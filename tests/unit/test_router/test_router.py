@@ -10365,7 +10365,7 @@ def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_r
 
     assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-1") == (["ultrafast"],)
     assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-2") == (["ultrafast"], None)
-    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"], None)
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"],)
 
 
 @pytest.mark.parametrize(
@@ -10409,6 +10409,65 @@ def test_get_configured_service_tiers_reads_an_alias_off_its_target_deployments(
     assert router.get_configured_service_tiers("gpt-6", team_id="team-1") == (["ultrafast"],)
     assert router.get_configured_service_tiers("gpt-6", team_id="team-2") == (["ultrafast"], ["priority"])
     assert router.get_configured_service_tiers("gpt-6-quiet", team_id="team-1") == (["ultrafast"],)
+
+
+def _router_with_team_owned_deployments():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/paused-model"},
+                "model_info": {"team_id": "team-2", "blocked": True, "service_tiers": ["paused"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/team-2-model"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["flex"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/team-1-model"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/shared-model"},
+                "model_info": {"service_tiers": ["flex"]},
+            },
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+        ],
+        model_group_alias={"nickname": "owned-by-teams"},
+    )
+
+
+@pytest.mark.parametrize(
+    "model_name, team_id, upstream_model, service_tiers",
+    [
+        ("owned-by-teams", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("owned-by-teams", "team-2", "openai/team-2-model", (["flex"],)),
+        ("nickname", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("nickname", "team-2", "openai/team-2-model", (["flex"],)),
+        ("owned-by-teams", "team-3", None, ()),
+        ("owned-by-teams", None, "openai/gpt-5.5", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-1", "openai/team-1-model", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-2", "openai/shared-model", (["flex"],)),
+        ("owned-and-shared", None, "openai/shared-model", (["flex"],)),
+        ("openai/gpt-5.5", "team-1", None, ()),
+        ("not-a-real-model", None, None, ()),
+    ],
+)
+def test_upstream_model_and_service_tiers_are_read_off_the_deployments_the_team_can_route_to(
+    model_name, team_id, upstream_model, service_tiers
+):
+    router = _router_with_team_owned_deployments()
+
+    assert router.get_routable_upstream_model(model_name, team_id) == upstream_model
+    assert router.get_configured_service_tiers(model_name, team_id) == service_tiers
 
 
 def test_get_configured_display_name_treats_malformed_values_as_absent():
