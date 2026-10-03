@@ -105,6 +105,12 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               adaptive and quality routers are excluded
             </p>
           )}
+          {stats.unattributed_saved_spend != null && (
+            <p className="text-center text-xs text-muted-foreground">
+              Per-router records differ from recorded savings by {usd(Math.abs(stats.unattributed_saved_spend))}, for
+              example history from before per-router tracking, so the baseline comparison is unavailable
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
@@ -297,22 +303,34 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
       <TierTurnsChart view={view} autoRouters={autoRouters} />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric
-          label="Avg saved per session"
-          value={stats.saved_per_session == null ? "Unavailable" : usd(stats.saved_per_session)}
-          hint={`· ${stats.sessions.toLocaleString()} sessions`}
-        />
-        <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
-        <Metric label="Avg session length" value={durationLabel(stats.avg_session_seconds)} />
-        <Metric label="Avg tokens per session" value={formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)} />
-      </div>
+      <p className="text-xs text-muted-foreground">
+        Savings and spend count requests on the selected UTC days. Actual spend covers every request on complexity
+        routers, including LLM classification cost. Baseline is actual spend plus recorded savings, so savings can be
+        zero or negative.
+      </p>
 
       <p className="text-xs text-muted-foreground">
-        Actual spend covers every request on complexity routers, including LLM classification cost. Baseline is actual
-        spend plus recorded savings, so savings can be zero or negative. The range counts whole sessions that overlap
-        it, so totals can differ from savings views that group usage by UTC day.
+        Session metrics cover every session that overlaps the range, including its turns outside the range.
       </p>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Metric
+          label="Avg turns per session"
+          value={stats.avg_turns_per_session == null ? "Unavailable" : stats.avg_turns_per_session.toFixed(1)}
+          hint={`· ${stats.sessions.toLocaleString()} sessions`}
+        />
+        <Metric
+          label="Avg session length"
+          value={stats.avg_session_seconds == null ? "Unavailable" : durationLabel(stats.avg_session_seconds)}
+        />
+        <Metric
+          label="Avg tokens per session"
+          value={
+            stats.avg_tokens_per_session == null
+              ? "Unavailable"
+              : formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)
+          }
+        />
+      </div>
 
       <div className="space-y-4">
         <div className="flex flex-wrap items-baseline gap-2">

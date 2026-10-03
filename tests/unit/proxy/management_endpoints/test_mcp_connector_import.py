@@ -124,7 +124,8 @@ class TestConvertMcpServersMapping:
         assert isinstance(result, ConvertedConnector)
         assert result.request.transport == MCPTransport.sse
 
-    def test_stdio_connector(self):
+    def test_stdio_connector(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
         result = _single(
             {
                 "mcpServers": {
@@ -142,10 +143,17 @@ class TestConvertMcpServersMapping:
         assert result.request.args == ["-y", "@example/mcp-server"]
         assert result.request.env == {"API_KEY": "value"}
 
-    def test_disallowed_stdio_command_returns_error(self):
+    def test_disallowed_stdio_command_returns_error(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
         result = _single({"mcpServers": {"evil": {"command": "rm", "args": ["-rf", "/"]}}})
         assert isinstance(result, ConnectorConversionError)
         assert "not in the allowed commands list" in result.error
+
+    def test_stdio_connector_is_reported_as_an_error_while_stdio_is_not_enabled(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+        result = _single({"mcpServers": {"local": {"command": "npx", "args": ["-y", "@example/mcp-server"]}}})
+        assert isinstance(result, ConnectorConversionError)
+        assert "LITELLM_ENABLE_MCP_STDIO=true" in result.error
 
     def test_unsupported_type_returns_error(self):
         result = _single({"mcpServers": {"ws": {"type": "websocket", "url": "wss://x.example"}}})

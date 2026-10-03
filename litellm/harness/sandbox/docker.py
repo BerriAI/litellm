@@ -77,8 +77,6 @@ class DockerSandbox:
     def __repr__(self) -> str:
         return f"DockerSandbox({self.image!r}, workdir={self.workdir!r})"
 
-    # -- docker CLI plumbing (tests monkeypatch these two) ---------------------
-
     def _docker_binary(self) -> str:
         binary = shutil.which("docker")
         if binary is None:
@@ -115,8 +113,6 @@ class DockerSandbox:
         except asyncio.TimeoutError:
             await handle.kill()
             raise SandboxError(f"docker {args[0]} timed out after {timeout}s")
-
-    # -- command construction --------------------------------------------------
 
     def run_args(
         self,
@@ -169,8 +165,6 @@ class DockerSandbox:
         joined = path if posixpath.isabs(path) else posixpath.join(self.workdir, path)
         return posixpath.normpath(joined)
 
-    # -- lifecycle ---------------------------------------------------------------
-
     async def start(self) -> str:
         """Start the container if needed and return its id."""
         if self._closed:
@@ -190,8 +184,6 @@ class DockerSandbox:
     async def _exec_capture(self, cmd: Sequence[str], *, input: bytes | None = None) -> tuple[int, bytes, bytes]:
         container_id = await self.start()
         return await self._docker(self.exec_args(container_id, cmd), input=input)
-
-    # -- Sandbox protocol --------------------------------------------------------
 
     async def exec(
         self,

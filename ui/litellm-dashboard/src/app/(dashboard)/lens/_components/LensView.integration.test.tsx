@@ -231,6 +231,21 @@ it("runs saved settings immediately without opening setup", async () => {
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
+it("offers the interactive demo without starting an investigation", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: false };
+    return { traces: false, requests: false };
+  });
+  const onDemo = vi.fn();
+  const user = userEvent.setup();
+  renderWithProviders(<LensView accessToken="test" onDemo={onDemo} />);
+  await user.click(await screen.findByRole("button", { name: "Preview sample" }));
+  expect(onDemo).toHaveBeenCalledOnce();
+  expect(apiClient.post).not.toHaveBeenCalled();
+});
+
 it("guides a first-time administrator into worker connection and lens setup", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
@@ -240,13 +255,14 @@ it("guides a first-time administrator into worker connection and lens setup", as
     return { traces: true, requests: false, data: [] };
   });
   const user = userEvent.setup();
-  renderWithProviders(<LensView accessToken="test" />);
+  renderWithProviders(<LensView accessToken="test" onDemo={vi.fn()} />);
   const guide = within(await screen.findByRole("region", { name: "Find what needs attention" }));
   expect(apiClient.get).toHaveBeenCalledWith("/lens/activity/available", { accessToken: "test" });
   expect(await guide.findByRole("link", { name: "View traces" })).toHaveAttribute(
     "href",
     expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
   );
+  expect(await guide.findByRole("button", { name: "Preview sample" })).toBeVisible();
   await user.click(guide.getByRole("button", { name: "Connect worker" }));
   const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));
   expect(connection.getByRole("button", { name: "Get install command" })).toBeVisible();
@@ -269,6 +285,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
     });
   });
   await waitFor(() => expect(guide.getByRole("button", { name: "New investigation" })).toBeEnabled());
+  expect(guide.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   await user.click(guide.getByRole("button", { name: "New investigation" }));
   expect(await screen.findByRole("dialog", { name: "Which activity should we investigate?" })).toBeVisible();
 });

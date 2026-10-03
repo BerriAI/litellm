@@ -1,3 +1,4 @@
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 import { useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 import { useMemo } from "react";
@@ -65,6 +66,7 @@ export function useAgentTraces({
   isLiveTail,
   enabled,
 }: UseAgentTracesOptions): AgentTracesResult {
+  const demo = useLensDemo();
   const fetchPage = (pageParam: unknown): Promise<TracePage> => {
     const nowMs = Date.now();
     const listOptions: Parameters<typeof agentTraceListCall>[0] = {
@@ -73,7 +75,11 @@ export function useAgentTraces({
       endMs: isCustomDate ? moment(endTime).valueOf() : nowMs,
       cursor: pageParam as string | null,
     };
-    return agentTraceListCall(listOptions);
+    return demo
+      ? demo.client.get<TracePage>("/v1/traces", {
+          query: { start_ms: listOptions.startMs, end_ms: listOptions.endMs, cursor: listOptions.cursor },
+        })
+      : agentTraceListCall(listOptions);
   };
   const queryOptions: Parameters<typeof useInfiniteQuery<TracePage, Error>>[0] = {
     queryKey: ["agentTraces", accessToken, startTime, endTime, isCustomDate],
@@ -106,9 +112,11 @@ export function useAgentTraces({
 }
 
 export function useTraceAvailability(accessToken: string, enabled: boolean) {
+  const demo = useLensDemo();
+  const client = demo?.client ?? apiClient;
   const options: UseQueryOptions<TracePage, Error, boolean> = {
     queryKey: ["trace-availability", accessToken],
-    queryFn: () => apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } }),
+    queryFn: () => client.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } }),
     select: (page: TracePage) => page.data.length > 0,
     enabled,
     retry: false,

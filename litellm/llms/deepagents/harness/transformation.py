@@ -70,11 +70,6 @@ APPROVAL_TOOLS: Final = WRITE_TOOLS | EXECUTE_TOOLS
 _APPROVAL_DECISIONS: Final = ("approve", "reject")
 
 
-# ---------------------------------------------------------------------------
-# Pure helpers (unit tested directly; kept module-level so they port cleanly)
-# ---------------------------------------------------------------------------
-
-
 def gateway_headers(
     ctx: SessionContext,
 ) -> dict[str, str]:  # mutable-ok: ChatLiteLLM.extra_headers is a pydantic dict field
