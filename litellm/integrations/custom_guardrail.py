@@ -1,15 +1,15 @@
 import contextvars
 import copy
 import hashlib
+import json
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
 import httpx
-import orjson
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -1566,11 +1566,22 @@ _PRE_CALL_CONTENT_KEYS: Final = frozenset(
 _STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
 
 
-def _content_fingerprint(value: object) -> object:
-    """Serialized form of a JSON-shaped value so the allow/mask baseline costs one orjson pass, not a
-    deep copy of the whole prompt. Anything orjson cannot serialize falls back to a deep copy."""
+def _canonical_json_dumps() -> Callable[[object], bytes]:
     try:
-        return orjson.dumps(value, option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS)
+        import orjson
+    except ImportError:
+        return lambda value: json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return lambda value: orjson.dumps(value, option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS)
+
+
+_canonical_json: Final = _canonical_json_dumps()
+
+
+def _content_fingerprint(value: object) -> object:
+    """Serialized form of a JSON-shaped value so the allow/mask baseline costs one JSON pass, not a
+    deep copy of the whole prompt. Anything the serializer rejects falls back to a deep copy."""
+    try:
+        return _canonical_json(value)
     except TypeError:
         return copy.deepcopy(value)
 
