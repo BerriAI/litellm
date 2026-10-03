@@ -23,7 +23,7 @@ import {
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
-import { CREDENTIAL_LABELS } from "../constants";
+import { CREDENTIAL_LABELS, KUBERNETES_POD_ROUTING_LABELS } from "../constants";
 import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
@@ -75,6 +75,7 @@ export function LogDetailContent({
   userEmail,
 }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
+  const podRouting = metadata.kubernetes_pod_routing;
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
   const isClassifier =
@@ -160,6 +161,12 @@ export function LogDetailContent({
               <DescriptionItem label="API Base">
                 <TruncatedValue value={logEntry.api_base} maxWidth={API_BASE_MAX_WIDTH} />
               </DescriptionItem>
+              {podRouting && typeof podRouting === "object" && (
+                <DescriptionItem label="Pod">
+                  {podRouting.pod_ip} · {KUBERNETES_POD_ROUTING_LABELS[podRouting.selection]} · {podRouting.pod_count}{" "}
+                  pods
+                </DescriptionItem>
+              )}
               {logEntry.requester_ip_address && (
                 <DescriptionItem label="IP Address">{logEntry.requester_ip_address}</DescriptionItem>
               )}

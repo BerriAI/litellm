@@ -3125,6 +3125,13 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
+class StandardLoggingKubernetesPodRouting(TypedDict):
+    service_host: ReadOnly[str]
+    pod_ip: ReadOnly[str]
+    pod_count: ReadOnly[int]
+    selection: ReadOnly[Literal["round_robin", "session_affinity", "session_affinity_retry"]]
+
+
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
 # logging off. Every other field aggregates the prompt without reproducing it and is kept,
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
@@ -3186,6 +3193,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
+    kubernetes_pod_routing: ReadOnly[StandardLoggingKubernetesPodRouting | None]
     applied_guardrails: list[str] | None
     usage_object: dict | None
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval

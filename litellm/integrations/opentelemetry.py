@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY
 from litellm.integrations._types.open_inference import (
     OpenInferenceSpanKindValues,
     SpanAttributes,
@@ -2403,9 +2404,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ############ LLM CALL METADATA ##############
             #############################################
-            metadata: Final = standard_logging_payload["metadata"]
+            metadata: Final[Mapping[str, object]] = standard_logging_payload["metadata"]
             for key, value in metadata.items():
-                self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
+                self.safe_set_attribute(
+                    span=span,
+                    key=f"metadata.{key}",
+                    value=safe_dumps(value) if key == KUBERNETES_POD_ROUTING_KEY else value,
+                )
 
             # get hidden params
             hidden_params: Final = getattr(standard_logging_payload, "hidden_params", None) or (
