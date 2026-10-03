@@ -29,6 +29,7 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 MIGRATIONS_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
 MIGRATION_NAME: Final = "20260921190000_agent_identity"
 BASELINE_DIR: Final = MIGRATIONS_DIR / "0_init"
+pytestmark: Final = pytest.mark.timeout(900)
 PASSWORD: Final = "wr ong'pw9"
 FRAGMENTS: Final = ("wr ong", "wr+ong", "ong'pw9", "wr%20ong", "ong%27pw9", "pw9")
 SHIPPED_MIGRATIONS: Final = tuple(
@@ -328,7 +329,6 @@ def test_wrong_password_emits_four_p1000_errors_without_password_fragments(tmp_p
         _assert_no_password_fragments(output)
 
 
-@pytest.mark.timeout(900)
 def test_duplicate_agent_identity_logs_the_p3018_migration_error(tmp_path: Path) -> None:
     with owned_database(PASSWORD) as database_url:
         setup: Final = run_v1_migrations(database_url, tmp_path, {})
@@ -349,7 +349,6 @@ def test_duplicate_agent_identity_logs_the_p3018_migration_error(tmp_path: Path)
         _assert_no_password_fragments(output)
 
 
-@pytest.mark.timeout(900)
 def test_p3005_baseline_recovery_records_zero_init_and_logs_no_errors(tmp_path: Path) -> None:
     existed_before: Final = BASELINE_DIR.exists()
     try:
