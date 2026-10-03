@@ -994,7 +994,12 @@ def _responses_try_dispatch_mcp_gateway(
     kwargs: dict[str, object],
     _is_async: bool,
     skip_mcp_handler: bool,
-) -> Any | None:
+) -> (
+    ResponsesAPIResponse
+    | BaseResponsesAPIStreamingIterator
+    | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+    | None
+):
     """Return a response when MCP gateway handles the call; otherwise None."""
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
