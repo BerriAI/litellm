@@ -17,6 +17,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
+    _estimator_choices_from_deployments,
     _estimator_models_from_deployments,
     _gateway_transport,
     _next_update,
@@ -411,3 +412,36 @@ def test_old_source_report_is_not_returned_when_matching_new_source_identity() -
     assert matched.status_code == 200
     assert matched.json()["report"] is None
     assert matched.json()["identity_map"] == {"dev.name": "dev@example.test"}
+
+
+def test_estimator_choices_show_underlying_models_and_exclude_non_chat_routes() -> None:
+    deployments: Final = (
+        {
+            "model_name": "estimator",
+            "litellm_params": {"model": "deployment-name"},
+            "model_info": {"base_model": "gpt-6-luna", "mode": "chat"},
+        },
+        {
+            "model_name": "estimator",
+            "litellm_params": {"model": "second-deployment"},
+            "model_info": {"base_model": "gpt-6-luna", "mode": "chat"},
+        },
+        {
+            "model_name": "embeddings",
+            "litellm_params": {"model": "custom-embedding"},
+            "model_info": {"mode": "embedding"},
+        },
+        {
+            "model_name": "image",
+            "litellm_params": {"model": "custom-image"},
+            "model_info": {"mode": "image_generation"},
+        },
+        {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+        {"model_name": "missing", "litellm_params": {}},
+        {"model_name": "custom-chat", "litellm_params": {"model": "openai/private-model"}},
+    )
+    choices: Final = _estimator_choices_from_deployments(deployments)
+    assert tuple((choice.model_name, choice.provider_models) for choice in choices) == (
+        ("custom-chat", ("openai/private-model",)),
+        ("estimator", ("gpt-6-luna",)),
+    )

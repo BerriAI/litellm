@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.roi_calculator.analytics import match_identity, normalize_email
 from litellm.proxy.roi_calculator.estimator import CompletionCaller, Estimator, EstimatorModel, cache_context
 from litellm.proxy.roi_calculator.github import GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.pull_cache import cache_key, settings_fingerprint
@@ -124,8 +125,6 @@ async def read_spend(
     start: date,
     end: date,
 ) -> tuple[ROISpendRecord, ...]:
-    from litellm.proxy.roi_calculator.analytics import normalize_email
-
     database: Final = prisma_client.db
     daily_table: Final = database.litellm_dailyuserspend
     group_by: Final = TypeAdapter(list[Literal["user_id", "date"]]).validate_python(("user_id", "date"))
@@ -166,6 +165,17 @@ async def read_spend(
     )
 
 
+async def read_gateway_user_emails(prisma_client: _SpendPrismaClient) -> frozenset[str]:
+    users: Final = _USER_EMAILS.validate_python(
+        await prisma_client.db.litellm_usertable.find_many(where={"user_email": {"not": None}})
+    )
+    return frozenset(email for user in users if (email := normalize_email(user.user_email)))
+
+
+class GatewayUserReader(Protocol):
+    def __call__(self) -> Awaitable[frozenset[str]]: ...
+
+
 class GitHubFactory(Protocol):
     def __call__(
         self,
@@ -204,6 +214,26 @@ class _StatusUpdate(TypedDict, total=False):
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _unlinked_estimate(
+    pull: ROIPullEvidence | ROIPullRecord,
+    gateway_emails: frozenset[str],
+    mappings: Mapping[str, str],
+) -> ROIEstimate | None:
+    email, method = match_identity(pull, gateway_emails, mappings)
+    if email and email in gateway_emails:
+        return None
+    reason: Final = (
+        "Multiple gateway users match this author."
+        if method == "ambiguous emails"
+        else "This author is not linked to a registered gateway user."
+    )
+    return {
+        "status": "needs_review",
+        "hours": None,
+        "reasoning": f"Not estimated: {reason} Link the author to a gateway user and run analysis again.",
+    }
 
 
 async def _estimate_with_fallback(
@@ -399,6 +429,8 @@ class SyncManager:
         coordinator: SyncCoordinator | None = None,
         scheduled_interval: float = 0,
         branch_spend_reader: BranchSpendReader | None = None,
+        *,
+        gateway_user_reader: GatewayUserReader,
     ) -> bool:
         async with self._start_lock:
             if not settings.repos or not settings.estimator_model:
@@ -439,6 +471,7 @@ class SyncManager:
                     coordinator,
                     owner,
                     branch_spend_reader,
+                    gateway_user_reader,
                 )
             )
             return True
@@ -481,12 +514,14 @@ class SyncManager:
         coordinator: SyncCoordinator | None,
         owner: str,
         branch_spend_reader: BranchSpendReader | None,
+        gateway_user_reader: GatewayUserReader,
     ) -> None:
         monitor: Final = asyncio.create_task(self._heartbeat(asyncio.current_task(), coordinator, owner))
         github: Final = self._github_factory(settings, github_transport)
         try:
             end: Final = self._clock().date()
             start: Final = end - timedelta(days=settings.backfill_days - 1)
+            gateway_emails: Final = await gateway_user_reader()
             spend: Final = await spend_reader(start, end)
             self._update_status(phase="repositories", stage="Reading configured repositories")
             repositories: Final = await _read_repositories(github, settings.repos, start, end)
@@ -545,15 +580,21 @@ class SyncManager:
                     await _cache_estimated_pull(
                         repository, key, cached_record, cached_pull if saved is not None else None
                     )
-                    self._update_estimate_progress(cached_record["estimate"])
-                    return _ProcessedPull(index, cached_record)
+                    cached_estimate: Final = (
+                        _unlinked_estimate(cached_record, gateway_emails, settings.identity_map)
+                        or cached_record["estimate"]
+                    )
+                    self._update_estimate_progress(cached_estimate)
+                    return _ProcessedPull(index, {**cached_record, "estimate": cached_estimate})
                 try:
                     evidence: Final = await github.evidence(repo, pull)
                 except SourceError as exc:
                     unavailable: Final = await _unavailable_record(github, settings, repo, pull, exc)
                     self._update_estimate_progress(unavailable["estimate"])
                     return _ProcessedPull(index, unavailable, metadata_unavailable=True)
-                estimate: Final = await _estimate_with_fallback(estimator, evidence)
+                estimate: Final = _unlinked_estimate(
+                    evidence, gateway_emails, settings.identity_map
+                ) or await _estimate_with_fallback(estimator, evidence)
                 evidence_item: Final = GitHubPullListItem.model_validate(
                     MappingProxyType(
                         {
