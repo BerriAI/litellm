@@ -1902,6 +1902,15 @@ def test_grouping_sets_dispatcher_returns_no_throughput_for_legacy_rows_without_
     assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].output_tokens_per_second is None
 
 
+def test_combined_timed_tokens_propagates_unknown_measurements():
+    from litellm.proxy.management_endpoints.common_daily_activity import _combined_timed_completion_tokens
+    from litellm.types.proxy.management_endpoints.common_daily_activity import ProviderThroughputMetrics
+
+    existing = ProviderThroughputMetrics(timed_completion_tokens=10)
+
+    assert _combined_timed_completion_tokens(existing, None) is None
+
+
 def test_grouping_sets_dispatcher_keeps_ptu_flat_cost_out_of_the_provider_breakdown():
     """Sentinel rows carry no provider, so their flat cost must not surface under the
     "unknown" provider - the per-row path skips them for exactly the same reason."""

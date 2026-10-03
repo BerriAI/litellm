@@ -8,6 +8,7 @@ import pytest
 
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
+    _counter_value,
     build_bulk_upsert,
     conflict_key,
     merge_by_conflict_key,
@@ -88,6 +89,13 @@ def test_legacy_timed_requests_keep_timed_tokens_unknown_when_rows_merge():
     merged = merge_by_conflict_key(TAG_TABLE, (legacy, tag_txn(timed_completion_tokens=7)))
 
     assert merged[0][1]["timed_completion_tokens"] is None
+
+
+def test_legacy_timed_request_serializes_unknown_token_total():
+    legacy = tag_txn(timed_requests=1)
+    del legacy["timed_completion_tokens"]
+
+    assert _counter_value("timed_completion_tokens", legacy) is None
 
 
 def test_distinct_keys_are_not_merged_and_are_ordered_deterministically():
