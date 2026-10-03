@@ -25,3 +25,5 @@ The LlamaIndex captures contain provider IDs inside `output.value.raw.id`. Regre
 Curated SQL lives in `tests/queries/*.sql`. Each query has a matching `.expected.json` containing ordered result rows for `admin`, `team`, `key`, and `other_team` readers. Update the exports and expected results together. Add a named case in `tests/queries.rs` for each new query. Assertions compare only result data, excluding server statistics and execution timing
 
 Typed query tests execute the production SQL through `litellm_storage_clickhouse::fetch` using contracts from `litellm-traces`. The fixture projection is test setup, so this suite covers the Rust decoder, normalization, inserts, schema, readers, and queries. Python ingress transformations, including payload truncation and exception-event fallback, remain covered by the Python tests
+
+`crates/traces/tests/captures.rs` resolves every capture against its spend rows without ClickHouse and checks the unrelated-transport and redundant-response-ID invariants

@@ -13,6 +13,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source_release_tag="sha-$(git -C "$repo_root" rev-parse HEAD)"
 proxy_port="${LENS_DEV_PROXY_PORT:-4000}"
 ui_port="${LENS_DEV_UI_PORT:-3000}"
 state_dir="${LENS_DEV_STATE_DIR:-$repo_root/.lens-dev}"
@@ -108,6 +109,8 @@ proxy_env() {
   unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS OPENAI_BASE_URL OPENAI_API_BASE
   for var in $(compgen -e | grep '^REDIS_' || true); do unset "$var"; done
   eval "$1"
+  export LITELLM_RELEASE_TAG="$source_release_tag"
+  export LENS_WORKER_IMAGE=litellm-lens-worker:local
   export LITELLM_MODE=PRODUCTION
   export LITELLM_MASTER_KEY="$master_key"
   if [ "$master_key" = sk-1234 ]; then export LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true; fi
@@ -236,7 +239,8 @@ main() {
   wait_for_proxy "$proxy_pid"
   ensure_worker_token
 
-  LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
+  LITELLM_RELEASE_TAG="$source_release_tag" \
+    LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
     "$py" -c "import asyncio, logging; from litellm.proxy.lens.worker import main; logging.basicConfig(level=logging.INFO); asyncio.run(main())" \
     < /dev/null > "$log_dir/worker.log" 2>&1 &
   pids+=("$!")

@@ -62,6 +62,6 @@ fn result_contracts_preserve_public_field_names() {
         json!({"span_id": "span", "message": "error", "total_chars": u64::MAX, "version": "version"}),
     );
     round_trip::<SpendByResponseIdsRow>(
-        json!({"request_id": "request", "response_id": "response", "upstream_response_id": "upstream", "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key", "user": "user", "spend": 0.125, "start_ms": -1}),
+        json!({"request_id": "request", "litellm_call_id": "gateway", "response_id": "response", "upstream_response_id": "upstream", "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key", "user": "user", "spend": 0.125, "start_ms": -1}),
     );
 }
