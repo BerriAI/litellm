@@ -24,6 +24,8 @@ py="${LENS_DEV_PYTHON:-$repo_root/.venv/bin/python}"
 database_url="${LENS_DEV_DATABASE_URL:-postgresql://litellm:litellm@127.0.0.1:15432/litellm}"
 clickhouse_url=http://default:local-tracing@127.0.0.1:18123
 master_key=""
+startup_timeout="${LENS_DEV_STARTUP_TIMEOUT_SECONDS:-300}"
+readiness_request_timeout="${LENS_DEV_READINESS_REQUEST_TIMEOUT_SECONDS:-5}"
 pids=()
 
 die() { echo "lens-dev: $*" >&2; exit 1; }
@@ -159,12 +161,26 @@ ensure_worker_token() {
 wait_for_proxy() {
   local proxy_pid="$1"
   echo "lens-dev: waiting for the proxy (log: $log_dir/proxy.log)"
-  for _ in $(seq 1 300); do
+  for _ in $(seq 1 "$startup_timeout"); do
     kill -0 "$proxy_pid" 2>/dev/null || die "proxy exited; see $log_dir/proxy.log"
-    curl -fsS "$proxy_url/health/readiness" -H "Authorization: Bearer $master_key" >/dev/null 2>&1 && return
+    curl -fsS --max-time "$readiness_request_timeout" "$proxy_url/health/readiness" -H "Authorization: Bearer $master_key" >/dev/null 2>&1 && return
     sleep 1
   done
-  die "proxy not ready after 300s; see $log_dir/proxy.log"
+  die "proxy not ready after ${startup_timeout}s; see $log_dir/proxy.log"
+}
+
+wait_for_ui() {
+  local ui_pid="$1"
+  echo "lens-dev: waiting for the UI (log: $log_dir/ui.log)"
+  for _ in $(seq 1 "$startup_timeout"); do
+    kill -0 "$ui_pid" 2>/dev/null || die "UI exited; see $log_dir/ui.log"
+    if curl -fsS --max-time "$readiness_request_timeout" "http://localhost:$ui_port/ui/login/" >/dev/null 2>&1; then
+      kill -0 "$ui_pid" 2>/dev/null || die "UI exited; see $log_dir/ui.log"
+      return
+    fi
+    sleep 1
+  done
+  die "UI not ready after ${startup_timeout}s; see $log_dir/ui.log"
 }
 
 # Children run in their own process groups (set -m), so killing -pid takes their trees too.
@@ -231,7 +247,7 @@ parse_args() {
 }
 
 main() {
-  local config_file exports proxy_pid pid key_hint
+  local config_file exports proxy_pid ui_pid pid key_hint
   parse_args "$@"
   if [ -n "${LENS_DEV_CONFIG:-}" ]; then
     [ -f "$LENS_DEV_CONFIG" ] || die "LENS_DEV_CONFIG not found: $LENS_DEV_CONFIG"
@@ -246,6 +262,8 @@ main() {
     return
   fi
 
+  [[ "$startup_timeout" =~ ^[1-9][0-9]*$ ]] || die "LENS_DEV_STARTUP_TIMEOUT_SECONDS must be a positive integer"
+  [[ "$readiness_request_timeout" =~ ^[1-9][0-9]*$ ]] || die "LENS_DEV_READINESS_REQUEST_TIMEOUT_SECONDS must be a positive integer"
   listening "$proxy_port" && die "port $proxy_port is in use; set LENS_DEV_PROXY_PORT"
   listening "$ui_port" && die "port $ui_port is in use; set LENS_DEV_UI_PORT"
   [ "$proxy_port" != "$ui_port" ] || die "proxy and UI ports must differ"
@@ -290,8 +308,10 @@ main() {
     cd ui/litellm-dashboard
     NEXT_PUBLIC_BASE_URL="" LENS_DEV_PROXY_URL="$proxy_url" exec "$repo_root/scripts/with_dashboard_node.sh" npx next dev -p "$ui_port"
   ) < /dev/null > "$log_dir/ui.log" 2>&1 &
-  pids+=("$!")
+  ui_pid=$!
+  pids+=("$ui_pid")
 
+  wait_for_ui "$ui_pid"
   wait_for_proxy "$proxy_pid"
   ensure_worker_token
   if [ -n "$seed_profile" ]; then seed_data; fi

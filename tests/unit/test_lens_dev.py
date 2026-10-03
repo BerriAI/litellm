@@ -216,3 +216,17 @@ def test_skipping_ui_build_needs_no_static_export(tmp_path: Path) -> None:
     proc = _run(tmp_path, f'repo_root="{tmp_path}"; build_dashboard', LENS_DEV_BUILD_UI="0")
     assert proc.returncode == 0, proc.stderr
     assert not (tmp_path / "ui/litellm-dashboard/out").exists()
+
+
+def test_ui_readiness_uses_live_login_route(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'wait_for_ui "$$"', LENS_DEV_UI_PORT="3017")
+    assert proc.returncode == 0, proc.stderr
+    assert "http://localhost:3017/ui/login/" in _curl_calls(tmp_path)
+
+
+def test_ui_exit_fails_before_readiness_request(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'true & child=$!; wait "$child"; wait_for_ui "$child"')
+    assert proc.returncode == 1
+    assert "UI exited; see" in proc.stderr
+    assert "ui.log" in proc.stderr
+    assert _curl_calls(tmp_path) == ""
