@@ -128,6 +128,12 @@ async def _served_mcp_path_names(
     return await served_names(names) if names else frozenset[str]()
 
 
+def names_gateway_mcp_tool(tools: Iterable[ToolParam] | None) -> bool:
+    """True when a tool may name this gateway: server_url "litellm_proxy..." or an http(s) URL ending in
+    /mcp/<name>. `_split_mcp_tools` then settles which of the latter the gateway actually serves."""
+    return any(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) is not None for tool in tools or ())
+
+
 class LiteLLM_Proxy_MCP_Handler:
     """
     Helper class with static methods for MCP integration with Responses API.
@@ -151,9 +157,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Iterable[ToolParam] | None) -> bool:
-        """True when a tool may name this gateway: server_url "litellm_proxy..." or an http(s) URL ending in
-        /mcp/<name>. `_split_mcp_tools` then settles which of the latter the gateway actually serves."""
-        return any(_names_gateway_explicitly(tool) or _proxy_path_mcp_name(tool) is not None for tool in tools or ())
+        return names_gateway_mcp_tool(tools)
 
     @staticmethod
     def _parse_mcp_tools(tools: Iterable[Mapping[str, object]] | None) -> SplitTools:
