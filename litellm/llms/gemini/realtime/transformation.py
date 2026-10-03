@@ -5,9 +5,12 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from enum import Enum
+from types import MappingProxyType
+from typing import Any, Final, Literal, cast
 
-from typing_extensions import ReadOnly, Required, TypedDict
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly, Required, TypedDict, assert_never
 
 import litellm
 from litellm import verbose_logger
@@ -138,6 +141,54 @@ PCM16_INPUT_AUDIO_BYTES_PER_SECOND: Final = 48000
 def _base64_decoded_byte_count(data: str) -> int:
     padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
     return max(len(data) * 3 // 4 - padding, 0)
+
+
+class _GeminiLiveFunctionBehavior(BaseModel):
+    name: str
+    behavior: Literal["BLOCKING", "NON_BLOCKING"]
+
+
+def _gemini_live_tool_behaviors(value: object) -> Mapping[str, Literal["BLOCKING", "NON_BLOCKING"]]:
+    tools: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(value)
+    functions: Final = tuple(tool.get("function", tool) for tool in tools)
+    behaviors: Final = tuple(
+        _GeminiLiveFunctionBehavior.model_validate(function)
+        for function in functions
+        if isinstance(function, Mapping) and "behavior" in function
+    )
+    return MappingProxyType({function.name: function.behavior for function in behaviors})
+
+
+class _GeminiLiveToolControlError(Enum):
+    INVALID_SCHEDULING = "Invalid Gemini Live function response scheduling"
+    INVALID_CONTINUATION = "Gemini Live will_continue must be a boolean"
+    CONFLICTING_CONTINUATION = "Conflicting Gemini Live continuation fields"
+
+
+def _parse_gemini_live_response_controls(
+    item: Mapping[str, object],
+) -> Mapping[str, object] | _GeminiLiveToolControlError:
+    scheduling: Final = item.get("scheduling")
+    continuation: Final = item.get("will_continue", item.get("willContinue"))
+    if "scheduling" in item and scheduling not in ("SILENT", "WHEN_IDLE", "INTERRUPT"):
+        return _GeminiLiveToolControlError.INVALID_SCHEDULING
+    if ("will_continue" in item or "willContinue" in item) and not isinstance(continuation, bool):
+        return _GeminiLiveToolControlError.INVALID_CONTINUATION
+    if "will_continue" in item and "willContinue" in item and item["will_continue"] is not item["willContinue"]:
+        return _GeminiLiveToolControlError.CONFLICTING_CONTINUATION
+    return MappingProxyType(
+        {key: value for key, value in (("scheduling", scheduling), ("willContinue", continuation)) if value is not None}
+    )
+
+
+def _gemini_live_response_fields(item: Mapping[str, object]) -> Mapping[str, object]:
+    result: Final = _parse_gemini_live_response_controls(item)
+    match result:
+        case _GeminiLiveToolControlError() as error:
+            raise ValueError(error.value)
+        case Mapping() as fields:
+            return fields
+    assert_never(result)
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -311,6 +362,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         ]
 
     def map_openai_params(self, optional_params: dict, non_default_params: dict) -> dict:
+        behaviors: Final = _gemini_live_tool_behaviors(non_default_params.get("tools", ()))
         if "generationConfig" not in optional_params:
             optional_params["generationConfig"] = {}
         for key, value in non_default_params.items():
@@ -331,9 +383,20 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
                 vertex_gemini_config = VertexGeminiConfig()
                 # Tools should be at the top level of setup, not inside generationConfig
-                optional_params["tools"] = vertex_gemini_config._map_function(
-                    value=value, optional_params=optional_params
-                )
+                optional_params["tools"] = [
+                    {
+                        **mapped_tool,
+                        "function_declarations": [
+                            {**declaration, "behavior": behaviors[declaration["name"]]}
+                            if declaration["name"] in behaviors
+                            else declaration
+                            for declaration in mapped_tool["function_declarations"]
+                        ],
+                    }
+                    if "function_declarations" in mapped_tool
+                    else mapped_tool
+                    for mapped_tool in vertex_gemini_config._map_function(value=value, optional_params=optional_params)
+                ]
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
             elif key == "turn_detection" and value is not None:
@@ -536,9 +599,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             return self._handle_function_call_output(item)
         return self._handle_user_text_content(item)
 
-    def _handle_function_call_output(self, item: dict) -> list[str]:
+    def _handle_function_call_output(self, item: Mapping[str, object]) -> list[str]:
         """Transform function_call_output to Gemini toolResponse format."""
-        call_id: Final = item.get("call_id", "")
+        call_id: Final = TypeAdapter(str).validate_python(item.get("call_id", ""))
         output: Final = item.get("output", "{}")
 
         verbose_logger.debug("Gemini Realtime: Transforming function_call_output for call_id=%s", call_id)
@@ -560,7 +623,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 call_id,
             )
 
-        function_response: Final[dict[str, object]] = {"response": output_dict}
+        function_response: Final[dict[str, object]] = {"response": output_dict, **_gemini_live_response_fields(item)}
         if self._include_function_response_id() and call_id:
             function_response["id"] = call_id
         if function_name:
