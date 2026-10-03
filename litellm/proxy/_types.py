@@ -2994,6 +2994,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
+    vector_store_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered",
+    )
     missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,
         description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
@@ -4539,6 +4543,11 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    user_vector_store_access_denied = "user_vector_store_access_denied"
+    """
+    User does not have access to the vector store
+    """
+
     team_member_already_in_team = "team_member_already_in_team"
     """
     Team member is already in team
@@ -4571,7 +4580,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_vector_store_access_error_type_for_object(
-        cls, object_type: Literal["key", "team", "org"]
+        cls, object_type: Literal["key", "team", "org", "user"]
     ) -> "ProxyErrorTypes":
         """
         Get the vector store access error type for object_type
@@ -4582,6 +4591,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_vector_store_access_denied
         elif object_type == "org":
             return cls.org_vector_store_access_denied
+        elif object_type == "user":
+            return cls.user_vector_store_access_denied
 
 
 DB_CONNECTION_ERROR_TYPES: Final = (

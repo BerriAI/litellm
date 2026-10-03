@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
@@ -33,6 +34,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    LITELLM_PROXY_MASTER_KEY_ALIAS,
     MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
@@ -43,7 +45,9 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     RBAC_ROLES,
+    UI_TEAM_ID,
     CallInfo,
+    ConfigGeneralSettings,
     LiteLLM_AccessGroupTable,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -1281,6 +1285,8 @@ async def common_checks(
             request_body=request_body,
             team_object=team_object,
             valid_token=valid_token,
+            user_object=user_object,
+            deny_by_default=_vector_store_deny_by_default(_typed_request_body(general_settings)),
         )
 
     # 12. [OPTIONAL] Tool allowlist - key/team allowed_tools (no DB in hot path)
@@ -6622,17 +6628,135 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
 
 
+def _is_strict_vector_store_identity(valid_token: UserAPIKeyAuth | None) -> bool:
+    return (
+        valid_token is not None
+        and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
+        and valid_token.team_id != UI_TEAM_ID
+    )
+
+
+def _vector_store_deny_by_default(general_settings: Mapping[str, object]) -> bool:
+    """
+    Startup rejects a non-boolean value from the config file. A non-boolean value that reaches
+    general_settings another way enables the policy, so only vector store requests are denied.
+    """
+    try:
+        return ConfigGeneralSettings.model_validate(
+            MappingProxyType(
+                {"vector_store_deny_by_default": general_settings.get("vector_store_deny_by_default", False)}
+            )
+        ).vector_store_deny_by_default
+    except ValidationError:
+        return True
+
+
+_VECTOR_STORE_IDS_ADAPTER: Final[TypeAdapter[list[str]]] = TypeAdapter(list[str])
+_TOOLS_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
+_TOOL_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _validated_vector_store_ids(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    try:
+        return tuple(_VECTOR_STORE_IDS_ADAPTER.validate_python(value, strict=True))
+    except ValidationError:
+        raise _malformed_vector_store_ids() from None
+
+
+def _malformed_vector_store_ids() -> ProxyException:
+    return ProxyException(
+        message="vector_store_ids must be a list of strings",
+        type="invalid_request_error",
+        param="vector_store_ids",
+        code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+def _tools(tools: object) -> tuple[object, ...]:
+    try:
+        return tuple(_TOOLS_ADAPTER.validate_python(tools, strict=True))
+    except ValidationError:
+        return ()
+
+
+def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
+    try:
+        tool_fields: Final = _TOOL_ADAPTER.validate_python(tool, strict=True)
+    except ValidationError:
+        return ()
+    return _validated_vector_store_ids(tool_fields.get("vector_store_ids"))
+
+
+def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    """
+    Same fields VectorStoreRegistry.get_vector_store_ids_to_run reads, but a vector_store_ids that is
+    not a list of strings is a 400 instead of being skipped or iterated, and tools that are not
+    objects name no store.
+    """
+    return tuple(
+        chain(
+            _validated_vector_store_ids(request_body.get("vector_store_ids")),
+            chain.from_iterable(_tool_vector_store_ids(tool) for tool in _tools(request_body.get("tools"))),
+        )
+    )
+
+
+def _require_vector_store_grant(
+    object_type: Literal["key", "team", "user"],
+    vector_store_ids_to_run: Sequence[str],
+    object_permission: _VectorStorePermissionsRow | None,
+) -> None:
+    if object_permission is None or not object_permission.vector_stores:
+        raise ProxyException(
+            message=f"{object_type.capitalize()} not allowed to access vector store. Tried to access {vector_store_ids_to_run[0]}. vector_store_deny_by_default is enabled and the {object_type} has no vector store grants",
+            type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(object_type),
+            param="vector_store",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+    _can_object_call_vector_stores(
+        object_type=object_type,
+        vector_store_ids_to_run=vector_store_ids_to_run,
+        object_permissions=object_permission,
+    )
+
+
 async def vector_store_access_check(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
+    *,
+    user_object: LiteLLM_UserTable | None = None,
+    deny_by_default: bool = False,
 ):
     """
-    Checks if the object (key, team, org) has access to the vector store.
+    Checks whether the caller may use every vector store the request names.
 
-    Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
+    Requested stores come from `vector_store_ids`, `tools[].vector_store_ids` and the RAG
+    `retrieval_config.vector_store_id`. Grants come from each identity's
+    `object_permission.vector_stores`.
+
+    With `deny_by_default=False` (legacy), a key or team only restricts access when its list is
+    nonempty, and stores are only read from the request when a vector store registry is loaded.
+
+    With `deny_by_default=True` (`general_settings.vector_store_deny_by_default`), stores are read
+    even without a registry, and a missing record, `null` or `[]` grants nothing:
+
+    - virtual key: the key must grant every store, and so must its team when it has one, even if
+      the team failed to load
+    - keyless team member (JWT, `lite login` session token): only the resolved team is checked
+    - keyless user with no team: the user's own grant is checked
+    - master key and dashboard sessions: legacy behavior
+
+    The user's personal grant is only consulted in the keyless no-team case, so it can neither
+    rescue nor restrict a key or team request.
+
+    Raises ProxyException (401, `{key,team,user}_vector_store_access_denied`) on the first identity
+    that does not grant a requested store, and with the flag on, ProxyException (400,
+    `invalid_request_error`) when a `vector_store_ids` field is not a list of strings.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     #########################################################
     # Get the vector store the user is trying to access
@@ -6642,12 +6766,17 @@ async def vector_store_access_check(
         return True
 
     registry_ids: Final = (
-        litellm.vector_store_registry.get_vector_store_ids_to_run(
-            non_default_params=request_body, tools=request_body.get("tools", None)
+        _strict_requested_vector_store_ids(_typed_request_body(request_body))
+        if deny_by_default
+        else (
+            litellm.vector_store_registry.get_vector_store_ids_to_run(
+                non_default_params=request_body, tools=request_body.get("tools", None)
+            )
+            if litellm.vector_store_registry is not None
+            else None
         )
-        if litellm.vector_store_registry is not None
-        else None
-    ) or ()
+        or ()
+    )
     rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
@@ -6659,37 +6788,60 @@ async def vector_store_access_check(
     # Check if the object (key, team, org) has access to the vector store
     #########################################################
     # Check if the key can access the vector store
-    if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission: Final = await _object_permission_table(
-            ObjectPermissionRepository(prisma_client)
-        ).find_unique(
+    key_object_permission: Final = (
+        await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
             where={"object_permission_id": valid_token.object_permission_id},
         )
-        if key_object_permission is not None:
-            _can_object_call_vector_stores(
-                object_type="key",
-                vector_store_ids_to_run=vector_store_ids_to_run,
-                object_permissions=key_object_permission,
-            )
+        if valid_token is not None and valid_token.object_permission_id is not None
+        else None
+    )
+    strict_identity: Final = deny_by_default and _is_strict_vector_store_identity(valid_token)
+    strict_key: Final = (
+        strict_identity and valid_token is not None and valid_token.via_virtual_key and not valid_token.is_session_token
+    )
+    has_team: Final = team_object is not None or (valid_token is not None and valid_token.team_id is not None)
+    if strict_key:
+        _require_vector_store_grant("key", vector_store_ids_to_run, key_object_permission)
+    elif key_object_permission is not None:
+        _can_object_call_vector_stores(
+            object_type="key",
+            vector_store_ids_to_run=vector_store_ids_to_run,
+            object_permissions=key_object_permission,
+        )
 
     # Check if the team can access the vector store
-    if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission: Final = await _object_permission_table(
-            ObjectPermissionRepository(prisma_client)
-        ).find_unique(
+    team_object_permission: Final = (
+        await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
             where={"object_permission_id": team_object.object_permission_id},
         )
-        if team_object_permission is not None:
-            _can_object_call_vector_stores(
-                object_type="team",
-                vector_store_ids_to_run=vector_store_ids_to_run,
-                object_permissions=team_object_permission,
+        if team_object is not None and team_object.object_permission_id is not None
+        else None
+    )
+    if strict_identity and has_team:
+        _require_vector_store_grant("team", vector_store_ids_to_run, team_object_permission)
+    elif team_object_permission is not None:
+        _can_object_call_vector_stores(
+            object_type="team",
+            vector_store_ids_to_run=vector_store_ids_to_run,
+            object_permissions=team_object_permission,
+        )
+
+    if strict_identity and not strict_key and not has_team:
+        user_object_permission: Final = (
+            await get_object_permission(
+                object_permission_id=user_object.object_permission_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
             )
+            if user_object is not None and user_object.object_permission_id is not None
+            else None
+        )
+        _require_vector_store_grant("user", vector_store_ids_to_run, user_object_permission)
     return True
 
 
 def _can_object_call_vector_stores(
-    object_type: Literal["key", "team", "org"],
+    object_type: Literal["key", "team", "org", "user"],
     vector_store_ids_to_run: Sequence[str],
     object_permissions: _VectorStorePermissionsRow | None,
 ):

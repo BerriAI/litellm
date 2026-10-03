@@ -1451,11 +1451,7 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
         *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
         *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
     )
-    for key in keys:
-        try:
-            await user_api_key_cache.async_delete_cache(key=key)
-        except Exception as e:  # noqa: BLE001  # a cache we cannot clear still expires; never fail the write
-            verbose_proxy_logger.warning("Failed to invalidate cached entitlement key %r: %s", key, e)
+    await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
 
 
 async def _update_single_user_helper(
