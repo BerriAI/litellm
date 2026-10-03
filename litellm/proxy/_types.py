@@ -3016,6 +3016,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
     )
+    responses_websocket_first_message_timeout: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Seconds to wait for the first response.create frame on /responses and "
+            "/v1/responses when ?model= is omitted. Defaults to 30 when unset. Raise "
+            "this for clients that pre-open idle WebSocket pools (e.g. OpenAI Codex)."
+        ),
+    )
     transcribe_media_buckets: list[str] | None = Field(
         default=None,
         description="S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.",

@@ -702,6 +702,71 @@ class TestResponsesWSFirstFrameValidation:
         assert result is None
         ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
 
+    @pytest.mark.asyncio
+    async def test_first_frame_timeout_closes_socket(self):
+        """A first frame that arrives after the deadline closes with 1008."""
+        import asyncio
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        frame = json.dumps({"type": "response.create", "model": "gpt-4.1", "input": []})
+
+        async def delayed_receive():
+            await asyncio.sleep(0.15)
+            return frame
+
+        ws = MagicMock()
+        ws.receive_text = delayed_receive
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws, timeout=0.05)
+
+        assert result is None
+        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
+
+    @pytest.mark.asyncio
+    async def test_late_first_frame_accepted_when_timeout_raised(self):
+        """Raising the deadline accepts a first frame that would miss the old 30s default.
+
+        Uses a short scaled timeout so CI stays fast; the issue repro sleeps 31s against 30.
+        """
+        import asyncio
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        frame = json.dumps({"type": "response.create", "model": "gpt-4.1", "input": []})
+
+        async def delayed_receive():
+            await asyncio.sleep(0.08)
+            return frame
+
+        ws = MagicMock()
+        ws.receive_text = delayed_receive
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws, timeout=0.5)
+
+        assert ws.close.await_count == 0
+        assert result == ("gpt-4.1", frame)
+
+    def test_resolve_first_message_timeout_from_general_settings(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT,
+            _resolve_responses_ws_first_message_timeout,
+        )
+
+        assert _resolve_responses_ws_first_message_timeout(None) == DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT
+        assert _resolve_responses_ws_first_message_timeout({}) == DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT
+        assert _resolve_responses_ws_first_message_timeout(
+            {"responses_websocket_first_message_timeout": 1800}
+        ) == 1800.0
+
 
 class TestResponsesWSFirstFrameModelAuth:
     @pytest.mark.asyncio

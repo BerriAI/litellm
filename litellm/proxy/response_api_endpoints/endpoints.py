@@ -1313,16 +1313,40 @@ async def cancel_response(
         )
 
 
+DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT: Final = 30.0
+
+
+def _resolve_responses_ws_first_message_timeout(
+    general_settings: Mapping[str, object] | None = None,
+) -> float:
+    """Resolve the first-frame deadline for native Responses WebSockets.
+
+    Precedence: general_settings.responses_websocket_first_message_timeout -> 30s.
+    """
+    if not isinstance(general_settings, Mapping):
+        return DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT
+    configured = general_settings.get("responses_websocket_first_message_timeout")
+    # bool is a subclass of int; reject it so True/False never become 1.0/0.0.
+    if isinstance(configured, bool):
+        return DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT
+    if isinstance(configured, (int, float)):
+        return float(configured)
+    return DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT
+
+
 async def _read_ws_model_from_first_frame(
     websocket: WebSocket,
     query_model: str | None = None,
+    timeout: float = DEFAULT_RESPONSES_WS_FIRST_MESSAGE_TIMEOUT,
 ) -> tuple[str, str] | None:
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
+    ``timeout`` is the first-frame deadline in seconds (configurable via
+    ``general_settings.responses_websocket_first_message_timeout``).
     """
     try:
-        first_message: Final = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+        first_message: Final = await asyncio.wait_for(websocket.receive_text(), timeout=timeout)
     except asyncio.TimeoutError:
         await websocket.close(code=1008, reason="Timed out waiting for first message")
         return None
@@ -1514,7 +1538,10 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    result: Final = await _read_ws_model_from_first_frame(websocket, query_model=model)
+    first_message_timeout: Final = _resolve_responses_ws_first_message_timeout(
+        cast(Mapping[str, object], general_settings)  # cast-ok: proxy_server declares general_settings as bare dict
+    )
+    result: Final = await _read_ws_model_from_first_frame(websocket, query_model=model, timeout=first_message_timeout)
     if result is None:
         return
     resolved_model, first_message = result
