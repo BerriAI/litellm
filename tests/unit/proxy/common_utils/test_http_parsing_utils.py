@@ -2,6 +2,7 @@ import gzip
 import io
 import json
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -57,6 +58,44 @@ async def test_read_raw_json_body_returns_the_bytes_the_parsed_body_came_from():
 
     assert await _read_request_body(request) == orjson.loads(body)
     assert await read_raw_json_body(request) == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "route_template"),
+    [
+        ("/v1/chat/completions", None),
+        ("/chat/completions", None),
+        ("/engines/model/chat/completions", "/engines/{model:path}/chat/completions"),
+        ("/openai/deployments/model/chat/completions", "/openai/deployments/{model:path}/chat/completions"),
+        ("/v1/responses", None),
+        ("/responses", None),
+        ("/openai/v1/responses", None),
+        ("/v1/messages", None),
+    ],
+)
+@pytest.mark.parametrize("body", [b"[]", b"null", b'"text"', b"1", b"true"])
+async def test_non_object_json_body_is_rejected_before_caching(body: bytes, path: str, route_template: str | None):
+    request: Final = _starlette_request(body, "application/json", path=path)
+    if route_template is not None:
+        request.scope["route"] = SimpleNamespace(path=route_template)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _read_request_body(request)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert "must be a JSON object" in exc_info.value.message
+    assert _safe_get_request_parsed_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_passthrough_json_array_body_remains_available():
+    body: Final = b'[{"role":"user","content":"hello"}]'
+    request: Final = _starlette_request(body, "application/json", path="/vertex-ai/v1/rawPredict")
+
+    assert await _read_request_body(request) == json.loads(body)
+    assert await request.body() == body
 
 
 @pytest.mark.asyncio
