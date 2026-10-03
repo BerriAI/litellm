@@ -12,8 +12,6 @@ _LABEL_VALUES: Final = TypeAdapter(tuple[str, ...])
 
 
 def _parse_admission(line: bytes) -> tuple[str, ...] | None:
-    """A line a worker could only write part of, which happens when the directory runs out of space, admits
-    nothing for every worker rather than stopping every worker from reading the lines after it."""
     try:
         return _LABEL_VALUES.validate_json(line)
     except ValidationError:
@@ -48,7 +46,7 @@ class _MetricAdmissions:
     def _append(self, label_values: tuple[str, ...]) -> None:
         descriptor: Final = os.open(self._path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
-            os.write(descriptor, _LABEL_VALUES.dump_json(label_values) + b"\n")
+            os.write(descriptor, b"\n" + _LABEL_VALUES.dump_json(label_values) + b"\n")
         finally:
             os.close(descriptor)
 
@@ -75,7 +73,9 @@ class SharedPrometheusSeriesAdmissions:
     ``PROMETHEUS_MULTIPROC_DIR``. Each metric has one append-only file there, and its first ``max_series``
     distinct lines are the admitted label sets. Every worker reads the same lines in the same order, so all of
     them, including a worker that replaces an exited one, admit the same label sets and a scrape that merges
-    the workers stays at the cap."""
+    the workers stays at the cap. Each record sits between two newlines, so a record a worker could only write
+    part of (the directory ran out of space) is a line of its own that admits nothing for every worker, and
+    it neither hides the records after it nor runs into the next worker's record."""
 
     def __init__(self, directory: str) -> None:
         self._directory = directory

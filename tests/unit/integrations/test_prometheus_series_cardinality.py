@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 from threading import Thread
-from time import monotonic
 from typing import Final
 
 import pytest
@@ -56,7 +55,7 @@ def isolated_registry_and_settings(monkeypatch):
 
 @pytest.fixture
 def clock(monkeypatch):
-    now: Final = [monotonic()]
+    now: Final = [1_000.0]
     monkeypatch.setattr(bounded_prometheus_series_tracker.time, "monotonic", lambda: now[0])
     return now
 
@@ -200,9 +199,9 @@ def test_a_line_another_worker_is_still_writing_is_read_once_it_is_complete(tmp_
     assert reader.admit_series("litellm_requests_metric", ("user-b",), max_series=2)
 
 
-def test_a_line_cut_short_by_a_full_disk_admits_nothing_and_stops_no_worker(tmp_path: Path):
+def test_a_record_cut_short_by_a_full_disk_admits_nothing_and_hides_no_other_record(tmp_path: Path):
     admissions_file: Final = tmp_path / f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}litellm_requests_metric"
-    admissions_file.write_bytes(b'["user-a\n')
+    admissions_file.write_bytes(b'\n["user-a')
     writer: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
     reader: Final = SharedPrometheusSeriesAdmissions(directory=str(tmp_path))
 
