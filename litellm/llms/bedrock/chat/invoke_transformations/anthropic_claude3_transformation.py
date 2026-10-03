@@ -23,6 +23,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
 )
@@ -378,7 +379,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        return AnthropicConfig.transform_response(
+        transformed: Final = AnthropicConfig.transform_response(
             self,
             model=model,
             raw_response=raw_response,
@@ -392,3 +393,5 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        transformed.model = strip_bedrock_routing_prefix(model)
+        return transformed

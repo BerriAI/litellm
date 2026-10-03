@@ -1136,3 +1136,75 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+_INVOKE_CLAUDE_BODY: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5",
+    "content": [{"type": "text", "text": "hello there"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 10, "output_tokens": 20},
+}
+_CONVERSE_BODY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "hello there"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 10, "outputTokens": 20, "totalTokens": 30},
+    "metrics": {"latencyMs": 1},
+}
+
+
+def _complete_bedrock_claude(model: str, aws_region_name: str) -> litellm.ModelResponse:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    def fake_post(self, url, *args, **kwargs):
+        body = _CONVERSE_BODY if url.endswith("/converse") else _INVOKE_CLAUDE_BODY
+        return httpx.Response(
+            200,
+            json=body,
+            headers={"content-type": "application/json"},
+            request=httpx.Request("POST", url),
+        )
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        return litellm.completion(
+            model=model,
+            aws_region_name=aws_region_name,
+            messages=[{"role": "user", "content": "hi"}],
+            client=HTTPHandler(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("aws_region_name", "bedrock_model", "cost_key"),
+    [
+        ("us-gov-west-1", "anthropic.claude-opus-5", "bedrock/us-gov-west-1/anthropic.claude-opus-5"),
+        ("us-west-2", "anthropic.claude-opus-5", "anthropic.claude-opus-5"),
+        ("us-west-2", "us.anthropic.claude-opus-5", "us.anthropic.claude-opus-5"),
+        ("us-west-2", "global.anthropic.claude-opus-5", "global.anthropic.claude-opus-5"),
+        ("ap-northeast-2", "apac.anthropic.claude-opus-5", "apac.anthropic.claude-opus-5"),
+    ],
+)
+def test_invoke_claude_prices_like_converse_for_the_same_region_and_model(
+    local_model_cost_map, monkeypatch, aws_region_name, bedrock_model, cost_key
+):
+    """Invoke Claude used to drop region_name and report the Anthropic body model, so a
+    GovCloud call was priced at the commercial rate while Converse got the GovCloud key
+    (#44002). Cross-region profiles (us., apac.) must keep their own rate too."""
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    prices: Final = litellm.model_cost[cost_key]
+    expected_cost: Final = 10 * prices["input_cost_per_token"] + 20 * prices["output_cost_per_token"]
+
+    invoke: Final = _complete_bedrock_claude(f"bedrock/invoke/{bedrock_model}", aws_region_name)
+    converse: Final = _complete_bedrock_claude(f"bedrock/converse/{bedrock_model}", aws_region_name)
+
+    for response in (invoke, converse):
+        assert response._hidden_params["region_name"] == aws_region_name
+        assert response._hidden_params["custom_llm_provider"] == "bedrock"
+        assert response.model == bedrock_model
+        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
