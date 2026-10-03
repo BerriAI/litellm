@@ -171,7 +171,7 @@ async def read_spend(
 async def _gateway_users(database: _PrismaDatabase) -> AsyncIterator[_UserEmail]:
     cursor: str | None = None  # rebind-ok: keyset pagination advances after each bounded page
     while True:
-        users: Final = _USER_EMAILS.validate_python(
+        users: tuple[_UserEmail, ...] = _USER_EMAILS.validate_python(
             await database.query_raw(
                 'SELECT "user_id", "user_email" FROM "LiteLLM_UserTable" '
                 'WHERE "user_email" IS NOT NULL AND ($1::text IS NULL OR "user_id" > $1) '
