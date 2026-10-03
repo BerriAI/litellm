@@ -159,3 +159,26 @@ def test_v2_still_counts_request_tokens_to_enforce_a_declared_tpm_limit() -> Non
 
     assert messages.read_count > 0, "request messages must be tokenized when a deployment declares a tpm limit"
     assert picked is None, "a request larger than the remaining tpm budget must not be routed to the limited deployment"
+
+
+def test_v2_counts_request_tokens_when_only_one_of_two_deployments_declares_a_tpm_limit() -> None:
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=DualCache())
+    limited: Final = _deployment(LOW_USAGE_DEPLOYMENT_ID)
+    limited["litellm_params"]["tpm"] = 50
+    unlimited: Final = _deployment(HIGH_USAGE_DEPLOYMENT_ID)
+    messages: Final = _ReadTrackingMessages([{"role": "user", "content": "hello " * 200}])
+
+    picked: Final = strategy._common_checks_available_deployment(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[limited, unlimited],
+        tpm_keys=[f"{LOW_USAGE_DEPLOYMENT_ID}:gpt-4o:tpm:00-00", f"{HIGH_USAGE_DEPLOYMENT_ID}:gpt-4o:tpm:00-00"],
+        tpm_values=[10, 10],
+        rpm_keys=[f"{LOW_USAGE_DEPLOYMENT_ID}:gpt-4o:rpm:00-00", f"{HIGH_USAGE_DEPLOYMENT_ID}:gpt-4o:rpm:00-00"],
+        rpm_values=[1, 1],
+        messages=messages,
+    )
+
+    assert messages.read_count > 0, "a single tpm-limited deployment in the group must keep the request count"
+    assert picked is not None and picked["model_info"]["id"] == HIGH_USAGE_DEPLOYMENT_ID, (
+        "the oversized request must skip the tpm-limited deployment and land on the unlimited one"
+    )
