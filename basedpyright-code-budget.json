@@ -9,7 +9,7 @@
     "limit": 319
   },
   "reportAttributeAccessIssue": {
-    "limit": 481
+    "limit": 480
   },
   "reportCallIssue": {
     "limit": 112
