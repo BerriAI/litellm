@@ -5,7 +5,7 @@ use litellm_traces::query::named as contracts;
 use litellm_traces_clickhouse::{
     QueryScope,
     query::named::{ListTraces, ListTracesParams, TraceSpans, TraceSpansParams},
-    query_sql,
+    query_help, query_sql,
 };
 use rstest::{fixture, rstest};
 use serde::Deserialize;
@@ -48,12 +48,9 @@ struct QueryResult {
 }
 
 #[rstest]
-#[case::rollups(include_str!("queries/rollups.sql"), include_str!("queries/rollups.expected.json"))]
 #[case::costs(include_str!("queries/trace_costs.sql"), include_str!("queries/trace_costs.expected.json"))]
-#[case::errors(include_str!("queries/failed_spans.sql"), include_str!("queries/failed_spans.expected.json"))]
-#[case::metadata(include_str!("queries/metadata_filters.sql"), include_str!("queries/metadata_filters.expected.json"))]
 #[tokio::test]
-async fn curated_queries_return_expected_rows(
+async fn storage_queries_return_expected_rows(
     #[future(awt)] seeded_database: TestResult<SeededDatabase>,
     #[case] sql: &str,
     #[case] expected_json: &str,
@@ -76,6 +73,64 @@ async fn curated_queries_return_expected_rows(
         scope.as_ref()
     );
     Ok(())
+}
+
+#[rstest]
+#[case::trace_summary("Trace summaries with tokens and errors", include_str!("../query/help/trace_summary.sql"), include_str!("queries/rollups.expected.json"))]
+#[case::failed_spans("Recent failed spans", include_str!("../query/help/failed_spans.sql"), include_str!("queries/failed_spans.expected.json"))]
+#[case::metadata_filter("Filter calls by nested metadata", include_str!("../query/help/metadata_filter.sql"), include_str!("queries/metadata_filters.expected.json"))]
+#[tokio::test]
+async fn documented_queries_render_and_return_expected_rows(
+    #[future(awt)] seeded_database: TestResult<SeededDatabase>,
+    fixture_clock: TestResult<u64>,
+    #[case] name: &str,
+    #[case] expected_sql: &str,
+    #[case] expected_json: &str,
+    #[values(ScopeCase::Admin, ScopeCase::Team, ScopeCase::OtherTeam)] scope: ScopeCase,
+) -> TestResult {
+    let fixture = seeded_database?;
+    let reader = fixture
+        .readers
+        .connection(&fixture.database.client, &scope.scope(), "fixture-secret")
+        .await?;
+    let help = serde_json::to_value(query_help(&fixture.database.client, &reader).await?)?;
+    let example = help["examples"]
+        .as_array()
+        .ok_or("missing examples")?
+        .iter()
+        .find(|example| example["name"] == name)
+        .ok_or("missing documented query")?;
+    let sql = example["sql"].as_str().ok_or("missing example SQL")?;
+    assert_eq!(sql.trim(), expected_sql.trim());
+    assert!(
+        help["guide"]
+            .as_str()
+            .ok_or("missing guide")?
+            .contains(&format!("{name}\n{sql}"))
+    );
+    let sql_at_fixture_time = sql.replace("now()", &format!("toDateTime({})", fixture_clock?));
+    let result: QueryResult = serde_json::from_str(
+        &query_sql(&fixture.database.client, &reader, &sql_at_fixture_time).await?,
+    )?;
+    let expected: BTreeMap<String, Vec<Value>> = serde_json::from_str(expected_json)?;
+    assert_eq!(
+        &result.data,
+        expected
+            .get(scope.as_ref())
+            .ok_or("missing expected scope")?,
+        "{}: {sql}",
+        scope.as_ref()
+    );
+    Ok(())
+}
+
+#[fixture]
+fn fixture_clock() -> TestResult<u64> {
+    let spans = litellm_traces::decode_otlp(
+        include_bytes!("../../traces/tests/fixtures/query_root.json"),
+        Some("application/json"),
+    )?;
+    Ok(spans.first().ok_or("missing fixture root")?.start_ns / 1_000_000_000)
 }
 
 #[fixture]
