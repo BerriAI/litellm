@@ -562,3 +562,23 @@ it("lists investigations without edit or run controls for read-only viewers", as
   await user.click(row);
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
+
+it("shows the actual saved failure and run context without opening backend logs", async () => {
+  testQueryClient.clear();
+  const error =
+    "Grouping observations failed: Clusters response invalid after 2 attempts.\n" +
+    "candidates.0.check_id: Field required [missing]";
+  const job = { ...lens.jobs[0], id: "failed-run", status: "failed" as const, stage: "Failed", error, findings: [] };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [job];
+    if (path === "/lens/lens/runs/failed-run") return job;
+    return { data: [] };
+  });
+  renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
+  const failure = within(await screen.findByRole("alert"));
+  expect(failure.getByLabelText("Investigation error")).toHaveTextContent(error.replaceAll("\n", " "));
+  expect(failure.getByText("failed-run")).toBeVisible();
+  expect(failure.getByText(job.settings.model)).toBeVisible();
+  expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();
+});

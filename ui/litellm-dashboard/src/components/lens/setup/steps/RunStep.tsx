@@ -44,13 +44,7 @@ export function RunStep({
             control={control}
             name="interval"
             render={({ field }) => (
-              <DurationInput
-                label="Check every"
-                value={field.value}
-                onChange={field.onChange}
-                base="minutes"
-                max={10080}
-              />
+              <DurationInput label="Check every" value={field.value} onChange={field.onChange} base="minutes" />
             )}
           />
         )}
@@ -106,7 +100,7 @@ export function RunStep({
           <div className="grid gap-5 sm:grid-cols-2">
             <label className="grid content-start gap-2 text-sm font-medium">
               Monthly limit (USD)
-              <Input {...register("budget", { valueAsNumber: true })} type="number" min="0.01" max="100000" step="1" />
+              <Input {...register("budget", { valueAsNumber: true })} type="number" min="0.01" step="1" />
               {errors.budget?.message && (
                 <p role="alert" className="text-sm text-destructive">
                   {errors.budget.message}

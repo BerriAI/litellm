@@ -16,6 +16,7 @@ base64.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"
+itertools = "0.14.0"
 litellm-http.workspace = true
 litellm-migrate.workspace = true
 litellm-storage-clickhouse.workspace = true

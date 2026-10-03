@@ -249,3 +249,45 @@ def test_run_now_with_a_lookback_scans_that_lookback_instead_of_since_last_run()
     now: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
     resumed: Final = saved_lens().model_copy(update={"last_scan_at": now - timedelta(hours=1)})
     assert run_window(resumed, RunRequest(lookback_hours=24), now) is None
+
+
+@pytest.mark.parametrize("provider", (False, True))
+def test_model_errors_reach_worker_with_status_and_redacted_provider_message(provider: bool) -> None:
+    import httpx
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.lens.endpoints import model_failure
+    from litellm.proxy.lens.worker import failure_message
+
+    message: Final = "Token rate limit exceeded. api_key=secret-example-value-123456 Retry in 60 seconds."
+    error: Final = model_failure(
+        ProxyException(message, "rate_limit_error", None, 429, headers={"retry-after": "60"})
+        if provider
+        else HTTPException(429, message, headers={"retry-after": "60"})
+    )
+    request: Final = httpx.Request("POST", "https://proxy.test/lens/worker/lens/run/model")
+    response: Final = httpx.Response(error.status_code, json={"detail": error.detail}, request=request)
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        response.raise_for_status()
+    diagnostic: Final = failure_message(caught.value)
+    assert diagnostic.startswith("Model request failed (HTTP 429):")
+    assert "Token rate limit exceeded." in diagnostic
+    assert "Retry in 60 seconds." in diagnostic
+    assert "secret-example" not in diagnostic
+    assert error.headers == {"retry-after": "60"}
+
+
+@pytest.mark.asyncio
+async def test_preview_reports_calendar_overflow_as_a_validation_error() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy.lens.endpoints import Preview, preview_sample
+
+    body: Final = Preview(
+        settings=LensSettings(name="Calendar regression", model="analysis", context="Read recorded activity"),
+        as_of=datetime.min.replace(tzinfo=timezone.utc),
+    )
+    with pytest.raises(HTTPException) as error:
+        await preview_sample(body, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), None)
+    assert error.value.status_code == 422
+    assert "supported calendar range" in error.value.detail
