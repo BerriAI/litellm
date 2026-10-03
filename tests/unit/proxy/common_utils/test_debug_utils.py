@@ -1,6 +1,8 @@
+import gc
 import json
 import os
 import socket
+import weakref
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -17,6 +19,7 @@ from litellm.proxy.common_utils.debug_utils import (
     PSUTIL_MISSING_ERROR,
     _ProcFilesystemProcess,
     _summary_process_memory,
+    freeze_startup_heap,
     get_memory_summary,
 )
 from litellm.proxy.common_utils.debug_utils import router as debug_router
@@ -146,3 +149,25 @@ def test_debug_report_returns_what_the_bug_report_link_carries_and_nothing_from_
         "model_list[*].provider = [azure]",
     ]
     assert not any(hostile in response.text for hostile in HOSTILE_STRINGS), response.text
+
+
+@pytest.fixture
+def unfrozen_heap() -> Iterator[None]:
+    gc.unfreeze()
+    yield
+    gc.unfreeze()
+
+
+class StartupObject:
+    def __init__(self) -> None:
+        self.cycle = self
+
+
+def test_freeze_startup_heap_keeps_startup_objects_out_of_later_full_collections(unfrozen_heap: None) -> None:
+    startup_object = StartupObject()
+    still_alive = weakref.ref(startup_object)
+    frozen = freeze_startup_heap()
+    assert frozen == gc.get_freeze_count() > 0
+    del startup_object
+    gc.collect()
+    assert still_alive() is not None

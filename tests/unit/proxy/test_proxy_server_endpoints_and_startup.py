@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import gc
 import importlib
 import json
 import logging
@@ -9,6 +10,7 @@ import socket
 import subprocess
 import time
 import types
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
@@ -15534,3 +15536,35 @@ async def test_update_cache_reads_and_writes_declare_the_auth_objects_key_family
     assert seen, "update_cache must touch the cache for a priced user request"
     assert {target for _, target in seen} == {"auth_objects"}
     assert current_service_target() is None
+
+
+@patch(
+    "litellm.proxy.proxy_server.ProxyStartupEvent._setup_prisma_client",
+    return_value=mock_prisma,
+)
+@pytest.mark.asyncio
+async def test_proxy_startup_freezes_the_startup_heap_before_serving(mock_prisma, monkeypatch, tmp_path):
+    import yaml
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", MockPrisma)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"general_settings": {"master_key": "sk-12345"}}))
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+
+    class StartupCycle:
+        def __init__(self) -> None:
+            self.cycle = self
+
+    startup_object = StartupCycle()
+    still_alive = weakref.ref(startup_object)
+    gc.unfreeze()
+    try:
+        async with proxy_startup_event(FastAPI()):
+            del startup_object
+            gc.collect()
+            assert still_alive() is not None, "an object allocated before startup finished was collected after it"
+    finally:
+        gc.unfreeze()

@@ -57,6 +57,16 @@ def configure_gc_thresholds():
 configure_gc_thresholds()
 
 
+def freeze_startup_heap() -> int:
+    """Freezes the million-plus objects alive after startup so later full collections skip them instead of
+    stalling the event loop, and every in-flight body read, for hundreds of milliseconds."""
+    gc.collect()
+    gc.freeze()
+    frozen: Final = gc.get_freeze_count()
+    verbose_proxy_logger.info("GC froze %d startup objects out of future collections", frozen)
+    return frozen
+
+
 @router.get(
     "/debug/asyncio-tasks",
     dependencies=[Depends(user_api_key_auth)],
