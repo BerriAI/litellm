@@ -580,5 +580,9 @@ describe("TeamSSOSettings", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save Changes/i }));
 
     expect(screen.getByRole("button", { name: /Cancel/i })).toBeDisabled();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Edit Settings/i })).toBeInTheDocument();
+    });
   });
 });
