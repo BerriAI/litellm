@@ -675,13 +675,18 @@ def test_settlement_on_another_replica_releases_the_creators_budget_reservation(
     with rig.creator.scenario() as scenario:
         model: Final = rig.models.in_progress
         key: Final = scenario.key(max_budget=0.5 * _reservation_pin(rig.creator, model))
+        janitor: Final = scenario.key()
         first: Final = _create(rig.creator, model, key)
         pinned: Final = rig.creator.request(
             "POST", "/v1beta/interactions", {"model": model, "input": "settle pinned", "background": True}, key=key
         )
         assert pinned.status_code == 422 and pinned.json()["error"]["type"] == "budget_exceeded", pinned.text
         _state(rig, first, _completed())
-        deleted: Final = _delete(rig.settler, first, key)
+        still_pinned: Final = _delete(rig.settler, first, key)
+        assert still_pinned.status_code == 422 and still_pinned.json()["error"]["type"] == "budget_exceeded", (
+            still_pinned.text
+        )
+        deleted: Final = _delete(rig.settler, first, janitor)
         assert deleted.status_code == 200, deleted.text
         spend: Final = _assert_billed(_await_spend_row(first), _rates(rig.creator, model))
         _await_key_spend(rig.creator, key, spend)
