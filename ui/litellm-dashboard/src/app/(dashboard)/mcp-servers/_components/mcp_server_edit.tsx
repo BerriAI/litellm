@@ -727,6 +727,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   const isOAuthPending = ["authorizing", "exchanging"].includes(oauthStatus);
 
+  const handleCancel = () => {
+    window.sessionStorage.removeItem(EDIT_OAUTH_UI_STATE_KEY);
+    resetOAuthFlow();
+    onCancel();
+  };
+
   const submitForm = async () => {
     if (isOAuthPending) return;
     const isValid = await form.trigger(mountedPaths(registry) as string[]);
@@ -1319,7 +1325,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 </div>
 
                 <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={onCancel}>
+                  <Button variant="outline" onClick={handleCancel}>
                     Cancel
                   </Button>
                   <Button type="submit" disabled={isOAuthPending}>
@@ -1336,7 +1342,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={isLoadingTools} />
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={onCancel}>
+              <Button variant="outline" onClick={handleCancel}>
                 Cancel
               </Button>
               <Button onClick={() => void submitForm()} disabled={isOAuthPending}>

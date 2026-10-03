@@ -1783,6 +1783,28 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
   });
 
+  it("discards a canceled OAuth snapshot before saved server data loads", async () => {
+    setSecureItem(
+      EDIT_OAUTH_UI_STATE_KEY,
+      JSON.stringify({
+        serverId: interactiveOAuthServer.server_id,
+        formValues: { ...interactiveOAuthServer, url: "https://new.example/mcp" },
+      }),
+    );
+    const props = { accessToken: "access-token", onCancel: vi.fn(), onSuccess: vi.fn(), availableAccessGroups: [] };
+    const view = render(<MCPServerEdit {...props} mcpServer={{ ...interactiveOAuthServer, server_id: "", url: "" }} />);
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]);
+    });
+    expect(props.onCancel).toHaveBeenCalledOnce();
+    expect(window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY)).toBeNull();
+    expect(mockOauth.reset).toHaveBeenCalled();
+    view.unmount();
+    render(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
+    await waitFor(() => expect(screen.getByLabelText("MCP Server URL")).toHaveValue(interactiveOAuthServer.url));
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+  });
+
   it("restores the edited upstream after OAuth when saved server data loads later", async () => {
     setSecureItem(
       EDIT_OAUTH_UI_STATE_KEY,
