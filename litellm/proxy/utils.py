@@ -44,6 +44,7 @@ from typing import (
     Union,
     cast,
     overload,
+    runtime_checkable,
 )
 
 from typing_extensions import ReadOnly, TypedDict
@@ -524,8 +525,13 @@ class _UpstreamStreamBoundary(Generic[_T]):
             raise
 
 
+@runtime_checkable
+class _ClosableAsyncIterator(Protocol):
+    def aclose(self) -> object: ...
+
+
 class _StreamIteratorHook(Protocol[_T]):
-    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncGenerator[_T, None]: ...
+    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncIterator[_T]: ...
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
@@ -2764,8 +2770,15 @@ class ProxyLogging:
     ) -> AsyncGenerator[_T, None]:
         upstream: Final = _UpstreamStreamBoundary(response)
         try:
-            async for chunk in hook(response=upstream):
-                yield chunk
+            guarded: Final = hook(response=upstream)
+            try:
+                async for chunk in guarded:
+                    yield chunk
+            finally:
+                if isinstance(guarded, _ClosableAsyncIterator):
+                    closing: Final = guarded.aclose()
+                    if inspect.isawaitable(closing):
+                        await closing
         except Exception as e:
             if e is not upstream.failure:
                 enrich_http_exception_with_guardrail_context(e, callback)
@@ -3950,6 +3963,7 @@ class ProxyLogging:
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
+        guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
                 if resolved_callback.guardrail_name in pipeline_gated_names:
@@ -3992,6 +4006,7 @@ class ProxyLogging:
                 hook,
                 request_data=request_data,
             )
+            guarded_layers.append(current_response)
 
         pipeline_translation: Final = (
             resolve_endpoint_translation(user_api_key_dict, None) if post_call_pipelines else None
@@ -4004,6 +4019,7 @@ class ProxyLogging:
                 pipelines=post_call_pipelines,
                 translation=pipeline_translation,
             )
+            guarded_layers.append(current_response)
 
         served_chunks: Final[list[object]] = []  # mutable-ok: accumulates while yielding to the client
         try:
@@ -4011,6 +4027,7 @@ class ProxyLogging:
                 served_chunks.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
+            await ProxyLogging._close_guarded_layers(guarded_layers)
             ProxyLogging._record_served_stream_output(request_data, served_chunks)
             raise
         except Exception as e:
@@ -4090,6 +4107,16 @@ class ProxyLogging:
 
         for buffered_item in buffered:
             yield buffered_item
+
+    @staticmethod
+    async def _close_guarded_layers(layers: Sequence[AsyncGenerator[object, None]]) -> None:
+        for layer in reversed(layers):
+            try:
+                await layer.aclose()
+            except Exception as e:  # noqa: BLE001  # one failing callback cleanup must not skip the inner ones
+                verbose_proxy_logger.warning(
+                    "Closing a streaming callback layer after a client disconnect raised %s", type(e).__name__
+                )
 
     @staticmethod
     def _record_served_stream_output(request_data: Mapping[str, object], served_chunks: Sequence[object]) -> None:
