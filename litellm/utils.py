@@ -410,7 +410,7 @@ if TYPE_CHECKING:
         BaseVectorStoreFilesConfig,
     )
     from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo, BedrockRoute
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
     from litellm.llms.bedrock.embed.amazon_nova_transformation import (
         AmazonNovaEmbeddingConfig,
     )
@@ -3473,14 +3473,6 @@ def _should_drop_param(k, additional_drop_params) -> bool:
     return False
 
 
-def _bedrock_route_for_request(
-    model: str, passed_params: Mapping[str, object], additional_drop_params: Sequence[str] | None
-) -> BedrockRoute:
-    from litellm.llms.bedrock.common_utils import bedrock_route_for_request
-
-    return bedrock_route_for_request(model, passed_params, additional_drop_params)
-
-
 def _get_non_default_params(passed_params: dict, default_params: dict, additional_drop_params: list | None) -> dict:
     non_default_params: Final = {}
     for k, v in passed_params.items():
@@ -3611,7 +3603,7 @@ def get_optional_params_image_gen(
     user: str | None = None,
     imageConfig: dict | None = None,
     custom_llm_provider: str | None = None,
-    additional_drop_params: Sequence[str] | None = None,
+    additional_drop_params: list | None = None,
     provider_config: BaseImageGenerationConfig | None = None,
     drop_params: bool | None = None,
     **kwargs: object,
@@ -4454,7 +4446,7 @@ def get_optional_params(
     allowed_openai_params: list[str] | None = None,
     reasoning_effort=None,
     verbosity=None,
-    additional_drop_params: list[str] | None = None,
+    additional_drop_params=None,
     messages: list[AllMessageValues] | None = None,
     thinking: AnthropicThinkingParam | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
@@ -4522,17 +4514,9 @@ def get_optional_params(
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
-    bedrock_route: Final = (
-        _bedrock_route_for_request(model, passed_params, additional_drop_params)
-        if custom_llm_provider == "bedrock"
-        else None
-    )
     get_supported_openai_params: Final[_SupportedOpenAIParamsGetter] = litellm_utils.get_supported_openai_params
-    supported_params = (
-        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
-        if bedrock_route == "converse"
-        and isinstance(provider_config, litellm.AmazonBedrockRuntimeChatCompletionsConfig)
-        else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
+    supported_params = get_supported_openai_params(
+        model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
     )
     if supported_params is None:
         supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
@@ -4702,6 +4686,7 @@ def get_optional_params(
         )
     elif custom_llm_provider == "bedrock":
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
+        bedrock_route: Final = bedrock_model_info.get_bedrock_route(model)
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(

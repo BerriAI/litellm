@@ -206,7 +206,6 @@ LLM_CONFIG_NAMES: Final = (
     "AmazonTwelveLabsPegasusConfig",
     "AmazonInvokeConfig",
     "AmazonBedrockOpenAIConfig",
-    "AmazonBedrockRuntimeChatCompletionsConfig",
     "AmazonStabilityConfig",
     "AmazonStability3Config",
     "AmazonNovaCanvasConfig",
@@ -868,10 +867,6 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "AmazonBedrockOpenAIConfig": (
         ".llms.bedrock.chat.invoke_transformations.amazon_openai_transformation",
         "AmazonBedrockOpenAIConfig",
-    ),
-    "AmazonBedrockRuntimeChatCompletionsConfig": (
-        ".llms.bedrock.chat.chat_completions.transformation",
-        "AmazonBedrockRuntimeChatCompletionsConfig",
     ),
     "AmazonStabilityConfig": (
         ".llms.bedrock.image_generation.amazon_stability1_transformation",
