@@ -20,7 +20,11 @@ vi.mock("@/components/networking", () => ({
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
   fetchMCPGatewaySessions: vi.fn(),
   terminateMCPGatewaySessions: vi.fn(),
+  getUiConfig: vi.fn().mockResolvedValue({}),
 }));
+
+const stubUiConfig = (config: object) =>
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(config), { status: 200 }));
 
 const createQueryClient = () =>
   new QueryClient({
@@ -135,6 +139,7 @@ describe("MCPServers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    stubUiConfig({});
   });
 
   it("should render the MCPServers component with title", async () => {
@@ -297,6 +302,90 @@ describe("MCPServers", () => {
     await userEvent.type(search, "no-match");
     expect(screen.queryByTestId("mcp-servers-grid")).not.toBeInTheDocument();
     expect(screen.getByText("No servers match the current filters or search.")).toBeVisible();
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ])("marks stdio servers as disabled only when the proxy reports stdio off (enabled=%s)", async (enabled, flagged) => {
+    stubUiConfig({ mcp_stdio_enabled: enabled });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: "stdio-1",
+        server_name: "local_tools",
+        alias: "local_tools",
+        transport: "stdio",
+        command: "python",
+        args: ["server.py"],
+        created_by: "user",
+        updated_by: "user",
+      } as MCPServer,
+    ]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    const grid = await screen.findByTestId("mcp-servers-grid");
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await waitFor(() => expect(within(grid).queryByText("stdio disabled") !== null).toBe(flagged));
+    expect(within(grid).getByText("STDIO")).toBeInTheDocument();
+  });
+
+  const stdioServer = {
+    server_id: "stdio-1",
+    server_name: "local_tools",
+    alias: "local_tools",
+    transport: "stdio",
+    command: "python",
+    args: ["server.py"],
+    created_by: "user",
+    updated_by: "user",
+  } as MCPServer;
+
+  it("greys out stdio in the create form when the proxy reports stdio off", async () => {
+    stubUiConfig({ mcp_stdio_enabled: false });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} userRole="Internal User" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+    await user.click(await screen.findByRole("button", { name: "+ Submit MCP Server" }));
+    await user.click(await screen.findByRole("combobox", { name: /Transport Type/ }));
+
+    expect(await screen.findByRole("option", { name: /Standard Input\/Output \(stdio\)/ })).toHaveAttribute(
+      "data-disabled",
+    );
+    expect(screen.getByRole("option", { name: /Streamable HTTP/ })).not.toHaveAttribute("data-disabled");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+  });
+
+  it("explains on the edit page why an existing stdio server cannot run when the proxy reports stdio off", async () => {
+    stubUiConfig({ mcp_stdio_enabled: false });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([stdioServer]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    const grid = await screen.findByTestId("mcp-servers-grid");
+    await waitFor(() => expect(within(grid).getByText("stdio disabled")).toBeInTheDocument());
+
+    await user.click(within(grid).getAllByText("local_tools")[0]);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+
+    expect(await screen.findByText("stdio is disabled on this proxy")).toBeInTheDocument();
   });
 
   it("should render mocked MCP servers data in the table", async () => {

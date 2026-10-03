@@ -12,6 +12,8 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -688,8 +690,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if AnthropicModelInfo().is_tool_search_used(tools):
             beta_values.add(get_tool_search_beta_header(custom_llm_provider))
 
-        if not beta_values:
+        thinking_display_betas: Final = (
+            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,)
+            if AnthropicModelInfo().is_thinking_display_updates_used(optional_params.get("thinking"))
+            else ()
+        )
+        tool_change_betas: Final = (
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,)
+            if AnthropicModelInfo().is_mid_conversation_tool_change_used(messages)
+            else ()
+        )
+        all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+
+        if not all_beta_values:
             return headers
         merged: Final = {key: value for key, value in headers.items() if key.lower() != "anthropic-beta"}
-        merged["anthropic-beta"] = ",".join(sorted(beta_values))
+        merged["anthropic-beta"] = ",".join(sorted(all_beta_values))
         return merged

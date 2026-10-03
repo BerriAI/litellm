@@ -99,9 +99,7 @@ class InvalidControlOption:
 
 
 def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
-    given: Final = {  # mutable-ok: TypeAdapter.validate_python takes a dict
-        name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs
-    }
+    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
     try:
         return _CONTROL_OPTIONS.validate_python(given)
     except ValidationError as e:
@@ -118,8 +116,8 @@ def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptio
 
 def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
     if control == ControlOptions():
-        return dict(litellm_params)  # mutable-ok: completion() hands litellm_params to provider code typed as dict
-    return {**litellm_params, CONTROL_OPTIONS_KEY: control}  # mutable-ok: same dict contract as above
+        return dict(litellm_params)
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
 
 
 def _get_base_model_from_litellm_call_metadata(
@@ -155,6 +153,7 @@ def get_litellm_params(
     allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
+    cost_per_second: float | None = None,
     input_cost_per_second=None,
     input_cost_per_token=None,
     output_cost_per_token=None,
@@ -216,6 +215,7 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "cost_per_second": cost_per_second,
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,

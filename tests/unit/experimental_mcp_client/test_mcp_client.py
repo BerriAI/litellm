@@ -3,8 +3,9 @@ import base64
 import importlib
 import json
 import os
+import selectors
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -79,6 +80,42 @@ class _MockTransportClient(MCPClient):
             headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
         )
         return streamable_http_client(self.server_url, http_client=http_client), http_client
+
+
+class _ManualClockLoop(asyncio.SelectorEventLoop):
+    """An event loop whose clock moves only when the test advances it, so timeouts fire on test-controlled conditions"""
+
+    def __init__(self, selector: selectors.BaseSelector | None = None) -> None:
+        super().__init__(selector)
+        self._now = 0.0
+
+    def time(self) -> float:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+
+class _AutojumpSelector(selectors.DefaultSelector):
+    def __init__(self, advance: Callable[[float], None]) -> None:
+        super().__init__()
+        self._advance = advance
+
+    def select(self, timeout: float | None = None) -> list[tuple[selectors.SelectorKey, int]]:
+        ready: Final = super().select(0)
+        if ready or timeout == 0:
+            return ready
+        if timeout is None:
+            return super().select(None)
+        self._advance(timeout)
+        return []
+
+
+class _AutojumpClockLoop(_ManualClockLoop):
+    """A manual-clock loop that jumps to the next timer only once no callback or I/O event is left to run"""
+
+    def __init__(self) -> None:
+        super().__init__(_AutojumpSelector(self.advance))
 
 
 class _FakeExceptionGroup(Exception):
@@ -1876,16 +1913,26 @@ async def test_transport_parsing_failure_is_preserved(transport: MCPTransport, f
         )
 
 
-@pytest.mark.asyncio
-async def test_sse_read_failure_is_preserved() -> None:
-    client: Final = MCPClient(server_url="https://example.com/sse", transport_type=MCPTransport.sse, timeout=0.2)
-    with pytest.raises(httpx2.ReadError, match="secret-read-error"):
-        await asyncio.wait_for(
-            client._execute_session_operation(
-                _diagnostic_transport(MCPTransport.sse, "io-error", "tools/list"), lambda session: session.list_tools()
-            ),
-            timeout=3,
-        )
+def test_sse_read_failure_is_preserved() -> None:
+    loop: Final = _AutojumpClockLoop()
+
+    async def run() -> None:
+        client: Final = MCPClient(server_url="https://example.com/sse", transport_type=MCPTransport.sse, timeout=0.2)
+        with pytest.raises(httpx2.ReadError, match="secret-read-error"):
+            await asyncio.wait_for(
+                client._execute_session_operation(
+                    _diagnostic_transport(MCPTransport.sse, "io-error", "tools/list"),
+                    lambda session: session.list_tools(),
+                ),
+                timeout=3,
+            )
+
+    try:
+        loop.run_until_complete(run())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
 
 
 @pytest.mark.asyncio
@@ -2309,16 +2356,20 @@ async def test_optional_discovery_collects_all_pages(method: str, session_id: st
     assert sum(call.args[0].method == "DELETE" for call in responder.call_args_list) == (1 if session_id else 0)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ("prompts/list", "resources/list", "resources/templates/list"))
 @pytest.mark.parametrize(
     "failure", ("repeat", "cycle", "cap", "method_not_found", "internal_error", "unauthorized", "deadline")
 )
 @pytest.mark.parametrize("strict", (False, True))
-async def test_optional_discovery_rejects_incomplete_walks(
+def test_optional_discovery_rejects_incomplete_walks(
     method: str, failure: str, strict: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_MAX_PAGES", 3 if failure == "cycle" else 2, raising=False)
+    monkeypatch.setattr(
+        mcp_client_module,
+        "MCP_TOOL_LISTING_MAX_PAGES",
+        3 if failure in ("cycle", "repeat") else 2,
+        raising=False,
+    )
     monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_TIMEOUT", 0.05)
     field: Final = {
         "prompts/list": "prompts",
@@ -2330,82 +2381,98 @@ async def test_optional_discovery_rejects_incomplete_walks(
         "resources/list": {"name": "first", "uri": "test://first"},
         "resources/templates/list": {"name": "first", "uriTemplate": "test://{name}"},
     }[method]
-    cancelled: Final = asyncio.Event()
+    loop: Final = _ManualClockLoop()
 
-    async def respond(request: httpx2.Request) -> httpx2.Response:
-        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
-        if not isinstance(payload, JSONRPCRequest):
-            return httpx2.Response(202)
-        if payload.method == "initialize":
-            return httpx2.Response(
-                200,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": payload.id,
-                    "result": {
-                        "protocolVersion": (payload.params or {})["protocolVersion"],
-                        "capabilities": {"prompts": {}, "resources": {}},
-                        "serverInfo": {"name": "interrupted", "version": "1"},
-                    },
-                },
-            )
-        assert payload.method == method
-        cursor: Final = (payload.params or {}).get("cursor")
-        if cursor is not None:
-            if failure == "deadline":
-                try:
-                    await asyncio.Event().wait()
-                finally:
-                    cancelled.set()
-            if failure == "unauthorized":
-                return httpx2.Response(401)
-            if failure in ("method_not_found", "internal_error"):
+    async def run() -> None:
+        cancelled: Final = asyncio.Event()
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+            if not isinstance(payload, JSONRPCRequest):
+                return httpx2.Response(202)
+            if payload.method == "initialize":
                 return httpx2.Response(
                     200,
                     json={
                         "jsonrpc": "2.0",
                         "id": payload.id,
-                        "error": {
-                            "code": -32601 if failure == "method_not_found" else -32603,
-                            "message": "Later page unavailable",
+                        "result": {
+                            "protocolVersion": (payload.params or {})["protocolVersion"],
+                            "capabilities": {"prompts": {}, "resources": {}},
+                            "serverInfo": {"name": "interrupted", "version": "1"},
                         },
                     },
                 )
-        next_cursor: Final = (
-            "private-cursor-2" if cursor == "private-cursor-1" and failure != "repeat" else "private-cursor-1"
-        )
-        return httpx2.Response(
-            200, json={"jsonrpc": "2.0", "id": payload.id, "result": {field: [entry], "nextCursor": next_cursor}}
-        )
+            assert payload.method == method
+            cursor: Final = (payload.params or {}).get("cursor")
+            if cursor is not None:
+                if failure == "deadline":
+                    loop.advance(0.15)
+                    try:
+                        for _ in range(1_000):
+                            await asyncio.sleep(0)
+                    except asyncio.CancelledError:
+                        cancelled.set()
+                        raise
+                    return httpx2.Response(500)
+                if failure == "unauthorized":
+                    return httpx2.Response(401)
+                if failure in ("method_not_found", "internal_error"):
+                    return httpx2.Response(
+                        200,
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": payload.id,
+                            "error": {
+                                "code": -32601 if failure == "method_not_found" else -32603,
+                                "message": "Later page unavailable",
+                            },
+                        },
+                    )
+            if failure == "deadline" and cursor is None:
+                loop.advance(0.1)
+            next_cursor: Final = (
+                "private-cursor-2" if cursor == "private-cursor-1" and failure != "repeat" else "private-cursor-1"
+            )
+            return httpx2.Response(
+                200, json={"jsonrpc": "2.0", "id": payload.id, "result": {field: [entry], "nextCursor": next_cursor}}
+            )
 
-    responder: Final = AsyncMock(side_effect=respond)
-    client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp", timeout=0.2)
-    operation: Final = {
-        "prompts/list": client.list_prompts,
-        "resources/list": client.list_resources,
-        "resources/templates/list": client.list_resource_templates,
-    }[method]
-    if strict:
-        error_type: Final = {
-            "internal_error": MCPError,
-            "unauthorized": httpx2.HTTPStatusError,
-            "deadline": TimeoutError,
-        }.get(failure, RuntimeError)
-        with pytest.raises(error_type):
-            await operation(raise_on_error=True)
-    else:
-        assert await operation() == []
-    assert len(
-        tuple(
-            payload
-            for call in responder.call_args_list
-            if isinstance(payload := _JSONRPC_MESSAGE_ADAPTER.validate_json(call.args[0].content), JSONRPCRequest)
-            and payload.method == method
-        )
-    ) == (3 if failure == "cycle" else 2)
-    assert "private-cursor" not in caplog.text
-    if failure == "deadline":
-        assert cancelled.is_set()
+        responder: Final = AsyncMock(side_effect=respond)
+        client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp", timeout=0.2)
+        operation: Final = {
+            "prompts/list": client.list_prompts,
+            "resources/list": client.list_resources,
+            "resources/templates/list": client.list_resource_templates,
+        }[method]
+        if strict:
+            error_type: Final = {
+                "internal_error": MCPError,
+                "unauthorized": httpx2.HTTPStatusError,
+                "deadline": TimeoutError,
+            }.get(failure, RuntimeError)
+            with pytest.raises(error_type):
+                await operation(raise_on_error=True)
+        else:
+            assert await operation() == []
+        assert len(
+            tuple(
+                payload
+                for call in responder.call_args_list
+                if isinstance(payload := _JSONRPC_MESSAGE_ADAPTER.validate_json(call.args[0].content), JSONRPCRequest)
+                and payload.method == method
+            )
+        ) == (3 if failure == "cycle" else 2)
+        assert "private-cursor" not in caplog.text
+        if failure == "deadline":
+            assert cancelled.is_set()
+
+    try:
+        loop.run_until_complete(run())
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
 
 
 @pytest.mark.asyncio
@@ -2604,9 +2671,12 @@ def test_public_mcp_import_preserves_incompatible_sdk_error() -> None:
 @pytest.mark.parametrize("grouped", (False, True))
 @pytest.mark.parametrize("raise_on_error", (False, True))
 @pytest.mark.parametrize("termination", ("ok", "failure", "hang"))
-async def test_outer_deadline_delivers_session_termination(termination: str, grouped: bool, raise_on_error: bool) -> None:
+async def test_outer_deadline_delivers_session_termination(
+    termination: str, grouped: bool, raise_on_error: bool
+) -> None:
     deleted: Final = asyncio.Event()
     started: Final = asyncio.Event()
+    caller_deadline: Final[asyncio.Future[anyio.CancelScope]] = asyncio.get_running_loop().create_future()
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
         await anyio.lowlevel.checkpoint()
@@ -2638,26 +2708,30 @@ async def test_outer_deadline_delivers_session_termination(termination: str, gro
         if payload.method == "tools/list":
             return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": []}})
         started.set()
+        caller_deadline.result().deadline = anyio.current_time()
         await anyio.sleep_forever()
         raise AssertionError("cancelled request resumed")
 
     client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
 
-    async def invoke():
-        with anyio.fail_after(0.2):
-            pending: Final = client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error)
+    async def invoke() -> None:
+        with anyio.fail_after(None) as deadline:
+            caller_deadline.set_result(deadline)
+            pending: Final = client.call_tool(
+                CallToolRequestParams(name="slow", arguments={}), raise_on_error=raise_on_error
+            )
             if grouped:
                 await asyncio.gather(pending)
             else:
                 await pending
 
-    before: Final = anyio.current_time()
-    with pytest.raises(TimeoutError):
-        await invoke()
+    with anyio.fail_after(20):
+        with pytest.raises(TimeoutError):
+            await invoke()
     assert started.is_set()
     assert deleted.is_set(), "Cancellation must deliver DELETE before returning to the caller"
 
-    assert anyio.current_time() - before < 6.5
+    assert anyio.current_time() - caller_deadline.result().deadline < 6.5
     assert await client.list_tools(raise_on_error=True) == []
 
 
@@ -2954,9 +3028,101 @@ async def test_configured_upstream_revision_is_offered_and_checked(revision, acc
             await client.list_tools(raise_on_error=True)
 
 
-@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", "", None])
+@pytest.mark.parametrize("revision", ["unknown", "", None])
 def test_upstream_protocol_configuration_rejects_unavailable_modes(revision):
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
         MCPClient(protocol_version=revision)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [True, False])
+async def test_modern_upstream_requests_are_self_contained_without_initialization(accepted: bool) -> None:
+    from queue import SimpleQueue
+
+    from mcp.types import DiscoverResult, ToolsCapability
+
+    methods: Final[SimpleQueue[str]] = SimpleQueue()
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(payload, JSONRPCRequest)
+        methods.put(payload.method)
+        assert payload.method != "initialize", "Modern operations must not establish a legacy session"
+        assert "mcp-session-id" not in request.headers
+        assert request.headers["mcp-protocol-version"] == "2026-07-28"
+        assert request.headers["authorization"] == "Bearer upstream-credential"
+        assert payload.params is not None
+        metadata: Final = payload.params["_meta"]
+        assert metadata["io.modelcontextprotocol/protocolVersion"] == "2026-07-28"
+        assert "io.modelcontextprotocol/clientCapabilities" in metadata
+        if payload.method == "server/discover":
+            discovery: Final = DiscoverResult(
+                supported_versions=["2026-07-28"] if accepted else ["2025-11-25"],
+                capabilities=ServerCapabilities(tools=ToolsCapability()),
+                instructions="modern instructions",
+            )
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": discovery.model_dump(by_alias=True, exclude_none=True),
+                },
+            )
+        assert accepted, "Rejected negotiation must prevent upstream execution"
+        if payload.method == "tools/list":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "resultType": "complete",
+                        "cacheScope": "private",
+                        "ttlMs": 0,
+                        "tools": [{"name": "add", "inputSchema": {"type": "object"}}],
+                    },
+                },
+            )
+        assert payload.method == "tools/call"
+        assert payload.params["arguments"] == {"a": 2, "b": 3}
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {"resultType": "complete", "content": [{"type": "text", "text": "5"}], "isError": False},
+            },
+        )
+
+    client: Final = _MockTransportClient(
+        respond,
+        server_url="https://example.com/mcp",
+        protocol_version="2026-07-28",
+        auth_type=MCPAuth.bearer_token,
+        auth_value="upstream-credential",
+    )
+    params: Final = CallToolRequestParams(name="add", arguments={"a": 2, "b": 3})
+    if accepted:
+        result: Final = await client.call_tool(params, raise_on_error=True)
+        assert result.content[0].text == "5"
+        assert not result.is_error
+        assert client._last_initialize_instructions == "modern instructions"
+        assert tuple(methods.get_nowait() for _ in range(methods.qsize())) == (
+            "server/discover",
+            "tools/call",
+            "tools/list",
+        )
+    else:
+        with pytest.raises((MCPError, RuntimeError), match="protocol version"):
+            await client.call_tool(params, raise_on_error=True)
+        assert tuple(methods.get_nowait() for _ in range(methods.qsize())) == ("server/discover",)
+
+
+def test_modern_upstream_rejects_legacy_sse_transport() -> None:
+    with pytest.raises(ValueError, match="transport"):
+        MCPClient(protocol_version="2026-07-28", transport_type=MCPTransport.sse)
