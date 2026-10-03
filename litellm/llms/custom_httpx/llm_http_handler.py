@@ -25,7 +25,6 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
-from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -397,7 +396,6 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
-_PREFETCHED_SOURCE_DATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -5994,7 +5992,7 @@ class BaseLLMHTTPHandler:
             error_text = e.response.text
         else:
             error_text = getattr(e, "text", str(e))
-        error_response: Final[object] = getattr(e, "response", None)
+        error_response: Final = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
@@ -7981,7 +7979,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        prefetch_json: object = None
+        prefetched_source_data = None
         prefetch_params: Final = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
@@ -8000,12 +7998,9 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetch_json = prefetch_resp.json()
+            prefetched_source_data = prefetch_resp.json()
 
         try:
-            prefetched_source_data: Final = (
-                None if prefetch_params is None else _PREFETCHED_SOURCE_DATA.validate_python(prefetch_json)
-            )
             url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
@@ -8081,7 +8076,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        prefetch_json: object = None
+        prefetched_source_data = None
         prefetch_params: Final = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
@@ -8100,12 +8095,9 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetch_json = prefetch_resp.json()
+            prefetched_source_data = prefetch_resp.json()
 
         try:
-            prefetched_source_data: Final = (
-                None if prefetch_params is None else _PREFETCHED_SOURCE_DATA.validate_python(prefetch_json)
-            )
             url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
