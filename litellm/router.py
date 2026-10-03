@@ -3605,11 +3605,22 @@ class Router:
                     initial_kwargs["original_function"] = router_self._completion
                     initial_kwargs["messages"] = messages
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
-                    fallback_response = router_self.function_with_fallbacks(
-                        **initial_kwargs,
+                    # Pass the MidStreamFallbackError through the common fallback utils, like the
+                    # async twin does. Calling function_with_fallbacks() here instead re-runs the
+                    # original (failing) group first, and because each nested Router.completion()
+                    # wraps its stream in this same iterator, every retry fails again only when
+                    # the caller iterates it — recursing until the stack runs out.
+                    fallback_response = run_async_function(
+                        router_self.async_function_with_fallbacks_common_utils,
+                        e,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
+                        args=(),
+                        kwargs=initial_kwargs,
+                        include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
                     if hasattr(fallback_response, "__iter__"):
@@ -5563,10 +5574,12 @@ class Router:
                 model, initial_kwargs
             )
             buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+            chunks_sent_to_client = 0  # any frame that reached the client blocks a same-group retry
             try:
                 async for chunk in source_iterator:
                     if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                         yield chunk
+                        chunks_sent_to_client += 1
                         continue
                     if _anthropic_stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
                         has_generated_content = True
@@ -5621,9 +5634,36 @@ class Router:
                         yield buffered_chunk
                     buffered_lifecycle_chunks = ()
                     yield chunk
+                    chunks_sent_to_client += 1
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
             except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                # A transport drop before ANY frame reached the client never
+                # reaches the retry machinery — the error is raised from the
+                # stream iterator, outside the retried call boundary — and
+                # surfaced as a 500 after a single upstream attempt (issue
+                # #44238). With no fallbacks configured there is nothing to
+                # hand the failure to, so retry the same group once; once any
+                # frame reached the client (or fallbacks are configured, whose
+                # recovery owns the failure) keep the existing behavior.
+                if (
+                    chunks_sent_to_client == 0
+                    and not fallbacks_disabled_for_request(initial_kwargs)
+                    and not initial_kwargs.get("fallbacks", self.fallbacks)
+                ):
+                    verbose_router_logger.info(
+                        "Anthropic messages stream dropped before first content; retrying the same group once"
+                    )
+                    retry_kwargs: Final = {
+                        **initial_kwargs,
+                        "original_function": self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt,
+                    }
+                    retry_stream = await self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(
+                        **retry_kwargs
+                    )
+                    async for item in retry_stream:
+                        yield item
+                    return
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
