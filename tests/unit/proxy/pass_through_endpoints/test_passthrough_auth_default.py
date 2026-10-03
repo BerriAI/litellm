@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 
@@ -77,6 +78,7 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch: py
         premium_user=False,
         visited_endpoints=visited,
     )
+    assert [route.path for route in app.routes if isinstance(route, APIRoute)] == ["/forwarder"]
     with TestClient(app) as client:
         response: Final = client.get(endpoint.path)
     assert response.status_code == 401, response.text
