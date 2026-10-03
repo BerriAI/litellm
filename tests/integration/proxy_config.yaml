@@ -23,3 +23,5 @@ vector_store_registry:
       api_base: os.environ/INTEGRATION_UPSTREAM_URL
       api_key: integration-provider-key
       vector_store_description: declared in tests/integration/proxy_config.yaml
+environment_variables:
+  PERPLEXITYAI_API_KEY: synthetic-decisions-env-key
