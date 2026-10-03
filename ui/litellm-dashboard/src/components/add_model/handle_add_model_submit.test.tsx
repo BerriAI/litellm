@@ -54,6 +54,35 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.custom_llm_provider).toBe("petals");
   });
 
+  it("sends the backend's own slug for a provider whose key is spelled differently in provider_map", async () => {
+    // The Provider dropdown submits the backend's `provider` field verbatim, and
+    // "CURSOR" is not a provider_map key. The lowercase fallback has to carry it,
+    // or the deployment is created against a provider litellm cannot resolve.
+    const formValues = {
+      model_mappings: [{ public_name: "Composer", litellm_model: "cursor/composer-1" }],
+      model_name: "cursor/composer-1",
+      custom_llm_provider: "CURSOR",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments![0].litellmParamsObj.custom_llm_provider).toBe("cursor");
+  });
+
+  it("builds the wildcard model from the backend slug, not the raw dropdown key", async () => {
+    const formValues = {
+      model: ["all-wildcard"],
+      custom_llm_provider: "CURSOR",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.modelName).toBe("cursor/*");
+    expect(deployment.litellmParamsObj.model).toBe("cursor/*");
+  });
+
   it("ignores litellm_credential_name inside LiteLLM Params JSON", async () => {
     const formValues = {
       model_mappings: [
