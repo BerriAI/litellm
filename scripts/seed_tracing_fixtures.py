@@ -18,7 +18,7 @@ from prisma import Json, Prisma
 from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.traces import AllQueryScope, ClickHouseStorage
 from litellm.tracing.config import trace_storage_config
 from litellm.tracing.types import SpendLogRecord, Trace
 
@@ -163,7 +163,7 @@ async def seed() -> int:
         identity: Final = await storage.query_sql(
             "SELECT DISTINCT TeamId AS team_id, ApiKeyHash AS api_key, UserId AS user "
             f"FROM otel_traces WHERE TraceId = '{trace_id}'",
-            {"kind": "admin"},
+            AllQueryScope(kind="all"),
             master_key,
         )
         tenant: Final = TenantIdentity.model_validate(identity.data[0])
