@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from typing import Any, Final, TypeAlias
 
@@ -17,7 +17,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+from litellm.proxy.search_endpoints.search_tool_registry import (
+    SearchToolRegistry,
+    keep_loaded_search_tools_that_do_not_decrypt,
+)
 from litellm.types.search import (
     ListSearchToolsResponse,
     SearchTool,
@@ -63,6 +66,18 @@ async def _refresh_router_search_tools() -> None:
         await proxy_config.reload_search_tools_from_db()
     except Exception as e:  # noqa: BLE001  # the row is committed; no refresh failure may reach the caller
         verbose_proxy_logger.exception("Search tool router refresh failed after a management write: %s", e)
+
+
+def _with_loaded_tools_where_undecryptable(db_search_tools: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    from litellm.proxy.proxy_server import llm_router
+
+    kept_search_tools: Final = keep_loaded_search_tools_that_do_not_decrypt(
+        db_search_tools, loaded_search_tools=llm_router.search_tools if llm_router is not None else ()
+    )
+    return [
+        {**db_tool, "litellm_params": kept_tool.get("litellm_params")}
+        for db_tool, kept_tool in zip(db_search_tools, kept_search_tools, strict=True)
+    ]
 
 
 async def _team_object_from_db(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable:
@@ -187,7 +202,9 @@ async def list_search_tools(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        search_tools_from_db = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(prisma_client=prisma_client)
+        search_tools_from_db = _with_loaded_tools_where_undecryptable(
+            await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(prisma_client=prisma_client)
+        )
 
         db_tool_names: Final = {tool.get("search_tool_name") for tool in search_tools_from_db}
 
@@ -514,15 +531,16 @@ async def get_search_tool_info(search_tool_id: str):
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        result: Final = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
+        db_result: Final = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
-        if result is None:
+        if db_result is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Search tool with ID {search_tool_id} not found",
             )
+        result: Final = _with_loaded_tools_where_undecryptable((db_result,))[0]
 
         # Mask sensitive data
         litellm_params_dict: Final = dict(result.get("litellm_params", {}))

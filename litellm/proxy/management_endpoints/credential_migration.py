@@ -460,6 +460,7 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars", "static_headers", "env"), ()),
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
+    ("search_tools", "litellm_searchtoolstable", ("litellm_params",), ()),
 ]
 
 
