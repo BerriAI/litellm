@@ -1,61 +1,46 @@
 "use client";
 
+import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { AnalysisKeyPicker } from "./AnalysisKeyPicker";
 
 import { AnalysisAccessFields } from "./AnalysisAccessFields";
-import type { AnalysisAccess } from "./workerSchema";
-export function WorkerForm({
-  useExisting,
-  accessToken,
-  analysisKey,
-  setAnalysisKey,
-  access,
-  setAccess,
-  editingWorker,
-  setUseExisting,
-  address,
-  setAddress,
-}: {
-  useExisting: boolean;
-  accessToken: string;
-  analysisKey: string | null;
-  setAnalysisKey: (key: string | null) => void;
-  access: AnalysisAccess;
-  setAccess: (value: AnalysisAccess) => void;
-  editingWorker: string | null;
-  setUseExisting: (value: boolean) => void;
-  address: string;
-  setAddress: (value: string) => void;
-}) {
+import type { WorkerFormInput } from "./workerSchema";
+
+export function WorkerForm({ accessToken, editingWorker }: { accessToken: string; editingWorker: string | null }) {
+  const {
+    control,
+    register,
+    formState: { errors },
+  } = useFormContext<WorkerFormInput>();
+  const useExisting = useWatch({ control, name: "useExisting" });
   return (
     <div className="min-w-0 space-y-5">
       {useExisting ? (
-        <AnalysisKeyPicker accessToken={accessToken} value={analysisKey} onChange={setAnalysisKey} />
+        <AnalysisKeyPicker accessToken={accessToken} />
       ) : (
-        <AnalysisAccessFields
-          accessToken={accessToken}
-          value={access}
-          onChange={(next) => {
-            setAccess(next);
-          }}
-        />
+        <AnalysisAccessFields accessToken={accessToken} />
       )}
       <details className="text-sm" open={editingWorker ? true : undefined}>
         <summary className="cursor-pointer font-medium">Advanced options</summary>
         <div className="mt-4 space-y-5">
           <label className="flex items-center justify-between gap-4">
             Use an existing virtual key
-            <Switch checked={useExisting} onCheckedChange={setUseExisting} />
+            <Controller
+              control={control}
+              name="useExisting"
+              render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
+            />
           </label>
           {!editingWorker && (
             <div className="space-y-2">
               <label htmlFor="worker-proxy-address" className="block text-sm font-medium">
                 LiteLLM proxy URL
               </label>
-              <Input id="worker-proxy-address" value={address} onChange={(e) => setAddress(e.target.value)} />
+              <Input id="worker-proxy-address" {...register("address")} />
               <p className="text-xs text-muted-foreground">Your server must be able to reach this address.</p>
+              {errors.address?.message && <p className="text-sm text-destructive">{errors.address.message}</p>}
             </div>
           )}
         </div>

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { z } from "zod";
+import { Controller } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,6 +13,10 @@ import {
 import { DurationInput } from "@/components/shared/DurationInput";
 import { type Settings } from "../model/types";
 
+const monitoringSchema = z.object({
+  interval_minutes: z.number().int().min(1).max(10080),
+});
+
 export function MonitoringDialog({
   settings,
   ready,
@@ -22,26 +28,27 @@ export function MonitoringDialog({
   onSave: (settings: Settings) => Promise<void>;
   onClose: () => void;
 }) {
-  const [interval, setInterval] = useState(settings.interval_minutes ?? 30);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const save = async () => {
-    setBusy(true);
+  const form = useZodForm(monitoringSchema, {
+    defaultValues: { interval_minutes: settings.interval_minutes ?? 30 },
+    mode: "onChange",
+  });
+  const { formState, control, setError } = form;
+  const save = form.handleSubmit(async ({ interval_minutes }) => {
     try {
-      await onSave({ ...settings, enabled: true, interval_minutes: interval });
+      await onSave({ ...settings, enabled: true, interval_minutes });
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not enable monitoring");
-    } finally {
-      setBusy(false);
+      setError("root", {
+        type: "server",
+        message: cause instanceof Error ? cause.message : "Could not enable monitoring",
+      });
     }
-  };
-  const validInterval = Number.isInteger(interval) && interval >= 1 && interval <= 10080;
+  });
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !busy) onClose();
+        if (!open && !formState.isSubmitting) onClose();
       }}
     >
       <DialogContent className="sm:max-w-md">
@@ -51,7 +58,24 @@ export function MonitoringDialog({
             Repeat this investigation with the saved scope, sample, model, and budget.
           </DialogDescription>
         </DialogHeader>
-        <DurationInput label="Check every" value={interval} onChange={setInterval} base="minutes" max={10080} />
+        <Controller
+          control={control}
+          name="interval_minutes"
+          render={({ field }) => (
+            <DurationInput
+              label="Check every"
+              value={field.value}
+              onChange={field.onChange}
+              base="minutes"
+              max={10080}
+            />
+          )}
+        />
+        {formState.errors.interval_minutes?.message && (
+          <p role="alert" className="text-sm text-destructive">
+            {formState.errors.interval_minutes.message}
+          </p>
+        )}
         <p className="text-xs leading-5 text-muted-foreground">
           Each investigation looks back over the saved time range. The interval starts after the previous run finishes.
         </p>
@@ -60,17 +84,17 @@ export function MonitoringDialog({
             Reconnect the worker before enabling monitoring.
           </p>
         )}
-        {error && (
+        {formState.errors.root?.message && (
           <p role="alert" className="text-sm text-destructive">
-            {error}
+            {formState.errors.root.message}
           </p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={busy || !ready || !validInterval} onClick={() => void save()}>
-            {busy ? "Saving…" : "Enable monitoring"}
+          <Button disabled={!formState.isValid || formState.isSubmitting || !ready} onClick={() => void save()}>
+            {formState.isSubmitting ? "Saving…" : "Enable monitoring"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button";
 
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { ScanDuration } from "../InvestigationProgress";
-import { type Lens, type Job } from "../../model/types";
+import type { Lens, Job } from "../../model/types";
 
 import { money, when } from "../../model/format";
+
 export function RunPicker({
   batchId,
   setBatchId,
@@ -22,7 +23,7 @@ export function RunPicker({
   setFindingId: (id: string | null) => void;
   job: Job | undefined;
   selectedOutsideHistory: boolean;
-  history: import("@tanstack/react-query").UseQueryResult<Job[], Error>;
+  history: Job[] | undefined;
   lens: Lens;
 }) {
   return (
@@ -42,7 +43,7 @@ export function RunPicker({
             {when(job.created_at)} · {job.status}
           </option>
         )}
-        {(history.data ?? lens.jobs)?.map((j) => (
+        {(history ?? lens.jobs)?.map((j) => (
           <option key={j.id} value={j.id}>
             {when(j.created_at)} · {j.status}
           </option>

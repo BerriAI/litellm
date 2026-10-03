@@ -7,16 +7,22 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { evidenceTarget } from "../model/findings";
 
+type RequestEvidence = components["schemas"]["ExecutionContent"];
+
 export function RequestEvidenceSheet({
   target,
   setEvidence,
-  requestEvidence,
+  requestEvidenceData,
+  requestEvidenceError,
+  requestEvidenceLoading,
   requestOffset,
   setRequestOffset,
 }: {
   target: ReturnType<typeof evidenceTarget>;
   setEvidence: (value: { id: string; span: string } | null) => void;
-  requestEvidence: import("@tanstack/react-query").UseQueryResult<components["schemas"]["ExecutionContent"], Error>;
+  requestEvidenceData: RequestEvidence | undefined;
+  requestEvidenceError: Error | null | undefined;
+  requestEvidenceLoading: boolean;
   requestOffset: number;
   setRequestOffset: (offset: number) => void;
 }) {
@@ -33,21 +39,21 @@ export function RequestEvidenceSheet({
           <SheetDescription>Original logged input and output</SheetDescription>
         </SheetHeader>
         <div className="p-4 space-y-3">
-          {requestEvidence.isLoading && <p role="status">Loading request…</p>}
-          {requestEvidence.error && <p role="alert">{requestEvidence.error.message}</p>}
-          {requestEvidence.data?.parts.map((p) => (
+          {requestEvidenceLoading && <p role="status">Loading request…</p>}
+          {requestEvidenceError && <p role="alert">{requestEvidenceError.message}</p>}
+          {requestEvidenceData?.parts.map((p) => (
             <pre className="whitespace-pre-wrap break-words text-xs" key={p.span_id}>
               {p.content}
             </pre>
           ))}
-          {requestEvidence.data?.parts.length === 0 && <p>Request was not found or is past retention</p>}
+          {requestEvidenceData?.parts.length === 0 && <p>Request was not found or is past retention</p>}
           <div className="flex flex-wrap gap-2">
             {requestOffset > 0 && (
               <Button variant="outline" onClick={() => setRequestOffset(Math.max(0, requestOffset - 8000))}>
                 Previous section
               </Button>
             )}
-            {requestEvidence.data?.parts.some((p) => p.truncated) && (
+            {requestEvidenceData?.parts.some((p) => p.truncated) && (
               <Button
                 variant="outline"
                 onClick={() => setRequestOffset(requestOffset === 0 ? 1 : requestOffset + 8000)}

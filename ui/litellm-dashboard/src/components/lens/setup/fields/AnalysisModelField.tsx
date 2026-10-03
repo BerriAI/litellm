@@ -1,13 +1,13 @@
 "use client";
 
+import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { analysisModelOptions, type AnalysisModelInfo } from "./analysisModels";
+import type { InvestigationInput } from "../investigationSchema";
 
 export function AnalysisModelField({
   models,
   modelDetails,
-  model,
-  setModel,
   modelsLoading,
   modelsError,
   unavailable,
@@ -15,24 +15,30 @@ export function AnalysisModelField({
 }: {
   models: string[];
   modelDetails: AnalysisModelInfo[];
-  model: string;
-  setModel: (model: string) => void;
   modelsLoading: boolean;
   modelsError?: string;
   unavailable: boolean;
   unsupported: boolean;
 }) {
+  const { control } = useFormContext<InvestigationInput>();
+  const model = useWatch({ control, name: "selectedModel" });
   return (
     <div className="space-y-2">
       <p className="text-sm font-medium">Analysis model</p>
-      <SearchSelect
-        aria-label="Analysis model"
-        options={analysisModelOptions(models, modelDetails)}
-        value={model}
-        onValueChange={(value) => setModel(value ?? "")}
-        placeholder={modelsLoading ? "Loading models…" : "Choose a model"}
-        disabled={modelsLoading}
-        emptyText="No matching models configured on this gateway"
+      <Controller
+        control={control}
+        name="selectedModel"
+        render={({ field }) => (
+          <SearchSelect
+            aria-label="Analysis model"
+            options={analysisModelOptions(models, modelDetails)}
+            value={field.value ?? ""}
+            onValueChange={(value) => field.onChange(value ?? "")}
+            placeholder={modelsLoading ? "Loading models…" : "Choose a model"}
+            disabled={modelsLoading}
+            emptyText="No matching models configured on this gateway"
+          />
+        )}
       />
       {modelsError && (
         <p role="alert" className="text-sm text-destructive">

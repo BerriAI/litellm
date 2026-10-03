@@ -48,7 +48,10 @@ export function InvestigationDetail({
     setFindingId,
     selectedOutsideHistory,
     history,
-    historical,
+    historyError,
+    refetchHistory,
+    historicalError,
+    refetchHistorical,
     missingSnapshot,
     kind,
     setKind,
@@ -125,10 +128,10 @@ export function InvestigationDetail({
               />
             )}
           </div>
-          {historical.error && (
+          {historicalError && (
             <p role="alert" className="text-sm text-destructive">
               Could not load this run.{" "}
-              <Button variant="link" onClick={() => void historical.refetch()}>
+              <Button variant="link" onClick={() => void refetchHistorical()}>
                 Retry
               </Button>
             </p>
@@ -164,6 +167,8 @@ export function InvestigationDetail({
           </TabsContent>
           <HistoryTab
             history={history}
+            historyError={historyError}
+            refetchHistory={refetchHistory}
             lens={lens}
             openBatch={openBatch}
             historyOffset={historyOffset}

@@ -3,6 +3,7 @@ import { Check, Loader2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { LensPreviewButton } from "../LensPreviewButton";
 import { uiHref } from "@/utils/uiHref";
+import { cn } from "@/lib/cva.config";
 
 export function InvestigationsWelcome({
   tracesReady,
@@ -33,7 +34,6 @@ export function InvestigationsWelcome({
   const canConnect = activityReady && !readOnly;
   const traceStatus = activityStatus(tracesReady, requestsReady, checking);
   const waitingForWorker = activityReady && !connected;
-  const pendingClass = activityReady ? "" : "text-muted-foreground";
   const firstStepTitle = requestsReady && !tracesReady ? "Recorded activity" : "Set up traces";
   const traceButtonClass = buttonVariants({
     variant: activityReady ? "ghost" : "default",
@@ -60,7 +60,8 @@ export function InvestigationsWelcome({
           </Link>
         </li>
         <li
-          className={`grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto] ${pendingClass}`}
+          data-state={activityReady ? "active" : "inactive"}
+          className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 text-muted-foreground data-[state=active]:text-foreground sm:grid-cols-[28px_minmax(0,1fr)_auto]"
         >
           <Step number={2} complete={workerReady} active={waitingForWorker} />
           <div>
@@ -79,7 +80,8 @@ export function InvestigationsWelcome({
           </Button>
         </li>
         <li
-          className={`grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto] ${!workerReady ? "text-muted-foreground" : ""}`}
+          data-state={workerReady ? "active" : "inactive"}
+          className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 text-muted-foreground data-[state=active]:text-foreground sm:grid-cols-[28px_minmax(0,1fr)_auto]"
         >
           <Step number={3} complete={false} active={workerReady} />
           <div>
@@ -122,15 +124,27 @@ function Step({
   active?: boolean;
 }) {
   const incomplete = checking ? <Loader2 className="size-4 animate-spin" /> : number;
-  const unfinishedStyle = active ? "bg-foreground text-background" : "border text-muted-foreground";
+  const state = stepState(complete, active);
   return (
     <span
-      className={`flex size-7 items-center justify-center rounded-full text-xs font-medium ${complete ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400" : unfinishedStyle}`}
+      data-state={state}
+      className={cn(
+        "flex size-7 items-center justify-center rounded-full text-xs font-medium",
+        "data-[state=complete]:bg-emerald-50 data-[state=complete]:text-emerald-700 dark:data-[state=complete]:bg-emerald-950 dark:data-[state=complete]:text-emerald-400",
+        "data-[state=active]:bg-foreground data-[state=active]:text-background",
+        "data-[state=inactive]:border data-[state=inactive]:text-muted-foreground",
+      )}
       aria-label={complete ? `Step ${number} complete` : `Step ${number}`}
     >
       {complete ? <Check className="size-4" /> : incomplete}
     </span>
   );
+}
+
+function stepState(complete: boolean, active?: boolean) {
+  if (complete) return "complete";
+  if (active) return "active";
+  return "inactive";
 }
 
 function activityStatus(traces: boolean, requests: boolean, checking: boolean) {

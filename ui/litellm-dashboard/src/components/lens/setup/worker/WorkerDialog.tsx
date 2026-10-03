@@ -8,6 +8,7 @@ import { WorkerForm } from "./WorkerForm";
 
 import { useNow } from "@/hooks/useNow";
 
+import { FormProvider } from "react-hook-form";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,8 +21,19 @@ import {
 } from "@/components/ui/dialog";
 import { CheckCircle2 } from "lucide-react";
 import { workerConnected } from "../../model/status";
-import { analysisAccessSchema, type AnalysisAccess } from "./workerSchema";
+import { workerFormSchema, type WorkerFormInput } from "./workerSchema";
 import type { LensList, WorkerCreated } from "../../model/types";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { cn } from "@/lib/cva.config";
+
+function defaultWorkerFormValues(): WorkerFormInput {
+  return {
+    useExisting: false,
+    analysisKey: null,
+    access: { model: null, budget: "100" },
+    address: typeof window === "undefined" ? "" : initialProxyAddress(),
+  };
+}
 
 export function WorkerDialog({
   accessToken,
@@ -38,15 +50,15 @@ export function WorkerDialog({
 }) {
   const revokeWorker = useRevokeWorker(accessToken);
   const now = useNow(2000);
-  const [access, setAccess] = useState<AnalysisAccess>({ model: null, budget: "100" });
-  const [useExisting, setUseExisting] = useState(false);
-  const [analysisKey, setAnalysisKey] = useState<string | null>(null);
+  const form = useZodForm(workerFormSchema, {
+    defaultValues: defaultWorkerFormValues(),
+    mode: "onChange",
+  });
+  const { formState, reset, setValue, clearErrors, setError: setFormError } = form;
   const [editingWorker, setEditingWorker] = useState<string | null>(null);
-  const [address, setAddress] = useState(initialProxyAddress);
   const [copied, setCopied] = useState(false);
   const [created, setCreated] = useState<WorkerCreated | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
   const connected = created
     ? workers.some((w) => w.id === created.worker.id && workerConnected(w, now))
     : workers.some((w) => workerConnected(w, now));
@@ -55,7 +67,6 @@ export function WorkerDialog({
   const screen = created ? "install" : uninstalledScreen;
   const createdTitle = connected ? "Worker connected" : "Run the worker";
   const formTitle = editingWorker ? "Analysis access" : "Connect a worker";
-  const validAccess = useExisting ? !!analysisKey : analysisAccessSchema.safeParse(access).success;
   const baseTitle = formVisible ? formTitle : "Analysis worker";
   const dialogTitle = created ? createdTitle : baseTitle;
   const actionLabel = editingWorker ? "Save analysis access" : "Get install command";
@@ -65,39 +76,48 @@ export function WorkerDialog({
       return;
     }
     setEditingWorker(null);
-    setAnalysisKey(null);
+    reset(defaultWorkerFormValues());
   };
   const editBilling = (worker: LensList["workers"][number]) => {
-    setUseExisting(true);
+    reset({
+      ...defaultWorkerFormValues(),
+      useExisting: true,
+      analysisKey: worker.analysis_key_id ?? null,
+    });
     setCreated(null);
     setEditingWorker(worker.id);
-    setAnalysisKey(worker.analysis_key_id ?? null);
   };
   const onPrepared = (created: WorkerCreated | null) => {
     if (created) setCreated(created);
     else {
       setEditingWorker(null);
-      setAnalysisKey(null);
+      setValue("analysisKey", null);
     }
   };
   const prepareWorker = usePrepareWorker(accessToken, { onChanged, onPrepared });
-  const createWorker = async () => {
-    setBusy(true);
-    setError("");
+  const createWorker = form.handleSubmit(async (values) => {
+    clearErrors("root");
     try {
-      const registration = { address, useExisting, analysisKey, access, editingWorker };
+      const registration = {
+        address: values.address,
+        useExisting: values.useExisting,
+        analysisKey: values.analysisKey,
+        access: values.access,
+        editingWorker,
+      };
       await prepareWorker.mutateAsync(registration);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create credential");
-    } finally {
-      setBusy(false);
+      setFormError("root", {
+        type: "server",
+        message: e instanceof Error ? e.message : "Could not create credential",
+      });
     }
-  };
+  });
   const revoke = async (id: string) => {
     try {
       await revokeWorker.mutateAsync(id);
-      setAnalysisKey(null);
-      setUseExisting(false);
+      setValue("analysisKey", null);
+      setValue("useExisting", false);
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not revoke worker");
@@ -109,73 +129,73 @@ export function WorkerDialog({
   const awaitingConnection = !editingWorker && !connected;
   const describeSetup = awaitingConnection && (formVisible || !!created);
   const completed = !!created && connected;
-  const installSize = connected ? "sm:max-w-sm p-8" : "sm:max-w-lg";
-  const modalSize = created ? installSize : "sm:max-w-xl";
+  const modalSize = cn(
+    created && connected && "sm:max-w-sm p-8",
+    created && !connected && "sm:max-w-lg",
+    !created && "sm:max-w-xl",
+  );
+  const onlyRootError = !!formState.errors.root && Object.keys(formState.errors).length === 1;
+  const formCanSubmit = (formState.isValid || onlyRootError) && !formState.isSubmitting;
   const description = describeSetup ? setupDescription : "Worker status and model access";
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose();
-      }}
-    >
-      <DialogContent className={`max-h-[90dvh] overflow-y-auto ${modalSize}`}>
-        <DialogHeader className={completed ? "items-center gap-3 text-center sm:text-center" : undefined}>
-          {completed && (
-            <div className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
-              <CheckCircle2 className="size-6" />
-            </div>
+    <FormProvider {...form}>
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open && !formState.isSubmitting) onClose();
+        }}
+      >
+        <DialogContent className={cn("max-h-[90dvh] overflow-y-auto", modalSize)}>
+          <DialogHeader className={cn(completed && "items-center gap-3 text-center sm:text-center")}>
+            {completed && (
+              <div className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
+                <CheckCircle2 className="size-6" />
+              </div>
+            )}
+            <DialogTitle className="text-xl leading-7">{dialogTitle}</DialogTitle>
+            <DialogDescription className={cn(!(describeSetup || completed) && "sr-only")}>
+              {completed ? "Ready to run investigations." : description}
+            </DialogDescription>
+          </DialogHeader>
+          {screen === "form" && <WorkerForm accessToken={accessToken} editingWorker={editingWorker} />}
+          {screen === "install" && created ? (
+            <WorkerInstall
+              connected={connected}
+              address={form.getValues("address")}
+              created={created}
+              copied={copied}
+              setCopied={setCopied}
+              setError={setError}
+              onReady={onReady}
+              onClose={onClose}
+            />
+          ) : null}
+          {screen === "form" && (
+            <DialogFooter>
+              <Button variant="outline" disabled={formState.isSubmitting} onClick={cancelForm}>
+                Cancel
+              </Button>
+              <Button disabled={!formCanSubmit} onClick={() => void createWorker()}>
+                {formState.isSubmitting ? "Preparing…" : actionLabel}
+              </Button>
+            </DialogFooter>
           )}
-          <DialogTitle className="text-xl leading-7">{dialogTitle}</DialogTitle>
-          <DialogDescription className={describeSetup || completed ? undefined : "sr-only"}>
-            {completed ? "Ready to run investigations." : description}
-          </DialogDescription>
-        </DialogHeader>
-        {screen === "form" && (
-          <WorkerForm
-            useExisting={useExisting}
-            accessToken={accessToken}
-            analysisKey={analysisKey}
-            setAnalysisKey={setAnalysisKey}
-            access={access}
-            setAccess={setAccess}
-            editingWorker={editingWorker}
-            setUseExisting={setUseExisting}
-            address={address}
-            setAddress={setAddress}
-          />
-        )}
-        {screen === "install" && created ? (
-          <WorkerInstall
-            connected={connected}
-            address={address}
-            created={created}
-            copied={copied}
-            setCopied={setCopied}
-            setError={setError}
-            onReady={onReady}
-            onClose={onClose}
-          />
-        ) : null}
-        {screen === "form" && (
-          <DialogFooter>
-            <Button variant="outline" disabled={busy} onClick={cancelForm}>
-              Cancel
-            </Button>
-            <Button disabled={busy || !address.trim() || !validAccess} onClick={createWorker}>
-              {busy ? "Preparing…" : actionLabel}
-            </Button>
-          </DialogFooter>
-        )}
-        {screen === "list" && (
-          <WorkerList workers={workers} now={now} accessToken={accessToken} editBilling={editBilling} revoke={revoke} />
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
-        )}
-      </DialogContent>
-    </Dialog>
+          {screen === "list" && (
+            <WorkerList
+              workers={workers}
+              now={now}
+              accessToken={accessToken}
+              editBilling={editBilling}
+              revoke={revoke}
+            />
+          )}
+          {(formState.errors.root?.message || error) && (
+            <p role="alert" className="text-sm text-destructive">
+              {formState.errors.root?.message || error}
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
+    </FormProvider>
   );
 }

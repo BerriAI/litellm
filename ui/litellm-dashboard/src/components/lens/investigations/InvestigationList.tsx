@@ -44,7 +44,10 @@ export function InvestigationList({
               <p className="mt-1 truncate text-xs text-muted-foreground">{scopeLabel(lens.settings)}</p>
             </div>
             <div className="col-start-1 row-start-2 text-xs sm:col-start-2 sm:row-start-1 sm:text-right">
-              <p className={lens.jobs[0]?.status === "failed" ? "text-destructive" : "text-muted-foreground"}>
+              <p
+                data-state={lens.jobs[0]?.status === "failed" ? "failed" : "other"}
+                className="data-[state=failed]:text-destructive data-[state=other]:text-muted-foreground"
+              >
                 {lensStatus(lens, connected)}
               </p>
               <p className="mt-1 text-muted-foreground">

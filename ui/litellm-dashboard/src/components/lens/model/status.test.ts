@@ -1,7 +1,7 @@
 import { nextCheckStatus, workerConnected } from "./status";
 import { describe, expect, it } from "vitest";
 
-import { type LensList, type Job } from "./types";
+import type { Job, Lens, LensList } from "./types";
 
 const coverage: Job["coverage"] = {
   eligible: 0,
@@ -69,7 +69,7 @@ describe("Worker readiness", () => {
   });
 });
 
-const lens: import("./types").Lens = {
+const lens: Lens = {
   version: 0,
   spent: 0,
   id: "lens",

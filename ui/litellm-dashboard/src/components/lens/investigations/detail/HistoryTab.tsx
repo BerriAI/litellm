@@ -6,17 +6,22 @@ import { Button } from "@/components/ui/button";
 
 import { TabsContent } from "@/components/ui/tabs";
 import { ScanDuration } from "../InvestigationProgress";
-import { type Lens, type Job } from "../../model/types";
+import type { Lens, Job } from "../../model/types";
 
 import { money, when } from "../../model/format";
+
 export function HistoryTab({
   history,
+  historyError,
+  refetchHistory,
   lens,
   openBatch,
   historyOffset,
   setHistoryOffset,
 }: {
-  history: import("@tanstack/react-query").UseQueryResult<Job[], Error>;
+  history: Job[] | undefined;
+  historyError: Error | null | undefined;
+  refetchHistory: () => void;
   lens: Lens;
   openBatch: (id: string) => void;
   historyOffset: number;
@@ -24,16 +29,16 @@ export function HistoryTab({
 }) {
   return (
     <TabsContent value="activity" className="pt-4 space-y-4">
-      {history.error && (
+      {historyError && (
         <p role="alert" className="text-sm text-destructive">
           Could not load run history.{" "}
-          <Button variant="link" size="sm" onClick={() => void history.refetch()}>
+          <Button variant="link" size="sm" onClick={() => void refetchHistory()}>
             Retry
           </Button>
         </p>
       )}
       <div className="divide-y border-y">
-        {(history.data ?? lens.jobs)?.map((j) => (
+        {(history ?? lens.jobs)?.map((j) => (
           <ListRow
             key={j.id}
             onClick={() => openBatch(j.id)}
@@ -49,14 +54,19 @@ export function HistoryTab({
               {j.error && <p className="mt-2 line-clamp-2 text-xs text-destructive">{j.error}</p>}
             </div>
             <div className="text-right text-xs text-muted-foreground">
-              <p className={`capitalize ${j.status === "failed" ? "text-destructive" : ""}`}>{j.status}</p>
+              <p
+                data-state={j.status === "failed" ? "failed" : "other"}
+                className="capitalize data-[state=failed]:text-destructive"
+              >
+                {j.status}
+              </p>
               <p className="mt-1">{money(j.cost ?? 0)}</p>
             </div>
             <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
           </ListRow>
         ))}
       </div>
-      {(historyOffset > 0 || (history.data?.length ?? 0) >= 50) && (
+      {(historyOffset > 0 || (history?.length ?? 0) >= 50) && (
         <div className="flex justify-between">
           <Button
             variant="ghost"
@@ -69,7 +79,7 @@ export function HistoryTab({
           <Button
             variant="ghost"
             size="sm"
-            disabled={(history.data?.length ?? 0) < 50}
+            disabled={(history?.length ?? 0) < 50}
             onClick={() => setHistoryOffset(historyOffset + 50)}
           >
             Older runs

@@ -29,30 +29,34 @@ export function WorkerList({
     <>
       {workers
         .filter((w) => !w.revoked)
-        .map((worker) => (
-          <section key={worker.id} className="space-y-5 text-sm">
-            <div className="flex items-center justify-between gap-3">
-              {workers.filter((w) => !w.revoked).length > 1 && <h3 className="font-medium">{worker.name}</h3>}
-              <span
-                className={`flex items-center gap-2 ${workerConnected(worker, now) ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}
-              >
-                {workerConnected(worker, now) && <CheckCircle2 className="size-4" />}
-                {workerStatus(worker, now)}
-              </span>
-            </div>
-            {worker.analysis_key_id && (
-              <AnalysisKeyDetails accessToken={accessToken} keyId={worker.analysis_key_id} showName />
-            )}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>
-                Settings
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => revoke(worker.id)}>
-                Revoke access
-              </Button>
-            </div>
-          </section>
-        ))}
+        .map((worker) => {
+          const connected = workerConnected(worker, now);
+          return (
+            <section key={worker.id} className="space-y-5 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                {workers.filter((w) => !w.revoked).length > 1 && <h3 className="font-medium">{worker.name}</h3>}
+                <span
+                  data-state={connected ? "active" : "inactive"}
+                  className="flex items-center gap-2 text-muted-foreground data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400"
+                >
+                  {connected && <CheckCircle2 className="size-4" />}
+                  {workerStatus(worker, now)}
+                </span>
+              </div>
+              {worker.analysis_key_id && (
+                <AnalysisKeyDetails accessToken={accessToken} keyId={worker.analysis_key_id} showName />
+              )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>
+                  Settings
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => revoke(worker.id)}>
+                  Revoke access
+                </Button>
+              </div>
+            </section>
+          );
+        })}
     </>
   );
 }

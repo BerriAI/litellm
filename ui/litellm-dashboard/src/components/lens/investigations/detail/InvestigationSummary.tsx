@@ -1,17 +1,31 @@
+import type { ComponentProps } from "react";
 import { NextCheck } from "../InvestigationProgress";
 import { lensStatus } from "../../model/status";
 import { runTime } from "../../model/format";
 import { type Lens } from "../../model/types";
+import { cn } from "@/lib/cva.config";
 
-export function InvestigationSummary({ lens, connected }: { lens: Lens; connected: boolean }) {
+export type InvestigationSummaryProps = ComponentProps<"div"> & {
+  lens: Lens;
+  connected: boolean;
+};
+
+export function InvestigationSummary({ lens, connected, className, ...props }: InvestigationSummaryProps) {
   const lastCompleted = lens.jobs.find((job) => job.status === "completed");
   const lastSuccess = lastCompleted?.finished_at ?? lens.last_scan_at;
   const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
   return (
-    <div className="flex flex-wrap gap-x-8 gap-y-3 border-y py-3 text-xs text-muted-foreground">
+    <div
+      {...props}
+      data-slot="investigation-summary"
+      className={cn("flex flex-wrap gap-x-8 gap-y-3 border-y py-3 text-xs text-muted-foreground", className)}
+    >
       <span>
         Latest run:{" "}
-        <strong className={`font-medium ${lens.jobs[0]?.status === "failed" ? "text-destructive" : "text-foreground"}`}>
+        <strong
+          data-state={lens.jobs[0]?.status === "failed" ? "failed" : "ok"}
+          className="font-medium data-[state=failed]:text-destructive data-[state=ok]:text-foreground"
+        >
           {lensStatus(lens, connected)}
         </strong>
       </span>

@@ -1,22 +1,20 @@
 "use client";
 
+import type { ComponentProps } from "react";
 import { useId, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/cva.config";
 
-export function DurationInput({
-  label,
-  value,
-  onChange,
-  base,
-  max,
-}: {
+export type DurationInputProps = Omit<ComponentProps<"div">, "onChange"> & {
   label: string;
   value: number;
   onChange: (value: number) => void;
   base: "minutes" | "hours";
   max: number;
-}) {
+};
+
+export function DurationInput({ label, value, onChange, base, max, className, ...props }: DurationInputProps) {
   const id = useId();
   const units =
     base === "minutes"
@@ -34,7 +32,7 @@ export function DurationInput({
     setScale(next);
   }
   return (
-    <div className="space-y-2">
+    <div {...props} data-slot="duration-input" className={cn("space-y-2", className)}>
       <label htmlFor={id} className="text-sm">
         {label}
       </label>

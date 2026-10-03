@@ -1,9 +1,21 @@
+import type { ComponentProps } from "react";
 import { runTime } from "../../model/format";
 import { type Job } from "../../model/types";
+import { cn } from "@/lib/cva.config";
 
-export function InvestigationFailure({ job, connected }: { job: Job; connected: boolean }) {
+export type InvestigationFailureProps = ComponentProps<"div"> & {
+  job: Job;
+  connected: boolean;
+};
+
+export function InvestigationFailure({ job, connected, className, ...props }: InvestigationFailureProps) {
   return (
-    <div role="alert" className="space-y-2 rounded-md border border-destructive/20 p-3 text-sm">
+    <div
+      {...props}
+      data-slot="investigation-failure"
+      role="alert"
+      className={cn("space-y-2 rounded-md border border-destructive/20 p-3 text-sm", className)}
+    >
       <p className="font-medium text-destructive">This investigation did not finish</p>
       <p>{job.error}</p>
       <details>

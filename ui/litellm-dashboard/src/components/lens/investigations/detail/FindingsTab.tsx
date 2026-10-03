@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 
 import { TabsContent } from "@/components/ui/tabs";
 import { type Lens, type Finding, type Job } from "../../model/types";
+import { cn } from "@/lib/cva.config";
 
 const priorityColors = { high: "bg-red-500", medium: "bg-amber-500", low: "bg-slate-400" };
 function emptyFindingTitle(active: boolean, scanned: boolean, status?: string) {
@@ -76,7 +77,8 @@ export function FindingsTab({
             className="flex w-full gap-3 py-4 text-left hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-ring"
           >
             <span
-              className={`mt-1 size-2 shrink-0 rounded-full ${priorityColors[f.priority ?? "medium"]}`}
+              data-state={f.priority ?? "medium"}
+              className={cn("mt-1 size-2 shrink-0 rounded-full", priorityColors[f.priority ?? "medium"])}
               aria-label={`${f.priority} priority`}
             />
             <div className="min-w-0 flex-1">

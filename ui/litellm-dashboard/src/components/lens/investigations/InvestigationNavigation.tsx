@@ -3,6 +3,7 @@ import { StatusDot } from "@/components/shared/StatusDot";
 
 import { ArrowLeft, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { Lens } from "../model/types";
 
 export function InvestigationNavigation({
   lens,
@@ -14,7 +15,7 @@ export function InvestigationNavigation({
   setWorkerSetup,
   setEditing,
 }: {
-  lens: import("../model/types").Lens | undefined;
+  lens: Lens | undefined;
   showActions: boolean;
   activityReady: boolean;
   connected: boolean;

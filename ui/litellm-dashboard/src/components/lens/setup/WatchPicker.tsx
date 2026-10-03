@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { watches } from "./watches";
+import { cn } from "@/lib/cva.config";
 
 const dotColors = ["#8b5cf6", "#22b3e8", "#e3a32b", "#eb6b93", "#22b3e8", "#8b5cf6", "#e3a32b", "#eb6b93"];
 const lensBlue = { light: "#0011b3", dark: "#8b9bff" };
@@ -128,20 +129,22 @@ export function WatchPicker({
               aria-pressed={on}
               title={watch.summary}
               tabIndex={index === cursor ? 0 : -1}
+              data-state={on ? "active" : "inactive"}
               onFocus={() => setCursor(index)}
               onClick={() => toggle(watch.id)}
-              className={`flex h-[5.25rem] flex-col justify-start gap-1 rounded-xl px-3.5 py-3 text-left outline-none transition-all duration-200 ease-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-[0.97] ${
-                on
-                  ? "bg-background text-foreground ring-[1.5px] ring-inset ring-foreground"
-                  : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-              }`}
+              className={cn(
+                "flex h-[5.25rem] flex-col justify-start gap-1 rounded-xl px-3.5 py-3 text-left outline-none transition-all duration-200 ease-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-[0.97]",
+                "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:ring-[1.5px] data-[state=active]:ring-inset data-[state=active]:ring-foreground",
+                "data-[state=inactive]:bg-muted/60 data-[state=inactive]:text-muted-foreground data-[state=inactive]:hover:bg-muted data-[state=inactive]:hover:text-foreground",
+              )}
             >
               <span className="flex items-center justify-between gap-1">
                 <span className="text-sm font-medium">{watch.name}</span>
                 <svg
                   viewBox="0 0 16 16"
                   aria-hidden="true"
-                  className={`size-3 transition-all duration-200 ${on ? "scale-100 opacity-100" : "scale-50 opacity-0"}`}
+                  data-state={on ? "active" : "inactive"}
+                  className="size-3 transition-all duration-200 data-[state=active]:scale-100 data-[state=active]:opacity-100 data-[state=inactive]:scale-50 data-[state=inactive]:opacity-0"
                 >
                   <path
                     d="M3 8.5l3.2 3.2L13 5"

@@ -26,3 +26,40 @@ export const analysisAccessSchema = z
   .transform((access) => ({ model: access.model ?? "", budget: Number(access.budget) }));
 
 export type AnalysisAccess = z.input<typeof analysisAccessSchema>;
+
+export const workerFormSchema = z
+  .object({
+    useExisting: z.boolean(),
+    analysisKey: z.string().nullable(),
+    access: z.object(analysisAccessFields),
+    address: z.string(),
+  })
+  .superRefine((values, ctx) => {
+    if (values.useExisting) {
+      if (!values.analysisKey) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Choose an existing virtual key",
+          path: ["analysisKey"],
+        });
+      }
+    } else {
+      const result = analysisAccessSchema.safeParse(values.access);
+      if (!result.success) {
+        ctx.addIssue({
+          code: "custom",
+          message: result.error.issues[0].message,
+          path: ["access"],
+        });
+      }
+    }
+    if (!values.address.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Enter a proxy URL",
+        path: ["address"],
+      });
+    }
+  });
+
+export type WorkerFormInput = z.input<typeof workerFormSchema>;

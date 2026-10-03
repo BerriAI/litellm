@@ -17,10 +17,10 @@ import {
 import { durationText } from "../model/format";
 import { nextCheckStatus } from "../model/status";
 import { type Lens, type Job } from "../model/types";
+import { cn } from "@/lib/cva.config";
 
 const steps = ["review runs", "find patterns", "check evidence"];
 const markers = { done: "✓", active: "▸", todo: "·" };
-const rowText = { done: "text-foreground", active: "font-medium text-foreground", todo: "text-muted-foreground" };
 const blocks = 32;
 
 function stageState(index: number, current: number): keyof typeof markers {
@@ -79,9 +79,12 @@ export function InvestigationProgress({ job, onCancel }: { job: Job; onCancel?: 
             {Array.from({ length: blocks }, (_, index) => (
               <span
                 key={index}
-                className={`flex-1 ${index < filled ? "bg-foreground" : "bg-foreground/10"} ${
-                  queued && index < blocks / 3 ? "motion-safe:animate-pulse bg-foreground/30" : ""
-                }`}
+                data-state={index < filled ? "active" : "inactive"}
+                className={cn(
+                  "flex-1",
+                  index < filled ? "bg-foreground" : "bg-foreground/10",
+                  queued && index < blocks / 3 && "motion-safe:animate-pulse bg-foreground/30",
+                )}
               />
             ))}
           </div>
@@ -98,8 +101,9 @@ export function InvestigationProgress({ job, onCancel }: { job: Job; onCancel?: 
             return (
               <li
                 key={label}
+                data-state={state}
                 aria-current={state === "active" ? "step" : undefined}
-                className={`grid grid-cols-[1rem_minmax(0,9rem)_6rem_auto] items-baseline gap-2 tabular-nums ${rowText[state]}`}
+                className="grid grid-cols-[1rem_minmax(0,9rem)_6rem_auto] items-baseline gap-2 tabular-nums data-[state=done]:text-foreground data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=todo]:text-muted-foreground"
               >
                 <span aria-hidden="true">{markers[state]}</span>
                 <span className="truncate">{label}</span>

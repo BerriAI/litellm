@@ -71,7 +71,9 @@ export function InvestigationsView({
     sampledRuns,
     target,
     evidence,
-    requestEvidence,
+    requestEvidenceData,
+    requestEvidenceError,
+    requestEvidenceLoading,
     requestOffset,
     setRequestOffset,
     setEvidence,
@@ -153,7 +155,7 @@ export function InvestigationsView({
           setEditing={setEditing}
         />
       )}
-      {(error || query.error) && <InvestigationError error={error} query={query} refresh={refresh} />}
+      {(error || query.error) && <InvestigationError error={error} queryError={query.error} refresh={refresh} />}
       {query.isLoading && <InvestigationsLoading />}
       {loaded && showEmpty && (
         <InvestigationsWelcome
@@ -258,7 +260,9 @@ export function InvestigationsView({
       <RequestEvidenceSheet
         target={target}
         setEvidence={setEvidence}
-        requestEvidence={requestEvidence}
+        requestEvidenceData={requestEvidenceData}
+        requestEvidenceError={requestEvidenceError}
+        requestEvidenceLoading={requestEvidenceLoading}
         requestOffset={requestOffset}
         setRequestOffset={setRequestOffset}
       />

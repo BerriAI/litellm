@@ -40,6 +40,22 @@ beforeEach(() => {
   vi.mocked(apiClient.post).mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
 });
 describe("Lens setup", () => {
+  it("preserves saved manual run selections when editing an investigation", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <InvestigationSetupDialog
+        initial={{ ...settings, execution_ids: ["saved-run"] }}
+        models={["analysis"]}
+        accessToken="test"
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("button", { name: "Clear 1 selected runs" })).toBeInTheDocument();
+  });
+
   it("preserves check identity and disabled state when a check is edited", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
@@ -181,7 +197,7 @@ it("configures monitoring separately and rejects a zero interval", async () => {
   await user.click(screen.getByRole("button", { name: "Enable monitoring" }));
   expect(save).toHaveBeenCalledWith(expect.objectContaining({ interval_minutes: 2, enabled: true }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "0" } });
-  expect(screen.getByRole("button", { name: "Enable monitoring" })).toBeDisabled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Enable monitoring" })).toBeDisabled());
 });
 
 it("keeps the draft when readiness changes and blocks a run until the worker recovers", async () => {
@@ -507,6 +523,8 @@ describe("Watch for", () => {
     await user.click(screen.getByRole("button", { name: "Back" }));
     for (const name of ["unsolved", "blocked", "unhappy"]) await user.click(tile(name));
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("pick something to watch for");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Describe the expected behavior or pick something to watch for",
+    );
   });
 });

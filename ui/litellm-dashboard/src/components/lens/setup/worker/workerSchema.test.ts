@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { validateWorkerAddress, analysisAccessSchema } from "./workerSchema";
+import { validateWorkerAddress, analysisAccessSchema, workerFormSchema } from "./workerSchema";
 import { workerSetupCommand, LENS_WORKER_IMAGE } from "./workerCommand";
+
+const workerDefaults = {
+  useExisting: false,
+  analysisKey: null,
+  access: { model: null, budget: "100" },
+  address: "http://localhost:4000",
+};
 
 describe("worker setup", () => {
   it.each(["https://gateway.example/proxy", "http://host.docker.internal:4000"])("accepts %s", (address) => {
@@ -43,4 +50,34 @@ it("requires a model and converts an accepted analysis budget to a number", () =
     model: "analysis",
     budget: 0.01,
   });
+});
+
+it("validates the selected-key branch and non-empty proxy address with field paths", () => {
+  const result = workerFormSchema.safeParse({
+    ...workerDefaults,
+    useExisting: true,
+    address: " ",
+  });
+  expect(result.success).toBe(false);
+  if (result.success) return;
+  expect(result.error.issues.map(({ path }) => path)).toEqual([["analysisKey"], ["address"]]);
+});
+
+it("validates analysis access only when creating a new virtual key", () => {
+  const invalidAccess = workerFormSchema.safeParse(workerDefaults);
+  expect(invalidAccess.success).toBe(false);
+  if (!invalidAccess.success) expect(invalidAccess.error.issues[0].path).toEqual(["access"]);
+  expect(
+    workerFormSchema.safeParse({
+      ...workerDefaults,
+      access: { model: "analysis", budget: "100" },
+    }).success,
+  ).toBe(true);
+  expect(
+    workerFormSchema.safeParse({
+      ...workerDefaults,
+      useExisting: true,
+      analysisKey: "key",
+    }).success,
+  ).toBe(true);
 });

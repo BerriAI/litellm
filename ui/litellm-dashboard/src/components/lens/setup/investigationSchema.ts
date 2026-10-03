@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { FieldPath } from "react-hook-form";
 import type { Settings } from "../model/types";
 import { normalizeFilters } from "./filters";
 import { initialWatches, isWatch, watchChecks } from "./watches";
@@ -29,46 +30,114 @@ const draftFields = {
 };
 const draftSchema = z.object(draftFields);
 
-function sampleValidationError(selection: z.infer<typeof draftSchema>["selection"]): string | null {
-  const hours = selection.lookback_hours ?? 24;
-  if (!Number.isInteger(hours) || hours < 1 || hours > 8760) return "Choose a time range between 1 hour and 365 days";
-  const percent = selection.sample_percent ?? 100;
-  if (!Number.isFinite(percent) || percent <= 0 || percent > 100)
-    return "Choose a sampling percentage greater than 0 and up to 100";
-  if (selection.sample_size != null && (!Number.isInteger(selection.sample_size) || selection.sample_size < 1))
-    return "Choose a positive maximum or leave it blank for no limit";
-  return null;
-}
+export const investigationSchema = draftSchema
+  .superRefine((draft, ctx) => {
+    const selection = draft.selection;
+    selection.filters.forEach((filter, index) => {
+      if (!filter.key.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Choose a key and value for every condition, or remove it",
+          path: ["selection", "filters", index, "key"],
+        });
+      }
+      if (!filter.value.trim()) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Choose a key and value for every condition, or remove it",
+          path: ["selection", "filters", index, "value"],
+        });
+      }
+    });
+    if (draft.manualSelection && !selection.execution_ids.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose at least one run or turn off individual selection",
+        path: ["selection", "execution_ids"],
+      });
+    }
+    const hours = selection.lookback_hours ?? 24;
+    if (!Number.isInteger(hours) || hours < 1 || hours > 8760) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a time range between 1 hour and 365 days",
+        path: ["selection", "lookback_hours"],
+      });
+    }
+    const percent = selection.sample_percent ?? 100;
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a sampling percentage greater than 0 and up to 100",
+        path: ["selection", "sample_percent"],
+      });
+    }
+    if (selection.sample_size != null && (!Number.isInteger(selection.sample_size) || selection.sample_size < 1)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a positive maximum or leave it blank for no limit",
+        path: ["selection", "sample_size"],
+      });
+    }
+    if (!Number.isFinite(draft.budget) || draft.budget <= 0 || draft.budget > 100000) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a monthly limit greater than zero and up to 100000",
+        path: ["budget"],
+      });
+    }
+    if (draft.repeat && (!Number.isInteger(draft.interval) || draft.interval < 1 || draft.interval > 10080)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a repeat interval between 1 and 10080 minutes",
+        path: ["interval"],
+      });
+    }
+    const checks = draft.questions.filter((check) => check.instruction.trim());
+    if (!draft.context.trim() && !checks.length && !draft.watching.length) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Describe the expected behavior or pick something to watch for",
+        path: ["context"],
+      });
+    }
+    draft.questions.forEach((check, index) => {
+      if (check.instruction.trim() && check.instruction.trim().length < 3) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Use at least three characters for each check",
+          path: ["questions", index, "instruction"],
+        });
+      }
+    });
+  })
+  .transform((draft) => ({
+    ...draft,
+    context: draft.context.trim(),
+    selection: { ...draft.selection, filters: normalizeFilters(draft.selection.filters) },
+    questions: draft.questions
+      .filter((check) => check.instruction.trim())
+      .map((check) => ({ ...check, instruction: check.instruction.trim() })),
+  }));
 
-export function investigationSchema(step: number) {
-  return draftSchema
-    .superRefine((draft, ctx) => {
-      const issue = (message: string) => ctx.addIssue({ code: "custom", message });
-      const selection = draft.selection;
-      if (selection.filters.some((f) => !f.key.trim() || !f.value.trim()))
-        return issue("Choose a key and value for every condition, or remove it");
-      if (step >= 2 && draft.manualSelection && !selection.execution_ids.length)
-        return issue("Choose at least one run or turn off individual selection");
-      const sampleError = sampleValidationError(selection);
-      if (sampleError) return issue(sampleError);
-      const checks = draft.questions.filter((check) => check.instruction.trim());
-      const nothingToCheck = !draft.context.trim() && !checks.length && !draft.watching.length;
-      if (step >= 1 && nothingToCheck) return issue("Describe the expected behavior or pick something to watch for");
-      if (checks.some((check) => check.instruction.trim().length < 3))
-        return issue("Use at least three characters for each check");
-    })
-    .transform((draft) => ({
-      ...draft,
-      context: draft.context.trim(),
-      selection: { ...draft.selection, filters: normalizeFilters(draft.selection.filters) },
-      questions: draft.questions
-        .filter((check) => check.instruction.trim())
-        .map((check) => ({ ...check, instruction: check.instruction.trim() })),
-    }));
-}
+export type InvestigationInput = z.input<typeof investigationSchema>;
+export type InvestigationOutput = z.output<typeof investigationSchema>;
 
-export type InvestigationInput = z.input<ReturnType<typeof investigationSchema>>;
-export type InvestigationOutput = z.output<ReturnType<typeof investigationSchema>>;
+export const investigationStepFields: readonly FieldPath<InvestigationInput>[][] = [
+  ["name", "selection.source", "selection.service", "selection.agent_name", "selection.filters", "selection.team_id"],
+  ["context", "questions", "watching"],
+  [
+    "selection.execution_ids",
+    "selection.lookback_hours",
+    "selection.sample_size",
+    "selection.sample_percent",
+    "selectedModel",
+    "budget",
+    "interval",
+    "repeat",
+    "manualSelection",
+  ],
+];
 
 function activitySelectionDefaults(
   initial: Settings | undefined,

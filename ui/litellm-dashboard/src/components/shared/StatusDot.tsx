@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { Circle } from "lucide-react";
 import { cn } from "@/lib/cva.config";
 
@@ -7,6 +8,13 @@ const colors = {
   off: "fill-slate-400 text-slate-400",
 };
 
-export function StatusDot({ state, className }: { state: keyof typeof colors; className?: string }) {
-  return <Circle data-state={state} className={cn("size-2", colors[state], className)} />;
+export type StatusDotProps = Omit<ComponentProps<typeof Circle>, "className"> & {
+  state: keyof typeof colors;
+  className?: string;
+};
+
+export function StatusDot({ state, className, ...props }: StatusDotProps) {
+  return (
+    <Circle {...props} data-slot="status-dot" data-state={state} className={cn("size-2", colors[state], className)} />
+  );
 }

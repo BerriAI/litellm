@@ -1,13 +1,18 @@
 "use client";
 
-import { FormProvider } from "react-hook-form";
+import { FormProvider, useWatch } from "react-hook-form";
 import { useZodForm } from "@/lib/forms/useZodForm";
-import { investigationSchema, investigationDefaults, investigationSettings } from "./investigationSchema";
+import {
+  investigationSchema,
+  investigationDefaults,
+  investigationSettings,
+  investigationStepFields,
+} from "./investigationSchema";
 import { ScopeStep } from "./steps/ScopeStep";
 import { ExpectationsStep } from "./steps/ExpectationsStep";
 import { RunStep } from "./steps/RunStep";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,8 +22,9 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { type ActivitySelection, type Settings } from "../model/types";
+import { type Settings } from "../model/types";
 import { type AnalysisModelInfo } from "./fields/analysisModels";
+import { cn } from "@/lib/cva.config";
 
 export function InvestigationSetupDialog({
   initial,
@@ -49,69 +55,48 @@ export function InvestigationSetupDialog({
 }) {
   const [step, setStep] = useState(0);
   const [previewReady, setPreviewReady] = useState(false);
-  const form = useZodForm(investigationSchema(step), {
+  const form = useZodForm(investigationSchema, {
     defaultValues: investigationDefaults(initial, mode, defaultSource),
+    mode: "onChange",
   });
-  const { selection, selectedModel, budget, repeat, interval, manualSelection } = form.watch();
+  const { control, setError, setValue, subscribe, trigger, formState } = form;
+  const [selectedModel, repeat] = useWatch({
+    control,
+    name: ["selectedModel", "repeat"],
+  });
   const model = selectedModel ?? defaultModel ?? "";
-  const setModel = (model: string) => form.setValue("selectedModel", model);
-  const setSelection = (next: ActivitySelection) => {
-    form.setValue("selection.source", next.source);
-    form.setValue("selection.service", next.service ?? "");
-    form.setValue("selection.agent_name", next.agent_name ?? "");
-    form.setValue("selection.lookback_hours", next.lookback_hours ?? 24);
-    form.setValue("selection.sample_size", next.sample_size ?? null);
-    form.setValue("selection.sample_percent", next.sample_percent ?? 100);
-    form.setValue("selection.team_id", next.team_id ?? "");
-    form.setValue("selection.execution_ids", next.execution_ids ?? []);
-    if (next.filters !== selection.filters) {
-      if (next.filters?.length === selection.filters.length) {
-        next.filters.forEach((filter, index) => {
-          form.setValue(`selection.filters.${index}.key`, filter.key);
-          form.setValue(`selection.filters.${index}.value`, filter.value);
-        });
-      } else form.setValue("selection.filters", next.filters ?? []);
-    }
+  useEffect(
+    () =>
+      subscribe({
+        name: [
+          "selection.source",
+          "selection.service",
+          "selection.agent_name",
+          "selection.filters",
+          "selection.lookback_hours",
+          "selection.team_id",
+        ],
+        formState: { values: true },
+        callback: ({ values }) => {
+          if (values.selection.execution_ids.length) setValue("selection.execution_ids", []);
+        },
+      }),
+    [setValue, subscribe],
+  );
+  const next = async () => {
+    if (await trigger(investigationStepFields[step])) setStep(step + 1);
   };
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const changeSelection = (next: ActivitySelection) => {
-    const pool = (s: ActivitySelection) =>
-      JSON.stringify([s.source, s.service, s.agent_name, s.filters, s.lookback_hours, s.team_id]);
-    setSelection({
-      ...selection,
-      ...next,
-      execution_ids: pool(next) === pool(selection) ? next.execution_ids ?? [] : [],
-    });
-  };
-  const validate = () => {
-    const result = investigationSchema(step).safeParse(form.getValues());
-    if (!result.success) throw new Error(result.error.issues[0].message);
-    return result.data;
-  };
-  const next = () => {
+  const save = form.handleSubmit(async (values) => {
     try {
-      validate();
-      setError("");
-      setStep(step + 1);
+      await onSave(investigationSettings(values, initial, model));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Check your settings");
+      setError("root", {
+        type: "server",
+        message: cause instanceof Error ? cause.message : "Could not save investigation",
+      });
     }
-  };
-  const save = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const settings = investigationSettings(validate(), initial, model);
-      await onSave(settings);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save investigation");
-    } finally {
-      setBusy(false);
-    }
-  };
+  });
   const unsupported = modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
-  const budgetValid = Number.isFinite(budget) && budget > 0 && budget <= 100000;
   const canRun = ready || mode === "edit";
   const modelsReady = !modelsLoading && !modelsError;
   const unavailable = !!model && modelsReady && !models.includes(model);
@@ -119,13 +104,8 @@ export function InvestigationSetupDialog({
   const preservingSavedModel = mode === "edit" && model === initial?.model;
   const modelReady = modelsReady || preservingSavedModel;
   const modelValid = !!model && supported && modelReady;
-  const intervalRangeValid = interval >= 1 && interval <= 10080;
-  const intervalValid = !repeat || (Number.isInteger(interval) && intervalRangeValid);
-  const configurationValid = modelValid && budgetValid && intervalValid;
   const runReady = canRun && (mode === "edit" || previewReady);
-  const selectionValid = !manualSelection || !!selection.execution_ids?.length;
-  const validSettings = configurationValid && selectionValid;
-  const canSave = !busy && runReady && validSettings;
+  const canSave = formState.isValid && !formState.isSubmitting && modelValid && runReady;
   const createLabel = repeat ? "Run and monitor" : "Run investigation";
   const saveLabel = mode === "edit" ? "Save changes" : createLabel;
   const headings = [
@@ -138,11 +118,14 @@ export function InvestigationSetupDialog({
       <Dialog
         open
         onOpenChange={(open) => {
-          if (!open && !busy) onClose();
+          if (!open && !formState.isSubmitting) onClose();
         }}
       >
         <DialogContent
-          className={`flex max-h-[90dvh] flex-col gap-6 overflow-hidden ${["sm:max-w-xl", "sm:max-w-2xl", "sm:max-w-3xl"][step]}`}
+          className={cn(
+            "flex max-h-[90dvh] flex-col gap-6 overflow-hidden",
+            ["sm:max-w-xl", "sm:max-w-2xl", "sm:max-w-3xl"][step],
+          )}
         >
           <DialogHeader>
             <DialogTitle className="text-xl">{headings[step]}</DialogTitle>
@@ -160,13 +143,13 @@ export function InvestigationSetupDialog({
             {["Activity", "Expectations", "Run"].map((label, index) => (
               <button
                 key={label}
-                disabled={index > step || busy}
+                disabled={index > step || formState.isSubmitting}
                 aria-current={index === step ? "step" : undefined}
                 onClick={() => {
                   setStep(index);
-                  setError("");
                 }}
-                className={`flex-1 border-t-2 pt-2 text-left ${index === step ? "border-foreground font-medium" : "border-border text-muted-foreground"}`}
+                data-state={index === step ? "active" : "inactive"}
+                className="flex-1 border-t-2 border-border pt-2 text-left text-muted-foreground data-[state=active]:border-foreground data-[state=active]:font-medium data-[state=active]:text-foreground"
               >
                 {index + 1}. {label}
               </button>
@@ -174,12 +157,7 @@ export function InvestigationSetupDialog({
           </nav>
           <div className="min-h-0 overflow-y-auto pr-1 space-y-5">
             {(step === 0 || step === 2) && (
-              <ScopeStep
-                step={step}
-                changeSelection={changeSelection}
-                accessToken={accessToken}
-                setPreviewReady={setPreviewReady}
-              />
+              <ScopeStep step={step} accessToken={accessToken} setPreviewReady={setPreviewReady} />
             )}
             {step === 1 && <ExpectationsStep />}
             {step === 2 && (
@@ -187,8 +165,6 @@ export function InvestigationSetupDialog({
                 modelValid={modelValid}
                 models={models}
                 modelDetails={modelDetails}
-                model={model}
-                setModel={setModel}
                 modelsLoading={modelsLoading}
                 modelsError={modelsError}
                 unavailable={unavailable}
@@ -200,21 +176,25 @@ export function InvestigationSetupDialog({
                 The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
               </p>
             )}
-            {error && (
+            {formState.errors.root?.message && (
               <p role="alert" className="text-sm text-destructive">
-                {error}
+                {formState.errors.root.message}
               </p>
             )}
           </div>
           <DialogFooter className="border-t pt-4">
-            <Button variant="outline" disabled={busy} onClick={() => (step ? setStep(step - 1) : onClose())}>
+            <Button
+              variant="outline"
+              disabled={formState.isSubmitting}
+              onClick={() => (step ? setStep(step - 1) : onClose())}
+            >
               {step ? "Back" : "Cancel"}
             </Button>
             {step < 2 ? (
-              <Button onClick={next}>Continue</Button>
+              <Button onClick={() => void next()}>Continue</Button>
             ) : (
               <Button disabled={!canSave} onClick={() => void save()}>
-                {busy ? "Saving…" : saveLabel}
+                {formState.isSubmitting ? "Saving…" : saveLabel}
               </Button>
             )}
           </DialogFooter>

@@ -6,7 +6,7 @@ import { useLensDemo } from "../LensDemoContext";
 import { useLensApi } from "../api/useLensApi";
 import { lensQueries } from "../api/queries";
 import { evidenceTarget, mergeFeedback, sortedFindings } from "../model/findings";
-import type { Lens } from "../model/types";
+import type { Job, Lens } from "../model/types";
 
 export function useInvestigationResults(accessToken: string, lens: Lens | undefined) {
   const apiClient = useLensApi();
@@ -65,8 +65,11 @@ export function useInvestigationResults(accessToken: string, lens: Lens | undefi
     setKind,
     evidence,
     setEvidence,
-    history,
-    historical,
+    history: history.data,
+    historyError: history.error,
+    refetchHistory: history.refetch,
+    historicalError: historical.error,
+    refetchHistorical: historical.refetch,
     job,
     missingSnapshot,
     selectedOutsideHistory,
@@ -80,17 +83,14 @@ export function useInvestigationResults(accessToken: string, lens: Lens | undefi
     target,
     requestOffset,
     setRequestOffset,
-    requestEvidence,
+    requestEvidenceData: requestEvidence.data,
+    requestEvidenceError: requestEvidence.error,
+    requestEvidenceLoading: requestEvidence.isLoading,
     reset,
   };
 }
 
-function runSnapshot(
-  lens: Lens | undefined,
-  batchId: string,
-  historical: import("../model/types").Job | undefined,
-  history: import("../model/types").Job[] | undefined,
-) {
+function runSnapshot(lens: Lens | undefined, batchId: string, historical: Job | undefined, history: Job[] | undefined) {
   const job = ["latest", "all"].includes(batchId) ? lens?.jobs?.[0] : historical;
   const missingSnapshot = job?.status === "completed" && job.findings == null && batchId !== "all";
   const selectedOutsideHistory = !["latest", "all"].includes(batchId) && !history?.some((j) => j.id === batchId);

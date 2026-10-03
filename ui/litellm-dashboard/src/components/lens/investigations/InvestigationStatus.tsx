@@ -6,26 +6,22 @@ import { ApiError } from "@/lib/http/client";
 
 export function InvestigationError({
   error,
-  query,
+  queryError,
   refresh,
 }: {
   error: string;
-  query: import("@tanstack/react-query").UseQueryResult<import("../model/types").LensList, Error>;
+  queryError: unknown;
   refresh: () => void;
 }) {
+  const unavailable = queryError instanceof ApiError && queryError.status === 404;
+  const queryMessage = queryError instanceof Error ? queryError.message : undefined;
   return (
     <div role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive">
-      {query.error instanceof ApiError && query.error.status === 404
+      {unavailable
         ? "The Lens API is unavailable. Reload this page to use the current dashboard; if it persists, check the proxy deployment."
-        : error || query.error?.message}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() =>
-          query.error instanceof ApiError && query.error.status === 404 ? window.location.reload() : refresh()
-        }
-      >
-        {query.error instanceof ApiError && query.error.status === 404 ? "Reload page" : "Retry"}
+        : error || queryMessage}
+      <Button variant="ghost" size="sm" onClick={() => (unavailable ? window.location.reload() : refresh())}>
+        {unavailable ? "Reload page" : "Retry"}
       </Button>
     </div>
   );
