@@ -199,12 +199,9 @@ def call_details(request_data: Mapping[str, object]) -> Mapping[str, object]:
 
 def metadata_sources(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     details: Final = call_details(request_data)
-    return (
-        request_data,
-        as_mapping(request_data.get("litellm_params")),
-        details,
-        as_mapping(details.get("litellm_params")),
-    )
+    # LLM request data carries the logger and client-sent litellm_params; post_mcp_call hands over the logger's own
+    server_params: Final = EMPTY if "litellm_logging_obj" in request_data else request_data.get("litellm_params")
+    return (request_data, as_mapping(server_params), details, as_mapping(details.get("litellm_params")))
 
 
 def first_value(request_data: Mapping[str, object], key: str) -> object:
@@ -373,7 +370,7 @@ class AktoGuardrail(CustomGuardrail):
         model: Final = request_data.get("model") or inputs.get("model") or ""
         tools: Final = inputs.get("tools") or request_data.get("tools")
         tool_calls: Final = inputs.get("tool_calls")
-        optional: Final = (("tools", tools), ("tool_calls", tool_calls))
+        optional: Final = (("tools", tools), ("functions", request_data.get("functions")), ("tool_calls", tool_calls))
         return MappingProxyType(
             {
                 "model": model,
@@ -427,9 +424,11 @@ class AktoGuardrail(CustomGuardrail):
         response_payload: str | None = None,
     ) -> Mapping[str, object]:
         client_headers: Final = self.client_headers(request_data)
-        ip: Final = client_headers.get("x-forwarded-for", "").split(",")[0].strip() or client_headers.get(
-            "x-real-ip", ""
+        # The proxy's own requester_ip_address first, since clients control their forwarding headers
+        forwarded: Final = self.resolve_metadata_value(request_data, "requester_ip_address") or client_headers.get(
+            "x-forwarded-for", ""
         )
+        ip: Final = forwarded.split(",")[0].strip() or client_headers.get("x-real-ip", "")
         tag_json: Final = to_json(tag)
         return MappingProxyType(
             {

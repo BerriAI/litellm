@@ -71,6 +71,7 @@ class _VideoURLBlock(_Model):
 class _InputImageBlock(_Model):
     type: Literal["input_image"]
     image_url: str | None = None
+    file_id: str | None = None
 
 
 class _InputAudio(_Model):
@@ -85,6 +86,7 @@ class _InputAudioBlock(_Model):
 
 class _FileData(_Model):
     file_data: str | None = None
+    file_id: str | None = None
     filename: str | None = None
 
 
@@ -97,6 +99,7 @@ class _InputFileBlock(_Model):
     type: Literal["input_file"]
     file_data: str | None = None
     file_url: str | None = None
+    file_id: str | None = None
     filename: str | None = None
 
 
@@ -124,6 +127,12 @@ class _DocumentBlock(_Model):
     title: str | None = None
 
 
+class _SearchResultBlock(_Model):
+    type: Literal["search_result"]
+    title: str | None = None
+    content: object = None
+
+
 class _ToolResultBlock(_Model):
     type: Literal["tool_result"]
     content: object = None
@@ -143,6 +152,7 @@ _AttachmentBlock: TypeAlias = (
     | _InputFileBlock
     | _ImageBlock
     | _DocumentBlock
+    | _SearchResultBlock
     | _ToolResultBlock
 )
 _BLOCK_ADAPTER: Final[TypeAdapter[_AttachmentBlock]] = TypeAdapter(
@@ -162,7 +172,9 @@ def request_attachments(request_data: Mapping[str, object]) -> RequestAttachment
     # Both, so a decoy "messages" can't hide attachments in a Responses API "input"
     containers: Final = (_parse(_ITEMS_ADAPTER, request_data.get(key)) or () for key in ("messages", "input"))
     blocks: Final = chain.from_iterable(_message_blocks(message) for message in chain.from_iterable(containers))
-    classified: Final = tuple(_classify_block(block, index) for index, block in enumerate(blocks))
+    classified: Final = tuple(
+        chain.from_iterable(_block_attachments(block, index) for index, block in enumerate(blocks))
+    )
     return RequestAttachments(
         attachments=tuple(attachment for attachment, _ in classified if attachment is not None),
         unsendable_count=sum(1 for _, is_unsendable in classified if is_unsendable),
@@ -197,9 +209,38 @@ def _blocks(content: object) -> tuple[_AttachmentBlock, ...]:
     return tuple(block for block in parsed if block is not None)
 
 
+def _block_attachments(block: _AttachmentBlock, index: int) -> tuple[_Classified, ...]:
+    """A file block can name several sources and providers differ on which they send, so all are checked."""
+    match block:
+        case _FileBlock():
+            return _file_sources((block.file.file_data,), block.file.file_id, block.file.filename, index)
+        case _InputFileBlock():
+            return _file_sources((block.file_data, block.file_url), block.file_id, block.filename, index)
+        case _InputImageBlock():
+            return _file_sources((block.image_url,), block.file_id, None, index, "image")
+        case _:
+            return (_classify_block(block, index),)
+
+
+def _file_sources(
+    inline: tuple[str | None, ...], file_id: str | None, name: str | None, index: int, kind: AttachmentType = "file"
+) -> tuple[_Classified, ...]:
+    found: Final = (
+        *(_from_uri(source, name, index, kind) for source in inline if source),
+        *((_from_file_id(file_id, name, index, kind),) if file_id else ()),
+    )
+    return found or (_UNSENDABLE,)
+
+
+def _from_file_id(file_id: str, name: str | None, index: int, kind: AttachmentType) -> _Classified:
+    """A URL is checked; an uploaded file's id has no content to send."""
+    is_url: Final = file_id.strip().lower().startswith(_REMOTE_URI_SCHEMES)
+    return _from_uri(file_id, name, index, kind) if is_url else _UNSENDABLE
+
+
 def _classify_block(block: _AttachmentBlock, index: int) -> _Classified:
     match block:
-        case _ImageURLBlock() | _InputImageBlock():
+        case _ImageURLBlock():
             return _from_uri(_url(block.image_url), None, index, "image")
         case _VideoURLBlock():
             return _from_uri(_url(block.video_url), None, index, "file")
@@ -208,14 +249,13 @@ def _classify_block(block: _AttachmentBlock, index: int) -> _Classified:
             return _from_base64(data, name, index, "audio", None)
         case _InputAudioBlock():
             return _UNSENDABLE
-        case _FileBlock(file=file):
-            return _from_uri(file.file_data, file.filename, index, "file")
-        case _InputFileBlock():
-            return _from_uri(block.file_data or block.file_url, block.filename, index, "file")
         case _ImageBlock(source=source):
             return _from_source(source, None, index, "image")
         case _DocumentBlock(source=source, title=title):
             return _from_source(source, title, index, "file")
+        case _SearchResultBlock():
+            text: Final = _joined_text(block.content)
+            return _text_file(text, block.title, index, "file") if text else _NOT_AN_ATTACHMENT
         case _:
             return _NOT_AN_ATTACHMENT
 
@@ -243,12 +283,16 @@ def _from_source(source: _Source, name: str | None, index: int, kind: Attachment
             content: Final = base64.b64encode(data.encode(errors="surrogatepass")).decode()
             return Attachment(_filename(name, index, source.media_type or "text/plain"), kind, content=content), False
         case _Source(type="content", content=text_blocks) if text := _joined_text(text_blocks):
-            encoded: Final = base64.b64encode(text.encode(errors="surrogatepass")).decode()
-            return Attachment(_filename(name, index, "text/plain"), kind, content=encoded), False
+            return _text_file(text, name, index, kind)
         case _Source(type="url", url=str(url)) if url:
             return Attachment(_filename(name, index, url=url), kind, url=url), False
         case _:
             return _UNSENDABLE
+
+
+def _text_file(text: str, name: str | None, index: int, kind: AttachmentType) -> _Classified:
+    encoded: Final = base64.b64encode(text.encode(errors="surrogatepass")).decode()
+    return Attachment(_filename(name, index, "text/plain"), kind, content=encoded), False
 
 
 def _joined_text(content: object) -> str:
@@ -325,6 +369,10 @@ def _without_content(value: object, key: str) -> object:
 
 def _block_without_content(block: object) -> object:
     block_type: Final = (_parse(_OBJECT_MAPPING, block) or {}).get("type")
+    if block_type == "document":
+        # Title and context are prompt text the model reads, so they stay in the checked payload
+        document: Final = _parse(_OBJECT_MAPPING, block) or {}
+        return {key: document[key] for key in ("type", "title", "context") if key in document}
     if block_type in _ATTACHMENT_BLOCK_TYPES:
         return {"type": block_type}
     return _without_content(block, "content") if block_type == "tool_result" else block
