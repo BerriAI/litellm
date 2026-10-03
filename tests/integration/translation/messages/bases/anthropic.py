@@ -1,0 +1,70 @@
+from typing import Final
+
+from integration.translation.case import TranslationTestCase
+
+CLAUDE_SONNET_4_6: Final = TranslationTestCase(
+    scenario="basic",
+    client_path="/v1/messages",
+    client_request={
+        "model": "anthropic/claude-sonnet-4-6",
+        "max_tokens": 64,
+        "system": "You are a terse assistant.",
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "cache": {"no-cache": True},
+    },
+    provider_path="/v1/messages",
+    provider_headers={
+        "x-api-key": "synthetic-anthropic-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    provider_request={
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 64,
+        "stream": False,
+        "system": "You are a terse assistant.",
+        "messages": [{"role": "user", "content": "Say hello."}],
+    },
+    provider_response={
+        "model": "claude-sonnet-4-6",
+        "id": "msg_011CffzUNHaEfzVxCh5hskBG",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 18,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 5,
+            "service_tier": "standard",
+            "inference_geo": "global",
+        },
+        "diagnostics": None,
+    },
+    client_response={
+        "model": "anthropic/claude-sonnet-4-6",
+        "id": "msg_011CffzUNHaEfzVxCh5hskBG",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 18,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 5,
+            "service_tier": "standard",
+            "inference_geo": "global",
+        },
+        "diagnostics": None,
+    },
+)

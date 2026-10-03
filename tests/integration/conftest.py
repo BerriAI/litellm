@@ -15,6 +15,7 @@ from redis import Redis
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
+from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
@@ -124,6 +125,31 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
         yield value
+
+
+@pytest.fixture(scope="session")
+def shared_provider_server() -> Iterator[SharedProvider]:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.fail("the shared fake provider needs tests to run one at a time; this group runs under pytest-xdist")
+    with shared_provider() as server:
+        yield server
+
+
+@pytest.fixture
+def provider(shared_provider_server: SharedProvider, request: pytest.FixtureRequest) -> Iterator[SharedProvider]:
+    stray: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert stray == (), (
+        f"the shared fake provider got {[item.target for item in stray]} "
+        f"after {shared_provider_server.last_test} finished"
+    )
+    yield shared_provider_server
+    shared_provider_server.last_test = request.node.nodeid
+    unused: Final = len(shared_provider_server.replies)
+    unread: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert unused == 0, f"{unused} queued provider replies were never requested"
+    assert unread == (), f"the test never read the provider requests {[item.target for item in unread]}"
 
 
 @pytest.fixture
