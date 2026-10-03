@@ -29,12 +29,14 @@ enum ScopeCase {
 impl ScopeCase {
     fn scope(self) -> QueryScope {
         match self {
-            Self::Admin => QueryScope::Admin,
-            Self::Team => QueryScope::Team {
-                team_id: "team-a".into(),
+            Self::Admin => QueryScope::All,
+            Self::Team => QueryScope::Owned {
+                user_id: String::new(),
+                team_ids: vec!["team-a".into()],
             },
-            Self::OtherTeam => QueryScope::Team {
-                team_id: "team-b".into(),
+            Self::OtherTeam => QueryScope::Owned {
+                user_id: String::new(),
+                team_ids: vec!["team-b".into()],
             },
         }
     }
@@ -92,11 +94,7 @@ async fn typed_queries_read_normalized_spans_and_keep_trace_identities_separate(
     let fixture = seeded_database?;
     let reader = fixture
         .readers
-        .connection(
-            &fixture.database.client,
-            &QueryScope::Admin,
-            "fixture-secret",
-        )
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
         .await?;
     let params = ListTracesParams::from(contracts::ListTracesParams {
         access: admin_access?,
@@ -165,11 +163,7 @@ async fn typed_trace_cursor_returns_the_next_fixture_trace(
     let fixture = seeded_database?;
     let reader = fixture
         .readers
-        .connection(
-            &fixture.database.client,
-            &QueryScope::Admin,
-            "fixture-secret",
-        )
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
         .await?;
     let params = ListTracesParams::from(contracts::ListTracesParams {
         access: admin_access?,
@@ -207,11 +201,7 @@ async fn captured_deeplite_exports_round_trip_through_clickhouse(
     let decoded = insert_export(&fixture, export, "team-a", "key-a").await?;
     let reader = fixture
         .readers
-        .connection(
-            &fixture.database.client,
-            &QueryScope::Admin,
-            "fixture-secret",
-        )
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
         .await?;
     let params = TraceSpansParams {
         access: admin_access?,

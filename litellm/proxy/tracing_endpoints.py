@@ -27,7 +27,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
-from litellm.rust_bridge.traces import AdminQueryScope, ClickHouseStorage, LogQueryScope
+from litellm.rust_bridge.traces import AllQueryScope, ClickHouseStorage, OwnedQueryScope, QueryScope
 from litellm.tracing import (
     Tenant,
     TraceReceiver,
@@ -170,11 +170,11 @@ def provide_trace_query_secret() -> str:
     return master_key
 
 
-def trace_query_scope(scope: ReadScope) -> AdminQueryScope | LogQueryScope:
+def trace_query_scope(scope: ReadScope) -> QueryScope:
     if isinstance(scope, AllRows):
-        return AdminQueryScope(kind="admin")
-    return LogQueryScope(
-        kind="logs",
+        return AllQueryScope(kind="all")
+    return OwnedQueryScope(
+        kind="owned",
         user_id=scope.user_id or "",
         team_ids=scope.team_ids,
     )

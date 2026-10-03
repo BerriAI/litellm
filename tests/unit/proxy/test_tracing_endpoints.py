@@ -614,16 +614,16 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
 @pytest.mark.parametrize(
     ("auth", "expected_scope"),
     (
-        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), {"kind": "admin"}),
-        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), {"kind": "admin"}),
-        (TEAM_KEY, {"kind": "logs", "user_id": "user", "team_ids": ()}),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), {"kind": "all"}),
+        (UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), {"kind": "all"}),
+        (TEAM_KEY, {"kind": "owned", "user_id": "user", "team_ids": ()}),
         (
             UserAPIKeyAuth(user_id="user", token="project-key", team_id="team-a", project_id="project-a"),
-            {"kind": "logs", "user_id": "user", "team_ids": ()},
+            {"kind": "owned", "user_id": "user", "team_ids": ()},
         ),
         (
             UserAPIKeyAuth(user_id="user", token="solo-key"),
-            {"kind": "logs", "user_id": "user", "team_ids": ()},
+            {"kind": "owned", "user_id": "user", "team_ids": ()},
         ),
     ),
 )
@@ -644,7 +644,7 @@ def test_sql_and_help_use_authenticated_scope(
     assert help_result.status_code == 200, help_result.text
     assert help_result.json() == QUERY_HELP
     receiver.store.storage.query_help.assert_awaited_once_with(expected_scope, "test-secret")
-    forged: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1", "scope": {"kind": "admin"}})
+    forged: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1", "scope": {"kind": "all"}})
     assert forged.status_code == 422, forged.text
     assert receiver.store.storage.query_sql.await_count == 1
 
@@ -673,7 +673,7 @@ def test_sql_reports_rejected_queries_and_unavailable_readers(
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
     assert result.status_code == status, result.text
     receiver.store.storage.query_sql.assert_awaited_once_with(
-        "SELECT 1", {"kind": "logs", "user_id": "user", "team_ids": ()}, "test-secret"
+        "SELECT 1", {"kind": "owned", "user_id": "user", "team_ids": ()}, "test-secret"
     )
 
 
@@ -683,7 +683,7 @@ def test_query_help_does_not_fall_back_when_reader_provisioning_fails(client: Te
     result: Final = client.get("/v1/traces/query/help")
     assert result.status_code == 503, result.text
     receiver.store.storage.query_help.assert_awaited_once_with(
-        {"kind": "logs", "user_id": "user", "team_ids": ()}, "test-secret"
+        {"kind": "owned", "user_id": "user", "team_ids": ()}, "test-secret"
     )
 
 
@@ -703,7 +703,7 @@ def test_queries_require_a_proxy_secret(
         return
     assert result.status_code == 200, result.text
     receiver.store.storage.query_sql.assert_awaited_once_with(
-        "SELECT 1", {"kind": "logs", "user_id": "user", "team_ids": ()}, secret
+        "SELECT 1", {"kind": "owned", "user_id": "user", "team_ids": ()}, secret
     )
 
 
@@ -756,10 +756,10 @@ def test_shared_trace_permissions_reach_read_and_sql_boundaries(
     assert sql_response.json() == SQL_ENVELOPE
     assert client.get("/v1/traces/query/help").json() == QUERY_HELP
     query_scope: Final = (
-        {"kind": "admin"}
+        {"kind": "all"}
         if expected[0]
         else {
-            "kind": "logs",
+            "kind": "owned",
             "user_id": expected[1],
             "team_ids": expected[2],
         }
@@ -787,7 +787,7 @@ def test_trace_storage_permissions_map_owned_rows(
 ) -> None:
     assert tracing_endpoints._trace_scope(scope) == TraceScope(all_teams=0, user_id=expected[0], team_ids=expected[1])
     assert tracing_endpoints.trace_query_scope(scope) == {
-        "kind": "logs",
+        "kind": "owned",
         "user_id": expected[0],
         "team_ids": expected[1],
     }

@@ -147,8 +147,8 @@ fn predicate(scope: &QueryScope, table: TraceTable) -> String {
         TraceTable::SpendLogs => "team_id",
     };
     match scope {
-        QueryScope::Admin => "1".to_owned(),
-        QueryScope::Logs { user_id, team_ids } => {
+        QueryScope::All => "1".to_owned(),
+        QueryScope::Owned { user_id, team_ids } => {
             let owner = literal(user_id);
             let user_clause = match table {
                 TraceTable::OtelTraces => format!("UserId = {owner}"),
@@ -167,7 +167,6 @@ fn predicate(scope: &QueryScope, table: TraceTable) -> String {
             };
             format!("({owner} != '' AND {user_clause}) OR ({team_clause})")
         }
-        QueryScope::Team { team_id } => format!("{team} = {}", literal(team_id)),
     }
 }
 
@@ -189,19 +188,24 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::otel(TraceTable::OtelTraces, "TeamId")]
-    #[case::agent(TraceTable::AgentTracesByKey, "TeamId")]
-    #[case::spend(TraceTable::SpendLogs, "team_id")]
-    fn predicates_preserve_scope_and_escape_values(#[case] table: TraceTable, #[case] team: &str) {
-        assert_eq!(predicate(&QueryScope::Admin, table), "1");
+    #[case::otel(TraceTable::OtelTraces, "TeamId", "UserId = ''")]
+    #[case::agent(TraceTable::AgentTracesByKey, "TeamId", "UserIds = ['']")]
+    #[case::spend(TraceTable::SpendLogs, "team_id", "user = ''")]
+    fn predicates_preserve_scope_and_escape_values(
+        #[case] table: TraceTable,
+        #[case] team: &str,
+        #[case] user: &str,
+    ) {
+        assert_eq!(predicate(&QueryScope::All, table), "1");
         assert_eq!(
             predicate(
-                &QueryScope::Team {
-                    team_id: "team'\\".into()
+                &QueryScope::Owned {
+                    user_id: String::new(),
+                    team_ids: vec!["team'\\".into()]
                 },
                 table
             ),
-            format!("{team} = 'team\\'\\\\'")
+            format!("('' != '' AND {user}) OR ({team} IN ('team\\'\\\\'))")
         );
     }
 }

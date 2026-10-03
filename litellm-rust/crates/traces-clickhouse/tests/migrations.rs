@@ -1753,7 +1753,7 @@ async fn named_and_sql_readers_share_request_log_visibility(
         spend.iter().map(|row| row.0.request_id.as_str()).collect();
     let expected: std::collections::BTreeSet<_> = expected.into_iter().collect();
     assert_eq!(actual, expected);
-    let scope = QueryScope::Logs {
+    let scope = QueryScope::Owned {
         user_id: user.into(),
         team_ids: teams.into_iter().map(str::to_owned).collect(),
     };
