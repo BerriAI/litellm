@@ -12,6 +12,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,6 +29,8 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
+    drop_lookaround_regex_patterns,
+    tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
@@ -49,6 +52,7 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
@@ -100,6 +104,7 @@ from ..common_utils import (
     BedrockModelInfo,
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
+    bedrock_reasoning_effort_disabled,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
@@ -126,6 +131,17 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
     "prompt-caching",  # Prompt caching not supported in Converse API
     "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
+
+
+_TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _tools_the_model_accepts(
+    tools: Sequence[Mapping[str, object]], model: str, litellm_params: Mapping[str, object] | None
+) -> list[Mapping[str, object]]:
+    if bedrock_model_supports_regex_lookaround(model, litellm_params):
+        return list(tools)
+    return [tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) for tool in tools]
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -1120,6 +1136,25 @@ class AmazonConverseConfig(BaseConfig):
                     "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it always reasons and rejects it.",
                     model,
                 )
+            elif (
+                param == "reasoning_effort"
+                and isinstance(value, str)
+                and self._is_openai_gpt_reasoning_model(model)
+                and bedrock_reasoning_effort_disabled(model=model, effort=value)
+            ):
+                if not (litellm.drop_params or drop_params):
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            f"{model} does not support reasoning_effort={value}. "
+                            "To drop unsupported params, set `litellm.drop_params = True`."
+                        ),
+                        status_code=400,
+                    )
+                verbose_logger.debug(
+                    "Dropping unsupported `reasoning_effort=%s` for Bedrock model=%s.",
+                    value,
+                    model,
+                )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
@@ -1448,7 +1483,7 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     def _converted_text_blocks(self, message: ChatCompletionSystemMessage) -> tuple[ChatCompletionTextObject, ...]:
-        content: Final = message["content"]
+        content: Final = message.get("content")
         if isinstance(content, str):
             return (self._converted_text_block(content, message.get("cache_control")),) if content else ()
         parts: Final[Sequence[object]] = content or ()
@@ -1483,13 +1518,14 @@ class AmazonConverseConfig(BaseConfig):
         for message in hoisted:
             if message["role"] != "system":
                 continue
-            if isinstance(message["content"], str) and message["content"]:
-                system_content_blocks.append(SystemContentBlock(text=message["content"]))
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                system_content_blocks.append(SystemContentBlock(text=content))
                 cache_block = self.get_cache_point_block(message, block_type="system", model=model)
                 if cache_block:
                     system_content_blocks.append(cache_block)
-            elif isinstance(message["content"], list):
-                for m in message["content"]:
+            elif isinstance(content, list):
+                for m in content:
                     if m.get("type") == "text" and m.get("text"):
                         system_content_blocks.append(SystemContentBlock(text=m["text"]))
                         cache_block = self.get_cache_point_block(m, block_type="system", model=model)
@@ -1688,6 +1724,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         headers: dict | None,
         additional_request_params: dict,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> tuple[list[ToolBlock], list]:
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
@@ -1728,7 +1765,9 @@ class AmazonConverseConfig(BaseConfig):
             computer_use_tools, regular_tools = self._separate_computer_use_tools(filtered_tools, model)
 
             # Process regular function tools using existing logic
-            bedrock_tools = _bedrock_tools_pt(regular_tools, model=model)
+            bedrock_tools = _bedrock_tools_pt(
+                _tools_the_model_accepts(regular_tools, model, litellm_params), model=model
+            )
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
@@ -1792,7 +1831,10 @@ class AmazonConverseConfig(BaseConfig):
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
-            bedrock_tools = _bedrock_tools_pt(filtered_tools, model=model)
+            bedrock_tools = _bedrock_tools_pt(
+                _tools_the_model_accepts(_TOOLS_AS_SENT.validate_python(filtered_tools), model, litellm_params),
+                model=model,
+            )
 
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
@@ -1904,7 +1946,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Process tools and collect beta values
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
-            original_tools, model, headers, additional_request_params
+            original_tools, model, headers, additional_request_params, litellm_params
         )
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config

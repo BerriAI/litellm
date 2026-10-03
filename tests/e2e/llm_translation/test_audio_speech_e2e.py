@@ -139,3 +139,33 @@ class TestAudioSpeech:
             json=_OptionalSpeechBody(model=model, input="", voice="alloy"),
         )
         assert_client_error(result, "speech empty input")
+
+
+MP3_PREFIXES = (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
+
+
+class TestAwsPollySpeech:
+    def test_polly_generative_voice_returns_mp3(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = f"e2e-speech-polly-{unique_marker()}"
+        model_id = proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model="aws_polly/generative",
+                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+                aws_region_name="os.environ/AWS_REGION",
+            ),
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        client = sdk.openai(resources.key())
+
+        response = client.audio.speech.with_raw_response.create(
+            model=model, voice="alloy", input="Hello from the gateway.", response_format="mp3"
+        )
+        content_type = response_header(response.headers, "content-type")
+        assert "audio" in (content_type or ""), f"polly speech content-type is not audio: {content_type!r}"
+        assert response.content.startswith(MP3_PREFIXES), (
+            f"polly speech body is not MP3 audio: {response.content[:16]!r}"
+        )

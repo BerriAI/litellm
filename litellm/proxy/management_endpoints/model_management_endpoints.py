@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     SEARCH_CONTEXT_SIZES,
     ptu_config_error,
 )
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -115,6 +116,7 @@ from litellm.router_strategy.complexity_router import (
     normalize_classification_examples,
     normalize_classification_prompt,
 )
+from litellm.router_strategy.complexity_router.config import resolve_complexity_router_config_write
 from litellm.router_utils.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -185,6 +187,25 @@ class _ProxyModelRow(Protocol):
     def model_info(self) -> object: ...
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
+
+
+def _model_write_response(
+    row: _ProxyModelRow, member_write: MemberAutoRouterWrite | None
+) -> _ProxyModelRow | Mapping[str, object]:
+    if member_write is None:
+        return row
+    payload: Final = TypeAdapter(dict[str, object]).validate_json(row.model_dump_json())
+    stored_params: Final = payload.get("litellm_params")
+    params: Final = (
+        TypeAdapter(dict[str, object]).validate_json(stored_params)
+        if isinstance(stored_params, str)
+        else TypeAdapter(dict[str, object]).validate_python(stored_params)
+    )
+    redacted: Final = redact_credentials_in_payload(params)
+    return {
+        **payload,
+        "litellm_params": json.dumps(redacted) if isinstance(stored_params, str) else redacted,
+    }
 
 
 class _ProxyModelTable(Protocol):
@@ -407,34 +428,13 @@ WHERE model_id <> $1
 
 def _effective_complexity_router_config(
     incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
-) -> object:
+) -> Mapping[str, object] | None:
     incoming: Final = None if incoming_params is None else incoming_params.complexity_router_config
     existing: Final = None if existing_params is None else existing_params.complexity_router_config
-    if incoming is None:
-        return existing
-    if existing is None or incoming.get("classifier_type") != "jev" or existing.get("classifier_type") != "jev":
-        return incoming
-    incoming_jev: Final[object] = incoming.get("jev_classifier_config")
-    existing_jev: Final[object] = existing.get("jev_classifier_config")
-    if not isinstance(incoming_jev, Mapping) or not isinstance(existing_jev, Mapping):
-        return incoming
-    supplied: Final = TypeAdapter(dict[str, object]).validate_python(incoming_jev)
-    stored: Final = TypeAdapter(dict[str, object]).validate_python(existing_jev)
-    same_base: Final = "api_base" not in supplied or supplied["api_base"] == stored.get("api_base")
-    transport: Final = MappingProxyType(
-        {
-            key: value
-            for key, value in stored.items()
-            if key in ("api_key", "api_base") and (key != "api_key" or same_base)
-        }
-    )
-    return {
-        **incoming,
-        "jev_classifier_config": {
-            **transport,
-            **supplied,
-        },
-    }
+    config_adapter: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+    return resolve_complexity_router_config_write(
+        config_adapter.validate_python(incoming), config_adapter.validate_python(existing)
+    ).effective
 
 
 def _effective_model(
@@ -1304,7 +1304,7 @@ async def patch_model(
             live_after=reload_outcome.live_after,
         )
 
-        return updated_model
+        return _model_write_response(updated_model, member_write)
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in patch_model: %s", e)
@@ -1501,10 +1501,18 @@ async def _add_model_to_db(
     slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
 ) -> "_ProxyModelRow | LiteLLM_ProxyModelTable":
     # encrypt litellm params #
-    _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
+    _litellm_params_dict: Final = TypeAdapter(dict[str, object]).validate_python(
+        model_params.litellm_params.model_dump(exclude_none=True)
+    )
+    if "complexity_router_config" in _litellm_params_dict:
+        _litellm_params_dict["complexity_router_config"] = _effective_complexity_router_config(
+            model_params.litellm_params, None
+        )
     _original_litellm_model_name: Final = model_params.litellm_params.model
     for k, v in _litellm_params_dict.items():
-        encrypted_value = encrypt_value_helper(value=v, new_encryption_key=new_encryption_key)
+        encrypted_value = (
+            encrypt_value_helper(value=v, new_encryption_key=new_encryption_key) if isinstance(v, str) else v
+        )
         model_params.litellm_params[k] = encrypted_value
     _data: Final[dict] = {
         "model_id": model_params.model_info.id,
@@ -2536,7 +2544,7 @@ async def add_new_model(
             live_after=reload_outcome.live_after,
         )
 
-        return model_response
+        return _model_write_response(model_response, member_write)
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
@@ -2760,7 +2768,7 @@ async def update_model(
                 live_after=reload_outcome.live_after,
             )
 
-            return model_response
+            return None if model_response is None else _model_write_response(model_response, member_write)
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
         if isinstance(e, HTTPException):

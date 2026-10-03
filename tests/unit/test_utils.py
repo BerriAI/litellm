@@ -954,6 +954,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
@@ -996,6 +998,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "enum": ["low", "medium", "high", "max", "xhigh"],
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
+                "supports_regex_lookaround": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",
@@ -1020,6 +1023,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
+                            "/v1/systemone",
                             "/v1beta/interactions",
                         ],
                     },
@@ -6477,6 +6481,11 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
     original_function: str, args: tuple[object, ...], kwargs: dict[str, object], expected: str
 ) -> None:
     assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
+
+
+@pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
+def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(original_function: str) -> None:
+    assert _logged_request_messages(original_function, model="gpt-4o") is None
 
 
 def test_search_with_a_mixed_type_query_list_still_reaches_its_own_validation_error() -> None:

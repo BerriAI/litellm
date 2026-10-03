@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { ChevronDown } from "lucide-react";
 
 export function DurationInput({
   label,
@@ -47,18 +48,24 @@ export function DurationInput({
           value={Number.isFinite(value) ? value / scale : ""}
           onChange={(event) => onChange(event.target.value === "" ? NaN : Number(event.target.value) * scale)}
         />
-        <select
-          aria-label={`${label} unit`}
-          value={scale}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-          onChange={(event) => changeUnit(Number(event.target.value))}
-        >
-          {units.map((unit) => (
-            <option key={unit.scale} value={unit.scale}>
-              {unit.label}
-            </option>
-          ))}
-        </select>
+        <div className="relative w-28 shrink-0">
+          <select
+            aria-label={`${label} unit`}
+            value={scale}
+            className="h-9 w-full appearance-none rounded-md border border-input bg-background pl-3 pr-9 text-sm"
+            onChange={(event) => changeUnit(Number(event.target.value))}
+          >
+            {units.map((unit) => (
+              <option key={unit.scale} value={unit.scale}>
+                {unit.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            aria-hidden="true"
+            className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+        </div>
       </div>
     </div>
   );

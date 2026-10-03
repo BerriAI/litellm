@@ -11,10 +11,12 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_TeamMembership,
     LitellmUserRoles,
+    NewMCPServerRequest,
     NewUserRequest,
     OrganizationMemberUpdateRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
+    UpdateMCPServerRequest,
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
@@ -395,7 +397,7 @@ def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
         ConfigGeneralSettings(mcp_advertised_versions=versions)
 
 
-@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", None])
+@pytest.mark.parametrize("revision", ["unknown", None])
 def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 
@@ -403,3 +405,74 @@ def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     for model in (NewMCPServerRequest, UpdateMCPServerRequest):
         with pytest.raises(ValidationError):
             model.model_validate(payload)
+
+
+MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)
+STDIO_SERVER_FIELDS = {"server_id": "stdio-1", "transport": "stdio", "command": "python", "args": ["server.py"]}
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_a_stdio_mcp_server_is_refused_while_stdio_is_not_enabled(monkeypatch, request_model):
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+
+    with pytest.raises(ValidationError, match="LITELLM_ENABLE_MCP_STDIO=true"):
+        request_model(**STDIO_SERVER_FIELDS)
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+@pytest.mark.parametrize("flag", ["true", "TRUE", " True "])
+def test_a_stdio_mcp_server_is_accepted_once_stdio_is_enabled(monkeypatch, request_model, flag):
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", flag)
+
+    assert request_model(**STDIO_SERVER_FIELDS).command == "python"
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+@pytest.mark.parametrize("flag", ["false", "1", "yes", ""])
+def test_only_an_explicit_true_enables_stdio_mcp_servers(monkeypatch, request_model, flag):
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", flag)
+
+    with pytest.raises(ValidationError, match="LITELLM_ENABLE_MCP_STDIO=true"):
+        request_model(**STDIO_SERVER_FIELDS)
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_a_stdio_command_outside_the_allowlist_is_refused_even_when_stdio_is_enabled(monkeypatch, request_model):
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+
+    with pytest.raises(ValidationError, match="not in the allowed commands list"):
+        request_model(**{**STDIO_SERVER_FIELDS, "command": "/bin/sh"})
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+@pytest.mark.parametrize("missing", ["command", "args"])
+def test_an_enabled_stdio_mcp_server_still_needs_a_command_and_args(monkeypatch, request_model, missing):
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+
+    with pytest.raises(ValidationError, match=f"{missing} is required for stdio transport"):
+        request_model(**{k: v for k, v in STDIO_SERVER_FIELDS.items() if k != missing})
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_an_http_mcp_server_is_unaffected_by_the_stdio_flag(monkeypatch, request_model):
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+
+    assert request_model(server_id="http-1", transport="http", url="https://mcp.example.com").url == "https://mcp.example.com"
+    with pytest.raises(ValidationError, match="url or spec_path is required"):
+        request_model(server_id="http-1", transport="http")
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_a_non_mapping_mcp_server_payload_gets_a_validation_error(request_model):
+    with pytest.raises(ValidationError, match="valid dictionary"):
+        request_model.model_validate("not-a-server")
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_modern_http_upstream_protocol_is_available(request_model):
+    parsed = request_model.model_validate({
+        "server_id": "modern", "transport": "http", "url": "https://example.com/mcp",
+        "mcp_info": {"protocol_version": "2026-07-28"},
+    })
+    assert parsed.mcp_info["protocol_version"] == "2026-07-28"
+    assert parsed.transport == "http"

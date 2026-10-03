@@ -2,18 +2,22 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from functools import reduce
+from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime, BaseModel, Field, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, Field
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ModelAccessDeniedProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_model
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
+from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
     Claim,
     Execution,
@@ -35,7 +39,7 @@ from litellm.proxy.lens.models import (
     WorkerCreated,
 )
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
-from litellm.proxy.lens.sources import SourceReader, parse_execution
+from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
     can_access,
     claim_job,
@@ -45,10 +49,12 @@ from litellm.proxy.lens.state import (
     replace_job,
     snapshot_finding,
 )
+from litellm.proxy.tracing_runtime import provide_storage
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+StorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_storage)]
 
 
 def repository() -> LensRepository:
@@ -59,10 +65,13 @@ def repository() -> LensRepository:
     return LensRepository(WriterDatabase(writer_wrapper(prisma_client.db)))
 
 
-def source_reader() -> SourceReader:
-    from litellm.proxy.tracing_endpoints import get_receiver
-
-    return SourceReader(get_receiver().store.storage)
+def source_reader(storage: Storage | None) -> SourceReader:
+    if storage is None:
+        raise HTTPException(
+            status_code=501,
+            detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
+        )
+    return SourceReader(storage)
 
 
 def user_scope(auth: UserAPIKeyAuth, write: bool = False) -> Scope:
@@ -121,38 +130,77 @@ def validate_selection(settings: LensSettings) -> None:
             raise HTTPException(422, "Choose execution IDs returned by the activity preview")
 
 
-def validate_model(settings: LensSettings, auth: UserAPIKeyAuth) -> None:
-    from litellm.proxy.proxy_server import llm_router
+async def validate_model(settings: LensSettings, auth: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     validate_selection(settings)
-    if llm_router is None or settings.model not in llm_router.get_model_names(team_id=auth.team_id):
+    deployments: Final = (
+        llm_router.get_model_list(model_name=settings.model, team_id=auth.team_id) if llm_router else ()
+    )
+    if not deployments:
         raise HTTPException(400, "Choose a model configured on this LiteLLM instance")
-    allowed_models: Final = TypeAdapter(tuple[str, ...]).validate_python(auth.model_dump().get("models") or ())
-    if (
-        auth.user_role != LitellmUserRoles.PROXY_ADMIN
-        and allowed_models
-        and settings.model not in allowed_models
-        and "all-proxy-models" not in allowed_models
-    ):
-        raise HTTPException(403, "This key does not have access to the analysis model")
+    if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
+        try:
+            await can_key_call_model(
+                model=settings.model,
+                llm_model_list=deployments,
+                valid_token=auth,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+            )
+        except ModelAccessDeniedProxyException as exc:
+            raise HTTPException(403, "This key does not have access to the analysis model") from exc
+    for deployment in deployments:
+        deployment_prices(Deployment.model_validate(deployment))
+
+
+async def worker_supports_model(worker: Worker, settings: LensSettings) -> bool:
+    if worker.revoked or worker.analysis_key_id is None:
+        return False
+    try:
+        auth: Final = await validate_key(worker.analysis_key_id)
+        if auth is None:
+            return False
+        await validate_model(settings, auth)
+    except KeyNotFoundError:
+        return False
+    except HTTPException as exc:
+        if exc.status_code not in (400, 401, 403):
+            raise
+        return False
+    return True
+
+
+async def validate_workers(settings: LensSettings, scope: Scope) -> None:
+    workers: Final = repository().eligible_workers(scope)
+    first: Final = await anext(workers, None)
+    if first is None or await worker_supports_model(first, settings):
+        return
+    async for worker in workers:
+        if await worker_supports_model(worker, settings):
+            return
+    raise HTTPException(
+        400,
+        "No worker can use this analysis model. Choose a model available to the worker's virtual key, "
+        "or update its model access and pricing.",
+    )
 
 
 @router.get("", response_model=LensList)
-async def list_lenses(auth: Auth) -> LensList:
-    from litellm.proxy import tracing_endpoints
-
+async def list_lenses(auth: Auth, storage: StorageDep) -> LensList:
     scope: Final = user_scope(auth)
     return LensList(
         lenses=tuple(e for e in await repository().lenses() if can_access(scope, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_access(scope, w.scope)),
-        tracing_enabled=tracing_endpoints.receiver is not None,
+        tracing_enabled=storage is not None,
     )
 
 
 @router.post("", response_model=Lens)
 async def create_lens(settings: LensSettings, auth: Auth) -> Lens:
     scope: Final = user_scope(auth, write=True)
-    validate_model(settings, auth)
+    await validate_model(settings, auth)
+    await validate_workers(settings, scope)
     now: Final = datetime.now(timezone.utc)
     lens: Final = Lens(
         id=str(uuid4()),
@@ -165,10 +213,24 @@ async def create_lens(settings: LensSettings, auth: Auth) -> Lens:
     return await repository().create(queue_job(lens, now, str(uuid4())))
 
 
+@router.get("/activity/available", response_model=ActivityAvailability)
+async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailability:
+    scope: Final = user_scope(auth)
+    return await source_reader(storage).availability(scope) if storage is not None else ActivityAvailability()
+
+
+@router.get("/agents", response_model=tuple[str, ...])
+async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
+    scope: Final = user_scope(auth)
+    return await source_reader(storage).agents(scope) if storage is not None else ()
+
+
 @router.put("/{lens_id}", response_model=Lens)
 async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
-    await get_lens(lens_id, user_scope(auth, write=True))
-    validate_model(settings, auth)
+    lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
+    validate_selection(settings)
+    if settings.model != lens.settings.model or (settings.enabled and not lens.settings.enabled):
+        await validate_model(settings, auth)
     return required(
         await repository().update(
             lens_id,
@@ -186,9 +248,10 @@ async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
 
 @router.post("/{lens_id}/runs", response_model=Lens)
 async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
-    await get_lens(lens_id, user_scope(auth, write=True))
-    if body.settings is not None:
-        validate_model(body.settings, auth)
+    lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
+    settings: Final = body.settings or lens.settings
+    await validate_model(settings, auth)
+    await validate_workers(settings, lens.scope)
     now: Final = datetime.now(timezone.utc)
     job_id: Final = str(uuid4())
     return required(
@@ -261,14 +324,14 @@ class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
     settings: LensSettings
-    lookback_hours: int = Field(default=24, ge=1, le=720)
+    lookback_hours: int = Field(default=24, ge=1, le=8760)
 
 
 @router.post("/preview/sample", response_model=Sample)
-async def preview_sample(body: Preview, auth: Auth) -> Sample:
+async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Sample:
     validate_selection(body.settings)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
-    return await source_reader().sample(
+    return await source_reader(storage).sample(
         user_scope(auth),
         body.settings,
         int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000),
@@ -323,6 +386,9 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
     worker: Final = next((w for w in await repository().workers() if w.id == worker_id), None)
     if worker is None or not can_access(scope, worker.scope):
         raise HTTPException(404, "Worker not found")
+    jobs: Final = chain.from_iterable(lens.jobs for lens in await repository().lenses())
+    if any(job.status == "running" and job.worker_id == worker.id for job in jobs):
+        raise HTTPException(409, "Wait for this worker's investigation to finish or cancel it before revoking access")
     await repository().revoke_worker(worker.id)
     return True
 
@@ -367,14 +433,14 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
 
 
 @router.get("/worker/{lens_id}/{job_id}/sample", response_model=Sample)
-async def sample(lens_id: str, job_id: str, worker: WorkerAuth) -> Sample:
+async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: StorageDep) -> Sample:
     lens, job = await assigned(lens_id, job_id, worker)
     if job.sample is not None:
         return job.sample
     pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
     cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
     while True:
-        page = await source_reader().sample(
+        page = await source_reader(storage).sample(
             lens.scope,
             job.settings,
             int(job.start.timestamp() * 1000),
@@ -413,6 +479,7 @@ async def content(
     job_id: str,
     execution_id: str,
     worker: WorkerAuth,
+    storage: StorageDep,
     cursor: str = "",
     offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
@@ -421,7 +488,7 @@ async def content(
     execution: Final = next((e for e in selected.executions if e.id == execution_id), None)
     if execution is None:
         raise HTTPException(404, "Execution is outside this job's sample")
-    return await source_reader().content(lens.scope, execution, cursor, offset)
+    return await source_reader(storage).content(lens.scope, execution, cursor, offset)
 
 
 @router.post("/worker/{lens_id}/{job_id}/model", response_model=ModelResult)
@@ -433,7 +500,7 @@ async def model(lens_id: str, job_id: str, body: ModelRequest, worker: WorkerAut
 
 
 @router.post("/worker/{lens_id}/{job_id}/result", response_model=Lens)
-async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth) -> Lens:
+async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: StorageDep) -> Lens:
     lens: Final = await get_lens(lens_id, worker.scope)
     old: Final = next((j for j in lens.jobs if j.id == job_id), None)
     if old and old.status in ("completed", "failed") and old.worker_id == worker.id:
@@ -455,7 +522,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth) ->
         raise HTTPException(422, "Finding references evidence outside the job")
 
     for finding in body.findings:
-        await validate_finding(lens, selected, finding)
+        await validate_finding(lens, selected, finding, storage)
 
     def finish(e: Lens) -> Lens:
         active: Final = current_job(e)
@@ -508,10 +575,16 @@ async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
 
 
 async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Claim | None:
+    active: Final = current_job(candidate)
+    if not await worker_supports_model(worker, active.settings if active else candidate.settings):
+        return None
     job_id: Final = str(uuid4())
 
     def schedule(e: Lens) -> Lens:
         scheduled: Final = queue_job(e, now, job_id) if e.settings.enabled and e.next_run_at <= now else e
+        job: Final = current_job(scheduled)
+        if job and job.settings.model != (active.settings.model if active else candidate.settings.model):
+            return e
         return claim_job(scheduled, worker, now)
 
     updated: Final = await repository().update(candidate.id, schedule, changed_only=True)
@@ -523,12 +596,12 @@ async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Cla
     return None
 
 
-async def validate_finding(lens: Lens, selected: Sample, finding: FindingDraft) -> None:
+async def validate_finding(lens: Lens, selected: Sample, finding: FindingDraft, storage: Storage | None) -> None:
     previous: Final = next((f for f in lens.findings if f.id == finding.existing_finding_id), None)
     if finding.existing_finding_id and (previous is None or previous.check_id != finding.check_id):
         raise HTTPException(422, "Existing finding must belong to the same check")
     for evidence in finding.evidence:
-        if not await source_reader().verify_evidence(
+        if not await source_reader(storage).verify_evidence(
             lens.scope, next(e for e in selected.executions if e.id == evidence.execution_id), evidence
         ):
             raise HTTPException(422, "Evidence quote does not match stored content")
@@ -536,7 +609,12 @@ async def validate_finding(lens: Lens, selected: Sample, finding: FindingDraft) 
 
 @router.get("/{lens_id}/executions/{execution_id}", response_model=ExecutionContent)
 async def evidence_content(
-    lens_id: str, execution_id: str, auth: Auth, cursor: str = "", offset: int = Query(default=0, ge=0)
+    lens_id: str,
+    execution_id: str,
+    auth: Auth,
+    storage: StorageDep,
+    cursor: str = "",
+    offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
     lens: Final = await get_lens(lens_id, user_scope(auth))
     try:
@@ -556,4 +634,4 @@ async def evidence_content(
         span_count=1,
         root_seen=source == "requests",
     )
-    return await source_reader().content(lens.scope, execution, cursor, offset)
+    return await source_reader(storage).content(lens.scope, execution, cursor, offset)

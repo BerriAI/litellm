@@ -56,7 +56,7 @@ export function metadataObjectToPairs(
   excludedKeys: ReadonlySet<string> = new Set(),
 ): MetadataPair[] {
   return Object.entries(metadata ?? {})
-    .filter(([key]) => !excludedKeys.has(key))
+    .filter(([key]) => key !== "" && !excludedKeys.has(key))
     .map(([key, value]) => ({ key, value: formatMetadataValue(value) }));
 }
 

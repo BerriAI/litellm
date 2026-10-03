@@ -9,7 +9,7 @@ A trace is one agent run. It's made of spans (agent / llm / tool / chain / frame
 
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -26,10 +26,12 @@ class Span(TypedDict):
     name: ReadOnly[str]
     type: ReadOnly[SpanType]
     agent: ReadOnly[str]  # the agent this span runs inside, e.g. "researcher"
+    framework: ReadOnly[str]  # SDK that emitted the span, e.g. "claude-agent-sdk"; "" when unknown
     start_offset_ms: ReadOnly[float]  # relative to trace start
     duration_ms: ReadOnly[float]
     status: ReadOnly[SpanStatus]
-    error: ReadOnly[str | None]  # exception message when status == "error"
+    error: ReadOnly[str | None]
+    error_truncated: ReadOnly[bool]
     input_preview: ReadOnly[str]
     model: ReadOnly[str | None]
     input_tokens: ReadOnly[int]
@@ -55,6 +57,8 @@ class TraceSummary(TypedDict):
     trace_ref: ReadOnly[NotRequired[str]]
     name: ReadOnly[str]
     service: ReadOnly[str]
+    agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
+    frameworks: ReadOnly[NotRequired[tuple[str, ...]]]
     input_preview: ReadOnly[str]
     start_time: ReadOnly[str]  # ISO 8601
     duration_ms: ReadOnly[float]
@@ -91,11 +95,19 @@ class SpanDetail(TypedDict):
     attributes: ReadOnly[dict[str, str]]
 
 
-class TraceScope(TypedDict):
-    """Who is asking. Empty team_ids = all teams (admins only)."""
+class SpanErrorPage(TypedDict):
+    span_id: ReadOnly[str]
+    message: ReadOnly[str]
+    total_chars: ReadOnly[int]
+    next_cursor: ReadOnly[str | None]
 
+
+class TraceScope(TypedDict):
+    """Authenticated request-log visibility."""
+
+    all_teams: ReadOnly[Literal[0, 1]]
+    user_id: ReadOnly[str]
     team_ids: ReadOnly[tuple[str, ...]]
-    api_key_hash: ReadOnly[str]
 
 
 class SpanRow(TypedDict):
@@ -109,17 +121,19 @@ class SpanRow(TypedDict):
     SpanName: ReadOnly[str]
     SpanKind: ReadOnly[str]
     ServiceName: ReadOnly[str]
-    ResourceAttributes: dict[str, str]
+    ResourceAttributes: ReadOnly[Mapping[str, str]]
     ScopeName: ReadOnly[str]
     ScopeVersion: ReadOnly[str]
-    SpanAttributes: dict[str, str]
+    SpanAttributes: ReadOnly[Mapping[str, str]]
     Duration: ReadOnly[int]  # ns
     StatusCode: ReadOnly[str]
     StatusMessage: ReadOnly[str]
-    TeamId: str
-    ApiKeyHash: str
+    TeamId: ReadOnly[str]
+    ApiKeyHash: ReadOnly[str]
+    UserId: ReadOnly[str]
     ObservationType: SpanType
     AgentName: str
+    Framework: ReadOnly[str]
     LiteLLMRequestId: str
     Model: str
     InputTokens: int

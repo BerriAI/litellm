@@ -5,13 +5,14 @@ The fixture is a trimmed real export from a Deep Agents run (LangSmith OTEL mode
 deep_research_agent -> task (tool) -> researcher (subagent) -> search_docs (tool).
 """
 
+import base64
 import gzip
 import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from google.protobuf.json_format import Parse
+from google.protobuf.json_format import ParseDict
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
 from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, ScopeSpans, Span, Status
@@ -31,7 +32,14 @@ def _fixture_json() -> bytes:
 
 def _fixture_protobuf() -> bytes:
     request = ExportTraceServiceRequest()
-    Parse(_fixture_json().decode(), request)
+    payload = json.loads(_fixture_json())
+    for resource in payload["resourceSpans"]:
+        for scope in resource["scopeSpans"]:
+            for span in scope["spans"]:
+                for field in ("traceId", "spanId", "parentSpanId"):
+                    if field in span:
+                        span[field] = base64.b64encode(bytes.fromhex(span[field])).decode()
+    ParseDict(payload, request)
     return request.SerializeToString()
 
 
@@ -47,11 +55,92 @@ def _kv(key: str, value: str | int) -> KeyValue:
     return KeyValue(key=key, value=AnyValue(string_value=value))
 
 
-def _export(*spans: Span, service: str = "svc", scope: str = "test") -> bytes:
+def _export(*spans: Span, service: str = "svc", scope: str = "test", agent_name: str = "") -> bytes:
     resource_spans = ResourceSpans(scope_spans=[ScopeSpans(spans=list(spans))])
     resource_spans.resource.attributes.append(_kv("service.name", service))
+    if agent_name:
+        resource_spans.resource.attributes.append(_kv("gen_ai.agent.name", agent_name))
     resource_spans.scope_spans[0].scope.name = scope
     return ExportTraceServiceRequest(resource_spans=[resource_spans]).SerializeToString()
+
+
+@pytest.mark.parametrize(
+    ("name", "attributes"),
+    [
+        ("research_agent", {"openinference.span.kind": "AGENT", "metadata": '{"lc_agent_name":"research_agent"}'}),
+        ("research_agent", {"openinference.span.kind": "AGENT", "metadata": '{"ls_integration":"langgraph"}'}),
+        ("research_agent._execute_core", {"openinference.span.kind": "AGENT", "graph.node.id": "research_agent"}),
+        ("agent", {"openinference.span.kind": "AGENT", "gen_ai.agent.name": "research_agent"}),
+        ("openclaw.harness.run", {"openclaw.agent": "research_agent"}),
+        (
+            "invoke_agent research_agent",
+            {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "research_agent"},
+        ),
+    ],
+    ids=["deepagents", "langgraph", "crewai", "hermes", "openclaw", "genai"],
+)
+def test_framework_agent_identity_is_independent_of_service(name: str, attributes: dict[str, str]):
+    span = _span(name, b"\x02" * 8, **attributes)
+    row = decode_otlp(_export(span, service="shared-deployment"), "application/x-protobuf")[0]
+    assert row["AgentName"] == "research_agent"
+    assert row["ServiceName"] == "shared-deployment"
+    assert row["SpanName"] == name
+
+
+@pytest.mark.parametrize("name", ["ClaudeAgentSDK.query", "FunctionAgent.run"])
+def test_resource_agent_name_labels_instrumentors_without_an_agent_attribute(name: str):
+    span = _span(name, b"\x02" * 8, openinference__span__kind="AGENT")
+    row = decode_otlp(_export(span, agent_name="research_agent"), "application/x-protobuf")[0]
+    assert row["AgentName"] == "research_agent"
+
+
+def test_span_agent_name_takes_precedence_over_resource_default():
+    span = _span("invoke_agent child", b"\x02" * 8, gen_ai__agent__name="child")
+    row = decode_otlp(_export(span, agent_name="research_agent"), "application/x-protobuf")[0]
+    assert row["AgentName"] == "child"
+
+
+@pytest.mark.parametrize(
+    ("scope", "span_name", "configured_name", "expected"),
+    [
+        ("hermes-otel-plugin", "hermes-agent", "research_agent", "research_agent"),
+        ("hermes-otel-plugin", "child", "research_agent", "child"),
+        ("hermes-otel-plugin", "hermes-agent", "", "hermes-agent"),
+        ("other-plugin", "hermes-agent", "research_agent", "hermes-agent"),
+    ],
+)
+def test_hermes_resource_name_replaces_only_its_plugin_default(
+    scope: str, span_name: str, configured_name: str, expected: str
+):
+    span = _span("agent", b"\x02" * 8, gen_ai__agent__name=span_name)
+    row = decode_otlp(_export(span, scope=scope, agent_name=configured_name), "application/x-protobuf")[0]
+    assert row["AgentName"] == expected
+
+
+@pytest.mark.parametrize("agent_name", ["research_agent", ""])
+def test_openinference_middleware_is_not_a_separate_agent(agent_name: str):
+    span = _span(
+        "PatchToolCallsMiddleware.before_agent", b"\x02" * 8, b"\x01" * 8,
+        openinference__span__kind="AGENT", metadata=json.dumps({"lc_agent_name": agent_name}),
+    )
+    row = decode_otlp(_export(span, scope="openinference.instrumentation.langchain"), "application/x-protobuf")[0]
+    assert (row["ObservationType"], row["AgentName"]) == ("framework", agent_name)
+
+
+@pytest.mark.parametrize("scope", ["test", "openinference.instrumentation.langchain"])
+@pytest.mark.parametrize("kind", ["CHAIN", "AGENT"])
+@pytest.mark.parametrize("metadata", ["not json", "[]", '{"lc_agent_name":null}', "{}"])
+def test_unnamed_framework_does_not_invent_an_agent_from_service(metadata: str, scope: str, kind: str):
+    span = _span("workflow", b"\x02" * 8, openinference__span__kind=kind, metadata=metadata)
+    row = decode_otlp(_export(span, scope=scope), "application/x-protobuf")[0]
+    assert row["AgentName"] == ""
+
+
+@pytest.mark.parametrize("name,expected", [("support", "support"), ("LangGraph", "")])
+def test_langgraph_distinguishes_configured_graph_name_from_default(name: str, expected: str):
+    span = _span(name, b"\x02" * 8, openinference__span__kind="CHAIN", metadata='{"ls_integration":"langgraph"}')
+    row = decode_otlp(_export(span, scope="openinference.instrumentation.langchain"), "application/x-protobuf")[0]
+    assert row["AgentName"] == expected
 
 
 def _span(name: str, span_id: bytes, parent: bytes = b"", **attributes: str | int) -> Span:
@@ -191,7 +280,7 @@ def test_plain_tool_input_output(rows_by_name):
 
 def test_heavy_attributes_are_lifted_out_of_span_attributes(rows_by_name):
     for row in rows_by_name.values():
-        assert not set(row["SpanAttributes"]) & decode._HEAVY_ATTRIBUTES
+        assert not set(row["SpanAttributes"]) & {"gen_ai.prompt", "gen_ai.completion"}
     assert rows_by_name["ChatOpenAI"]["SpanAttributes"]["langsmith.span.kind"] == "llm"
 
 
@@ -217,10 +306,38 @@ def test_content_type_defaults_to_protobuf():
     assert len(decode_otlp(_fixture_protobuf(), None)) == 6
 
 
-@pytest.mark.parametrize("content_encoding", ["gzip", None])
-def test_gzip_body_by_header_or_magic_bytes(content_encoding):
-    rows = decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf", content_encoding)
+def test_gzip_body_by_header():
+    rows = decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf", "gzip")
     assert len(rows) == 6
+
+
+def test_gzip_requires_content_encoding_header():
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf")
+
+
+def test_invalid_gzip_body_is_rejected():
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(b"not gzip", "application/x-protobuf", "gzip")
+
+
+def test_gzip_expansion_respects_body_limit():
+    with patch.object(decode, "OTLP_MAX_BODY_BYTES", 1024):
+        with pytest.raises(decode.OTLPPayloadTooLargeError):
+            decode_otlp(gzip.compress(b" " * 16384), "application/json", "gzip")
+
+
+def test_concatenated_gzip_members_are_decoded():
+    body = _fixture_json()
+    midpoint = len(body) // 2
+    compressed = gzip.compress(body[:midpoint]) + gzip.compress(body[midpoint:])
+    assert len(decode_otlp(compressed, "application/json", "gzip")) == 6
+
+
+@pytest.mark.parametrize("encoding", ["br", "gzip, identity"])
+def test_unsupported_content_encoding_is_rejected(encoding):
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(_fixture_protobuf(), "application/x-protobuf", encoding)
 
 
 def test_long_values_are_truncated_with_marker():
@@ -402,7 +519,7 @@ def test_non_string_attribute_values_are_stringified():
     assert row["SpanAttributes"]["flag"] == "true"
     assert row["SpanAttributes"]["ratio"] == "0.5"
     assert row["SpanAttributes"]["raw"] == "abc"
-    assert json.loads(row["SpanAttributes"]["list"]) == ["a", "1"]
+    assert json.loads(row["SpanAttributes"]["list"]) == ["a", 1]
 
 
 # ---------------------------------------------------------------- helpers
@@ -412,3 +529,67 @@ def test_encode_otlp_response_matches_request_encoding():
     assert encode_otlp_response("application/json") == (b"{}", "application/json")
     assert encode_otlp_response("application/x-protobuf") == (b"", "application/x-protobuf")
     assert encode_otlp_response(None) == (b"", "application/x-protobuf")
+    body, media_type = encode_otlp_response("application/x-protobuf", "invalid trace")
+    assert media_type == "application/x-protobuf"
+    from google.rpc.status_pb2 import Status
+
+    assert Status.FromString(body).message == "invalid trace"
+
+
+@pytest.mark.parametrize(
+    "attributes, expected",
+    [
+        ({"langsmith__span__kind": "llm"}, "llm"),
+        ({"langsmith__span__kind": "tool"}, "tool"),
+        ({"gen_ai__operation__name": "chat"}, "llm"),
+        ({"gen_ai__operation__name": "execute_tool"}, "tool"),
+        ({"openinference__span__kind": "LLM"}, "llm"),
+    ],
+)
+def test_explicit_root_span_semantics_and_response_id_are_preserved(attributes, expected):
+    exported = _span("root", b"\x01" * 8, gen_ai__response__id="response-123", **attributes)
+    (row,) = decode_otlp(_export(exported))
+    assert (row["ObservationType"], row["LiteLLMRequestId"]) == (expected, "response-123")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"messages": 7}',
+        '{"messages": {"0": "wrong"}}',
+        '{"messages": [{"kwargs": []}]}',
+        '{"messages": [{"role": "assistant", "tool_calls": [1]}]}',
+    ],
+)
+def test_malformed_framework_messages_preserve_raw_content_without_rejecting_the_batch(payload):
+    exported = _span("agent", b"\x01" * 8, langsmith__span__kind="chain", gen_ai__prompt=payload)
+    (row,) = decode_otlp(_export(exported))
+    assert row["Input"] == payload
+
+
+def test_unrecognized_heavy_attributes_are_retained():
+    exported = _span("root", b"\x01" * 8, gen_ai__prompt="unknown convention", gen_ai__tool__definitions="tools")
+    (row,) = decode_otlp(_export(exported))
+    assert row["SpanAttributes"]["gen_ai.prompt"] == "unknown convention"
+    assert row["SpanAttributes"]["gen_ai.tool.definitions"] == "tools"
+
+
+@pytest.mark.parametrize("count", [-1, 1 << 32])
+def test_token_counts_outside_storage_range_are_rejected(count):
+    exported = _span("root", b"\x01" * 8, gen_ai__usage__input_tokens=count)
+    with pytest.raises(decode.InvalidOTLPPayloadError, match="storage range"):
+        decode_otlp(_export(exported))
+
+
+def test_claude_agent_sdk_rows_carry_framework_tool_names_and_arguments():
+    fixture = Path(__file__).parent / "fixtures" / "claude_agent_sdk_detailed_export.json"
+    rows = decode_otlp(fixture.read_bytes(), "application/json")
+    sdk_llms = [r for r in rows if r["ObservationType"] == "llm" and r["SpanAttributes"]["query_source_safe"] == "sdk"]
+    assert sdk_llms and {r["Framework"] for r in sdk_llms} == {"claude-agent-sdk"}
+    tools = {r["SpanName"]: r for r in rows if r["ObservationType"] == "tool"}
+    assert set(tools) == {"Bash", "Read"}
+    assert json.loads(tools["Bash"]["Input"])["command"] == tools["Bash"]["SpanAttributes"]["full_command"]
+    assert "tool_input" not in tools["Bash"]["SpanAttributes"]
+    root = next(r for r in rows if r["ObservationType"] == "agent")
+    assert "user_prompt" not in root["SpanAttributes"]
+    assert json.loads(root["Input"])[0]["role"] == "user"
