@@ -17,7 +17,7 @@ from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
-from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import _cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -27,6 +27,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitUnverifiableError,
     _PROXY_MaxParallelRequestsHandler_v3,
 )
+from litellm.proxy.hooks.sensitive_data_routing import _PROXY_SensitiveDataRoutingHandler
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 from litellm.router_utils.routing_read_batch import (
@@ -1083,3 +1084,78 @@ def test_the_routing_read_family_follows_the_keys_that_are_actually_due(
     """A routing MGET is ``router_cooldowns`` when only cooldown keys go out, ``router_usage`` when the
     cooldowns were already in memory and only usage counters go out, and the combined family otherwise."""
     assert _routing_read_target(cooldown_keys, usage_keys) == expected
+
+
+class _BoundRouterStrategy:
+    async def async_pre_routing_hook(self, model, request_kwargs, messages=None, input=None, specific_deployment=False):
+        return None
+
+
+def _session_replies(command: tuple[Any, ...]) -> Any:
+    assert command[0] == "MGET"
+    return [
+        json.dumps("smart-router") if key.startswith("claude_code_session_router:") else None for key in command[1:]
+    ]
+
+
+def _claude_code_kwargs() -> dict:
+    headers = {"x-claude-code-session-id": "session-1234", "x-claude-code-agent-id": "agent-1234"}
+    return {"metadata": {"user_api_key_hash": "key-hash-a"}, "proxy_server_request": {"headers": headers}}
+
+
+@pytest.mark.asyncio
+async def test_the_sensitive_pin_and_the_session_binding_ride_the_routing_read_pipeline():
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    client = FakeClient(_session_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    router.complexity_routers = {"smart-router": (TaggedPreRoutingStrategy(tags=(), strategy=_BoundRouterStrategy()),)}
+    pins = _PROXY_SensitiveDataRoutingHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    request_kwargs = _claude_code_kwargs()
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, request_kwargs)
+        pin = await pins._get_routed_model("session-1234", UserAPIKeyAuth(api_key="k"))
+        routed = await router._resolve_claude_code_session_router(_MODEL_GROUP, _MODEL_GROUP, request_kwargs)
+
+    assert pin is None
+    assert routed == "smart-router"
+    assert request_kwargs["metadata"]["model_group"] == "smart-router"
+    assert len(client.pipelines) == 1
+    commands = client.pipelines[0].commands
+    assert [command[0] for command in commands] == ["MGET", "MGET", "MGET"]
+    keys = set(chain.from_iterable(command[1:] for command in commands))
+    assert {CooldownCache.get_cooldown_cache_key("dep-a"), CooldownCache.get_cooldown_cache_key("dep-b")} <= keys
+    assert router._claude_code_session_router_cache_key(request_kwargs) in keys
+    assert any(key.startswith("{sensitive_route:") for key in keys)
+    assert [op for op in redis_cache.alone if op[0] != "SET"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_native_compaction_child_call_does_not_read_the_session_binding_it_never_uses():
+    from litellm.router_strategy.complexity_router.context_compaction import native_compaction_call
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    client = FakeClient(_session_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    router.complexity_routers = {"smart-router": (TaggedPreRoutingStrategy(tags=(), strategy=_BoundRouterStrategy()),)}
+    pins = _PROXY_SensitiveDataRoutingHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    request_kwargs = _claude_code_kwargs()
+
+    with request_redis_batch_scope(), native_compaction_call():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, request_kwargs)
+        await pins._get_routed_model("session-1234", UserAPIKeyAuth(api_key="k"))
+        routed = await router._resolve_claude_code_session_router(_MODEL_GROUP, _MODEL_GROUP, request_kwargs)
+
+    assert routed == _MODEL_GROUP
+    keys = set(chain.from_iterable(command[1:] for pipeline in client.pipelines for command in pipeline.commands))
+    assert router._claude_code_session_router_cache_key(request_kwargs) not in keys, (
+        "a native compaction child armed a session-binding read that binding resolution skips"
+    )
+    assert [op for op in redis_cache.alone if op[0] != "SET"] == []

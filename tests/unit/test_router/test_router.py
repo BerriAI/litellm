@@ -3,6 +3,7 @@ import copy
 import functools
 import gc
 import json
+from itertools import chain
 import logging
 import os
 import sys
@@ -11828,6 +11829,122 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         )
 
         assert response["content"][0]["text"] == "fourth fallback response"
+
+    @staticmethod
+    def _batching_redis(cluster: bool = False):
+        from tests.unit.caching.test_redis_batch import FakeClient, FakeClusterCache, FakeRedisCache
+
+        store: dict[str, str] = {}
+        client = FakeClient(lambda command: [store.get(key) for key in command[1:]])
+        redis_cache = FakeClusterCache(client) if cluster else FakeRedisCache(client)
+        redis_cache.store = store
+        return redis_cache, client
+
+    @pytest.mark.asyncio
+    async def test_an_armed_subagent_binding_read_rides_the_request_batch_and_routing_reads_nothing_more(self):
+        from litellm.caching.redis_batch import request_redis_batch_scope
+
+        router = self._router()
+        redis_cache, client = self._batching_redis()
+        router._update_redis_cache(cache=redis_cache)
+        request_kwargs = self._request_kwargs(agent_id="agent-1234")
+        redis_cache.store[router._claude_code_session_router_cache_key(request_kwargs)] = json.dumps("smart-router")
+
+        with request_redis_batch_scope():
+            router.arm_routing_read_prefetch("expensive-model", request_kwargs)
+            routed = await router._resolve_claude_code_session_router(
+                "expensive-model", "expensive-model", request_kwargs
+            )
+
+        assert routed == "smart-router"
+        assert request_kwargs["metadata"]["model_group"] == "smart-router"
+        assert len(client.pipelines) == 1
+        assert [op for op in redis_cache.alone if op[0] != "SET"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_stale_binding_read_through_the_request_batch_is_still_deleted(self):
+        from litellm.caching.redis_batch import request_redis_batch_scope
+
+        router = self._router()
+        redis_cache, client = self._batching_redis()
+        router._update_redis_cache(cache=redis_cache)
+        request_kwargs = self._request_kwargs(agent_id="agent-1234")
+        binding_key = router._claude_code_session_router_cache_key(request_kwargs)
+        redis_cache.store[binding_key] = json.dumps("gone-router")
+
+        with request_redis_batch_scope():
+            router.arm_routing_read_prefetch("expensive-model", request_kwargs)
+            routed = await router._resolve_claude_code_session_router(
+                "expensive-model", "expensive-model", request_kwargs
+            )
+
+        assert routed == "expensive-model"
+        assert ("DEL", binding_key) in redis_cache.alone
+        assert len(client.pipelines) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_binding_armed_for_one_session_is_not_served_to_another(self):
+        from litellm.caching.redis_batch import request_redis_batch_scope
+
+        router = self._router()
+        redis_cache, _client = self._batching_redis()
+        router._update_redis_cache(cache=redis_cache)
+        armed_kwargs = self._request_kwargs(agent_id="agent-1234")
+        redis_cache.store[router._claude_code_session_router_cache_key(armed_kwargs)] = json.dumps("smart-router")
+        other_kwargs = self._request_kwargs(agent_id="agent-1234")
+        other_kwargs["proxy_server_request"]["headers"]["X-Claude-Code-Session-Id"] = "session-5678"
+
+        with request_redis_batch_scope():
+            router.arm_routing_read_prefetch("expensive-model", armed_kwargs)
+            routed = await router._resolve_claude_code_session_router(
+                "expensive-model", "expensive-model", other_kwargs
+            )
+
+        assert routed == "expensive-model"
+        assert "model_group" not in other_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("request_kwargs_overrides", [{"fallback_depth": 1}, {"agent_id": None}])
+    async def test_requests_that_never_read_a_binding_do_not_declare_one(self, request_kwargs_overrides):
+        from litellm.caching.redis_batch import request_redis_batch_scope
+
+        router = self._router()
+        redis_cache, client = self._batching_redis()
+        router._update_redis_cache(cache=redis_cache)
+        request_kwargs = self._request_kwargs(**{"agent_id": "agent-1234", **request_kwargs_overrides})
+        binding_key = router._claude_code_session_router_cache_key(request_kwargs)
+
+        with request_redis_batch_scope() as request:
+            router.arm_routing_read_prefetch("expensive-model", request_kwargs)
+            await request.flush_all()
+
+        declared = set(chain.from_iterable(command[1:] for pipe in client.pipelines for command in pipe.commands))
+        assert binding_key not in declared
+        assert redis_cache.alone == []
+
+    @pytest.mark.asyncio
+    async def test_on_a_cluster_the_armed_binding_is_read_when_the_batch_flushes_not_at_route_time(self):
+        from litellm.caching.redis_batch import request_redis_batch_scope
+
+        router = self._router()
+        redis_cache, client = self._batching_redis(cluster=True)
+        router._update_redis_cache(cache=redis_cache)
+        request_kwargs = self._request_kwargs(agent_id="agent-1234")
+        binding_key = router._claude_code_session_router_cache_key(request_kwargs)
+        redis_cache.store[binding_key] = "smart-router"
+
+        with request_redis_batch_scope() as request:
+            router.arm_routing_read_prefetch("expensive-model", request_kwargs)
+            await request.flush_all()
+            reads_before_routing = [op for op in redis_cache.alone if op[0] == "MGET"]
+            routed = await router._resolve_claude_code_session_router(
+                "expensive-model", "expensive-model", request_kwargs
+            )
+
+        assert routed == "smart-router"
+        assert [op for op in reads_before_routing if binding_key in op[1]] != []
+        assert [op for op in redis_cache.alone if op[0] == "MGET"] == reads_before_routing
+        assert client.pipelines == []
 
     @pytest.mark.asyncio
     async def test_session_router_binding_is_scoped_to_the_authenticated_key(self):

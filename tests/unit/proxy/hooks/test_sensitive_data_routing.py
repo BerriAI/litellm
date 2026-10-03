@@ -7,6 +7,7 @@ All subsequent requests in the same session are routed to the same model.
 """
 
 import asyncio
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
@@ -27,6 +29,7 @@ from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.proxy.utils import InternalUsageCache
+from tests.unit.caching.test_redis_batch import FakeClient, FakeClusterCache, FakeRedisCache
 
 
 class MockInternalUsageCache:
@@ -1032,3 +1035,135 @@ async def test_an_open_circuit_breaker_keeps_session_routing_in_memory_without_a
     assert routed == "safe-model"
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+class _PinRedis(FakeRedisCache):
+    """A Redis double that records a standalone GET and serves MGET replies from ``store``."""
+
+    def __init__(self, client: FakeClient) -> None:
+        super().__init__(client)
+        self.ttls: dict[str, int] = {}
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # records the direct read
+        self.alone.append(("GET", key))
+        value = self.store.get(key)
+        return None if value is None else json.loads(value)
+
+    async def async_get_ttl(self, key: str) -> int | None:  # pyright: ignore[reportIncompatibleMethodOverride]  # fake, no server
+        return self.ttls.get(key)
+
+
+class _PinClusterRedis(FakeClusterCache):
+    """A cluster double that records a standalone GET; the request batch cannot pipeline on a cluster."""
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # records the direct read
+        self.alone.append(("GET", key))
+        value = self.store.get(key)
+        return None if value is None else json.loads(value)
+
+    async def async_get_ttl(self, key: str) -> int | None:  # pyright: ignore[reportIncompatibleMethodOverride]  # fake, no server
+        return 120
+
+
+def _pin_handler(
+    fail: Exception | None = None, cluster: bool = False
+) -> tuple[_PROXY_SensitiveDataRoutingHandler, _PinRedis | _PinClusterRedis, FakeClient]:
+    store: dict[str, str] = {}
+    client = FakeClient(lambda command: [store.get(key) for key in command[1:]], fail)
+    redis_cache = _PinClusterRedis(client) if cluster else _PinRedis(client)
+    redis_cache.store = store
+    handler = _PROXY_SensitiveDataRoutingHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    return handler, redis_cache, client
+
+
+class TestSensitiveRoutePinReadRidesTheRequestRedisBatch:
+    """Inside a request's Redis batch scope the pin lookup is one MGET on the shared pipeline, not a GET of
+    its own, and every fallback the GET path had (missing pin, Redis failure, memory copy) still holds."""
+
+    _KEY = UserAPIKeyAuth(api_key="hashed-key", team_id="team-a")
+
+    @classmethod
+    def _pin_key(cls, handler: _PROXY_SensitiveDataRoutingHandler, session_id: str) -> str:
+        return handler._make_cache_key(session_id, handler._resolve_tenant(cls._KEY))
+
+    @pytest.mark.asyncio
+    async def test_the_pin_shares_the_pipeline_of_a_pending_read_and_still_backfills_memory(self):
+        handler, redis_cache, client = _pin_handler()
+        pin_key = self._pin_key(handler, "session-1")
+        redis_cache.store[pin_key] = json.dumps("on-prem-model")
+        redis_cache.ttls[pin_key] = 120
+
+        with request_redis_batch_scope():
+            request = active_request_redis_batches()
+            assert request is not None
+            other_owner = request.batch(redis_cache).mget(["other-owner:key"])
+            routed = await handler._get_routed_model("session-1", self._KEY)
+            await other_owner
+
+        assert routed == "on-prem-model"
+        assert len(client.pipelines) == 1
+        assert [command[0] for command in client.pipelines[0].commands] == ["MGET", "MGET"]
+        assert pin_key in client.pipelines[0].commands[1]
+        assert redis_cache.alone == []
+        memory_copy = await handler.internal_usage_cache.async_get_cache(
+            key=pin_key, litellm_parent_otel_span=None, local_only=True
+        )
+        assert memory_copy == "on-prem-model"
+
+    @pytest.mark.asyncio
+    async def test_a_pin_missing_from_the_batch_read_means_no_route_and_no_standalone_get(self):
+        handler, redis_cache, client = _pin_handler()
+
+        with request_redis_batch_scope():
+            routed = await handler._get_routed_model("session-2", self._KEY)
+
+        assert routed is None
+        assert len(client.pipelines) == 1
+        assert redis_cache.alone == []
+
+    @pytest.mark.asyncio
+    async def test_a_failed_batch_read_falls_back_to_the_in_memory_pin(self):
+        handler, redis_cache, _client = _pin_handler(fail=ConnectionError("redis down"))
+        pin_key = self._pin_key(handler, "session-3")
+        await handler.internal_usage_cache.async_set_cache(
+            key=pin_key, value="memory-model", ttl=60, litellm_parent_otel_span=None, local_only=True
+        )
+
+        with request_redis_batch_scope():
+            routed = await handler._get_routed_model("session-3", self._KEY)
+
+        assert routed == "memory-model"
+        assert redis_cache.alone == []
+
+    @pytest.mark.asyncio
+    async def test_on_a_cluster_the_pin_keeps_its_own_get_and_leaves_the_pending_reads_alone(self):
+        handler, redis_cache, _client = _pin_handler(cluster=True)
+        pin_key = self._pin_key(handler, "session-5")
+        redis_cache.store[pin_key] = json.dumps("on-prem-model")
+
+        with request_redis_batch_scope():
+            request = active_request_redis_batches()
+            assert request is not None
+            other_owner = request.batch(redis_cache).mget(["other-owner:key"])
+            routed = await handler._get_routed_model("session-5", self._KEY)
+            settled_by_the_pin = request.batch(redis_cache).pending == 0
+            await other_owner
+
+        assert routed == "on-prem-model"
+        assert sorted(redis_cache.alone) == [("GET", pin_key), ("MGET", ("other-owner:key",))]
+        assert not settled_by_the_pin
+
+    @pytest.mark.asyncio
+    async def test_outside_a_request_batch_the_pin_is_read_with_its_own_get_as_before(self):
+        handler, redis_cache, client = _pin_handler()
+        pin_key = self._pin_key(handler, "session-4")
+        redis_cache.store[pin_key] = json.dumps("on-prem-model")
+        redis_cache.ttls[pin_key] = 120
+
+        routed = await handler._get_routed_model("session-4", self._KEY)
+
+        assert routed == "on-prem-model"
+        assert redis_cache.alone == [("GET", pin_key)]
+        assert client.pipelines == []
