@@ -42,9 +42,9 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and "router" in file.lower():
+                file_path = os.path.join(root, file)
+                if file.endswith(".py") and "router" in os.path.relpath(file_path, dir_path).lower():
                     print("file: ", file)
-                    file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
                         try:
                             tree = ast.parse(f.read())
