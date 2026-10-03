@@ -63,7 +63,7 @@ def test_unreachable_peer_errors_while_a_healthy_sibling_keeps_serving(gateway: 
         listing: Final = caller.list_tools(good_id if entry == "rest" else None)
         assert listing.error is None, listing.raw
         assert {f"{good}-add", "add"} & set(listing.tools), listing.raw
-        assert not {f"{bad}-add"} & set(listing.tools) or entry != "rest", listing.raw
+        assert not [tool for tool in listing.tools if tool.startswith(bad)], listing.raw
         healthy.drain()
         served: Final = _call(caller, f"{good}-add", {"a": 2, "b": 3}, entry, good_id)
         assert served.text == "5", served.raw

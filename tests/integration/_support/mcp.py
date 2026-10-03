@@ -145,8 +145,6 @@ def _drain_sse_streams() -> None:
 
 
 def _draining_sse_watcher(app: Callable[[Scope, Receive, Send], object]):
-    """sse_starlette parks a per-loop watcher that only stops once AppStatus.should_exit flips."""
-
     async def lifespan(scope: Scope, receive: Receive, send: Send) -> None:
         while True:
             message: Final = await receive()
@@ -230,7 +228,6 @@ def jsonrpc_error(identity: object, code: int, message: str) -> Reply:
 
 @contextmanager
 def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
-    """Raw JSON-RPC peer for shapes the SDK server cannot produce: half-written bodies, stalls, wire errors."""
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
     by_name: Final = {tool.name: tool for tool in tools}
 
@@ -290,7 +287,6 @@ def echo_tool(name: str) -> ScriptedTool:
 
 @contextmanager
 def openapi_peer() -> Iterator[McpPeer]:
-    """OpenAPI-described HTTP service plus the spec file the proxy turns into MCP tools."""
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
 
     def provider(request: Request) -> Reply:
@@ -375,16 +371,6 @@ def peer_of(kind: PeerKind, *, rich: bool = False) -> Iterator[McpPeer]:
             yield candidate
 
 
-def register_mcp(scenario: Scenario, peer: McpPeer, alias: str, **fields: object) -> str:
-    response: Final = scenario.gateway.request(
-        "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, **peer.registration(), **fields}
-    )
-    identity: Final = response.json()["server_id"]
-    scenario.cleanups.callback(forget_mcp, scenario.gateway, identity)
-    assert response.status_code == 201, response.text
-    return identity
-
-
 def forget_mcp(gateway: Gateway, identity: str) -> None:
     response: Final = gateway.request("DELETE", f"/v1/mcp/server/{identity}")
     assert response.status_code in (202, 404), response.text
@@ -394,6 +380,23 @@ def delete_mcp(gateway: Gateway, identity: str) -> None:
     response: Final = gateway.request("DELETE", f"/v1/mcp/server/{identity}")
     assert response.status_code == 202, response.text
     assert read_rows('SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id = %s', (identity,)) == []
+
+
+def register_mcp(
+    scenario: Scenario,
+    peer: McpPeer,
+    alias: str,
+    *,
+    cleanup: Callable[[Gateway, str], None] = delete_mcp,
+    **fields: object,
+) -> str:
+    response: Final = scenario.gateway.request(
+        "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, **peer.registration(), **fields}
+    )
+    identity: Final = response.json()["server_id"]
+    scenario.cleanups.callback(cleanup, scenario.gateway, identity)
+    assert response.status_code == 201, response.text
+    return identity
 
 
 def listed_tools(gateway: Gateway, key: str, identity: str | None = None) -> dict[str, dict[str, object]]:
@@ -438,8 +441,6 @@ INITIALIZE: Final = {
 
 @dataclass(frozen=True, slots=True)
 class Outcome:
-    """What a caller saw from one MCP operation, normalised across entry points."""
-
     status: int
     error: str | None
     tools: tuple[str, ...] = ()
@@ -493,8 +494,6 @@ def _outcome_from_rest(response: httpx.Response) -> Outcome:
 
 @dataclass(frozen=True, slots=True)
 class McpCaller:
-    """One caller's view of the gateway through a specific entry point."""
-
     gateway: Gateway
     key: str | None
     entry: EntryPoint
@@ -558,7 +557,6 @@ class McpCaller:
 def _legacy_sse_rpc(
     gateway: Gateway, headers: Mapping[str, str], method: str, params: JsonRpc | None
 ) -> httpx.Response:
-    """Drive the legacy GET /mcp/sse + POST /mcp/sse/messages pair for one request and synthesise a JSON response."""
     with gateway.client.stream("GET", "/mcp/sse", headers=headers, timeout=15) as stream:
         if stream.status_code != 200:
             stream.read()
@@ -586,7 +584,6 @@ def _legacy_sse_rpc(
 def official_client_outcomes(
     gateway: Gateway, key: str, path: str, name: str, arguments: JsonRpc, *, legacy_sse: bool = False
 ) -> tuple[Outcome, Outcome]:
-    """List then call through the official MCP client session, returning both outcomes."""
     url: Final = str(gateway.client.base_url).rstrip("/") + path
     headers: Final = {"x-litellm-api-key": key}
 
