@@ -11,7 +11,9 @@ from itertools import groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
+
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import verbose_logger
@@ -1140,10 +1142,17 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
     (``AnthropicConfig._map_tool_helper``) and Anthropic Messages MCP paths run
     a schema through here so an external MCP schema cannot succeed on one route
     and 400 on the other.
+
+    A root that is a local ``$ref`` or a top-level combinator is resolved into an
+    object first. Without that, ``type: "object"`` and an empty ``properties``
+    are stamped over a schema whose fields live one level down, and the
+    allowlist then drops the combinator: a ``TypeAdapter(Union[A, B])`` tool
+    reaches Anthropic taking no arguments at all. An unresolvable root (external
+    or missing ``$ref``, a branch that cannot merge) is left alone.
     """
     from litellm.types.llms.anthropic import AnthropicInputSchema
 
-    normalized = dict(input_schema) if input_schema else {}
+    normalized = dict(flatten_top_level_schema_combinators(_inline_root_schema_ref(input_schema or {})))
     if normalized.get("type") != "object":
         normalized["type"] = "object"
     if "properties" not in normalized:
@@ -1204,6 +1213,53 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
     return target if isinstance(target, dict) else None
 
 
+class _AllOfSchema(TypedDict):
+    allOf: ReadOnly[Sequence[object]]
+
+
+def _both_constraints_apply(target_property: object, sibling_property: object) -> object:
+    """One property schema satisfying both sides of a ``$ref`` merge.
+
+    A plain dict rather than a ``MappingProxyType``, because this value is
+    serialised straight into the provider request and ``json`` cannot encode a
+    mapping proxy.
+    """
+    if target_property is None or target_property == sibling_property:
+        return sibling_property
+    both: Final = [target_property, sibling_property]  # mutable-ok: allOf is a JSON array; a tuple is not one
+    combined: Final[_AllOfSchema] = {"allOf": both}
+    return combined
+
+
+def _inline_root_schema_ref(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Merge a root-level local ``$ref`` with the schema it points at.
+
+    Per JSON Schema, keys beside a ``$ref`` apply on top of what it references
+    rather than being replaced by it. ``properties`` and ``required`` therefore
+    union, and a property both sides declare becomes an ``allOf`` of the two so
+    neither one's constraints are lost; Anthropic accepts a combinator nested
+    inside a property, only a root one is a problem. Replacing the root outright
+    would drop what the caller stated here, such as ``additionalProperties:
+    false``. A root without a ``$ref``, or one pointing outside the document or
+    at a missing name, is returned as is.
+    """
+    ref: Final = schema.get("$ref")
+    if not isinstance(ref, str):
+        return schema
+    target: Final = _resolve_local_schema_ref(schema, ref)
+    if target is None:
+        return schema
+    siblings: Final = MappingProxyType({key: value for key, value in schema.items() if key != "$ref"})
+    target_properties: Final = _schema_properties(target)
+    sibling_wins: Final = MappingProxyType({**target_properties, **_schema_properties(siblings)})
+    properties: Final = {  # mutable-ok: tool parameters are JSON dicts, and a mapping proxy will not serialise
+        name: _both_constraints_apply(target_properties.get(name), value) for name, value in sibling_wins.items()
+    }
+    required: Final = sorted(_schema_required_names(target) | _schema_required_names(siblings))
+    required_update: Final = MappingProxyType({"required": required}) if required else _EMPTY_SCHEMA
+    return MappingProxyType({**target, **siblings, "properties": properties, **required_update})
+
+
 def _mergeable_branch(
     root: Mapping[str, object],
     branch: object,
@@ -1237,6 +1293,18 @@ def _is_object_schema(schema: Mapping[str, object]) -> bool:
     return schema.get("type") == "object" or ("type" not in schema and "properties" in schema)
 
 
+def _distinct_branches(branches: tuple[Mapping[str, object], ...]) -> tuple[Mapping[str, object], ...]:
+    """Collapse branches that resolved to the same object.
+
+    Repeated ``$ref``s share one memoised result, so a schema declaring the same
+    reference thousands of times would otherwise re-merge its properties once per
+    branch. Merging a branch again cannot change the outcome: property merges are
+    idempotent, and so are the union and intersection used for ``required``.
+    """
+    by_identity: Final = MappingProxyType({id(branch): branch for branch in branches})
+    return tuple(by_identity.values())
+
+
 def _flatten_schema_against_root(
     schema: Mapping[str, object],
     root: Mapping[str, object],
@@ -1265,7 +1333,8 @@ def _flatten_schema_against_root(
     if any(branch is None for _, group in raw_branch_groups for branch in group):
         return schema
     branch_groups: Final = tuple(
-        (combinator, tuple(branch for branch in group if branch is not None)) for combinator, group in raw_branch_groups
+        (combinator, _distinct_branches(tuple(branch for branch in group if branch is not None)))
+        for combinator, group in raw_branch_groups
     )
     branches: Final = tuple(branch for _, group in branch_groups for branch in group)
     is_object_schema: Final = _is_object_schema(schema) or (
