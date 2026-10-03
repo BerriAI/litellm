@@ -948,6 +948,58 @@ async def test_messages_web_search_honors_the_native_tool_domain_filter(
     assert mock_asearch.await_args.kwargs.get("search_domain_filter") == expected_provider_filter
 
 
+_PATH_RULE_URLS = (
+    "https://example.com/docs/intro",
+    "https://example.com/docs-private/x",
+    "https://example.com/other/y",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domain_field", "rule", "expected_urls"),
+    [
+        ("allowed_domains", "example.com/docs/", ["https://example.com/docs/intro"]),
+        ("allowed_domains", "example.com/docs", ["https://example.com/docs/intro"]),
+        ("blocked_domains", "example.com/docs/", ["https://example.com/docs-private/x", "https://example.com/other/y"]),
+    ],
+)
+async def test_messages_web_search_domain_path_rules_match_whole_path_segments(
+    monkeypatch: pytest.MonkeyPatch,
+    domain_field: str,
+    rule: str,
+    expected_urls: list[str],
+):
+    import litellm
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+    from litellm.llms.base_llm.search.transformation import SearchResult
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _perplexity_router())
+    monkeypatch.setattr(
+        litellm,
+        "asearch",
+        AsyncMock(
+            return_value=SearchResponse(
+                object="search",
+                results=[SearchResult(title=url, url=url, snippet="snippet") for url in _PATH_RULE_URLS],
+            )
+        ),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])])
+
+    response = await anthropic_messages(
+        max_tokens=512,
+        messages=[{"role": "user", "content": "litellm"}],
+        model="bedrock/converse/test-model",
+        custom_llm_provider="bedrock",
+        tools=[{"type": "web_search_20250305", "name": "web_search", domain_field: [rule]}],
+    )
+
+    text = next(block["text"] for block in response["content"] if block["type"] == "text")
+    assert [url for url in _PATH_RULE_URLS if url in text] == expected_urls
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("domain_field", "expected_urls", "expected_provider_filter"),

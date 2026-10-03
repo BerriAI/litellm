@@ -34,12 +34,13 @@ def domain_host(domain: str) -> str:
 
 
 def _url_matches_domain(url: str, domain: str) -> bool:
-    """Anthropic web_search domain semantics: subdomains are included and an optional path is a prefix."""
+    """Anthropic web_search domain semantics: subdomains are included and an optional path matches whole path segments."""
     target: Final = urlsplit(url)
     host: Final = (target.hostname or "").lower()
     rule_host, rule_path = _split_domain(domain)
     host_matches: Final = host == rule_host or host.endswith(f".{rule_host}")
-    return host_matches and target.path.startswith(rule_path)
+    path_matches: Final = not rule_path or target.path == rule_path or target.path.startswith(f"{rule_path}/")
+    return host_matches and path_matches
 
 
 def _url_passes_domain_filter(url: str, domains: WebSearchDomainFilter) -> bool:
