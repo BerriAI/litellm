@@ -55,6 +55,21 @@ jobs:
         run: |
           uv lock --check
 
+      - name: Set up dashboard Node
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+
+      - name: Build dashboard for proxy wheel checks
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          cd ui/litellm-dashboard
+          npm ci
+          npm run build
+          mkdir -p ../../litellm-proxy-extras/litellm_proxy_extras/ui
+          cp -R out/. ../../litellm-proxy-extras/litellm_proxy_extras/ui/
+
       - name: Check locked runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
@@ -69,6 +84,9 @@ jobs:
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "${checker[@]}")
+            if [ "$extra" = core ] || [ "$extra" = proxy ]; then
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_proxy_ui.py" --profile "$extra")
+            fi
           done
 
       - name: Build the public wheel
@@ -93,4 +111,7 @@ jobs:
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "${checker[@]}")
+            if [ "$extra" = core ] || [ "$extra" = proxy ]; then
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_proxy_ui.py" --profile "$extra")
+            fi
           done

@@ -75,7 +75,7 @@ proxy = [
     "mcp>=2.2.0,<3",
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.105",
+    "litellm-proxy-extras==0.4.106",
     "litellm-enterprise==0.1.73",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
@@ -310,7 +310,6 @@ features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
-    "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
@@ -318,6 +317,8 @@ include = [
     "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [
+    "litellm/proxy/_experimental/out",
+    "litellm/proxy/_experimental/out/**",
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
     "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks",
@@ -329,6 +330,9 @@ exclude = [
     "**/.ruff_cache",
     "**/.ruff_cache/**",
 ]
+
+[tool.litellm.ui]
+package = "litellm-proxy-extras"
 
 [tool.uv]
 constraint-dependencies = [

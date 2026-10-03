@@ -2705,7 +2705,7 @@ jobs:
             - ~/.cache/ms-playwright
       - run:
           name: Build UI from source
-          # Prior version used `cp -r out/ ../../litellm/proxy/_experimental/out/`.
+          # Prior version used `cp -r out/ ../../litellm-proxy-extras/litellm_proxy_extras/ui/`.
           # GNU cp (used on CircleCI's Ubuntu image) interprets that as "copy the
           # source directory as a child of the destination" when the destination
           # already exists — silently creating `_experimental/out/out/` instead of
@@ -2716,10 +2716,10 @@ jobs:
           command: |
             cd ui/litellm-dashboard
             npm run build
-            rm -rf ../../litellm/proxy/_experimental/out
-            mv out ../../litellm/proxy/_experimental/out
+            rm -rf ../../litellm-proxy-extras/litellm_proxy_extras/ui
+            mv out ../../litellm-proxy-extras/litellm_proxy_extras/ui
             # Restructure HTML so extensionless routes work (login.html -> login/index.html)
-            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
+            find ../../litellm-proxy-extras/litellm_proxy_extras/ui -name '*.html' ! -name 'index.html' | while read -r f; do
               d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
             done
       - wait_for_service:
@@ -2861,9 +2861,9 @@ jobs:
           command: |
             cd ui/litellm-dashboard
             npm run build
-            rm -rf ../../litellm/proxy/_experimental/out
-            mv out ../../litellm/proxy/_experimental/out
-            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
+            rm -rf ../../litellm-proxy-extras/litellm_proxy_extras/ui
+            mv out ../../litellm-proxy-extras/litellm_proxy_extras/ui
+            find ../../litellm-proxy-extras/litellm_proxy_extras/ui -name '*.html' ! -name 'index.html' | while read -r f; do
               d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
             done
       - wait_for_service:

@@ -135,6 +135,7 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.common_utils.static_asset_utils import get_packaged_ui_directory
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -2140,8 +2141,7 @@ origins, allow_cors_credentials = _get_cors_config()
 # get current directory
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    packaged_ui_path: Final = os.path.join(current_dir, "_experimental", "out")
-    ui_path = packaged_ui_path
+    packaged_ui_path: Final = get_packaged_ui_directory()
     litellm_asset_prefix: Final = "/litellm-asset-prefix"
 
     def _dir_has_content(path: str) -> bool:
@@ -2246,6 +2246,32 @@ try:
     # and ensures extensionless routes like /ui/login work via <route>/index.html.
     is_non_root: Final = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
 
+    def _restructure_ui_html_files(ui_root: str) -> None:
+        """Ensure each exported HTML route is available as <route>/index.html."""
+
+        for current_root, _, files in os.walk(ui_root):
+            rel_root = os.path.relpath(current_root, ui_root)
+            first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
+
+            # Ignore Next.js asset directories
+            if first_segment in {"_next", "litellm-asset-prefix"}:
+                continue
+
+            for filename in files:
+                if not filename.endswith(".html") or filename == "index.html":
+                    continue
+
+                file_path = os.path.join(current_root, filename)
+                target_dir = os.path.splitext(file_path)[0]
+                target_path = os.path.join(target_dir, "index.html")
+
+                os.makedirs(target_dir, exist_ok=True)
+                try:
+                    os.replace(file_path, target_path)
+                except FileNotFoundError:
+                    # Another process may have already moved this file.
+                    continue
+
     # Determine runtime UI path
     # Priority: LITELLM_UI_PATH env var > default path based on is_non_root
     if is_non_root:
@@ -2254,9 +2280,11 @@ try:
         default_runtime_ui_path = packaged_ui_path
 
     runtime_ui_path: Final = os.getenv("LITELLM_UI_PATH", default_runtime_ui_path)
+    if runtime_ui_path is None:
+        raise FileNotFoundError("No packaged dashboard or LITELLM_UI_PATH is available")
 
     # Validate packaged UI before proceeding
-    if not _validate_ui_directory(packaged_ui_path):
+    if packaged_ui_path is not None and not _validate_ui_directory(packaged_ui_path):
         verbose_proxy_logger.error(
             "Packaged UI at %s is invalid or incomplete. UI may not function correctly.", packaged_ui_path
         )
@@ -2292,6 +2320,9 @@ try:
         else:
             verbose_proxy_logger.info("UI not found at %s. Attempting to populate from packaged UI.", runtime_ui_path)
 
+            if packaged_ui_path is None:
+                raise FileNotFoundError("No packaged dashboard is available to populate LITELLM_UI_PATH")
+
             success, error = _try_populate_ui_directory(packaged_ui_path, runtime_ui_path)
 
             if success:
@@ -2309,7 +2340,7 @@ try:
     else:
         # Case 1: Using packaged UI directly (local development)
         verbose_proxy_logger.info("Using packaged UI directory: %s", packaged_ui_path)
-        ui_path = packaged_ui_path
+        ui_path = runtime_ui_path
 
     # Validate final UI path
     if not _validate_ui_directory(ui_path):
@@ -2381,32 +2412,6 @@ try:
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-
-    def _restructure_ui_html_files(ui_root: str) -> None:
-        """Ensure each exported HTML route is available as <route>/index.html."""
-
-        for current_root, _, files in os.walk(ui_root):
-            rel_root = os.path.relpath(current_root, ui_root)
-            first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
-
-            # Ignore Next.js asset directories
-            if first_segment in {"_next", "litellm-asset-prefix"}:
-                continue
-
-            for filename in files:
-                if not filename.endswith(".html") or filename == "index.html":
-                    continue
-
-                file_path = os.path.join(current_root, filename)
-                target_dir = os.path.splitext(file_path)[0]
-                target_path = os.path.join(target_dir, "index.html")
-
-                os.makedirs(target_dir, exist_ok=True)
-                try:
-                    os.replace(file_path, target_path)
-                except FileNotFoundError:
-                    # Another process may have already moved this file.
-                    continue
 
     # Handle HTML file restructuring
     # Only restructure if:
@@ -17713,13 +17718,13 @@ async def get_favicon():
         resolve_validated_local_image_path,
     )
 
-    current_dir: Final = os.path.dirname(os.path.abspath(__file__))
-    default_favicon: Final = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
+    packaged_ui: Final = get_packaged_ui_directory()
+    default_favicon: Final = os.path.join(packaged_ui, "favicon.ico") if packaged_ui is not None else None
 
     favicon_url: Final = os.getenv("LITELLM_FAVICON_URL", "")
 
     if not favicon_url:
-        if os.path.exists(default_favicon):
+        if default_favicon is not None and os.path.exists(default_favicon):
             return FileResponse(default_favicon, media_type="image/x-icon")
         raise HTTPException(status_code=404, detail="Default favicon not found")
 
@@ -17734,7 +17739,7 @@ async def get_favicon():
             "LITELLM_FAVICON_URL %r is not a supported image file or does not exist, falling back to default favicon",
             favicon_url,
         )
-        if os.path.exists(default_favicon):
+        if default_favicon is not None and os.path.exists(default_favicon):
             return FileResponse(default_favicon, media_type="image/x-icon")
         raise HTTPException(status_code=404, detail="Favicon not found")
 

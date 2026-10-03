@@ -19,7 +19,7 @@ Run from `litellm-rust` with an existing dashboard export and a gateway config:
 
 ```sh
 export LITELLM_CONFIG=/path/to/config.yaml
-export LITELLM_UI_PATH=/path/to/litellm/proxy/_experimental/out
+export LITELLM_UI_PATH=/path/to/litellm-proxy-extras/litellm_proxy_extras/ui
 export UI_USERNAME=admin
 read -rs UI_PASSWORD
 export UI_PASSWORD

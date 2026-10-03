@@ -89,8 +89,8 @@ COPY . .
 # Replace the committed UI bundle with the one built from this exact source.
 # Clearing first drops the committed bundle's content-hashed chunks that COPY
 # would otherwise leave behind alongside the fresh ones.
-RUN rm -rf litellm/proxy/_experimental/out
-COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
+RUN rm -rf litellm-proxy-extras/litellm_proxy_extras/ui
+COPY --from=ui-builder /ui/out/. litellm-proxy-extras/litellm_proxy_extras/ui/
 
 # Build Admin UI before final sync (applies the enterprise color override when present)
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
