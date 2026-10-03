@@ -24,19 +24,19 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "acc856a2-7413-4bfb-aba1-4ac97d22b519"
-            }
-          },
-          {
-            "key": "service.name",
-            "value": {
-              "stringValue": "opentelemetry-simple"
+              "stringValue": "a48a2994-64bf-44d0-8ac6-1146a0be0297"
             }
           },
           {
             "key": "telemetry.auto.version",
             "value": {
               "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
             }
           }
         ]
@@ -49,13 +49,13 @@
           },
           "spans": [
             {
-              "traceId": "d0eecfc62e38855ffa4993587fdaeda3",
-              "spanId": "a206ce51f5f4f91a",
-              "parentSpanId": "d478cf6e508d09e3",
+              "traceId": "edb4fb0164bfc26a45298631e19cd7f1",
+              "spanId": "d9135f3b8ed66656",
+              "parentSpanId": "e864396d15d0caf9",
               "name": "ChatCompletion",
               "kind": 1,
-              "startTimeUnixNano": "1791012993296096478",
-              "endTimeUnixNano": "1791012997843009292",
+              "startTimeUnixNano": "1791056940399014000",
+              "endTimeUnixNano": "1791056942808559000",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -66,7 +66,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"openai/gpt-6-luna\",\"messages\":[{\"role\":\"user\",\"content\":\"What is an agent trace?\"}]}"
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"messages\": [{\"role\": \"user\", \"content\": \"What is an agent trace?\"}], \"max_completion_tokens\": 1024}"
                   }
                 },
                 {
@@ -78,7 +78,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"chatcmpl-EUoaHKAH0u5nc0HxhHSAtRbHTI9nn\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of the steps an AI agent takes to handle a request. It can include the request, the agent’s actions (such as calling a search or database tool), the results of those actions, and the final response.\\n\\nFor example:\\n\\n1. User asks for tomorrow’s weather.\\n2. Agent calls a weather service.\\n3. The service returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help developers understand how an agent behaved, diagnose errors, and measure performance. They don’t necessarily include the model’s private internal reasoning.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791012993,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":222,\"prompt_tokens\":12,\"total_tokens\":234,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":96,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
+                    "stringValue": "{\"id\":\"chatcmpl-EV016gmgPqSRfnW79IZOtUF3rtBcR\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of what an AI agent did while handling a task. It often includes the steps it took, such as:\\n\\n- the user\u2019s request and the agent\u2019s inputs\\n- actions or tool calls the agent made\\n- results returned by tools\\n- decisions or status updates\\n- the final response\\n\\nFor example, a trace for \u201cWhat\u2019s the weather in Paris?\u201d might show the agent calling a weather service, receiving the forecast, and then replying.\\n\\nTraces are useful for debugging, auditing, and understanding how a task was completed. They don\u2019t necessarily include the model\u2019s full internal reasoning; often they show only observable steps and tool interactions.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791056940,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":189,\"prompt_tokens\":12,\"total_tokens\":201,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":43,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
                   }
                 },
                 {
@@ -90,7 +90,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"model\":\"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"model\": \"openai/gpt-6-luna\", \"max_completion_tokens\": 1024}"
                   }
                 },
                 {
@@ -114,7 +114,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "234"
+                    "intValue": "201"
                   }
                 },
                 {
@@ -126,7 +126,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "222"
+                    "intValue": "189"
                   }
                 },
                 {
@@ -150,7 +150,7 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "96"
+                    "intValue": "43"
                   }
                 },
                 {
@@ -168,7 +168,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of the steps an AI agent takes to handle a request. It can include the request, the agent’s actions (such as calling a search or database tool), the results of those actions, and the final response.\n\nFor example:\n\n1. User asks for tomorrow’s weather.\n2. Agent calls a weather service.\n3. The service returns the forecast.\n4. Agent summarizes it for the user.\n\nTraces help developers understand how an agent behaved, diagnose errors, and measure performance. They don’t necessarily include the model’s private internal reasoning."
+                    "stringValue": "An **agent trace** is a record of what an AI agent did while handling a task. It often includes the steps it took, such as:\n\n- the user\u2019s request and the agent\u2019s inputs\n- actions or tool calls the agent made\n- results returned by tools\n- decisions or status updates\n- the final response\n\nFor example, a trace for \u201cWhat\u2019s the weather in Paris?\u201d might show the agent calling a weather service, receiving the forecast, and then replying.\n\nTraces are useful for debugging, auditing, and understanding how a task was completed. They don\u2019t necessarily include the model\u2019s full internal reasoning; often they show only observable steps and tool interactions."
                   }
                 },
                 {
@@ -197,12 +197,12 @@
           },
           "spans": [
             {
-              "traceId": "d0eecfc62e38855ffa4993587fdaeda3",
-              "spanId": "d478cf6e508d09e3",
+              "traceId": "edb4fb0164bfc26a45298631e19cd7f1",
+              "spanId": "e864396d15d0caf9",
               "name": "research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791012993279400805",
-              "endTimeUnixNano": "1791012997843043918",
+              "startTimeUnixNano": "1791056940184174000",
+              "endTimeUnixNano": "1791056942808673000",
               "attributes": [
                 {
                   "key": "gen_ai.agent.name",
@@ -225,7 +225,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of the steps an AI agent takes to handle a request. It can include the request, the agent’s actions (such as calling a search or database tool), the results of those actions, and the final response.\n\nFor example:\n\n1. User asks for tomorrow’s weather.\n2. Agent calls a weather service.\n3. The service returns the forecast.\n4. Agent summarizes it for the user.\n\nTraces help developers understand how an agent behaved, diagnose errors, and measure performance. They don’t necessarily include the model’s private internal reasoning."
+                    "stringValue": "An **agent trace** is a record of what an AI agent did while handling a task. It often includes the steps it took, such as:\n\n- the user\u2019s request and the agent\u2019s inputs\n- actions or tool calls the agent made\n- results returned by tools\n- decisions or status updates\n- the final response\n\nFor example, a trace for \u201cWhat\u2019s the weather in Paris?\u201d might show the agent calling a weather service, receiving the forecast, and then replying.\n\nTraces are useful for debugging, auditing, and understanding how a task was completed. They don\u2019t necessarily include the model\u2019s full internal reasoning; often they show only observable steps and tool interactions."
                   }
                 }
               ],

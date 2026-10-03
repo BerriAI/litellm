@@ -137,6 +137,7 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 #[case::opentelemetry_swarm(include_bytes!("fixtures/opentelemetry_swarm.json"))]
 #[case::pydantic_ai_simple(include_bytes!("fixtures/pydantic_ai_simple.json"))]
 #[case::pydantic_ai_swarm(include_bytes!("fixtures/pydantic_ai_swarm.json"))]
+#[case::pydantic_ai_token_limit_swarm(include_bytes!("fixtures/pydantic_ai_token_limit_swarm.json"))]
 #[case::query_alternate(include_bytes!("fixtures/query_alternate.json"))]
 #[case::query_children(include_bytes!("fixtures/query_children.json"))]
 #[case::query_other_team(include_bytes!("fixtures/query_other_team.json"))]
