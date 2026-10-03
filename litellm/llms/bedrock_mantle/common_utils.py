@@ -13,8 +13,8 @@ global state.
 """
 
 import re
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -158,3 +158,43 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     """
     entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"
+
+
+_WEB_SEARCH_TOOL_TYPE_PREFIX: Final = "web_search"
+_UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS: Final = frozenset({"search_content_types"})
+
+
+def _strip_one_web_search_tool(tool: object) -> object:
+    if not isinstance(tool, dict):
+        return tool
+    typed_tool: Final = cast(  # cast-ok: OpenAI tool JSON; isinstance(dict) does not bind key/value types
+        dict[str, object], tool
+    )
+    tool_type: Final = typed_tool.get("type")
+    if not isinstance(tool_type, str) or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX):
+        return tool
+    if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(typed_tool):
+        return tool
+    return {  # mutable-ok: OpenAI tool JSON object after dropping Mantle-rejected keys
+        key: value for key, value in typed_tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS
+    }
+
+
+def strip_unsupported_web_search_tool_fields(tools: object) -> object:
+    """Drop Mantle-rejected nested fields from web-search tool definitions.
+
+    Bedrock Mantle accepts ``web_search`` tools but rejects OpenAI/Codex fields such
+    as ``search_content_types`` (validation_error 400). ``additional_drop_params`` only
+    reaches top-level request keys, so nested tool fields need an explicit strip.
+    Non-dict tools and non-web-search tool types are left unchanged. Returns the
+    original object when nothing needs rewriting so callers can keep identity.
+    """
+    if not isinstance(tools, (list, tuple)):
+        return tools
+    tools_seq: Final = cast(  # cast-ok: isinstance(list|tuple) does not bind element types for basedpyright
+        Sequence[object], tools
+    )
+    rewritten: Final = tuple(_strip_one_web_search_tool(tool) for tool in tools_seq)
+    if all(new is old for new, old in zip(rewritten, tools_seq, strict=True)):
+        return tools
+    return list(rewritten)  # mutable-ok: chat/Responses tools param is a JSON list

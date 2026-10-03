@@ -11,7 +11,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 
@@ -21,6 +21,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
+    strip_unsupported_web_search_tool_fields,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
@@ -125,6 +126,32 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         except Exception as e:
             verbose_logger.debug("BedrockMantleChatConfig: error checking reasoning support: %s", e)
             return False
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict:
+        mapped_params: Final = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
+        )
+        tools: Final = mapped_params.get("tools")
+        if tools is None:
+            return mapped_params
+        stripped_tools: Final = strip_unsupported_web_search_tool_fields(
+            cast(object, tools),  # cast-ok: bare dict .get is Unknown to basedpyright
+        )
+        return {  # mutable-ok: map_openai_params contract returns a plain dict
+            **mapped_params,
+            "tools": stripped_tools,
+        }
 
     def get_model_response_iterator(
         self,
