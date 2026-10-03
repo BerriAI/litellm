@@ -11393,8 +11393,8 @@ export interface paths {
          * Submit Oracle Router Feedback
          * @description Complete a program: its model slot is released now, its verifier runs in the background.
          *
-         *     The key that started the program (or an admin) may complete it. 404 when no ORACLE router holds a
-         *     program with that id, which also covers programs completed earlier.
+         *     Programs are private to the key that started them; an admin may complete any key's program. 404 when
+         *     the caller holds no program with that id, which also covers programs completed earlier.
          */
         post: operations["submit_oracle_router_feedback_oracle_router_feedback_post"];
         delete?: never;

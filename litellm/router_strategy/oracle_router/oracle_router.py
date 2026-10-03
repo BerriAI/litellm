@@ -265,10 +265,10 @@ class OracleRouter:
         chosen_model, request_type = await self._decide(program_id, prompt, _api_key_hash(request_kwargs))
         _stamp_internal(request_kwargs, CHOSEN_MODEL_METADATA_KEY, chosen_model)
         _stamp_internal(request_kwargs, PROGRAM_ID_METADATA_KEY, program_id)
-        verbose_router_logger.debug(
-            "OracleRouter[%s]: program=%s request_type=%s -> %s",
+        verbose_router_logger.debug(  # caller-supplied program ids stay out of the log
+            "OracleRouter[%s]: %s request, request_type=%s -> %s",
             self.router_name,
-            program_id,
+            "program" if program_id else "stateless",
             request_type.value,
             chosen_model,
         )
@@ -343,7 +343,11 @@ class OracleRouter:
         except Exception as error:  # noqa: BLE001  # any verifier failure is counted and must not break the feedback loop
             self.verifications_failed += 1
             verbose_router_logger.exception(
-                "OracleRouter[%s]: verification of %s failed: %s", self.router_name, binding.program_id, error
+                "OracleRouter[%s]: verification of a %s program on %s failed: %s",
+                self.router_name,
+                binding.context.request_type.value,
+                binding.model,
+                error,
             )
             return float("nan")
         async with self._update_lock:
