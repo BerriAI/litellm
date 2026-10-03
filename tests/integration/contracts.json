@@ -1599,6 +1599,12 @@
     ],
     "tests/integration/spend/test_daily_activity_key_owner_traffic.py::test_owner_is_reported_on_every_route_while_a_burst_of_requests_waits_on_the_provider": [
       "quota_management.spend_tracking.key_attribution.every_route_under_provider_burst"
+    ],
+    "tests/integration/spend/test_stream_alias_billing.py::test_streamed_alias_matching_a_capability_rule_bills_the_deployment_price[vertex-mock-response]": [
+      "quota_management.spend_tracking.streamed_alias_bills_deployment_price"
+    ],
+    "tests/integration/spend/test_stream_alias_billing.py::test_streamed_alias_matching_a_capability_rule_bills_the_deployment_price[anthropic-upstream]": [
+      "quota_management.spend_tracking.streamed_alias_bills_deployment_price"
     ]
   },
   "browser": {
