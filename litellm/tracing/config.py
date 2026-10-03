@@ -58,9 +58,7 @@ def _cursor_keys(store: Mapping[str, object], environ: Mapping[str, str]) -> tup
     supplied: Final = _value(store, "cursor_keys", environ, None)
     if supplied is None:
         fallback: Final = environ.get("LITELLM_SALT_KEY") or environ.get("LITELLM_MASTER_KEY")
-        if not fallback:
-            raise ValueError("tracing.store.cursor_keys, LITELLM_SALT_KEY or LITELLM_MASTER_KEY is required")
-        return (fallback,)
+        return (fallback,) if fallback else ()
     try:
         candidates: Final = CURSOR_KEYS.validate_python((supplied,) if isinstance(supplied, str) else supplied)
     except ValidationError as error:
@@ -108,3 +106,10 @@ def trace_storage_config(settings: Mapping[str, object], environ: Mapping[str, s
         ),
         cursor_keys=_cursor_keys(store, environ),
     )
+
+
+def trace_reader_config(settings: Mapping[str, object], environ: Mapping[str, str] = os.environ) -> TraceStorageConfig:
+    config: Final = trace_storage_config(settings, environ)
+    if not config.cursor_keys:
+        raise ValueError("tracing.store.cursor_keys, LITELLM_SALT_KEY or LITELLM_MASTER_KEY is required")
+    return config

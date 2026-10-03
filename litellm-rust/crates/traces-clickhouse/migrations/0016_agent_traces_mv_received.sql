@@ -15,6 +15,7 @@ SELECT
     countIf(StatusCode = 'STATUS_CODE_ERROR')              AS ErrorCount,
     sum(InputTokens)                                       AS InputTokens,
     sum(OutputTokens)                                      AS OutputTokens,
+    min(EngineReceivedMs)                                  AS ReceivedMs,
     groupUniqArrayIf(toString(Model), Model != '')         AS Models,
     groupUniqArrayIf(SpanName, ObservationType = 'agent')  AS AgentNames,
     groupArrayIf(LiteLLMRequestId, ObservationType = 'llm' OR LiteLLMRequestId != '') AS RequestIds

@@ -131,10 +131,29 @@ fn rotated_keys_keep_verifying_earlier_cursors(binding: Binding, now: OffsetDate
 }
 
 #[rstest]
-#[case::no_keys(Vec::<&str>::new())]
 #[case::empty_key(vec![""])]
+#[case::empty_key_among_valid(vec!["valid", ""])]
 fn key_rings_require_nonempty_secrets(#[case] secrets: Vec<&str>) {
     assert!(matches!(KeyRing::new(secrets), Err(Error::InvalidKeys)));
+}
+
+#[rstest]
+fn a_key_ring_without_keys_refuses_to_sign_or_verify(
+    keys: KeyRing,
+    binding: Binding,
+    now: OffsetDateTime,
+) {
+    let unsigned = KeyRing::new(Vec::<&str>::new()).unwrap();
+    let token = keys.encode(&binding, &cursor(now)).unwrap();
+    assert_eq!(unsigned.signing_key_id(), None);
+    assert!(matches!(
+        unsigned.encode(&binding, &cursor(now)),
+        Err(Error::MissingKeys)
+    ));
+    assert!(matches!(
+        unsigned.decode::<Position>(&binding, &token, now),
+        Err(Error::MissingKeys)
+    ));
 }
 
 #[rstest]
@@ -190,6 +209,7 @@ fn bounded_pages_keep_a_complete_prefix_and_reissue_the_cursor(
 #[case::changed(Error::TraversalChanged, FailureCode::TraversalChanged, false, true)]
 #[case::too_large(Error::ResourceTooLarge, FailureCode::ResourceTooLarge, false, false)]
 #[case::keys(Error::InvalidKeys, FailureCode::Unavailable, true, false)]
+#[case::missing_keys(Error::MissingKeys, FailureCode::Unavailable, true, false)]
 fn errors_map_to_stable_codes(
     #[case] error: Error,
     #[case] code: FailureCode,

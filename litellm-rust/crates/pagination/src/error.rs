@@ -71,6 +71,8 @@ pub enum Error {
     ResourceTooLarge,
     #[error("Cursor signing keys must be nonempty")]
     InvalidKeys,
+    #[error("Cursor signing keys are not configured")]
+    MissingKeys,
     #[error("Cursor encoding failed")]
     Encode(#[from] serde_json::Error),
 }
@@ -82,7 +84,7 @@ impl Error {
             Self::TraversalExpired => FailureCode::TraversalExpired,
             Self::TraversalChanged => FailureCode::TraversalChanged,
             Self::ResourceTooLarge => FailureCode::ResourceTooLarge,
-            Self::InvalidKeys | Self::Encode(_) => FailureCode::Unavailable,
+            Self::InvalidKeys | Self::MissingKeys | Self::Encode(_) => FailureCode::Unavailable,
         }
     }
 }

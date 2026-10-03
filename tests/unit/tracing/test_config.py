@@ -1,7 +1,7 @@
 import pytest
 
 from litellm import constants
-from litellm.tracing.config import is_clickhouse_tracing_enabled, trace_storage_config
+from litellm.tracing.config import is_clickhouse_tracing_enabled, trace_reader_config, trace_storage_config
 
 
 @pytest.mark.parametrize(
@@ -124,7 +124,11 @@ def test_legacy_reader_and_split_retention_fields_are_rejected() -> None:
 @pytest.mark.parametrize(
     ("store_keys", "environ", "expected"),
     [
-        (["os.environ/NEW_KEY", "literal-old"], {"NEW_KEY": "rotated", "LITELLM_SALT_KEY": "salt"}, ("rotated", "literal-old")),
+        (
+            ["os.environ/NEW_KEY", "literal-old"],
+            {"NEW_KEY": "rotated", "LITELLM_SALT_KEY": "salt"},
+            ("rotated", "literal-old"),
+        ),
         ("single-key", {"LITELLM_SALT_KEY": "salt"}, ("single-key",)),
         (None, {"LITELLM_SALT_KEY": "salt", "LITELLM_MASTER_KEY": "sk-master"}, ("salt",)),
         (None, {"LITELLM_MASTER_KEY": "sk-master"}, ("sk-master",)),
@@ -146,6 +150,10 @@ def test_invalid_cursor_keys_are_rejected(store_keys: object) -> None:
         trace_storage_config({"store": store}, {"LITELLM_SALT_KEY": "salt"})
 
 
-def test_missing_cursor_key_source_is_rejected() -> None:
+def test_missing_cursor_key_source_is_rejected_for_readers() -> None:
     with pytest.raises(ValueError, match="cursor_keys, LITELLM_SALT_KEY or LITELLM_MASTER_KEY is required"):
-        trace_storage_config({"store": {"type": "clickhouse", "url": "http://localhost:8123"}}, {})
+        trace_reader_config({"store": {"type": "clickhouse", "url": "http://localhost:8123"}}, {})
+
+
+def test_write_only_storage_does_not_need_cursor_keys() -> None:
+    assert trace_storage_config({"store": {"type": "clickhouse", "url": "http://localhost:8123"}}, {}).cursor_keys == ()

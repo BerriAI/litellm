@@ -95,7 +95,13 @@ describe("Lens interactive demo", () => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (path === "/lens") return Response.json({ lenses: [saved], workers: [], tracing_enabled: true });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
-      if (path === "/v1/traces") return Response.json({ data: data.runs.map((run) => run.trace.summary) });
+      if (path === "/v1/traces") {
+        return Response.json({
+          items: data.runs.map((run) => run.trace.summary),
+          next_cursor: null,
+          traversal: { id: "demo", published_at: "2026-01-01T00:00:00Z", expires_at: "2026-01-01T00:30:00Z" },
+        });
+      }
       return Response.json({ data: [], traces: true, requests: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {

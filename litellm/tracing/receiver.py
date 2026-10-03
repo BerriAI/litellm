@@ -26,7 +26,7 @@ from litellm.constants import (
 )
 from litellm.rust_bridge.trace.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
-from litellm.tracing.config import trace_storage_config
+from litellm.tracing.config import trace_reader_config
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, TracingPayloadTooLargeError, decompress
 
 
@@ -55,7 +55,7 @@ class TraceReceiver:
 
     @classmethod
     def from_settings(cls, settings: Mapping[str, object]) -> "TraceReceiver":
-        return cls(storage=ClickHouseStorage(trace_storage_config(settings)))
+        return cls(storage=ClickHouseStorage(trace_reader_config(settings)))
 
     async def start(self) -> None:
         await self.storage.ensure_schema()

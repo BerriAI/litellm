@@ -26,6 +26,8 @@ def trace_span_rows(
     body: bytes, content_type: str | None, tenant: Mapping[str, str], max_attribute_value_bytes: int
 ) -> list[dict[str, JsonValue]]: ...
 
+class TraceReadError(Exception): ...
+
 @final
 class NativeTraceConfig:
     def __new__(
@@ -34,6 +36,7 @@ class NativeTraceConfig:
         url: str,
         retention_days: int,
         max_attribute_value_bytes: int,
+        cursor_keys: Sequence[str],
     ) -> NativeTraceConfig: ...
 
 @final
@@ -46,7 +49,7 @@ class NativeTraceStorage:
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
     ) -> Future[JsonValue]: ...
     def get_trace(
-        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
+        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None, page_size: int | None
     ) -> Future[JsonValue]: ...
     def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Future[JsonValue]: ...
     def get_span_error(
@@ -358,6 +361,7 @@ __all__ = [
     "RustUpstreamError",
     "TokenCounter",
     "Tokenizer",
+    "TraceReadError",
     "achat_completions",
     "acompletion",
     "aembedding",

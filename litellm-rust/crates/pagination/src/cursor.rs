@@ -41,14 +41,15 @@ impl KeyRing {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if keys.is_empty() {
-            return Err(Error::InvalidKeys);
-        }
         Ok(Self { keys })
     }
 
-    pub fn signing_key_id(&self) -> &str {
-        &self.keys[0].id
+    pub fn signing_key_id(&self) -> Option<&str> {
+        self.keys.first().map(|key| key.id.as_str())
+    }
+
+    fn signing_key(&self) -> Result<&Key, Error> {
+        self.keys.first().ok_or(Error::MissingKeys)
     }
 
     fn sign(key: &Key, binding: &Binding, payload: &[u8]) -> Vec<u8> {
@@ -66,15 +67,16 @@ impl KeyRing {
         binding: &Binding,
         cursor: &Cursor<P>,
     ) -> Result<String, Error> {
+        let signing_key = self.signing_key()?;
         let payload = serde_json::to_vec(&Envelope {
             version: FORMAT_VERSION,
-            key_id: &self.keys[0].id,
+            key_id: &signing_key.id,
             expires_unix: cursor.expires_at.unix_timestamp(),
             published_ms: cursor.published_ms,
             revision: &cursor.revision,
             position: &cursor.position,
         })?;
-        let tag = Self::sign(&self.keys[0], binding, &payload);
+        let tag = Self::sign(signing_key, binding, &payload);
         Ok(format!(
             "{}.{}",
             URL_SAFE_NO_PAD.encode(payload),
@@ -89,6 +91,7 @@ impl KeyRing {
         token: &str,
         now: OffsetDateTime,
     ) -> Result<Cursor<P>, Error> {
+        self.signing_key()?;
         let (payload, tag) = token.split_once('.').ok_or(Error::InvalidCursor)?;
         let payload = URL_SAFE_NO_PAD
             .decode(payload)
