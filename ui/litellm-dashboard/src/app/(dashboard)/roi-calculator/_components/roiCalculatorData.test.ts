@@ -8,11 +8,14 @@ import {
   formatMoney,
   formatNumber,
   formatSyncedAt,
+  highestCostPulls,
   peopleCsv,
 } from "./roiCalculatorData";
 import type { ROIPull } from "./roiCalculatorData";
 
 const pull = (overrides: Partial<ROIPull>): ROIPull => ({
+  source_repo: "github.com/org/repo",
+  source_branch: "feature",
   repo: "org/repo",
   number: 42,
   title: "Improve request routing",
@@ -39,9 +42,20 @@ const summary = {
 };
 
 describe("ROI calculator display helpers", () => {
+  it("ranks only attributed PR costs, limits the overview to five and preserves report order", () => {
+    const pulls = [2, 6, 1, 4, 3, 5].map((spend) =>
+      pull({ number: spend, branch_cost: { status: "matched", spend, requests: 1, cost_per_hour: spend } }),
+    );
+    pulls.push(pull({ number: 99, branch_cost: { status: "ambiguous", spend: 99, requests: 1, cost_per_hour: null } }));
+    pulls.push(pull({ number: 100 }));
+    expect(highestCostPulls(pulls).map((item) => item.number)).toEqual([6, 5, 4, 3, 2]);
+    expect(pulls.map((item) => item.number)).toEqual([2, 6, 1, 4, 3, 5, 99, 100]);
+  });
   it("formats spend and estimated hours without losing null values", () => {
     expect(formatMoney(1234.5)).toBe("$1,234.50");
-    expect(formatMoney(0.0001)).toBe("<$0.01");
+    expect(formatMoney(0.0001)).toBe("$0.0001");
+    expect(formatMoney(0.000186)).toBe("$0.000186");
+    expect(formatMoney(0.0000001)).toBe("<$0.000001");
     expect(formatMoney(0)).toBe("$0.00");
     expect(formatMoney(null)).toBe("—");
     expect(formatNumber(4.25)).toBe("4.3");
@@ -56,13 +70,14 @@ describe("ROI calculator display helpers", () => {
   it("keeps caveat copy tied to the estimate basis and reports match coverage", () => {
     expect(effortNote("without_ai")).toContain("not actual hours worked or hours saved");
     expect(effortNote(null)).toContain("Earlier estimates");
-    expect(coverageLabel(summary)).toBe("1 of 2 PRs have email matches");
+    expect(coverageLabel(summary)).toBe("1 of 2 matched");
   });
 
   it("labels estimates and filters PRs by title, repository, number, or login", () => {
     const matchingPull = pull({});
     expect(estimateLabel(matchingPull.estimate)).toBe("4.5 hrs");
-    expect(estimateLabel({ status: "needs_review", hours: null, reasoning: "", cached: false })).toBe("Needs review");
+    const incompleteEstimate = { status: "needs_review" as const, hours: null, reasoning: "", cached: false };
+    expect(estimateLabel(incompleteEstimate)).toBe("Needs review");
     expect(filterPulls([matchingPull], "ROUTING")).toEqual([matchingPull]);
     expect(filterPulls([matchingPull], "nobody")).toEqual([]);
   });
@@ -75,6 +90,9 @@ it("exports precise spend, cohort eligibility and safely quoted CSV values", () 
     effort_basis: "without_ai",
     people: [
       {
+        id: "export-person",
+        estimated_prs: 1,
+        match_methods: ["manual"],
         email: '=HYPERLINK("bad")',
         logins: ["alice", "bob"],
         spend: 0.0001,

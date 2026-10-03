@@ -3,6 +3,8 @@ from collections.abc import Mapping
 from typing import Final
 
 from litellm.types.roi_calculator import (
+    ROIBranchAttribution,
+    ROIBranchMetrics,
     ROIPersonSummary,
     ROIPullRecord,
     ROIPullSummary,
@@ -53,8 +55,12 @@ def _pull_summary(
     address: str,
     method: str,
     observed: frozenset[str],
+    branch_cost: ROIBranchAttribution,
 ) -> ROIPullSummary:
     return ROIPullSummary(
+        source_repo=pull.get("source_repo", ""),
+        source_branch=pull.get("source_branch", ""),
+        branch_cost=branch_cost,
         repo=pull["repo"],
         number=pull["number"],
         title=pull["title"],
@@ -119,6 +125,9 @@ def _summarize_person(
 
 
 def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
+    from litellm.proxy.roi_calculator.branch_spend import attribute_branches
+
+    branch_costs: Final = attribute_branches(report["pulls"], report.get("branch_spend"))
     complete_scope: Final = not report.get("unavailable_repos", ())
     observed: Final = frozenset(
         normalized for normalized in (normalize_email(row["email"]) for row in report["spend"]) if normalized
@@ -143,7 +152,8 @@ def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
         for key in sorted(people_keys)
     )
     pull_summaries: Final = tuple(
-        _pull_summary(pull, address, method, observed) for pull, address, method in matched_pulls
+        _pull_summary(pull, address, method, observed, branch_costs[(pull["repo"], pull["number"])])
+        for pull, address, method in matched_pulls
     )
     eligible_emails: Final = frozenset(person["email"] for person in people if person["eligible"])
     dates: Final = tuple(
@@ -197,7 +207,26 @@ def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
     )
     summary_people: Final = tuple(sorted(people, key=lambda person: (-person["hours"], person["id"])))
     summary_pulls: Final = tuple(sorted(pull_summaries, key=lambda pull: pull["merged_at"], reverse=True))
+    branch_cohort: Final = tuple(
+        pull
+        for pull in pull_summaries
+        if pull["branch_cost"].status == "matched" and pull["estimate"]["status"] == "estimated"
+    )
+    branch_spend: Final = sum(pull["branch_cost"].spend or 0 for pull in branch_cohort)
+    branch_hours: Final = sum(pull["estimate"]["hours"] or 0 for pull in branch_cohort)
+    linked: Final = frozenset((pull.get("source_repo", ""), pull.get("source_branch", "")) for pull in branch_cohort)
+    unlinked: Final = tuple(row for row in report.get("branch_spend", ()) if (row.repo, row.branch) not in linked)
     return ROISummary(
+        source_provider=report.get("source_provider", "github"),
+        branch_metrics=ROIBranchMetrics(
+            spend=branch_spend,
+            hours=branch_hours,
+            cost_per_hour=branch_spend / branch_hours if complete_scope and branch_hours else None,
+            matched_pulls=sum(pull["branch_cost"].status == "matched" for pull in pull_summaries),
+            total_tagged_spend=sum(row.spend for row in report.get("branch_spend", ())),
+            unlinked_spend=sum(row.spend for row in unlinked),
+        ),
+        unlinked_branches=unlinked,
         id=report.get("id"),
         mode=report["mode"],
         start=report["start"],

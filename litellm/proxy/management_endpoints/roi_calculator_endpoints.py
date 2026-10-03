@@ -3,7 +3,12 @@ from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Annotated, Final, Literal
+from typing import (
+    Annotated,
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # PrismaWrapper dynamically delegates database methods
+)
 
 import httpx
 from apscheduler.schedulers.asyncio import (  # pyright: ignore[reportMissingTypeStubs]  # no upstream stubs
@@ -11,6 +16,7 @@ from apscheduler.schedulers.asyncio import (  # pyright: ignore[reportMissingTyp
 )
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from starlette.types import Receive, Scope, Send
 
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -20,13 +26,22 @@ from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKey
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.roi_calculator.analytics import normalize_email, summarize
+from litellm.proxy.roi_calculator.branch_spend import BranchSpendDatabase, read_branch_spend
 from litellm.proxy.roi_calculator.estimator import CompletionCaller, EstimatorModel
-from litellm.proxy.roi_calculator.github import GitHub, SourceError
-from litellm.proxy.roi_calculator.sync import SpendReader, SyncManager, read_spend, spend_prisma_client
+from litellm.proxy.roi_calculator.github import SourceError
+from litellm.proxy.roi_calculator.source import create_source
+from litellm.proxy.roi_calculator.sync import (
+    BranchSpendReader,
+    SpendReader,
+    SyncManager,
+    read_spend,
+    spend_prisma_client,
+)
 from litellm.proxy.roi_calculator.sync_store import SyncStore
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.roi_calculator import (
     DEFAULT_PROMPT,
+    ROIBranchSpend,
     ROICompletionRequest,
     ROIIdentityMapResponse,
     ROIIdentityMapUpdate,
@@ -40,6 +55,7 @@ from litellm.types.roi_calculator import (
     ROISpendRecord,
     ROISummaryResponse,
     ROISyncStatus,
+    normalize_source_login,
 )
 
 router: Final = APIRouter()
@@ -52,6 +68,9 @@ _ROI_TAGS: Final[list[str | Enum]] = ["roi calculator"]  # mutable-ok: FastAPI r
 class _StoredSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    source_provider: Literal["github", "gitlab"] = "github"
+    gitlab_api_url: str = "https://gitlab.com/api/v4"
+    gitlab_token: str = ""
     github_api_url: str = "https://api.github.com"
     github_token: str = ""
     estimator_key: str = ""
@@ -181,6 +200,11 @@ async def _load_settings(repository: ConfigRepository) -> ROISettings:
     token: Final = decrypt_value_helper(stored.github_token, _SETTINGS_KEY) if stored.github_token else ""
     try:
         return ROISettings(
+            source_provider=stored.source_provider,
+            gitlab_api_url=stored.gitlab_api_url,
+            gitlab_token=SecretStr(decrypt_value_helper(stored.gitlab_token, _SETTINGS_KEY) or "")
+            if stored.gitlab_token
+            else SecretStr(""),
             github_api_url=stored.github_api_url,
             github_token=SecretStr(token or ""),
             estimator_key=SecretStr(decrypt_value_helper(stored.estimator_key, _SETTINGS_KEY) or "")
@@ -202,8 +226,12 @@ async def _save_settings(
     settings: ROISettings,
     encrypted_token: str,
     encrypted_estimator_key: str,
+    encrypted_gitlab_token: str = "",
 ) -> None:
     stored: Final = _StoredSettings(
+        source_provider=settings.source_provider,
+        gitlab_api_url=settings.gitlab_api_url,
+        gitlab_token=encrypted_gitlab_token,
         github_api_url=settings.github_api_url,
         github_token=encrypted_token,
         estimator_key=encrypted_estimator_key,
@@ -217,19 +245,28 @@ async def _save_settings(
     await repository.set_param(_SETTINGS_KEY, stored.model_dump(mode="json"))
 
 
-async def _load_report(repository: ConfigRepository) -> ROIReport | None:
+async def _load_report(repository: ConfigRepository, settings: ROISettings) -> ROIReport | None:
     parameter: Final = await repository.get_param(_REPORT_KEY)
-    if parameter is None:
+    if parameter is None or parameter.param_value is None:
         return None
     try:
-        return TypeAdapter(ROIReport).validate_python(parameter.param_value)
+        report: Final = TypeAdapter(ROIReport).validate_python(parameter.param_value)
     except ValidationError:
         raise HTTPException(status_code=500, detail="Stored ROI Calculator report is invalid.") from None
+    if (
+        report.get("source_provider", "github") != settings.source_provider
+        or report.get("source_api_url", settings.github_api_url) != settings.source_api_url
+    ):
+        return None
+    return report
 
 
 def _public_settings(settings: ROISettings) -> ROISettingsResponse:
     models: Final = _router_models()
     return ROISettingsResponse(
+        source_provider=settings.source_provider,
+        gitlab_api_url=settings.gitlab_api_url,
+        has_gitlab_token=bool(settings.gitlab_token.get_secret_value()),
         github_api_url=settings.github_api_url,
         repos=settings.repos,
         estimator_model=settings.estimator_model,
@@ -267,7 +304,14 @@ def _gateway_http_client() -> AsyncHTTPHandler:
 
 @lru_cache(maxsize=1)
 def _gateway_transport(app: FastAPI) -> httpx.ASGITransport:
-    return httpx.ASGITransport(app=app)
+    async def estimator_request(scope: Scope, receive: Receive, send: Send) -> None:
+        await app(
+            {**scope, "state": {**scope.get("state", {}), "litellm_roi_estimator": True}},
+            receive,
+            send,
+        )
+
+    return httpx.ASGITransport(app=estimator_request)
 
 
 def _completion_caller(settings: ROISettings) -> CompletionCaller:
@@ -317,6 +361,21 @@ def _spend_reader(repository: ConfigRepository) -> SpendReader:
     return get_spend
 
 
+def _branch_spend_reader(repository: ConfigRepository, settings: ROISettings) -> BranchSpendReader:
+    async def get_spend(start: date, end: date, repos: tuple[str, ...]) -> tuple[ROIBranchSpend, ...]:
+        return await read_branch_spend(
+            cast(  # cast-ok: PrismaWrapper delegates methods dynamically
+                BranchSpendDatabase, repository.prisma_client.db
+            ),
+            start,
+            end,
+            repos,
+            casefold_repo=settings.source_provider == "github",
+        )
+
+    return get_spend
+
+
 @router.get(
     "/roi-calculator/settings",
     response_model=ROISettingsResponse,
@@ -343,8 +402,26 @@ async def update_roi_calculator_settings(
     current: Final = await _load_settings(repository)
     if "github_api_url" in patch.model_fields_set and patch.github_api_url is None:
         raise HTTPException(status_code=422, detail="GitHub API URL cannot be null.")
+    if "gitlab_api_url" in patch.model_fields_set and patch.gitlab_api_url is None:
+        raise HTTPException(status_code=422, detail="GitLab API URL cannot be null.")
+    provider: Final = patch.source_provider or current.source_provider
+    gitlab_url: Final = patch.gitlab_api_url if patch.gitlab_api_url is not None else current.gitlab_api_url
+    gitlab_changed: Final = gitlab_url.rstrip("/") != current.gitlab_api_url.rstrip("/")
+    gitlab_token: Final = (
+        (patch.gitlab_token or "")
+        if "gitlab_token" in patch.model_fields_set
+        else ""
+        if gitlab_changed
+        else current.gitlab_token.get_secret_value()
+    )
+    encrypted_gitlab: Final = (
+        TypeAdapter(str).validate_python(encrypt_value_helper(gitlab_token)) if gitlab_token else ""
+    )
     github_api_url: Final = patch.github_api_url if patch.github_api_url is not None else current.github_api_url
     github_url_changed: Final = github_api_url.rstrip("/") != current.github_api_url.rstrip("/")
+    source_changed: Final = provider != current.source_provider or (
+        gitlab_changed if provider == "gitlab" else github_url_changed
+    )
     token_was_supplied: Final = "github_token" in patch.model_fields_set
     plaintext_token, encrypted_token = (
         (
@@ -368,23 +445,28 @@ async def update_roi_calculator_settings(
     )
     try:
         settings: Final = ROISettings(
+            source_provider=provider,
+            gitlab_api_url=gitlab_url,
+            gitlab_token=SecretStr(gitlab_token),
             github_api_url=github_api_url,
             github_token=SecretStr(plaintext_token),
             estimator_key=SecretStr(estimator_key),
             update_interval_minutes=patch.update_interval_minutes
             if patch.update_interval_minutes is not None
             else current.update_interval_minutes,
-            repos=patch.repos if patch.repos is not None else current.repos,
+            repos=patch.repos if patch.repos is not None else () if source_changed else current.repos,
             estimator_model=(patch.estimator_model if patch.estimator_model is not None else current.estimator_model),
             estimator_prompt=(
                 patch.estimator_prompt if patch.estimator_prompt is not None else current.estimator_prompt
             ),
             backfill_days=(patch.backfill_days if patch.backfill_days is not None else current.backfill_days),
-            identity_map=current.identity_map,
+            identity_map=MappingProxyType({}) if source_changed else current.identity_map,
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from None
-    await _save_settings(repository, settings, encrypted_token, encrypted_estimator_key)
+    await _save_settings(repository, settings, encrypted_token, encrypted_estimator_key, encrypted_gitlab)
+    if source_changed:
+        await repository.set_param(_REPORT_KEY, None)
     return _public_settings(settings)
 
 
@@ -400,7 +482,7 @@ async def get_roi_calculator_repositories(
     query: Annotated[str, Query(max_length=200)] = "",
     page: Annotated[int, Query(ge=1, le=1000)] = 1,
 ) -> ROIRepositoriesResponse:
-    github: Final = GitHub(await _load_settings(repository), transport)
+    github: Final = create_source(await _load_settings(repository), transport)
     try:
         repos, has_more = await github.repositories(query, page)
     except SourceError as exc:
@@ -428,7 +510,7 @@ async def get_roi_calculator_sync_status(
 ) -> ROISyncStatus:
     status: Final = await SyncStore(repository.prisma_client).status() or manager.status
     settings: Final = await _load_settings(repository)
-    report: Final = await _load_report(repository)
+    report: Final = await _load_report(repository, settings)
     next_update: Final = _next_update(settings, status, report)
     return status.model_copy(update=MappingProxyType({"next_update": next_update.isoformat() if next_update else None}))
 
@@ -448,7 +530,7 @@ async def start_roi_calculator_sync(
     settings: Final = await _load_settings(repository)
     public: Final = _public_settings(settings)
     if not public.ready:
-        raise HTTPException(status_code=409, detail="Connect GitHub, select repositories, and choose a router model.")
+        raise HTTPException(status_code=409, detail="Connect a source, select repositories, and choose a router model.")
     if not await manager.start(
         settings,
         repository,
@@ -457,6 +539,7 @@ async def start_roi_calculator_sync(
         transport,
         _router_estimator_models(settings.estimator_model),
         SyncStore(repository.prisma_client),
+        branch_spend_reader=_branch_spend_reader(repository, settings),
     ):
         raise HTTPException(status_code=409, detail="A sync is already running.")
     return manager.status
@@ -493,10 +576,10 @@ async def get_roi_calculator_report(
 
         sample: Final = summarize(sample_report(datetime.now(timezone.utc)), MappingProxyType({}))
         return ROIReportResponse(report=ROISummaryResponse.model_validate(sample))
-    report: Final = await _load_report(repository)
+    settings: Final = await _load_settings(repository)
+    report: Final = await _load_report(repository, settings)
     if report is None:
         return ROIReportResponse(report=None)
-    settings: Final = await _load_settings(repository)
     summary: Final = summarize(report, settings.identity_map)
     return ROIReportResponse(report=ROISummaryResponse.model_validate(summary))
 
@@ -514,15 +597,22 @@ async def update_roi_calculator_identity_map(
     login: Final = update.github_login.strip().casefold()
     current: Final = await _load_settings(repository)
     current_stored: Final = await _load_stored_settings(repository)
+    try:
+        normalize_source_login(login, current.source_provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     new_email: Final = normalize_email(update.email)
     if not login or (update.email is not None and not new_email):
-        raise HTTPException(status_code=422, detail="Enter a GitHub login and a valid email address.")
+        raise HTTPException(status_code=422, detail="Enter a source-control username and a valid email address.")
     identity_map: Final[Mapping[str, str]] = (
         MappingProxyType({key: value for key, value in current.identity_map.items() if key != login})
         if update.email is None
         else MappingProxyType({**current.identity_map, login: new_email})
     )
     settings: Final = ROISettings(
+        source_provider=current.source_provider,
+        gitlab_api_url=current.gitlab_api_url,
+        gitlab_token=current.gitlab_token,
         github_api_url=current.github_api_url,
         github_token=current.github_token,
         estimator_key=current.estimator_key,
@@ -533,8 +623,10 @@ async def update_roi_calculator_identity_map(
         backfill_days=current.backfill_days,
         identity_map=identity_map,
     )
-    await _save_settings(repository, settings, current_stored.github_token, current_stored.estimator_key)
-    report: Final = await _load_report(repository)
+    await _save_settings(
+        repository, settings, current_stored.github_token, current_stored.estimator_key, current_stored.gitlab_token
+    )
+    report: Final = await _load_report(repository, settings)
     summary: Final = summarize(report, settings.identity_map) if report is not None else None
     return ROIIdentityMapResponse(
         report=ROISummaryResponse.model_validate(summary) if summary is not None else None,
@@ -581,7 +673,7 @@ async def run_scheduled_sync() -> None:
         return
     store: Final = SyncStore(prisma_client)
     status: Final = await store.status() or _SYNC_MANAGER.status
-    report: Final = await _load_report(repository)
+    report: Final = await _load_report(repository, settings)
     next_update: Final = _next_update(settings, status, report)
     if next_update is None or next_update > datetime.now(timezone.utc):
         return
@@ -593,6 +685,7 @@ async def run_scheduled_sync() -> None:
         estimator_models=_router_estimator_models(settings.estimator_model),
         coordinator=store,
         scheduled_interval=settings.update_interval_minutes,
+        branch_spend_reader=_branch_spend_reader(repository, settings),
     )
 
 
@@ -607,7 +700,7 @@ async def test_roi_calculator_connections(
     if not public.ready:
         raise HTTPException(status_code=409, detail="Choose repositories and an available estimator model first.")
     await _test_estimator_access(settings)
-    github: Final = GitHub(settings, transport)
+    github: Final = create_source(settings, transport)
     try:
         await github.test_repositories(settings.repos)
     except SourceError as exc:
@@ -643,7 +736,7 @@ async def reset_roi_calculator_setup(
         current: Final = await _load_settings(repository)
         stored: Final = await _load_stored_settings(repository)
         settings: Final = current.model_copy(update=MappingProxyType({"repos": ()}))
-        await _save_settings(repository, settings, stored.github_token, stored.estimator_key)
+        await _save_settings(repository, settings, stored.github_token, stored.estimator_key, stored.gitlab_token)
         await store.clear_report()
         return _public_settings(settings)
     finally:

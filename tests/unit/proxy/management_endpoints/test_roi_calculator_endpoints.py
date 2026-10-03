@@ -2,20 +2,25 @@ import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from math import isclose
 from types import MappingProxyType
 from typing import Final, cast
 
+import httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
     _estimator_models_from_deployments,
+    _gateway_transport,
     _next_update,
+    get_github_transport,
     get_roi_config_repository,
     register_scheduled_sync,
     router,
@@ -23,9 +28,56 @@ from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
 )
 from litellm.proxy.roi_calculator.estimator import estimator_options
 from litellm.proxy.roi_calculator.sample import sample_report
-from litellm.types.roi_calculator import ROIReport, ROISettings, ROISyncStatus
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.types.roi_calculator import ROIReport, ROISettings, ROISummaryResponse, ROISyncStatus
 
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/chat/completions", "/v1/responses", "/v1/messages"))
+@pytest.mark.parametrize("string_metadata", (False, True))
+async def test_only_internal_estimator_transport_can_mark_persisted_spend(path: str, string_metadata: bool) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    app: Final = FastAPI()
+    tags: Final = ("repo:org/repo", "branch:feature", "litellm-roi-estimator")
+    forged: Final = {"tags": tags, "litellm_roi_estimator": True}
+    metadata: Final = json.dumps(forged) if string_metadata else forged
+    body: Final = {"model": "test-model", "metadata": metadata, "litellm_metadata": metadata}
+    now: Final = datetime(2026, 9, 15, tzinfo=timezone.utc)
+
+    @app.post(path)
+    async def log_request(request: Request) -> Mapping[str, object]:
+        data: Final = await add_litellm_data_to_request(
+            data=await request.json(),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", metadata={"litellm_roi_estimator": True}),
+            proxy_config=ProxyConfig(),
+        )
+        payload: Final = get_logging_payload(
+            kwargs={"model": "test-model", "response_cost": 0.25, "litellm_params": data},
+            response_obj={"id": "test-request", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+            start_time=now,
+            end_time=now,
+        )
+        return {
+            "metadata": json.loads(payload["metadata"]),
+            "tags": json.loads(payload["request_tags"]),
+            "spend": payload["spend"],
+        }
+
+    async with (
+        httpx.AsyncClient(transport=_gateway_transport(app), base_url="http://test") as internal,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as external,
+    ):
+        for client, expected in ((external, False), (internal, True), (external, False)):
+            response: Final = await client.post(path, json=body, headers={"x-litellm-roi-estimator": "true"})
+            assert response.status_code == 200
+            logged: Final = response.json()
+            assert logged["metadata"].get("litellm_roi_estimator") is expected
+            assert set(logged["tags"]) == set(tags)
+            assert logged["spend"] == 0.25
 
 
 @pytest.mark.asyncio
@@ -60,7 +112,7 @@ class _ConfigRepository:
 
     async def get_param(self, param_name: str) -> _Parameter | None:
         value: Final = self.values.get(param_name)
-        return _Parameter(value) if value is not None else None
+        return _Parameter(value) if param_name in self.values else None
 
     async def set_param(self, param_name: str, param_value: object) -> object:
         _assert_json_round_trip(param_value)
@@ -68,11 +120,14 @@ class _ConfigRepository:
         return self.values[param_name]
 
 
-def _client(role: LitellmUserRoles, repository: _ConfigRepository) -> TestClient:
+def _client(
+    role: LitellmUserRoles, repository: _ConfigRepository, transport: httpx.AsyncBaseTransport | None = None
+) -> TestClient:
     app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role)
     app.dependency_overrides[get_roi_config_repository] = lambda: repository
+    app.dependency_overrides[get_github_transport] = lambda: transport
     return TestClient(app)
 
 
@@ -161,6 +216,42 @@ def test_github_api_url_must_use_https() -> None:
     assert not repository.values
 
 
+@pytest.mark.parametrize(
+    "patch", ({"github_api_url": None}, {"gitlab_api_url": None}, {"repos": ["invalid"]}, {"estimator_prompt": " "})
+)
+def test_invalid_connection_settings_are_rejected_without_saving(patch: Mapping[str, object]) -> None:
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    assert client.put("/roi-calculator/settings", json=patch).status_code == 422
+    assert not repository.values
+
+
+@pytest.mark.parametrize("upstream_status", (200, 403))
+def test_public_gitlab_repository_browser_and_errors(upstream_status: int) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v4/projects"
+        assert request.url.params["search"] == "gateway"
+        assert "PRIVATE-TOKEN" not in request.headers
+        return httpx.Response(
+            upstream_status, json=[{"id": 1, "path_with_namespace": "group/gateway"}], headers={"x-next-page": "2"}
+        )
+
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository, httpx.MockTransport(respond))
+    assert client.put("/roi-calculator/settings", json={"source_provider": "gitlab"}).status_code == 200
+    response: Final = client.get("/roi-calculator/repositories", params={"query": "gateway"})
+    if upstream_status == 200:
+        assert response.status_code == 200
+        assert response.json() == {
+            "repositories": [{"name": "group/gateway", "visibility": "private", "archived": False}],
+            "page": 1,
+            "has_more": True,
+        }
+    else:
+        assert response.status_code == 502
+        assert "HTTP 403" in response.json()["detail"]
+
+
 @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
 @pytest.mark.parametrize(
     "method,path,body",
@@ -209,8 +300,16 @@ def test_sample_preview_does_not_change_live_settings_or_report() -> None:
     client: Final = _client(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, repository)
     response: Final = client.get("/roi-calculator/report", params={"mode": "demo"})
     assert response.status_code == 200
-    assert response.json()["report"]["mode"] == "demo"
-    assert response.json()["report"]["metrics"]["cost_per_hour"] > 0
+    report: Final = ROISummaryResponse.model_validate(response.json()["report"])
+    assert report.mode == "demo"
+    assert report.metrics.cost_per_hour is not None and report.metrics.cost_per_hour > 0
+    assert all(pull.branch_cost.status == "matched" and (pull.branch_cost.spend or 0) > 0 for pull in report.pulls)
+    assert any(not pull.matched for pull in report.pulls)
+    assert isclose(report.branch_metrics.spend, sum(pull.branch_cost.spend or 0 for pull in report.pulls))
+    assert report.branch_metrics.unlinked_spend > 0
+    assert isclose(
+        report.branch_metrics.total_tagged_spend, report.branch_metrics.spend + report.branch_metrics.unlinked_spend
+    )
     assert not repository.values
     assert client.get("/roi-calculator/report").json()["report"] is None
 
@@ -264,3 +363,51 @@ def test_manual_match_recalculates_saved_report_and_removal_restores_cohort() ->
     assert removed.status_code == 200
     assert not removed.json()["identity_map"]
     assert removed.json()["report"]["metrics"] == before.json()["report"]["metrics"]
+
+
+def test_switching_sources_clears_report_and_identities_and_keeps_tokens_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "roi-calculator-test-salt-key-0123456789")
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    saved: Final = client.put(
+        "/roi-calculator/settings",
+        json={"source_provider": "gitlab", "gitlab_token": "private-gitlab-test", "repos": ["group/subgroup/project"]},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["has_gitlab_token"] is True
+    assert "private-gitlab-test" not in saved.text
+    assert "private-gitlab-test" not in str(repository.values)
+    assert client.get("/roi-calculator/report").json()["report"] is None
+    matched: Final = client.put(
+        "/roi-calculator/identity-map", json={"github_login": "dev.name", "email": "dev@example.test"}
+    )
+    assert matched.status_code == 200
+    assert matched.json()["identity_map"] == {"dev.name": "dev@example.test"}
+    switched: Final = client.put("/roi-calculator/settings", json={"source_provider": "github"})
+    assert switched.status_code == 200
+    assert switched.json()["identity_map"] == {}
+    assert switched.json()["repos"] == []
+    assert client.get("/roi-calculator/report").json()["report"] is None
+    changed_host: Final = client.put(
+        "/roi-calculator/settings",
+        json={"source_provider": "gitlab", "gitlab_api_url": "https://git.example.test/api/v4"},
+    )
+    assert changed_host.json()["has_gitlab_token"] is False
+
+
+def test_old_source_report_is_not_returned_when_matching_new_source_identity() -> None:
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    assert client.put("/roi-calculator/settings", json={"source_provider": "gitlab"}).status_code == 200
+    old_report: Final = sample_report(datetime.now(timezone.utc))
+    serialized: Final = TypeAdapter(dict[str, object]).validate_json(TypeAdapter(ROIReport).dump_json(old_report))
+    asyncio.run(repository.set_param("roi_calculator_report", serialized))
+    assert client.get("/roi-calculator/report").json()["report"] is None
+    matched: Final = client.put(
+        "/roi-calculator/identity-map", json={"github_login": "dev.name", "email": "dev@example.test"}
+    )
+    assert matched.status_code == 200
+    assert matched.json()["report"] is None
+    assert matched.json()["identity_map"] == {"dev.name": "dev@example.test"}
