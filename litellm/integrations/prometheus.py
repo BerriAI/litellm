@@ -239,17 +239,13 @@ class _LabeledMetric:
                 assert_never(self._tracker)
 
     def _admits(self, kept_values: tuple[str, ...]) -> bool:
-        match self._tracker:
-            case SharedPrometheusSeriesAdmissions():
-                return self._limits.max_series is None or self._tracker.admit_series(
-                    metric_name=self._metric_name, label_values=kept_values, max_series=self._limits.max_series
-                )
-            case BoundedPrometheusSeriesTracker():
-                return self._tracker.admit_series(
-                    metric=self._metric, metric_name=self._metric_name, label_values=kept_values, limits=self._limits
-                )
-            case _:
-                return assert_never(self._tracker)
+        if isinstance(self._tracker, SharedPrometheusSeriesAdmissions):
+            return self._limits.max_series is None or self._tracker.admit_series(
+                metric_name=self._metric_name, label_values=kept_values, max_series=self._limits.max_series
+            )
+        return self._tracker.admit_series(
+            metric=self._metric, metric_name=self._metric_name, label_values=kept_values, limits=self._limits
+        )
 
     def _kept_values(self, values: tuple[object, ...]) -> tuple[str, ...]:
         return tuple(
