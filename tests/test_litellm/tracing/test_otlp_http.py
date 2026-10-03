@@ -35,7 +35,10 @@ def test_invalid_or_unsupported_encoding_is_rejected(body: bytes, encoding: str)
         decompress(body, encoding)
 
 
-@pytest.mark.parametrize(("body", "encoding"), ((b" " * 2048, None), (gzip.compress(b" " * 16384), "gzip")))
+@pytest.mark.parametrize(
+    ("body", "encoding"),
+    ((b" " * 2048, None), (gzip.compress(b" " * 16384, mtime=0), "gzip")),
+)
 def test_body_and_expansion_respect_the_body_limit(body: bytes, encoding: str | None) -> None:
     with patch.object(otlp_http, "OTLP_MAX_BODY_BYTES", 1024):
         with pytest.raises(TracingPayloadTooLargeError):
