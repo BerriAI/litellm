@@ -120,6 +120,8 @@ pub struct TracePageSpansParams {
     pub trace_refs: Vec<String>,
     pub start_ms: i64,
     pub end_ms: i64,
+    pub limit: u64,
+    pub offset: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

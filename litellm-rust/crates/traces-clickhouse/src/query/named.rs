@@ -241,6 +241,8 @@ struct TracePageSpansParamsEncoding {
     pub start_ms: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub end_ms: i64,
+    pub limit: u64,
+    pub offset: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

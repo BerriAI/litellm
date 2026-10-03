@@ -1,15 +1,15 @@
 use std::collections::BTreeMap;
 
-use litellm_storage_clickhouse::fetch;
+use litellm_storage_clickhouse::{READ_LIMITS, fetch};
 use litellm_traces::query::named as contracts;
 use litellm_traces_clickhouse::{
-    QueryScope,
+    Connection, InsertTable, QueryScope, insert_rows, list_traces,
     query::named::{ListTraces, ListTracesParams, TraceSpans, TraceSpansParams},
     query_sql,
 };
 use rstest::{fixture, rstest};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[path = "queries/support.rs"]
 mod fixtures;
@@ -83,6 +83,69 @@ fn admin_access() -> TestResult<contracts::ReadAccessParams> {
     Ok(serde_json::from_str(include_str!(
         "queries/read_access.json"
     ))?)
+}
+
+#[rstest]
+#[tokio::test]
+async fn trace_list_resolves_every_span_across_reader_pages(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    admin_access: TestResult<contracts::ReadAccessParams>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let tool_count = READ_LIMITS.result_rows * 2;
+    let rows = (0..=tool_count).map(|index| {
+        let root = index == tool_count;
+        BTreeMap::from([
+            ("Timestamp".into(), json!(1_000_000_000)),
+            ("TraceId".into(), json!("large-trace")),
+            ("SpanId".into(), json!(format!("{index:016x}"))),
+            (
+                "ParentSpanId".into(),
+                json!(if root {
+                    String::new()
+                } else {
+                    format!("{tool_count:016x}")
+                }),
+            ),
+            ("SpanName".into(), json!(if root { "root" } else { "tool" })),
+            (
+                "ObservationType".into(),
+                json!(if root { "agent" } else { "tool" }),
+            ),
+            ("Duration".into(), json!(1_000_000)),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+        ])
+    });
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        fixtures::DATABASE,
+        InsertTable::OtelTraces,
+        rows.collect(),
+    )
+    .await?;
+    let reader = fixture
+        .readers
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let page = list_traces(
+        &fixture.database.client,
+        &reader,
+        &admin_access?,
+        0,
+        2000,
+        None,
+        50,
+    )
+    .await?;
+    assert_eq!(page.data.len(), 1);
+    assert_eq!(page.data[0].span_count, tool_count + 1);
+    assert_eq!(page.data[0].tool_calls, tool_count);
+    assert_eq!(page.data[0].agent_count, 1);
+    assert_eq!(page.data[0].name, "root");
+    Ok(())
 }
 
 #[rstest]

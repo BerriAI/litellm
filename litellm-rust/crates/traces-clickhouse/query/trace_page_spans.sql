@@ -20,5 +20,6 @@ WHERE o.Timestamp >= fromUnixTimestamp64Milli({start_ms:Int64})
        OR ({user_id:String} != '' AND o.UserId = {user_id:String})
        OR has({team_ids:Array(String)}, o.TeamId))
   AND hex(SHA256(concat(o.TeamId, char(0), o.ApiKeyHash, char(0), o.TraceId))) IN {trace_refs:Array(String)}
-ORDER BY o.Timestamp, o.EngineReceivedMs, o.StatusMessage
+ORDER BY o.Timestamp, o.EngineReceivedMs, o.StatusMessage, o.TeamId, o.ApiKeyHash, o.TraceId, o.SpanId
 LIMIT 1 BY o.TeamId, o.ApiKeyHash, o.TraceId, o.SpanId
+LIMIT {limit:UInt64} OFFSET {offset:UInt64}

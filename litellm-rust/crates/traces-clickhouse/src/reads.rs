@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE};
+use futures_util::{TryStreamExt, stream};
 use litellm_http::Client;
-use litellm_storage_clickhouse::fetch;
+use litellm_storage_clickhouse::{READ_LIMITS, fetch};
 use litellm_traces::{
     SpanDetail, SpanErrorPage, SpendLookup, Trace, TracePage, listed_summary,
     query::named as contracts, resolve_trace, to_ui_content,
@@ -166,18 +167,32 @@ pub async fn list_traces(
             next_cursor,
         });
     };
-    let span_params = TracePageSpansParams::from(contracts::TracePageSpansParams {
-        access: access.clone(),
-        trace_refs: page.iter().map(|row| row.trace_ref.clone()).collect(),
-        start_ms: page_start,
-        end_ms: page_end + 1,
-    });
+    let trace_refs: Vec<String> = page.iter().map(|row| row.trace_ref.clone()).collect();
+    let span_pages: Vec<Vec<crate::query::named::TraceSpansRow>> =
+        stream::try_unfold(Some(0), |position| {
+            let trace_refs = &trace_refs;
+            async move {
+                let Some(offset) = position else {
+                    return Ok::<_, Error>(None);
+                };
+                let span_params = TracePageSpansParams::from(contracts::TracePageSpansParams {
+                    access: access.clone(),
+                    trace_refs: trace_refs.clone(),
+                    start_ms: page_start,
+                    end_ms: page_end + 1,
+                    limit: READ_LIMITS.result_rows,
+                    offset,
+                });
+                let rows = fetch::<TracePageSpans>(client, connection, &span_params).await?;
+                let next = (rows.len() as u64 == READ_LIMITS.result_rows)
+                    .then_some(offset + rows.len() as u64);
+                Ok(Some((rows, next)))
+            }
+        })
+        .try_collect()
+        .await?;
     let span_rows: Vec<contracts::TraceSpansRow> =
-        fetch::<TracePageSpans>(client, connection, &span_params)
-            .await?
-            .into_iter()
-            .map(|row| row.0)
-            .collect();
+        span_pages.into_iter().flatten().map(|row| row.0).collect();
     let spend_rows = spend(client, connection, access, &span_rows).await;
     let mut by_trace: HashMap<(String, String, String), Vec<contracts::TraceSpansRow>> =
         HashMap::new();
