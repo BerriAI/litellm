@@ -37,18 +37,24 @@ from litellm.proxy.lens.models import (
     RunRequest,
     Sample,
     Scope,
+    Step,
+    WatchAllResult,
+    WatchSkipped,
     Worker,
     WorkerCreated,
 )
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
+    add_step,
     can_access,
     claim_job,
     current_job,
     merge_finding,
+    next_scan_start,
     queue_job,
     replace_job,
+    scheduled_window,
     snapshot_finding,
 )
 from litellm.proxy.tracing_runtime import provide_storage
@@ -227,6 +233,40 @@ async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
     return await source_reader(storage).agents(scope) if storage is not None else ()
 
 
+def watching(lens: Lens) -> Lens:
+    if lens.settings.enabled:
+        return lens
+    return lens.model_copy(
+        update=MappingProxyType(
+            {
+                "settings": lens.settings.model_copy(update=MappingProxyType({"enabled": True})),
+                "revision": lens.revision + 1,
+            }
+        )
+    )
+
+
+async def watchable(lens: Lens, auth: UserAPIKeyAuth) -> WatchSkipped | None:
+    try:
+        await validate_model(lens.settings.model_copy(update=MappingProxyType({"enabled": True})), auth)
+    except HTTPException as exc:
+        return WatchSkipped(id=lens.id, name=lens.settings.name, reason=str(exc.detail))
+    return None
+
+
+@router.post("/watch-all", response_model=WatchAllResult)
+async def watch_all(auth: Auth) -> WatchAllResult:
+    scope: Final = user_scope(auth, write=True)
+    paused: Final = tuple(
+        e for e in await repository().lenses() if can_access(scope, e.scope) and not e.settings.enabled
+    )
+    checks: Final = tuple([(lens, await watchable(lens, auth)) for lens in paused])
+    skipped: Final = tuple(skip for _, skip in checks if skip is not None)
+    ready: Final = tuple(lens for lens, skip in checks if skip is None)
+    updated: Final = tuple([await repository().update(lens.id, watching) for lens in ready])
+    return WatchAllResult(watching=tuple(u.id for u in updated if u is not None), skipped=skipped)
+
+
 @router.put("/{lens_id}", response_model=Lens)
 async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
     lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
@@ -248,6 +288,20 @@ async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
     )
 
 
+def run_window(lens: Lens, body: RunRequest, now: datetime) -> tuple[datetime, datetime] | None:
+    if body.start is not None and body.end is not None:
+        return body.start, body.end
+    if body.lookback_hours is None and body.settings is None:
+        return scheduled_window(lens, now)
+    return None
+
+
+def run_settings(lens: Lens, body: RunRequest) -> LensSettings | None:
+    if body.agent_name is None:
+        return body.settings
+    return (body.settings or lens.settings).model_copy(update=MappingProxyType({"agent_name": body.agent_name}))
+
+
 @router.post("/{lens_id}/runs", response_model=Lens)
 async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
     lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
@@ -257,7 +311,18 @@ async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
     now: Final = datetime.now(timezone.utc)
     job_id: Final = str(uuid4())
     return required(
-        await repository().update(lens_id, lambda e: queue_job(e, now, job_id, body.lookback_hours, body.settings))
+        await repository().update(
+            lens_id,
+            lambda e: queue_job(
+                e,
+                now,
+                job_id,
+                body.lookback_hours,
+                run_settings(e, body),
+                run_window(e, body, now),
+                "manual",
+            ),
+        )
     )
 
 
@@ -425,13 +490,14 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
         job: Final = current_job(e)
         if job is None or job.id != job_id or job.worker_id != worker.id:
             return e
+        renewed: Final = job.model_copy(
+            update=MappingProxyType(
+                {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
+            )
+        )
         return replace_job(
             e,
-            job.model_copy(
-                update=MappingProxyType(
-                    {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
-                )
-            ),
+            renewed if body.stage == job.stage else add_step(renewed, Step(at=now, kind="stage", label=body.stage)),
         )
 
     required(await repository().update(lens_id, renew))
@@ -575,7 +641,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
             update=MappingProxyType(
                 {
                     "findings": (*merged, *(f for f in e.findings if f.id not in merged_ids)),
-                    "last_scan_at": e.last_scan_at if body.error else max(e.last_scan_at or job.end, job.end),
+                    "last_scan_at": next_scan_start(e, job, failed=bool(body.error)),
                     "next_run_at": now + timedelta(minutes=e.settings.interval_minutes),
                 }
             )

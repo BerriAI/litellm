@@ -296,6 +296,8 @@ export function createLensDemoData(now = Date.now()) {
             : [],
         })),
         attempts: 1,
+        steps: [],
+        trigger: "schedule" as const,
         error: "",
         cost: sample.length * 0.012,
         coverage: {
@@ -359,6 +361,7 @@ function demoLensApi(data: LensDemoData): LensApi {
     keyInfo: notInDemo,
     saveLens: readOnly,
     startRun: readOnly,
+    watchAll: async () => ({ watching: [], skipped: [] }),
     cancelRun: readOnly,
     reviewFinding: readOnly,
     registerWorker: readOnly,

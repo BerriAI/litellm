@@ -8968,6 +8968,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/watch-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Watch All */
+        post: operations["watch_all_lens_watch_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/worker/claim": {
         parameters: {
             query?: never;
@@ -10463,6 +10480,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -21342,6 +21364,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -33467,6 +33494,17 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["Step"][];
+            /**
+             * Trigger
+             * @default schedule
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
             /** Worker Id */
             worker_id?: string | null;
         };
@@ -44738,9 +44776,15 @@ export interface components {
         };
         /** RunRequest */
         RunRequest: {
+            /** Agent Name */
+            agent_name?: string | null;
+            /** End */
+            end?: string | null;
             /** Lookback Hours */
             lookback_hours?: number | null;
             settings?: components["schemas"]["LensSettings"] | null;
+            /** Start */
+            start?: string | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -46070,6 +46114,46 @@ export interface components {
              * @default []
              */
             user_ids: string[];
+        };
+        /** Step */
+        Step: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Cost
+             * @default 0
+             */
+            cost: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stage" | "model" | "error";
+            /** Label */
+            label: string;
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Purpose
+             * @default
+             */
+            purpose: string;
         };
         /**
          * SuccessfulKeyUpdate
@@ -49831,6 +49915,25 @@ export interface components {
             type: "wait";
         } & {
             [key: string]: unknown;
+        };
+        /** WatchAllResult */
+        WatchAllResult: {
+            /**
+             * Skipped
+             * @default []
+             */
+            skipped: components["schemas"]["WatchSkipped"][];
+            /** Watching */
+            watching: string[];
+        };
+        /** WatchSkipped */
+        WatchSkipped: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * WebSearchInterceptionSettings
@@ -62772,6 +62875,26 @@ export interface operations {
             };
         };
     };
+    watch_all_lens_watch_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchAllResult"];
+                };
+            };
+        };
+    };
     claim_lens_worker_claim_post: {
         parameters: {
             query?: {
@@ -65047,6 +65170,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -79724,6 +79848,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
