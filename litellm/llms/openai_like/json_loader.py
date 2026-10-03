@@ -3,10 +3,15 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from litellm._logging import verbose_logger
+from litellm.constants import openai_compatible_providers
+
+OPENAI_AUDIO_ENDPOINTS: Final = frozenset({"/v1/audio/transcriptions", "/v1/audio/speech"})
 
 
 class SimpleProviderConfig:
@@ -21,7 +26,7 @@ class SimpleProviderConfig:
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
-        self.supported_endpoints = data.get("supported_endpoints", [])
+        self.supported_endpoints: Final[Sequence[str]] = data.get("supported_endpoints", [])
 
 
 class JSONProviderRegistry:
@@ -79,6 +84,11 @@ class JSONProviderRegistry:
         return "/v1/responses" in provider.supported_endpoints
 
     @classmethod
+    def declared_endpoints(cls) -> Mapping[str, Sequence[str]]:
+        """Endpoints each JSON provider declares for itself"""
+        return MappingProxyType({slug: provider.supported_endpoints for slug, provider in cls._providers.items()})
+
+    @classmethod
     def list_providers(cls) -> list:
         """List all registered provider slugs"""
         return list(cls._providers.keys())
@@ -86,3 +96,29 @@ class JSONProviderRegistry:
 
 # Load on import
 JSONProviderRegistry.load()
+
+
+def derive_openai_audio_transcription_providers(
+    compatible_providers: Sequence[str],
+    declared_endpoints: Mapping[str, Sequence[str]],
+) -> frozenset[str]:
+    """Providers allowed to drive the OpenAI `/v1/audio/*` transport.
+
+    A JSON provider joins only when it declares an audio endpoint for itself, so a chat-only
+    provider can never be sent the caller's OpenAI credentials against its third-party base url.
+    """
+    non_json_providers: Final = frozenset(
+        provider for provider in compatible_providers if provider not in declared_endpoints
+    )
+    declaring_providers: Final = frozenset(
+        slug
+        for slug, endpoints in declared_endpoints.items()
+        if any(endpoint in OPENAI_AUDIO_ENDPOINTS for endpoint in endpoints)
+    )
+    return frozenset({"openai"}) | non_json_providers | declaring_providers
+
+
+OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = derive_openai_audio_transcription_providers(
+    compatible_providers=openai_compatible_providers,
+    declared_endpoints=JSONProviderRegistry.declared_endpoints(),
+)
