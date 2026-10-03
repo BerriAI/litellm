@@ -53,7 +53,7 @@ _SCHEMA_VALIDATION_LIMITER: Final = RunVar[anyio.CapacityLimiter]("mcp_schema_va
 _MAX_VALIDATION_DEPTH: Final = 64
 _MAX_VALIDATION_NODES: Final = 10_000
 _MAX_VALIDATION_CHARACTERS: Final = 1_048_576
-_VALIDATION_TIMEOUT_SECONDS: Final = 5
+_VALIDATION_TIMEOUT_SECONDS: Final = 30
 
 
 def _validation_nodes(value: JsonValue | Mapping[str, JsonValue], depth: int = 0) -> Iterator[tuple[int, int]]:
@@ -91,7 +91,7 @@ def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping
     except JsonSchemaValidationError as exc:
         return f"Invalid arguments: {exc.message}"
     except (SchemaError, Unresolvable, RecursionError, re.error):
-        return "Unable to validate tool arguments against the supplied schema without external references"
+        return "Unable to validate tool arguments against the supplied schema"
     return None
 
 

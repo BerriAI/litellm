@@ -50,6 +50,29 @@ PROXY_AUTHORIZATION_HEADER = "Bearer sk-1234"
 
 
 @pytest.mark.asyncio
+async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+
+    schema: Final = {
+        "type": "object",
+        "$defs": {"amount": {"type": "number", "multipleOf": 0.25}},
+        "properties": {"amount": {"$ref": "#/$defs/amount"}},
+    }
+    original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
+    try:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, {min(original_affinity)})
+        for _ in range(2):
+            results: Final = await asyncio.gather(
+                *(_tool_argument_validation_error(schema, {"amount": 0.75}) for _ in range(8))
+            )
+            assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
+    finally:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, original_affinity)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", (False, True))
 @pytest.mark.parametrize("concurrency", (1, 8))
 async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool, concurrency: int) -> None:
@@ -58,7 +81,10 @@ async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool,
     from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
 
     existing_children: Final = frozenset(child.pid for child in psutil.Process().children())
-    assert await _tool_argument_validation_error({"type": "object"}, {}) is None
+    warm_count: Final = min(concurrency, 4)
+    assert await asyncio.gather(
+        *(_tool_argument_validation_error({"type": "object"}, {}) for _ in range(warm_count))
+    ) == [None] * warm_count
     started: Final = time.monotonic()
     tasks: Final = tuple(
         asyncio.create_task(
@@ -85,7 +111,7 @@ async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool,
             assert all(isinstance(result, asyncio.CancelledError) for result in await group)
         else:
             assert await group == ["Tool argument validation exceeded its time limit"] * concurrency
-        assert time.monotonic() - started < 8
+        assert time.monotonic() - started < 35
         assert all(not worker.is_running() for worker in workers), "Cancelled validation must terminate worker CPU work"
         assert await _tool_argument_validation_error({"type": "object"}, {}) is None
     finally:
