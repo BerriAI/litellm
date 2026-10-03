@@ -252,7 +252,10 @@ async def handle_budget_for_entity(
         # If budget fields are provided, update the existing budget
         if _budget_data:
             await update_budget(
-                budget_obj=BudgetNewRequest(budget_id=existing_budget_id, **_budget_data),
+                budget_obj=BudgetNewRequest(
+                    budget_id=existing_budget_id,
+                    **{k: v for k, v in _budget_data.items() if k != "budget_id"},
+                ),
                 user_api_key_dict=user_api_key_dict,
             )
 

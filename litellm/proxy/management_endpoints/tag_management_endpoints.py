@@ -193,6 +193,8 @@ async def _require_tag_create_permission(
         raise HTTPException(status_code=403, detail=f"Caller does not administer team {tag.team_id}")
     if tag.models:
         raise HTTPException(status_code=403, detail="Only proxy admins can attach deployments to a tag")
+    if tag.budget_id is not None:
+        raise HTTPException(status_code=403, detail="Only proxy admins can attach an existing budget to a tag")
 
 
 async def _require_no_foreign_tag_usage(
@@ -238,6 +240,8 @@ async def _require_tag_update_permission(
             status_code=403,
             detail="Only proxy admins can change a tag's model associations",
         )
+    if tag.budget_id is not None and tag.budget_id != existing_tag.budget_id:
+        raise HTTPException(status_code=403, detail="Only proxy admins can attach an existing budget to a tag")
     if "team_id" in tag.model_fields_set and tag.team_id != existing_tag.team_id:
         raise HTTPException(status_code=403, detail="Team admins cannot change tag team ownership")
 

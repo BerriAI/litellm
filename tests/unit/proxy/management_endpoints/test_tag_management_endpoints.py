@@ -1656,6 +1656,12 @@ class FakeBudgetTable:
         self.created.append(data)
         return SimpleNamespace(budget_id=f"budget-{len(self.created)}", **data)
 
+    async def update(self, **kwargs: object) -> SimpleNamespace:
+        inspect.signature(LiteLLM_BudgetTableActions.update).bind(None, **kwargs)
+        data = dict(kwargs["data"])
+        data.setdefault("budget_id", kwargs["where"]["budget_id"])
+        return SimpleNamespace(**data)
+
 
 class _EmptyGroupBy:
     def __init__(self, rows=()):
@@ -2514,3 +2520,63 @@ async def test_new_tag_forbidden_caller_skips_foreign_usage_check():
         assert response.status_code == 403, response.text
         assert "foreign-tag" not in fake_db.tag_rows
         fake_db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_team_admin_cannot_attach_a_foreign_budget_id_on_create():
+    fake_db = _team_a_db()
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "borrowed-budget-tag", "team_id": "team-a", "budget_id": "other-entity-budget"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 403, response.text
+        assert "borrowed-budget-tag" not in fake_db.tag_rows
+        assert fake_db.litellm_budgettable.created == []
+
+
+@pytest.mark.asyncio
+async def test_team_admin_cannot_swap_budget_id_on_update():
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(tag_name="team-tag", team_id="team-a", budget_id="own-budget")
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", "budget_id": "other-entity-budget"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 403, response.text
+        assert _persisted_tag_row(fake_db, "team-tag")["budget_id"] == "own-budget"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "update_body",
+    [{"budget_id": "own-budget"}, {"max_budget": 5.0}],
+    ids=["same-budget-id", "budget-fields-only"],
+)
+async def test_team_admin_can_edit_their_own_budget(update_body):
+    fake_db = _team_a_db()
+    fake_db.tag_rows["team-tag"] = _new_tag_row(tag_name="team-tag", team_id="team-a", budget_id="own-budget")
+    with _tag_ownership_gateway(fake_db, _team_admin_auth()):
+        response = client.post(
+            "/tag/update",
+            json={"name": "team-tag", **update_body},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert _persisted_tag_row(fake_db, "team-tag")["budget_id"] == "own-budget"
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_attaches_budget_id_on_create():
+    fake_db = FakeTagOwnershipDb(team_ids={"team-a"})
+    with _tag_ownership_gateway(fake_db, _proxy_admin_auth()):
+        response = client.post(
+            "/tag/new",
+            json={"name": "admin-budget-tag", "team_id": "team-a", "budget_id": "shared-budget"},
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert _persisted_tag_row(fake_db, "admin-budget-tag")["budget_id"] == "shared-budget"
