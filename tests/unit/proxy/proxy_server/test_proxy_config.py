@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
+from litellm.types.utils import CredentialItem
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -1864,6 +1866,47 @@ def test_ProxyConfig_load_credential_list_invalid_entry_raises():
     pc = ProxyConfig()
     with pytest.raises(ValidationError):
         pc.load_credential_list({"credential_list": [{"missing_required": True}]})
+
+
+def _credential(name: str) -> CredentialItem:
+    return CredentialItem(credential_name=name, credential_values={"api_key": f"key-{name}"}, credential_info={})
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_delete_credentials_drops_only_names_missing_from_db_and_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pc = ProxyConfig()
+    loaded = [_credential("db-kept"), _credential("stale"), _credential("from-config")]
+    monkeypatch.setattr(litellm, "credential_list", loaded)
+    monkeypatch.setattr(
+        pc, "get_config", AsyncMock(return_value={"credential_list": [_credential("from-config").model_dump()]})
+    )
+
+    await pc.delete_credentials([_credential("db-kept")])
+
+    assert litellm.credential_list is loaded
+    assert [cred.credential_name for cred in loaded] == ["db-kept", "from-config"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_delete_credentials_scales_linearly_with_credential_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n = 20_000
+    pc = ProxyConfig()
+    monkeypatch.setattr(litellm, "credential_list", [_credential(f"cred-{i}") for i in range(n)])
+    monkeypatch.setattr(pc, "get_config", AsyncMock(return_value={}))
+    db_credentials = [cred for cred in litellm.credential_list if cred.credential_name != "cred-7"]
+
+    started = time.perf_counter()
+    await pc.delete_credentials(db_credentials)
+    elapsed = time.perf_counter() - started
+
+    assert litellm.credential_list == db_credentials
+    assert elapsed < 2.0, (
+        f"delete_credentials over {n} credentials took {elapsed:.1f}s; the per-reload sync must stay linear"
+    )
 
 
 # ---------------------------------------------------------------------------
