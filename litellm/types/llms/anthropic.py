@@ -513,7 +513,7 @@ class ToolUseBlock(TypedDict):
     caller: ToolCaller | None
 
 
-class TextBlock(TypedDict):
+class TextBlock(TypedDict, total=False):
     text: str
 
     type: Literal["text"]
