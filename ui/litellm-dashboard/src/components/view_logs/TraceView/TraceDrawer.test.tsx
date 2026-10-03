@@ -130,6 +130,8 @@ describe("RunView", () => {
     const pane = await screen.findByTestId("detail-pane");
     const root = rootSpanId(research);
     expect(pane).toHaveAttribute("data-row-id", root);
+    await user.keyboard("{Meta>}j{/Meta}{Control>}j{/Control}");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
     await user.keyboard("j");
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     await user.keyboard("k");

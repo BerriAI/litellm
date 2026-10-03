@@ -34,6 +34,7 @@ import {
   traceAgentNames,
   traceDisplayName,
 } from "./traceUtils";
+import { ignoresLetterShortcut } from "../letterShortcut";
 
 /** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
 export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
@@ -185,11 +186,10 @@ const SPAN_KEYS = { down: ["j", "J", "ArrowDown"], up: ["k", "K", "ArrowUp"] } a
 const EMBEDDED_SPAN_KEYS = { down: ["ArrowDown"], up: ["ArrowUp"] } as const;
 
 function ignoreStepKey(event: KeyboardEvent): boolean {
-  const modified = event.metaKey || event.ctrlKey || event.altKey;
   const control = (event.target as HTMLElement | null)?.closest(
     "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='tablist'], [role='menu'], [role='separator']",
   );
-  return event.defaultPrevented || modified || Boolean(control);
+  return event.defaultPrevented || ignoresLetterShortcut(event) || Boolean(control);
 }
 
 type TraceView = "steps" | "conversation";
