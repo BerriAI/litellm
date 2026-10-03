@@ -12,10 +12,10 @@ from litellm.proxy.roi_calculator.observed_workspace import (
 )
 from litellm.proxy.roi_calculator.settings import StoredConnection
 from litellm.types.roi_calculator import ROIBranchSpend, ROISettings
-from litellm.types.roi_observed import ObservedData, ObservedPeriodData, ObservedPull, ObservedWindow
+from litellm.types.roi_observed import ObservedData, ObservedIssue, ObservedPeriodData, ObservedPull, ObservedWindow
 
 
-def _source(settings: ROISettings) -> ObservedData:
+def _source(settings: ROISettings, issues: tuple[ObservedIssue, ...] | None = ()) -> ObservedData:
     host: Final = "github.com" if settings.source_provider == "github" else "gitlab.com"
     period: Final = ObservedPeriodData(
         window=ObservedWindow(start=date(2026, 9, 1), end=date(2026, 9, 28)),
@@ -33,7 +33,7 @@ def _source(settings: ROISettings) -> ObservedData:
             )
             for repo in settings.repos
         ),
-        issues=(),
+        issues=issues,
         spend=({"date": "2026-09-10", "user_id": "ari", "email": "ari@example.test", "spend": 60.0, "requests": 3},),
         branch_spend=tuple(
             ROIBranchSpend(repo=f"{host}/{repo}", branch="feature/one", spend=2, requests=1) for repo in settings.repos
@@ -92,6 +92,37 @@ def test_empty_repository_is_a_successful_zero_activity_report() -> None:
     assert report.periods.current.new_bug_labeled_issues == 0
     assert report.periods.current.median_merge_hours is None
     assert report.people == () and report.pulls.current == ()
+
+
+@pytest.mark.parametrize(
+    ("issues", "expected"),
+    (
+        (None, None),
+        ((), 0),
+        (
+            (
+                ObservedIssue(
+                    repo="org/service",
+                    number=1,
+                    created_at=datetime(2026, 9, 10, tzinfo=timezone.utc),
+                    labels=("bug", "regression"),
+                ),
+            ),
+            1,
+        ),
+    ),
+)
+def test_disabled_tracking_does_not_hide_other_connections_quality_counts(
+    issues: tuple[ObservedIssue, ...] | None, expected: int | None
+) -> None:
+    github: Final = _source(ROISettings(repos=("org/docs",)), issues=None)
+    gitlab: Final = _source(ROISettings(source_provider="gitlab", repos=("org/service",)), issues=issues)
+    report: Final = summarize_workspace(combine_observed((github, gitlab), ("org/docs", "org/service")), ())
+    assert tuple(
+        (period.new_bug_labeled_issues, period.new_regression_labeled_issues)
+        for period in (report.periods.current, report.periods.previous, report.periods.last_year)
+    ) == ((expected, expected),) * 3
+    assert report.periods.current.merged_prs == 2
 
 
 def test_duplicate_connection_cannot_double_count_a_merged_change() -> None:

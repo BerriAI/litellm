@@ -65,7 +65,7 @@ def combine_observed(sources: tuple[ObservedData, ...], repos: tuple[str, ...]) 
             window=values[0].window,
             pulls=tuple(sorted(pulls, key=lambda pull: (pull.merged_at, pull.url), reverse=True)),
             issues=None
-            if any(value.issues is None for value in values)
+            if all(value.issues is None for value in values)
             else tuple(chain.from_iterable(value.issues or () for value in values)),
             spend=values[0].spend,
             branch_spend=None

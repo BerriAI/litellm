@@ -114,7 +114,7 @@ async def collect_observed(
         pulls: Final = tuple(chain.from_iterable(result[0] for result in results))
         issues: Final = (
             None
-            if any(result[1] is None for result in results)
+            if results and all(result[1] is None for result in results)
             else tuple(chain.from_iterable(result[1] or () for result in results))
         )
         branches: Final = tuple(

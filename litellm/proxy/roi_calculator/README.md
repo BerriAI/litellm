@@ -30,6 +30,8 @@ Use **Link accounts** to associate several current or historical usernames with 
 
 Agent-authored changes count for a person only when the supported agent metadata explicitly names a requester. Repository issue counts and revert titles are quality signals, not an individual defect score
 
+Bug and regression counts combine repositories with issue tracking enabled. They remain unavailable when none of the selected repositories has issue tracking enabled
+
 ## Sync behavior
 
 The default refresh interval is daily and applies to every connection in the workspace. Adding or editing a connection preserves it unless `update_interval_minutes` is supplied. The observed settings API accepts `update_interval_minutes: 0` for manual updates. A cancelled or failed sync preserves the last complete report

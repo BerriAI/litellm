@@ -652,6 +652,57 @@ async def test_http_sync_combines_providers_retains_period_and_recovers_invalid_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("github", "gitlab"))
+async def test_host_whitespace_preserves_app_credentials_and_account_matches(
+    repository: ConfigRepository, provider: str
+) -> None:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.roi_observed_endpoints import get_observed_transport, router
+    from litellm.proxy.roi_calculator.settings import connection_id, get_roi_config_repository
+
+    config: Final = _config(provider)
+    granted: Final = await save_grant(
+        repository,
+        config,
+        TokenGrant(access_token=SecretStr("test-access"), refresh_token=SecretStr("test-refresh"), expires_in=3600),
+    )
+    stored: Final = await load_stored_settings(repository)
+    before: Final = granted.model_copy(
+        update={"repos": ("org/service",), "identity_map": {"ari": "ari@example.test"}, "ignored_logins": ("bea",)}
+    )
+    await save_settings(
+        repository, before, stored.github_token, stored.estimator_key, stored.gitlab_token, revision=stored.revision
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("Authorization") == "Bearer test-access"
+        if "/repos/" in request.url.path:
+            return httpx.Response(200, json={"full_name": "org/service"})
+        if request.url.path.endswith("/merge_requests"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json={"id": 1, "path_with_namespace": "org/service"})
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_roi_config_repository] = lambda: repository
+    app.dependency_overrides[get_observed_transport] = lambda: httpx.MockTransport(respond)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test") as client:
+        response: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "connection_id": connection_id(provider, config.api_url),
+                "source_provider": provider,
+                "api_url": f"  {config.api_url}/  ",
+                "repos": ["org/service"],
+            },
+        )
+        assert response.status_code == 200, response.text
+    assert (await load_settings(repository)) == before
+
+
+@pytest.mark.asyncio
 async def test_connection_edits_replace_only_the_selected_host_and_keep_the_workspace_schedule(
     repository: ConfigRepository,
 ) -> None:

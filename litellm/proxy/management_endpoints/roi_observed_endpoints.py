@@ -165,10 +165,7 @@ async def save_observed_settings(
     saved_connection: Final = next((entry for entry in stored_connections(refreshed) if entry.id == selected_id), None)
     stored: Final = select_connection(refreshed, saved_connection) if saved_connection else refreshed
     current: Final = await load_settings(repository, stored)
-    changed: Final = (patch.source_provider, patch.api_url.rstrip("/")) != (
-        current.source_provider,
-        current.source_api_url,
-    )
+    changed: Final = target_id != connection_id(current.source_provider, current.source_api_url)
     existing_token: Final = current.gitlab_token if patch.source_provider == "gitlab" else current.github_token
     token: Final = patch.token if patch.token is not None else "" if changed else existing_token.get_secret_value()
     updates: Final[Mapping[str, object]] = {
