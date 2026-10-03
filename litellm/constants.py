@@ -1042,7 +1042,7 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
     "prism",
     "sail",
-    "alpha",  # Alpha.sh - JSON-configured provider
+    "alpha",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
