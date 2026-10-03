@@ -126,6 +126,22 @@ export function analysisProgress(job: Job) {
   };
 }
 
+export function analysisStages(job: Job): { done: number; total: number }[] {
+  const {
+    screened = 0,
+    selected = 0,
+    grouped_batches = 0,
+    grouping_batches = 0,
+    investigated = 0,
+    candidates = 0,
+  } = job.coverage ?? {};
+  return [
+    { done: screened, total: selected },
+    { done: grouped_batches, total: grouping_batches },
+    { done: investigated, total: candidates },
+  ];
+}
+
 export interface ProgressSample {
   at: number;
   step: number;
@@ -158,15 +174,34 @@ export function analysisPace(samples: readonly ProgressSample[], now: number) {
   return { perMinute, secondsLeft };
 }
 
+export function stageDurations(samples: readonly ProgressSample[], createdAt: string, now: number): (number | null)[] {
+  const current = samples.at(-1)?.step ?? -1;
+  const starts = [0, 1, 2].map((stage) => {
+    if (stage === 0) return Date.parse(createdAt);
+    const entered = samples.findIndex(
+      (sample, index) => index > 0 && sample.step >= stage && samples[index - 1].step < stage,
+    );
+    return entered < 0 ? null : samples[entered].at;
+  });
+  return starts.map((start, stage) => {
+    if (start === null || stage > current) return null;
+    const end = stage === current ? now : starts[stage + 1];
+    return end === null ? null : Math.max(0, Math.floor((end - start) / 1000));
+  });
+}
+
 export function remainingLabel(seconds: number | null): string {
-  if (seconds === null) return "Estimating time left";
-  if (seconds < 60) return "Less than a minute left";
-  if (seconds < 3600) return `About ${Math.ceil(seconds / 60)} min left`;
-  return `About ${Math.floor(seconds / 3600)}h ${Math.ceil((seconds % 3600) / 60)}m left`;
+  if (seconds === null) return "estimating";
+  if (seconds < 60) return "<1m";
+  if (seconds < 3600) return `~${Math.ceil(seconds / 60)}m`;
+  return `~${Math.floor(seconds / 3600)}h ${Math.ceil((seconds % 3600) / 60)}m`;
 }
 
 export function analysisElapsed(createdAt: string, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000));
+  return durationText(Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000)));
+}
+
+export function durationText(seconds: number): string {
   if (!Number.isFinite(seconds)) return "0s";
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
