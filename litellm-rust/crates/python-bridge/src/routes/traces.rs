@@ -10,6 +10,8 @@ use pyo3::{
     types::PyBytes,
 };
 
+pyo3::import_exception!(litellm.rust_bridge.trace.errors, TraceChanged);
+
 #[derive(Message)]
 struct OtlpErrorStatus {
     #[prost(int32, tag = "1")]
@@ -38,11 +40,11 @@ fn map_error_ref(error: &Error) -> PyErr {
         Error::Decode(litellm_traces::Error::TooLarge)
         | Error::InsertTooLarge
         | Error::ReadTooLarge => PyOverflowError::new_err(error.to_string()),
+        Error::TraceChanged => TraceChanged::new_err(error.to_string()),
         Error::InvalidRow
         | Error::InvalidTable
         | Error::InvalidCursor(_)
         | Error::AmbiguousTrace
-        | Error::TraceChanged
         | Error::Decode(_)
         | Error::InvalidSchema
         | Error::InvalidQuery
@@ -484,7 +486,7 @@ mod tests {
     #[case::invalid_export(Error::Decode(litellm_traces::Error::InvalidPayload), "ValueError")]
     #[case::cursor(Error::InvalidCursor("trace"), "ValueError")]
     #[case::ambiguous(Error::AmbiguousTrace, "ValueError")]
-    #[case::changed_snapshot(Error::TraceChanged, "ValueError")]
+    #[case::changed_snapshot(Error::TraceChanged, "TraceChanged")]
     #[case::read_budget(Error::ReadTooLarge, "OverflowError")]
     fn trace_read_and_ingest_failures_preserve_public_exception_types(
         #[case] error: Error,
