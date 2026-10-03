@@ -925,33 +925,36 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     ``supports_prompt_caching`` must not receive them. An explicit
     ``supports_prompt_cache_breakpoint`` on the entry wins over that flag: a model can price
     cached tokens through implicit caching yet reject the marker on Converse ("This model
-    doesn't support the cachePoint field", Kimi K3). A model absent from the map
-    (an application inference profile ARN, a model newer than the map) keeps emitting
-    so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
-    is not reusable here: it returns False for unmapped models, the opposite polarity.
+    doesn't support the cachePoint field", Kimi K3). The router registers a deployment's
+    ``model_info`` under ``bedrock/<model>``, so that flag set there covers an application
+    inference profile ARN or a model newer than the map, while only the map decides whether
+    a model is known: absent a map entry the model keeps emitting so existing caching setups
+    never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
+    it returns False for unmapped models, the opposite polarity.
     """
     if model is None:
         return True
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
-    entries: Final = tuple(
+    deployment_entry: Final = litellm.model_cost.get(f"bedrock/{model}")
+    map_entries: Final = tuple(
         entry
         for candidate in (model, get_bedrock_base_model(model))
         if (entry := litellm.model_cost.get(candidate)) is not None
     )
-    if not entries:
-        return True
     explicit_marker_support: Final = next(
         (
             entry.get("supports_prompt_cache_breakpoint") is True
-            for entry in entries
-            if entry.get("supports_prompt_cache_breakpoint") is not None
+            for entry in (deployment_entry, *map_entries)
+            if entry is not None and entry.get("supports_prompt_cache_breakpoint") is not None
         ),
         None,
     )
     if explicit_marker_support is not None:
         return explicit_marker_support
-    return any(entry.get("supports_prompt_caching") is True for entry in entries)
+    if not map_entries:
+        return True
+    return any(entry.get("supports_prompt_caching") is True for entry in map_entries)
 
 
 def bedrock_supports_tool_search(model: str) -> bool:

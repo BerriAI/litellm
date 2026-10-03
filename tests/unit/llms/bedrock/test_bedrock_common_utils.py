@@ -521,6 +521,33 @@ def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points
     assert litellm.model_cost[model]["cache_read_input_token_cost"] > 0
 
 
+def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_model_cost_map):
+    """An application inference profile ARN is absent from the cost map, so the gate keeps emitting
+    for it. The router registers each deployment's ``model_info`` under ``bedrock/<model>``, which is
+    how an admin turns cache points off for a profile pointing at a model that rejects them."""
+    from litellm import Router
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    flagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/flagged"
+    unflagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unflagged"
+    Router(
+        model_list=[
+            {
+                "model_name": "kimi-k3-profile",
+                "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
+            {
+                "model_name": "kimi-k3-profile-unflagged",
+                "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+        ]
+    )
+
+    assert bedrock_model_accepts_cache_points(flagged_arn) is False
+    assert bedrock_model_accepts_cache_points(unflagged_arn) is True
+
+
 def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
     from litellm.llms.bedrock.common_utils import merge_bedrock_aws_request_params
 
