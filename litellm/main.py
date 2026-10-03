@@ -7330,9 +7330,7 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-                litellm_params={
-                    "ssl_verify": kwargs.pop("ssl_verify", None)
-                },
+                litellm_params={"ssl_verify": kwargs.pop("ssl_verify", None)},
             )
         elif custom_llm_provider == "perplexity":
             response = base_llm_http_handler.embedding(
