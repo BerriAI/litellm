@@ -1576,13 +1576,6 @@ def test_guardrail_provider_failure_status_is_still_mapped():
 
 
 def test_exception_mapping_vllm_nested_status_code():
-    """
-    Test that when an exception wraps a status_code inside a response object
-    (or as a string), we safely extract it and return the correct mapped error
-    (e.g., 500 InternalServerError) rather than swallowing it or returning a
-    generic APIConnectionError.
-    """
-
     class MockResponse:
         def __init__(self, code):
             self.status_code = code
@@ -1592,7 +1585,6 @@ def test_exception_mapping_vllm_nested_status_code():
             self.response = response
             super().__init__("Mock HTTP Error")
 
-    # 1. Test with integer status code tucked in response
     crash_error = RawHTTPError(MockResponse(500))
     with pytest.raises(litellm.InternalServerError) as exc_info:
         exception_type(
@@ -1604,7 +1596,6 @@ def test_exception_mapping_vllm_nested_status_code():
         )
     assert exc_info.value.status_code == 500
 
-    # 2. Test with string status code tucked in response
     weird_error = RawHTTPError(MockResponse("500"))
     with pytest.raises(litellm.InternalServerError) as exc_info:
         exception_type(
