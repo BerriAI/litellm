@@ -102,7 +102,7 @@ function LensContent({
               onDemo={activeTab === "traces" ? openDemo : undefined}
             />
           </TabsContent>
-          <TabsContent value="investigations" keepMounted={!!demo}>
+          <TabsContent value="investigations" keepMounted={!!demo} className="flex min-h-0 flex-col">
             {demo || isProxyAdminTierRole(userRole) ? (
               <InvestigationsView
                 accessToken={accessToken}
