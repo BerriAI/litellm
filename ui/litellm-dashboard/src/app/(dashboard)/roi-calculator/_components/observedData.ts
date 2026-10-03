@@ -189,7 +189,7 @@ export function weeklyMerges(snapshot: ObservedSnapshot, period: Period) {
 
 export function syncMessage(status: ObservedStatus, report: ObservedSnapshot | null) {
   if (status.running) return status.total ? `${status.stage} · ${status.done} / ${status.total}` : status.stage;
-  return report ? `Updated ${new Date(report.captured_at).toLocaleString()}` : "Ready to sync";
+  return report ? `Updated ${new Date(report.captured_at).toLocaleString()}` : "";
 }
 
 export function recordedBranches(snapshot: ObservedSnapshot) {

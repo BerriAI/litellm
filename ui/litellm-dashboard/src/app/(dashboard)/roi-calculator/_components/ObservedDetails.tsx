@@ -179,7 +179,7 @@ export function PersonDetails({
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <h3 className="font-medium">Merged {terms.lower}</h3>
+          <h3 className="font-medium">Merged {terms.plural}</h3>
           <div className="flex gap-1 rounded-lg bg-muted p-1">
             <Button size="sm" variant={period === "current" ? "outline" : "ghost"} onClick={() => setPeriod("current")}>
               Current

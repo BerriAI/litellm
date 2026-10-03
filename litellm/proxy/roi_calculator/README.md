@@ -6,6 +6,8 @@ The calculator combines repository activity with spend recorded by the gateway. 
 
 ## Connect repositories
 
+Use **Preview sample report** beside the title to explore the dashboard before connecting repositories. Sample periods, engineer details, quality signals, and branch spend work without changing your connections or live report. **Exit demo** returns to your report or setup
+
 Open `/ui/roi-calculator/`, choose GitHub or GitLab, then connect with an app or access token. Select several repositories and start the sync. Use **Add connection** to keep both providers connected. Each provider and API host retains its credentials, repositories, and identity mappings, and the report combines their activity while counting each person’s gateway spend once. Public repositories also accept an empty token, subject to the provider's anonymous API limits
 
 For GitHub tokens, grant read access to metadata, pull requests and issues. GitLab tokens require `read_api`. Self-hosted instances use their API URL, for example `https://git.example.com/api/v4`

@@ -56,6 +56,95 @@ afterEach(() => {
 });
 
 describe("observed ROI dashboard", () => {
+  it("previews every sample view before setup, changes sample periods without writes, and exits back to setup", async () => {
+    const requests = vi.fn(async (input: string, _init: RequestInit) => {
+      const path = new URL(input, "http://localhost").pathname;
+      const disconnected = { ...settings, ready: false, repos: [], has_token: false };
+      if (path.endsWith("/settings")) return Response.json(disconnected);
+      if (path.endsWith("/report")) return Response.json({ report: null });
+      if (path.endsWith("/sync")) return Response.json(idle);
+      throw new Error(path);
+    });
+    vi.stubGlobal("fetch", requests);
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    expect(await screen.findByRole("heading", { name: "Connect your repositories" })).toBeInTheDocument();
+    expect(screen.queryByText("Ready to sync")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Preview sample report" }));
+    expect(screen.getByRole("status")).toHaveTextContent("You’re viewing demo data");
+    expect(screen.getByRole("tab", { name: "Engineers 3", selected: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connections" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Link accounts" })).not.toBeInTheDocument();
+    expect(window.location.search).toBe("?demo=1");
+    await user.click(screen.getByRole("button", { name: "View Alex Rivera's merged changes" }));
+    expect(await screen.findByRole("dialog", { name: "Alex Rivera" })).toHaveTextContent("alex-demo@example.com");
+    expect(screen.getByRole("heading", { name: "Merged changes" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit linked accounts" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(screen.getByRole("tab", { name: "Merged changes" }));
+    expect(screen.getByRole("img", { name: /Merged changes by week/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Quality" }));
+    expect(screen.getByText("New regression-labeled issues")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Branch spend" }));
+    expect(screen.getAllByText(/feature\/sample-/).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("combobox", { name: "Reporting period" }));
+    await user.click(await screen.findByRole("option", { name: "Last 7 days" }));
+    expect(screen.getByRole("combobox", { name: "Reporting period" })).toHaveTextContent("Last 7 days");
+    await user.click(screen.getByRole("combobox", { name: "Comparison period" }));
+    await user.click(await screen.findByRole("option", { name: "vs. same period last year" }));
+    expect(screen.getByRole("combobox", { name: "Comparison period" })).toHaveTextContent("vs. same period last year");
+    await user.click(screen.getByRole("button", { name: "Exit demo" }));
+    expect(screen.getByRole("heading", { name: "Connect your repositories" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect GitHub or GitLab" })).toBeEnabled();
+    expect(window.location.search).toBe("");
+    expect(requests.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
+  });
+
+  it("keeps live sync and its report intact when entering and exiting the demo", async () => {
+    const requests = vi.fn(async (input: string, _init: RequestInit) => {
+      const path = new URL(input, "http://localhost").pathname;
+      if (path.endsWith("/settings")) return Response.json(settings);
+      if (path.endsWith("/report")) return Response.json({ report });
+      if (path.endsWith("/sync")) return Response.json({ ...idle, running: true, stage: "Reading changes" });
+      throw new Error(path);
+    });
+    vi.stubGlobal("fetch", requests);
+    window.history.replaceState(null, "", "/roi-calculator/?from=review#report");
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    expect(await screen.findByRole("button", { name: "Cancel sync" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Preview sample report" }));
+    expect(screen.queryByRole("button", { name: "Cancel sync" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "2 repositories" })).toBeInTheDocument();
+    expect(window.location.search).toBe("?from=review&demo=1");
+    await user.click(screen.getByRole("button", { name: "Exit demo" }));
+    expect(screen.getByRole("button", { name: "Cancel sync" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "1 repository" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Merge requests", selected: true })).toBeInTheDocument();
+    expect(window.location.search).toBe("?from=review");
+    expect(window.location.hash).toBe("#report");
+    expect(requests.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
+  });
+
+  it.each(["failed", "pending"])("opens a demo URL even when live requests are %s", async (state) => {
+    window.history.replaceState(null, "", "/roi-calculator/?demo=1");
+    const pending = Promise.withResolvers<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => (state === "failed" ? Promise.reject(new Error("Live data unavailable")) : pending.promise)),
+    );
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" isViewOnly />);
+    expect(screen.getByRole("status")).toHaveTextContent("You’re viewing demo data");
+    expect(screen.getByText("Alex Rivera")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Exit demo" }));
+    expect(screen.queryByText("Alex Rivera")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
+    expect(window.location.search).toBe("");
+    if (state === "failed") expect(await screen.findByRole("alert")).toHaveTextContent("Live data unavailable");
+  });
+
   it("retries failures, keeps the report during cancellation, and refreshes after completion", async () => {
     let status: ObservedStatus = { ...idle, phase: "error", error: "Provider temporarily unavailable" };
     let completeOnPoll = false;
