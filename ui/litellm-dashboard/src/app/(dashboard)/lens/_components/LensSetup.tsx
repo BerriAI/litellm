@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, X } from "lucide-react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -252,7 +252,11 @@ export function LensSetup({
                   placeholder="Answer the customer's question using verified sources and explain when information is missing."
                 />
               </label>
-              <WatchPicker selected={watching} onChange={setWatching} />
+              <WatchPicker
+                selected={watching}
+                onChange={setWatching}
+                onAddCustom={() => setQuestions([...questions, newCheck()])}
+              />
               <fieldset className="space-y-2">
                 <legend className="sr-only">Custom checks</legend>
                 {questions.map((check, index) => (
@@ -280,15 +284,6 @@ export function LensSetup({
                     </Button>
                   </div>
                 ))}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-auto gap-2 px-0 hover:bg-transparent"
-                  onClick={() => setQuestions([...questions, newCheck()])}
-                >
-                  <Plus className="size-3.5" /> custom
-                  <span className="font-normal text-muted-foreground">describe anything else in plain English</span>
-                </Button>
               </fieldset>
             </>
           )}
