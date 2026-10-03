@@ -173,6 +173,35 @@ def test_init_oracle_router_deployment_registers_the_router_and_finalize_is_idem
         )
 
 
+def test_upserting_an_oracle_deployment_builds_its_router_once_and_rebuilds_it_when_its_config_changes():
+    router = Router(model_list=_model_list()[1:])  # the two plain deployments, no oracle router yet
+    deployment = Deployment(
+        model_name="late-oracle",
+        litellm_params=LiteLLM_Params(
+            model="auto_router/oracle_router", oracle_router_config={"available_models": ["smart", "fast"]}
+        ),
+        model_info={"id": "oracle-1"},
+    )
+    router.upsert_deployment(deployment=deployment)  # a new id: nothing was on the router before
+    oracle = _oracle(router, "late-oracle")
+    assert oracle.models == ("smart", "fast")
+    router.upsert_deployment(deployment=deployment)  # unchanged: the router and its learned state survive
+    assert _oracle(router, "late-oracle") is oracle
+    assert len([hook for hook in _oracle_hooks() if hook.oracle_router is oracle]) == 1
+    router.upsert_deployment(
+        deployment=Deployment(
+            model_name="late-oracle",
+            litellm_params=LiteLLM_Params(
+                model="auto_router/oracle_router", oracle_router_config={"available_models": ["fast"]}
+            ),
+            model_info={"id": "oracle-1"},
+        )
+    )
+    rebuilt = _oracle(router, "late-oracle")
+    assert rebuilt is not oracle and rebuilt.models == ("fast",)
+    assert [hook.oracle_router for hook in _oracle_hooks() if hook.oracle_router in (oracle, rebuilt)] == [rebuilt]
+
+
 def test_strategy_router_dependencies_cover_available_models():
     from litellm.router_utils.auto_router_model_naming import strategy_router_dependencies
 
