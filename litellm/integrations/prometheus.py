@@ -249,7 +249,7 @@ class _LabeledMetric:
                     metric=self._metric, metric_name=self._metric_name, label_values=kept_values, limits=self._limits
                 )
             case _:
-                assert_never(self._tracker)
+                return assert_never(self._tracker)
 
     def _kept_values(self, values: tuple[object, ...]) -> tuple[str, ...]:
         return tuple(
