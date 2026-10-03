@@ -249,6 +249,13 @@ def search(
 
         verbose_logger.debug("Search call - provider: %s", search_provider)
 
+        auth_param_names: Final[frozenset[str]] = frozenset(
+            name for name in getattr(search_provider_config, "aws_authentication_params", ()) if isinstance(name, str)
+        )
+        auth_params: Final[dict[str, object]] = {  # mutable-ok: isolated provider signing params
+            key: kwargs.pop(key) for key in tuple(kwargs) if key in auth_param_names
+        }
+
         # Build optional_params from explicit parameters
         optional_params: Final = _build_search_optional_params(
             max_results=max_results,
@@ -306,6 +313,7 @@ def search(
             asearch=_is_async,
             headers=headers,
             provider_config=search_provider_config,
+            auth_params=auth_params,
         )
 
         return response
