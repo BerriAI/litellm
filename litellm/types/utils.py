@@ -211,6 +211,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
+    supports_regex_lookaround: ReadOnly[bool | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -1539,9 +1540,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
             function_call = FunctionCall(**function_call)
 
         if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
-            coerced_tool_calls: list[
-                ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall
-            ] = []  # mutable-ok: public Delta.tool_calls contract is a list
+            coerced_tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] = []
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
@@ -3846,10 +3845,13 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
+
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
+    - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
 )
 
 
@@ -3943,14 +3945,14 @@ def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     )
 
 
-agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # mutable-ok: public type stays a list
+agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)
 
 bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
-all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it  # mutable-ok: callers concat
+all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,

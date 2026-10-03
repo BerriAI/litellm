@@ -24,15 +24,23 @@ from e2e_http import assert_client_error
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from openai.types.responses import (
+    FunctionShellToolParam,
     FunctionToolParam,
     Response,
+    ResponseCompletedEvent,
+    ResponseFormatTextJSONSchemaConfigParam,
+    ResponseFunctionShellToolCall,
+    ResponseFunctionShellToolCallOutput,
     ResponseFunctionToolCall,
+    ResponseInputItemParam,
     ResponseInputParam,
+    ResponseOutputItemDoneEvent,
+    ResponseReasoningItem,
 )
 from provider_edge import LiveEdge, start_provider_edge
 from provider_edge_bedrock import bedrock_signer
 from proxy_client import ProxyClient
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
@@ -464,3 +472,125 @@ class TestResponses:
             json=_OptionalResponsesBody(model=model, input=""),
         )
         assert_client_error(result, "responses empty input")
+
+
+REASONING_BACKEND: Final = "openai/gpt-5.4-mini"
+SHELL_BACKEND: Final = "openai/gpt-5.5"
+TOOL_DATE: Final = "2025-01-15"
+
+GET_TODAY_TOOL: FunctionToolParam = {
+    "type": "function",
+    "name": "get_today",
+    "description": "Return today's date",
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    "strict": True,
+}
+
+TODAY_REPORT_FORMAT: ResponseFormatTextJSONSchemaConfigParam = {
+    "type": "json_schema",
+    "name": "today_report",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {"today": {"type": "string"}, "number_of_r": {"type": "string"}},
+        "required": ["today", "number_of_r"],
+        "additionalProperties": False,
+    },
+}
+
+SHELL_TOOL: FunctionShellToolParam = {"type": "shell", "environment": {"type": "container_auto"}}
+
+_INPUT_ITEMS: Final = TypeAdapter(list[ResponseInputItemParam])
+
+
+class TodayReport(BaseModel):
+    today: str
+    number_of_r: str
+
+
+class TestResponsesOpenAIHostedFeatures:
+    def test_reasoning_items_replay_into_structured_output_after_tool_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(
+            proxy,
+            resources,
+            LiteLLMParamsBody(model=REASONING_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
+            prefix="e2e-responses-reasoning",
+        )
+        client = sdk.openai(resources.key())
+        question: ResponseInputItemParam = {
+            "role": "user",
+            "content": (
+                "How many r are in strrawberrry? Call get_today first, then report today exactly as get_today "
+                f"returned it and the count of r. {unique_marker()}"
+            ),
+        }
+
+        first = client.responses.create(
+            model=model,
+            input=[question],
+            tools=[GET_TODAY_TOOL],
+            tool_choice={"type": "function", "name": "get_today"},
+            reasoning={"effort": "medium", "summary": "auto"},
+            text={"format": TODAY_REPORT_FORMAT},
+            extra_body=NO_PROXY_CACHE,
+        )
+        assert any(isinstance(item, ResponseReasoningItem) for item in first.output), (
+            f"reasoning model returned no reasoning item: {first.output!r}"
+        )
+        call = next((call for call in _function_calls(first) if call.name == "get_today"), None)
+        assert call is not None, f"forced get_today call missing: {first.output!r}"
+
+        replayed = _INPUT_ITEMS.validate_python([item.model_dump(exclude_none=True) for item in first.output])
+        tool_result: ResponseInputItemParam = {
+            "type": "function_call_output",
+            "call_id": call.call_id,
+            "output": TOOL_DATE,
+        }
+        second = client.responses.create(
+            model=model,
+            input=[question, *replayed, tool_result],
+            tools=[GET_TODAY_TOOL],
+            reasoning={"effort": "medium", "summary": "auto"},
+            text={"format": TODAY_REPORT_FORMAT},
+            extra_body=NO_PROXY_CACHE,
+        )
+        assert second.status == "completed", f"second turn did not complete: {second.status} {second.output!r}"
+        report = TodayReport.model_validate_json(second.output_text)
+        assert TOOL_DATE in report.today, f"structured output ignored the tool result: {report!r}"
+
+    @pytest.mark.provider_live
+    def test_shell_tool_stream_surfaces_shell_call_and_its_output(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(
+            proxy,
+            resources,
+            LiteLLMParamsBody(model=SHELL_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
+            prefix="e2e-responses-shell",
+        )
+        client = sdk.openai(resources.key())
+
+        stream = client.responses.create(
+            model=model,
+            input="Run `python --version` in the shell and reply with what it printed.",
+            tools=[SHELL_TOOL],
+            tool_choice="required",
+            max_output_tokens=1024,
+            stream=True,
+            extra_body=NO_PROXY_CACHE,
+        )
+        events = tuple(stream)
+        completed = events[-1] if events else None
+        assert isinstance(completed, ResponseCompletedEvent), (
+            f"shell stream did not end with response.completed: {[event.type for event in events]}"
+        )
+        streamed_items = tuple(event.item for event in events if isinstance(event, ResponseOutputItemDoneEvent))
+        assert any(isinstance(item, ResponseFunctionShellToolCall) for item in streamed_items), (
+            f"no shell_call item reached the stream: {[item.type for item in streamed_items]}"
+        )
+        outputs = tuple(
+            item for item in completed.response.output if isinstance(item, ResponseFunctionShellToolCallOutput)
+        )
+        assert outputs, f"completed response carries no shell_call_output: {completed.response.output!r}"

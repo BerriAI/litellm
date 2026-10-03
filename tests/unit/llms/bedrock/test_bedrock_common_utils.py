@@ -981,3 +981,86 @@ def test_unmapped_openai_family_model_routes_to_converse():
     assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
     imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
     assert BedrockModelInfo.get_bedrock_route(imported) == "openai"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("converse/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("chat_completions/us.xai.grok-4.6", "us.xai.grok-4.6"),
+        ("global.openai.gpt-5.6-sol", "global.openai.gpt-5.6-sol"),
+    ],
+)
+def test_without_bedrock_route_prefix_hands_converse_the_bare_model_id(model, expected):
+    from litellm.llms.bedrock.common_utils import without_bedrock_route_prefix
+
+    assert without_bedrock_route_prefix(model) == expected
+
+
+def test_bedrock_stream_event_statuses_cover_every_modeled_member_of_both_stream_shapes():
+    pytest.importorskip("botocore")
+    from botocore.loaders import Loader
+    from botocore.model import ServiceModel
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    mod.get_bedrock_stream_event_statuses.cache_clear()
+    statuses = mod.get_bedrock_stream_event_statuses()
+    assert statuses is not None
+
+    service_model = ServiceModel(Loader().load_service_model("bedrock-runtime", "service-2"))
+    for shape_name in ("ConverseStreamOutput", "ResponseStream"):
+        for name, member in service_model.shape_for(shape_name).members.items():
+            modeled = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+            assert statuses[name] == (None if modeled is None else int(modeled))
+            assert mod.bedrock_stream_event_error_status(name) == statuses[name]
+
+    assert any(status is not None for status in statuses.values())
+    assert any(status is None for status in statuses.values())
+    assert mod.bedrock_stream_event_error_status("notAModeledEvent") is None
+    assert mod.bedrock_stream_event_error_status(None) is None
+
+
+def test_bedrock_stream_event_statuses_load_failure_returns_none():
+    from unittest.mock import patch
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    pytest.importorskip("botocore")
+    mod.get_bedrock_stream_event_statuses.cache_clear()
+    with patch("botocore.loaders.Loader.load_service_model", side_effect=Exception("no data")):
+        assert mod._load_bedrock_stream_event_statuses() is None
+        assert mod.get_bedrock_stream_event_statuses() is None
+        assert mod.bedrock_stream_event_error_status("validationException") is None
+    mod.get_bedrock_stream_event_statuses.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_status", "expected_message"),
+    [
+        ({":message-type": "error"}, 400, '{"message":"upstream failed"}'),
+        (
+            {":message-type": "exception", ":exception-type": "somethingNotModeled"},
+            400,
+            'somethingNotModeled {"message":"upstream failed"}',
+        ),
+        (
+            {":message-type": "exception", ":exception-type": "throttlingException"},
+            429,
+            'throttlingException {"message":"upstream failed"}',
+        ),
+    ],
+)
+def test_build_bedrock_stream_error_resolves_status_from_the_exception_type(
+    headers: dict[str, str], expected_status: int, expected_message: str
+):
+    pytest.importorskip("botocore")
+    from litellm.llms.bedrock.common_utils import build_bedrock_stream_error, get_bedrock_response_stream_shape
+
+    error = build_bedrock_stream_error(
+        {"status_code": 400, "headers": headers, "body": b'{"message":"upstream failed"}'},
+        get_bedrock_response_stream_shape(),
+    )
+
+    assert error.status_code == expected_status
+    assert error.message == expected_message

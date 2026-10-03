@@ -5,21 +5,32 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+schema = ["dep:schemars"]
+
 [dependencies]
-base64.workspace = true
-flate2.workspace = true
-opentelemetry-proto = { version = "0.33.0", default-features = false, features = ["gen-tonic-messages", "trace", "with-serde"] }
-prost = "0.14.4"
-time = { workspace = true, features = ["formatting"] }
-litellm-http.workspace = true
-sha2.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+askama.workspace = true
+macro_rules_attribute.workspace = true
+schemars = { workspace = true, optional = true }
+indexmap = { version = "2", features = ["serde"] }
+litellm-llms-types.workspace = true
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
+prost.workspace = true
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+strum.workspace = true
 thiserror.workspace = true
-url.workspace = true
+time.workspace = true
 
 [dev-dependencies]
-litellm-http = { workspace = true, features = ["test-support"] }
+criterion.workspace = true
 rstest.workspace = true
-testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
-tokio.workspace = true
+
+[[bench]]
+name = "resource-fanout"
+harness = false
+
+[[bin]]
+name = "export-traces-schema"
+path = "src/bin/export_schema.rs"
+required-features = ["schema"]

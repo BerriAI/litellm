@@ -97,9 +97,7 @@ def _to_batch_errors(errors: Sequence[MistralBatchError]) -> BatchErrors | None:
         return None
     return BatchErrors(
         object="list",
-        data=[  # mutable-ok: openai Batch.Errors.data is typed as list
-            BatchError(message=f"{e.message} (x{e.count})" if e.count > 1 else e.message) for e in errors
-        ],
+        data=[BatchError(message=f"{e.message} (x{e.count})" if e.count > 1 else e.message) for e in errors],
     )
 
 
@@ -178,7 +176,7 @@ class MistralBatchesConfig(BaseBatchesConfig):
             if metadata
             else MistralCreateBatchJobRequest(input_files=(input_file_id,), endpoint=endpoint, model=model)
         )
-        return dict(body)  # mutable-ok: BaseBatchesConfig signature
+        return dict(body)
 
     def transform_create_batch_response(
         self,
@@ -203,7 +201,7 @@ class MistralBatchesConfig(BaseBatchesConfig):
             url=f"{get_mistral_api_base(api_base if isinstance(api_base, str) else None)}/v1/batch/jobs/{encoded_batch_id}",
             headers=get_mistral_auth_headers(_NO_HEADERS, api_key if isinstance(api_key, str) else None),
         )
-        return dict(request)  # mutable-ok: BaseBatchesConfig signature
+        return dict(request)
 
     def transform_retrieve_batch_response(
         self,
