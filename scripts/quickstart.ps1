@@ -186,16 +186,18 @@ function Invoke-LiteLLMQuickstart {
   # ------------------------------------------------------------ steps
 
   function Test-PortFree([int]$Port) {
-    # Free means nothing accepts the connection; a timeout counts as taken.
-    $client = New-Object System.Net.Sockets.TcpClient
+    # Binding answers right away and is accurate. Probing with a connect is
+    # not: the WSL2 localhost relay (Podman, Rancher Desktop) swallows the
+    # refusal on closed ports, so every connect waits out its timeout and
+    # closed ports look taken.
+    $listener = New-Object System.Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $Port)
     try {
-      $task = $client.ConnectAsync('127.0.0.1', $Port)
-      if (-not $task.Wait(2000)) { return $false }
-      return -not $client.Connected
-    } catch {
+      $listener.Start()
       return $true
+    } catch {
+      return $false
     } finally {
-      $client.Close()
+      $listener.Stop()
     }
   }
 
