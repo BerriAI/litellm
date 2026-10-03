@@ -8957,7 +8957,8 @@ class Router:
             ptu_error: Final = (
                 (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
             )
-            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+            declares_split: Final = _model_info.get("ptu_shares") is not None
+            if ptu_error is not None and (declares_split or is_ptu_cost_attribution_enabled()):
                 raise ValueError(ptu_error)
             access_windows_error: Final = access_windows_config_error(_model_info, model_name=_model_name)
             if access_windows_error is not None:

@@ -90,14 +90,15 @@ _TERMLESS_SHARED: Final = {
 }
 
 
-def test_a_share_map_registration_would_refuse_reserves_nothing():
-    """Registration refuses ``ptu_shares`` without the count, rate and start they split, and a map
-    that does not add up to the count, so a row carrying either shape holds nobody's capacity:
-    every team is served from it and no ceiling applies, the same as before the map was read."""
-    short: Final = _shared(shares={"team-a": 30}, ptu_count=50)
-    for deployment in (_TERMLESS_SHARED, short):
-        assert filter_ptu_shared_deployments([deployment], "team-z").withheld is False
-        assert _unaliased_ceiling([deployment], "team-a", "gpt-4.1-ptu") is None
+def test_a_declared_split_is_the_access_rule_even_without_pricing_terms():
+    """A map that reached the router without the count, rate and start registration now demands
+    still names who the deployment is for, so it is served to those teams alone and sized from
+    their shares; only the flat cost, which needs the terms, goes unattributed."""
+    assert filter_ptu_shared_deployments([_TERMLESS_SHARED], "team-z").withheld is True
+    assert filter_ptu_shared_deployments([_TERMLESS_SHARED], "team-a").withheld is False
+    ceiling: Final = _unaliased_ceiling([_TERMLESS_SHARED], "team-a", "gpt-4.1-ptu")
+    assert ceiling is not None
+    assert ceiling.tpm_limit == 30 * _GPT41.input_tpm_per_ptu
 
 
 def test_a_team_is_served_from_its_shared_deployment_first_and_never_from_another_teams_reservation():

@@ -18845,6 +18845,16 @@ def test_a_shared_ptu_deployment_whose_shares_do_not_add_up_is_refused_at_regist
         Router(model_list=model_list)
 
 
+def test_a_config_entry_declaring_shares_without_terms_is_refused_even_while_the_feature_is_off(monkeypatch):
+    """The split is enforced with the flag off, so its shape is checked with the flag off too: a
+    malformed one is refused at boot instead of being honoured or ignored without a word."""
+    monkeypatch.delenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", raising=False)
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"] = {"id": "shared-deployment", "ptu_shares": {"team-a": 30, "team-b": 20}}
+    with pytest.raises(ValueError, match=r"ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set"):
+        Router(model_list=model_list)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "verdict",
