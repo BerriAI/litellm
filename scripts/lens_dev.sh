@@ -42,20 +42,15 @@ load_master_key() {
   master_key="$(cat "$key_file")"
 }
 
-postgres_ok() {
-  "$py" -c 'import sys, psycopg; psycopg.connect(sys.argv[1], connect_timeout=5).close()' "$database_url" 2>/dev/null
-}
-
-# An explicit LENS_DEV_DATABASE_URL is used as is, so compose never starts Postgres for it.
 # Only reuse a listener on 15432/18123 if it accepts the tracing stack's credentials;
 # start the compose service when nothing is listening; fail if something else is.
+# A LENS_DEV_DATABASE_URL is left to the proxy, which may use Prisma-only URL params.
 ensure_services() {
   local services=()
-  if [ -n "${LENS_DEV_DATABASE_URL:-}" ]; then
-    postgres_ok || die "can't connect to LENS_DEV_DATABASE_URL"
-  elif listening 15432; then
-    postgres_ok || die "port 15432 is taken by something that isn't the tracing Postgres (litellm/litellm)"
-  else
+  if [ -z "${LENS_DEV_DATABASE_URL:-}" ] && listening 15432; then
+    "$py" -c 'import sys, psycopg; psycopg.connect(sys.argv[1], connect_timeout=5).close()' "$database_url" 2>/dev/null \
+      || die "port 15432 is taken by something that isn't the tracing Postgres (litellm/litellm)"
+  elif [ -z "${LENS_DEV_DATABASE_URL:-}" ]; then
     services+=(db)
   fi
   if listening 18123; then
