@@ -32,9 +32,13 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
+    _cache_team_object,
     _virtual_key_soft_budget_check,
     _team_soft_budget_check,
 )
+from litellm.caching.redis_cache import RedisCache
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+from litellm.proxy.common_utils.user_api_key_cache import get_management_object_redis_ttl, get_management_object_ttl
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
 
@@ -1595,3 +1599,31 @@ async def test_get_user_object_cache_miss_emits_exactly_one_postgres_get_user_ob
     assert result is not None and result.user_id == user_id
     assert await _db_service_call_types(db_success_hook) == ("get_user_object",)
     assert db_success_hook.await_args_list[0].kwargs["parent_otel_span"] == "auth-span"
+
+
+class _TtlRecordingRedis(RedisCache):
+    def __init__(self) -> None:  # noqa: super().__init__ skipped intentionally
+        self.ttls: dict[str, object] = {}
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.ttls[key] = kwargs.get("ttl")
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.ttls.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_cached_team_object_lives_longer_in_shared_redis_than_in_worker_memory():
+    """A worker whose memory copy expired refreshes from Redis instead of Postgres until the Redis copy expires."""
+    redis = _TtlRecordingRedis()
+    cache = UserApiKeyCache(redis_cache=redis, default_in_memory_ttl=60)
+
+    await _cache_team_object(
+        team_id="team-ttl",
+        team_table=LiteLLM_TeamTableCachedObj(team_id="team-ttl"),
+        user_api_key_cache=cache,
+        proxy_logging_obj=None,
+    )
+
+    assert redis.ttls["team_id:team-ttl"] == get_management_object_redis_ttl(cache)
+    assert get_management_object_redis_ttl(cache) > get_management_object_ttl(cache) == 60

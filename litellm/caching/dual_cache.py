@@ -517,11 +517,14 @@ class DualCache(BaseCache):
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
             )
 
-    async def async_set_cache_pre_call(self, key: str, value: object, ttl: float | None) -> BatchResult[None] | None:
+    async def async_set_cache_pre_call(
+        self, key: str, value: object, ttl: float | None, redis_ttl: float | None = None
+    ) -> BatchResult[None] | None:
         """Memory now, the Redis SET on the request's pipeline, sent with the next read any caller awaits; None
-        when no pipeline is open, so the caller takes its direct path."""
+        when no pipeline is open, so the caller takes its direct path. ``redis_ttl`` lets the shared Redis copy
+        outlive the per-worker memory copy."""
         batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
-        return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
+        return None if batch is None else await self._set_on_batch(batch, key, value, ttl, redis_ttl)
 
     async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
         """Memory now, the Redis DEL on the request's pipeline; None when no pipeline is open, so the caller
@@ -533,11 +536,13 @@ class DualCache(BaseCache):
             self.in_memory_cache.delete_cache(key)
         return batch.delete(key)
 
-    async def _set_on_batch(self, batch: RedisBatch, key: str, value: object, ttl: float | None) -> BatchResult[None]:
+    async def _set_on_batch(
+        self, batch: RedisBatch, key: str, value: object, ttl: float | None, redis_ttl: float | None = None
+    ) -> BatchResult[None]:
         effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
         if self.in_memory_cache is not None:
             await self.in_memory_cache.async_set_cache(key, value, ttl=effective_ttl)
-        return batch.set(key, value, effective_ttl)
+        return batch.set(key, value, effective_ttl if redis_ttl is None else redis_ttl)
 
     # async_batch_set_cache
     async def async_set_cache_pipeline(

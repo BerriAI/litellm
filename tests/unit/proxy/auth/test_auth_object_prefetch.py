@@ -29,6 +29,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
+    get_management_object_redis_ttl,
+    get_management_object_ttl,
 )
 
 USER_ID = "prefetch-user"
@@ -188,8 +190,8 @@ async def test_cold_regime_is_one_mget_one_query_and_the_getters_never_touch_io_
             f"SET {TEAM_ID}_{USER_ID} ttl=5",
             f"SET org_id:{ORG_ID} ttl=5",
             f"SET org_id:{ORG_ID}:with_budget ttl=5",
-            f"SET {USER_ID} ttl=60",
-            f"SET team_id:{TEAM_ID} ttl=60",
+            f"SET {USER_ID} ttl=600",
+            f"SET team_id:{TEAM_ID} ttl=600",
             f"SET team_membership:{USER_ID}:{TEAM_ID} ttl=None",
         ]
     )
@@ -207,6 +209,31 @@ async def test_cold_regime_is_one_mget_one_query_and_the_getters_never_touch_io_
     assert membership.litellm_budget_table.max_budget == 20.0
     assert isinstance(org, LiteLLM_OrganizationTable) and org.litellm_budget_table is not None
     assert org.litellm_budget_table.max_budget == 1000.0
+
+
+class _TtlRecordingMemory(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ttls: dict[str, object] = {}
+
+    def set_cache(self, key, value, **kwargs):  # type: ignore[override]
+        self.ttls[key] = kwargs.get("ttl")
+        super().set_cache(key, value, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_cold_prefetch_keeps_the_worker_memory_ttl_short_while_the_shared_redis_copy_outlives_it():
+    """Every worker refreshes from Redis on the memory TTL; only the Redis TTL decides when Postgres is read again."""
+    redis = CountingRedis()
+    memory = _TtlRecordingMemory()
+    cache = UserApiKeyCache(in_memory_cache=memory, redis_cache=redis)
+
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=_prisma())
+
+    team_sets = [c for c in redis.commands if c.startswith(f"SET team_id:{TEAM_ID} ")]
+    assert memory.ttls[f"team_id:{TEAM_ID}"] == get_management_object_ttl(cache)
+    assert team_sets == [f"SET team_id:{TEAM_ID} ttl={get_management_object_redis_ttl(cache)}"]
+    assert get_management_object_redis_ttl(cache) > get_management_object_ttl(cache)
 
 
 @pytest.mark.asyncio
