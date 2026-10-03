@@ -18563,6 +18563,63 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
 
 @pytest.mark.asyncio
+async def test_rotate_master_key_rotates_search_tools(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+
+    class _Row(SimpleNamespace):
+        def __iter__(self):
+            return iter(vars(self).items())
+
+    row = _Row(
+        search_tool_id="search-tool-1",
+        litellm_params={"search_provider": "tavily", "api_key": encrypt_value_helper("tvly-secret")},
+    )
+
+    async def _update_many(where, data):
+        expected_litellm_params = json.loads(where["litellm_params"]["equals"])
+        if where["search_tool_id"] != row.search_tool_id or expected_litellm_params != row.litellm_params:
+            return 0
+        row.litellm_params = json.loads(data["litellm_params"])
+        return 1
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(return_value=[row])
+    mock_prisma_client.db.litellm_searchtoolstable.update_many = AsyncMock(side_effect=_update_many)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+
+    await _rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    assert decrypt_if_encrypted_with(row.litellm_params["api_key"], "sk-new-master-key") == "tvly-secret"
+    assert row.litellm_params["search_provider"] == "tavily"
+
+
+@pytest.mark.asyncio
 async def test_check_encryption_endpoint_rejects_proxy_admin_viewer():
     """The residual scan walks and decrypt-classifies every credential-bearing table,
     so it stays proxy_admin-only despite being read-only."""

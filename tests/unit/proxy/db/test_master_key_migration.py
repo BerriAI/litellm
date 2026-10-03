@@ -176,6 +176,27 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
 
 
 @pytest.mark.asyncio
+async def test_search_tool_litellm_params_are_moved_to_the_new_key():
+    tables: Tables = {
+        "LiteLLM_SearchToolsTable": [
+            {
+                "search_tool_id": "search-tool-1",
+                "litellm_params": {"search_provider": _encrypted("tavily"), "api_key": _encrypted("tvly-secret")},
+            },
+            {"search_tool_id": "legacy-search-tool", "litellm_params": {"api_key": "tvly-plaintext"}},
+        ]
+    }
+
+    migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert migrated == 2
+    search_tool_params = tables["LiteLLM_SearchToolsTable"][0]["litellm_params"]
+    assert decrypt_if_encrypted_with(search_tool_params["api_key"], NEW_KEY) == "tvly-secret"
+    assert decrypt_if_encrypted_with(search_tool_params["search_provider"], NEW_KEY) == "tavily"
+    assert tables["LiteLLM_SearchToolsTable"][1]["litellm_params"] == {"api_key": "tvly-plaintext"}
+
+
+@pytest.mark.asyncio
 async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
     database = _FakeDatabase(_seeded_tables())
 
