@@ -135,12 +135,17 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
         return returned_response
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: OpenAIGPTConfig contract
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: OpenAIGPTConfig contract
         supported_params: Final = super().get_supported_openai_params(model=model)
-        from litellm.utils import supports_reasoning
+        import litellm
 
+        cost_map: Final[dict[str, object]] = getattr(litellm, "model_cost", {})
+        raw_info: Final = (
+            cost_map.get(model) or cost_map.get(f"openai_like/{model}") or cost_map.get(f"openai/{model}")
+        )
         if (
-            supports_reasoning(model=model, custom_llm_provider="openai_like")
+            isinstance(raw_info, dict)
+            and raw_info.get("supports_reasoning") is True
             and "reasoning_effort" not in supported_params
         ):
             supported_params.append("reasoning_effort")

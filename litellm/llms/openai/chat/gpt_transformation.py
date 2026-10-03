@@ -183,11 +183,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
 
-        from litellm.utils import supports_reasoning
-
+        cost_map: Final[dict[str, object]] = getattr(litellm, "model_cost", {})
+        raw_info: Final = (
+            cost_map.get(model) or cost_map.get(f"openai/{model}") or cost_map.get(f"openai_like/{model}")
+        )
         if (
-            supports_reasoning(model=model, custom_llm_provider="openai") or supports_reasoning(model=model)
-        ) and "reasoning_effort" not in base_params:
+            isinstance(raw_info, dict)
+            and raw_info.get("supports_reasoning") is True
+            and "reasoning_effort" not in base_params
+        ):
             model_specific_params.append("reasoning_effort")
 
         return base_params + model_specific_params
