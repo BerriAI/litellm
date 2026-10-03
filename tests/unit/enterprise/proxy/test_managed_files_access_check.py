@@ -9,15 +9,29 @@ with deployment credentials, bypassing the managed files access-control hooks.
 """
 
 import base64
-import pytest
+from collections.abc import Mapping
+from datetime import datetime, timezone, tzinfo
 from types import SimpleNamespace
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from fastapi import HTTPException
 
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.types.utils import LiteLLMBatch
+
+
+class _FrozenDateTime(datetime):
+    @classmethod
+    def now(
+        cls: type["_FrozenDateTime"],
+        tz: tzinfo | None = None,
+    ) -> datetime:
+        fixed_now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        return fixed_now.astimezone(tz) if tz is not None else fixed_now.replace(tzinfo=None)
 
 
 def _make_user_api_key_dict(user_id: str) -> UserAPIKeyAuth:
@@ -290,12 +304,30 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     mock_job.created_by = "user-A"
     mock_job.id = "job-1"
     mock_job.team_id = None
+    job_created_at: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    mock_job.created_at = job_created_at
 
     # Mock prisma
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_managedobjecttable.find_many = AsyncMock(
-        return_value=[mock_job]
-    )
+
+    async def _find_many(
+        *,
+        where: dict[str, object],
+        take: int | None,
+        order: dict[str, str] | None,
+    ) -> list[MagicMock]:
+        created_at_filter: Final = where.get("created_at")
+        if isinstance(created_at_filter, Mapping):
+            created_at_values: Final = cast(Mapping[str, object], created_at_filter)
+            cutoff_lt: Final = created_at_values.get("lt")
+            cutoff_gte: Final = created_at_values.get("gte")
+            if isinstance(cutoff_lt, datetime) and job_created_at >= cutoff_lt:
+                return []
+            if isinstance(cutoff_gte, datetime) and job_created_at < cutoff_gte:
+                return []
+        return [mock_job]
+
+    mock_prisma.db.litellm_managedobjecttable.find_many = AsyncMock(side_effect=_find_many)
     mock_prisma.db.litellm_managedobjecttable.update = AsyncMock()
     mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
 
@@ -348,11 +380,17 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
     mock_file_content = MagicMock()
     mock_file_content.content = b'{"id":"req-1","response":{"status_code":200,"body":{"id":"cmpl-1","object":"chat.completion","created":1700000000,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}}\n'
 
-    with patch(
-        "litellm.files.main.afile_content",
-        new_callable=AsyncMock,
-        return_value=mock_file_content,
-    ) as mock_direct_afile_content:
+    with (
+        patch(
+            "litellm.files.main.afile_content",
+            new_callable=AsyncMock,
+            return_value=mock_file_content,
+        ) as mock_direct_afile_content,
+        patch(
+            "litellm_enterprise.proxy.common_utils.check_batch_cost.datetime",
+            _FrozenDateTime,
+        ),
+    ):
         await checker.check_batch_cost()
 
         # afile_content should be called directly (not through managed_files_obj)
