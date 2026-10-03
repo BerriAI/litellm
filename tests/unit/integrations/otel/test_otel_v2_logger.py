@@ -6,10 +6,15 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 (ambient context), and Baggage promotion onto child spans.
 """
 
+import ast
 import asyncio
 import contextlib
 import os
+import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -1745,15 +1750,58 @@ def test_service_span_verb_follows_the_cache_method_behind_the_call(call_type, t
     assert service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)) == untargeted
 
 
-def test_postgres_service_span_keeps_its_function_name_inside_a_targeted_phase():
-    """A DB helper that runs inside ``service_target("auth_objects")`` (the whole auth phase
-    does) is still ``postgres get_data``: the verb scheme is for cache methods, the Postgres
-    rename to ``db.select {table}`` is a separate change."""
+@pytest.mark.parametrize(
+    ("call_type", "event_metadata", "expected"),
+    [
+        ("get_data", {"table_name": "combined_view"}, "postgres.select LiteLLM_VerificationToken"),
+        ("get_data", {"table_name": "team"}, "postgres.select LiteLLM_TeamTable"),
+        ("get_data", {}, "postgres get_data"),
+        ("get_generic_data", {"table_name": "users"}, "postgres.select LiteLLM_UserTable"),
+        ("insert_data", {"table_name": "key"}, "postgres.insert LiteLLM_VerificationToken"),
+        ("update_data", {"table_name": "team"}, "postgres.update LiteLLM_TeamTable"),
+        ("delete_data", {"table_name": "user"}, "postgres.delete LiteLLM_UserTable"),
+        ("get_user_object", {}, "postgres.select LiteLLM_UserTable"),
+        ("get_key_object", {}, "postgres.select LiteLLM_VerificationToken"),
+        ("_get_team_db_check", {}, "postgres.select LiteLLM_TeamTable"),
+        ("get_org_object", {}, "postgres.select LiteLLM_OrganizationTable"),
+        ("get_end_user_object", {}, "postgres.select LiteLLM_EndUserTable"),
+        ("get_object_permission", {}, "postgres.select LiteLLM_ObjectPermissionTable"),
+        ("commit_spend_updates", {"table_name": "LiteLLM_UserTable"}, "postgres.update LiteLLM_UserTable"),
+        ("upsert_daily_spend", {"table_name": "LiteLLM_DailyTeamSpend"}, "postgres.upsert LiteLLM_DailyTeamSpend"),
+        ("insert_spend_logs", {"table_name": "LiteLLM_SpendLogs"}, "postgres.insert LiteLLM_SpendLogs"),
+        ("update_end_user_spend", {"table_name": "LiteLLM_EndUserTable"}, "postgres.upsert LiteLLM_EndUserTable"),
+        ("migrate_config_credentials", {"table_name": "LiteLLM_Config"}, "postgres.update LiteLLM_Config"),
+        ("migrate_sso_credentials", {"table_name": "LiteLLM_SSOConfig"}, "postgres.update LiteLLM_SSOConfig"),
+        (
+            "backfill_mcp_oauth_issuer",
+            {"table_name": "LiteLLM_MCPServerTable"},
+            "postgres.update LiteLLM_MCPServerTable",
+        ),
+        ("auto_register_jwt_mapping", {"table_name": "LiteLLM_JWTKeyMapping"}, "postgres.insert LiteLLM_JWTKeyMapping"),
+        (
+            "delete_orphaned_jwt_key",
+            {"table_name": "LiteLLM_VerificationToken"},
+            "postgres.delete LiteLLM_VerificationToken",
+        ),
+        ("save_email_settings", {"table_name": "LiteLLM_Config"}, "postgres.upsert LiteLLM_Config"),
+        ("get_data", {"table_name": "DROP TABLE x"}, "postgres get_data"),
+        ("get_data", {"table_name": "LiteLLM_NotInSchema"}, "postgres get_data"),
+        ("some_new_helper", {"table_name": "key"}, "postgres some_new_helper"),
+    ],
+)
+def test_postgres_service_span_is_named_by_sql_verb_and_prisma_table(call_type, event_metadata, expected):
+    """A Postgres helper renders as ``postgres.{verb} {table}``: the verb comes from the helper,
+    the table from the helper when it only ever touches one model and from the event's
+    ``table_name`` metadata otherwise (only the bounded ``PrismaClient`` literals and
+    ``LiteLLM_*`` model names resolve, so a stray string cannot become a span name). The
+    ambient ``service_target`` names a cache key family and never leaks into the name."""
     from litellm.integrations.otel.model.payloads import ServiceSpanData
     from litellm.integrations.otel.model.spans import service_span_name
 
-    data = ServiceSpanData(service_name="postgres", call_type="get_data", target="auth_objects")
-    assert service_span_name(data) == "postgres get_data"
+    data = ServiceSpanData(
+        service_name="postgres", call_type=call_type, target="auth_objects", event_metadata=event_metadata
+    )
+    assert service_span_name(data) == expected
 
 
 def test_service_target_declared_by_the_producer_rides_the_service_logger_payload():
@@ -1876,7 +1924,9 @@ def test_async_service_success_hook_emits_service_span():
 
 def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
     """Prisma reaches Postgres over loopback, so without server.address the
-    backend attributes the wait to localhost."""
+    backend attributes the wait to localhost. The span is named by SQL verb and
+    table, with the raw helper name kept on ``litellm.service.call_type`` for the
+    metric labels and the verb, table and summary on the ``db.*`` semconv keys."""
     dsn = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
     logger, exporter = _logger()
     parent = _service_parent(logger)
@@ -1887,14 +1937,19 @@ def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
                 logger.async_service_success_hook(
                     payload=_ServicePayload("postgres", "get_data"),
                     parent_otel_span=parent,
+                    event_metadata={"table_name": "combined_view"},
                 )
             )
     finally:
         parent.end()
-    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres.select LiteLLM_VerificationToken"]
     assert span.kind is SpanKind.CLIENT
+    assert span.parent.span_id == parent.get_span_context().span_id
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "get_data"
     assert span.attributes["db.system.name"] == "postgresql"
-    assert span.attributes["db.operation.name"] == "get_data"
+    assert span.attributes["db.operation.name"] == "select"
+    assert span.attributes["db.collection.name"] == "LiteLLM_VerificationToken"
+    assert span.attributes["db.query.summary"] == "SELECT LiteLLM_VerificationToken"
     assert span.attributes["server.address"] == "litellm-prod.abc123.us-east-1.rds.amazonaws.com"
     assert span.attributes["server.port"] == 6432
     assert span.attributes["db.namespace"] == "litellm|reporting"
@@ -1902,6 +1957,44 @@ def test_postgres_db_span_names_the_database_server_not_the_prisma_engine():
     exported = " ".join(str(value) for value in span.attributes.values())
     assert "dbpassword9090" not in exported
     assert "llmproxy" not in exported
+
+
+def test_postgres_helper_without_a_known_table_keeps_the_legacy_name_and_the_verb_attribute():
+    """A ``get_data`` event with no resolvable ``table_name`` must not ship as a half-named
+    ``postgres.select``: it keeps the legacy ``postgres get_data`` name so the gap is visible,
+    while ``db.operation.name`` still says SELECT and no ``db.collection.name`` is made up."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(payload=_ServicePayload("postgres", "get_data"), parent_otel_span=parent)
+        )
+    finally:
+        parent.end()
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    assert span.attributes["db.operation.name"] == "select"
+    assert "db.collection.name" not in span.attributes
+    assert "db.query.summary" not in span.attributes
+
+
+def test_redis_service_span_attributes_keep_the_raw_method_on_db_operation_name():
+    """The Postgres verb table must not reach Redis: a Redis call keeps its raw method on
+    ``db.operation.name`` and never grows a ``db.collection.name``."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_get_cache", target="llm_response"),
+                parent_otel_span=parent,
+                event_metadata={"table_name": "key"},
+            )
+        )
+    finally:
+        parent.end()
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis.get llm_response"]
+    assert span.attributes["db.operation.name"] == "async_get_cache"
+    assert "db.collection.name" not in span.attributes
 
 
 def test_async_service_failure_hook_marks_error_status():
@@ -2065,7 +2158,7 @@ def test_service_call_that_outlives_the_request_roots_its_own_trace_linked_to_th
     logger, exporter = _logger()
     server = _ended_request_span(logger)
     hook = logger.async_service_success_hook(
-        payload=_ServicePayload("batch_write_to_db", "_PROXY_track_cost_callback"),
+        payload=_ServicePayload("postgres", "get_key_object"),
         parent_otel_span=server if parent_source == "threaded" else None,
         start_time=_REQUEST_END + 0.1,
         end_time=_REQUEST_END + 0.5,
@@ -2076,7 +2169,7 @@ def test_service_call_that_outlives_the_request_roots_its_own_trace_linked_to_th
     else:
         asyncio.run(hook)
     by_name = {s.name: s for s in exporter.get_finished_spans()}
-    span = by_name["batch_write_to_db _PROXY_track_cost_callback"]
+    span = by_name["postgres.select LiteLLM_VerificationToken"]
     request_ctx = server.get_span_context()
     assert span.parent is None
     assert span.context.trace_id != request_ctx.trace_id
@@ -2094,13 +2187,13 @@ def test_service_call_that_finished_before_the_response_stays_in_the_request_tra
     server = _ended_request_span(logger)
     asyncio.run(
         logger.async_service_success_hook(
-            payload=_ServicePayload("postgres", "get_data"),
+            payload=_ServicePayload("postgres", "get_user_object"),
             parent_otel_span=server,
             start_time=_REQUEST_END - 0.5,
             end_time=_REQUEST_END - 0.1,
         )
     )
-    span = {s.name: s for s in exporter.get_finished_spans()}["postgres get_data"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["postgres.select LiteLLM_UserTable"]
     assert span.parent.span_id == server.get_span_context().span_id
     assert span.context.trace_id == server.get_span_context().trace_id
     assert list(span.links) == []
@@ -3322,3 +3415,89 @@ def test_a_classifier_closed_without_a_carrier_still_nests_under_the_route_phase
     assert by_name["chat gpt-4o-mini"].parent.span_id == route.get_span_context().span_id
     assert by_name["chat gpt-4o-mini"].attributes[LiteLLM.REQUEST_PURPOSE] == AUTOROUTER_CLASSIFIER_CALL_ORIGIN
     assert by_name["chat gpt-4o"].parent.span_id == root.get_span_context().span_id
+
+
+@dataclass(frozen=True, slots=True)
+class _CrudCallSite:
+    location: str
+    call_type: str
+    table_name: str | None
+
+
+_GENERIC_CRUD_HELPERS: Final = frozenset({"get_data", "get_generic_data", "insert_data", "update_data", "delete_data"})
+_PRISMA_RECEIVERS: Final = frozenset({"self", "db"})
+_SOURCE_ROOTS: Final = ("litellm", "enterprise", "litellm-proxy-extras")
+
+
+def _declared_table(call: ast.Call, call_type: str) -> str | None:
+    """The table the call names: a literal ``table_name``, else the lookup key the
+    ``PrismaClient`` CRUD helpers and ``@log_db_metrics`` both infer it from."""
+    from litellm.proxy.db.log_db_metrics import _DEFAULT_TABLE_BY_KWARG, _PRISMA_CLIENT_CRUD
+
+    by_arg: Final = {keyword.arg: keyword.value for keyword in call.keywords}
+    literal: Final = by_arg.get("table_name")
+    if isinstance(literal, ast.Constant) and isinstance(literal.value, str):
+        return literal.value
+    if call_type not in _PRISMA_CLIENT_CRUD:
+        return None
+    return next((table for key, table in _DEFAULT_TABLE_BY_KWARG.items() if key in by_arg), None)
+
+
+def _is_prisma_crud_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    if node.func.attr not in _GENERIC_CRUD_HELPERS:
+        return False
+    receiver: Final = ast.unparse(node.func.value)
+    return receiver in _PRISMA_RECEIVERS or receiver.endswith("prisma_client")
+
+
+def _crud_call_sites_in(path: Path, repo: Path) -> tuple[_CrudCallSite, ...]:
+    tree: Final = ast.parse(path.read_text(encoding="utf-8"))
+    return tuple(
+        _CrudCallSite(
+            location=f"{path.relative_to(repo)}:{node.lineno}",
+            call_type=node.func.attr,
+            table_name=_declared_table(node, node.func.attr),
+        )
+        for node in ast.walk(tree)
+        if _is_prisma_crud_call(node) and isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    )
+
+
+def _source_files(repo: Path) -> tuple[Path, ...]:
+    roots: Final = (repo / root for root in _SOURCE_ROOTS)
+    files: Final = (path for root in roots for path in root.rglob("*.py"))  # comprehension-ok: flatten
+    return tuple(path for path in files if "tests" not in path.parts and "node_modules" not in path.parts)
+
+
+def test_every_prisma_crud_call_site_names_a_known_table_so_no_half_named_postgres_span_ships():
+    """``PrismaClient.get_data`` and friends dispatch on ``table_name``, and so does the span
+    name. A call site that leaves it out would render the legacy ``postgres get_data`` with no
+    table, so every direct call in the proxy sources must name one, as a literal the schema
+    knows or through a lookup key the helper infers it from, and render ``postgres.{verb} LiteLLM_*``."""
+    from litellm.integrations.otel.model.payloads import ServiceSpanData
+    from litellm.integrations.otel.model.spans import _PRISMA_MODEL_BY_TABLE_NAME, service_span_name
+
+    repo = Path(__file__).resolve().parents[4]
+    per_file = (_crud_call_sites_in(path, repo) for path in _source_files(repo))
+    sites = tuple(site for sites_in_file in per_file for site in sites_in_file)  # comprehension-ok: flatten
+    assert len(sites) >= 40, f"the scan lost the PrismaClient call sites: {sites}"
+
+    unresolved = [site for site in sites if site.table_name not in _PRISMA_MODEL_BY_TABLE_NAME]
+    assert unresolved == [], f"PrismaClient CRUD calls whose table the schema cannot resolve: {unresolved}"
+
+    rendered = {
+        site.location: service_span_name(
+            ServiceSpanData(
+                service_name="postgres", call_type=site.call_type, event_metadata={"table_name": site.table_name}
+            )
+        )
+        for site in sites
+    }
+    half_named = {
+        location: name
+        for location, name in rendered.items()
+        if re.fullmatch(r"postgres\.(select|insert|update|delete) LiteLLM_\w+", name) is None
+    }
+    assert half_named == {}, half_named

@@ -238,7 +238,7 @@ async def test_service_span_not_duplicated_for_string_and_instance(monkeypatch):
     parent.end()
 
     db_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "postgres get_user_object"
+        s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"
     ]
     assert len(db_spans) == 1
 
@@ -274,7 +274,7 @@ async def test_service_failure_span_not_duplicated_for_string_and_instance(
     parent.end()
 
     db_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "postgres get_user_object"
+        s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"
     ]
     assert len(db_spans) == 1
 

@@ -37,6 +37,7 @@ from litellm.integrations.otel.model.semconv import (
     RpcSystem,
     Server,
 )
+from litellm.integrations.otel.model.spans import postgres_operation
 
 
 class GenAIMapper:
@@ -196,7 +197,7 @@ class GenAIMapper:
         # An outbound datastore call (DB_CALL / CLIENT span) also carries db.*
         # semconv naming the server it reached. Internal services (router, budget
         # jobs, …) have no db.system, so they get only the litellm.service.* keys.
-        attrs.update(db_span_attributes(data.service_name, data.call_type))
+        attrs.update(db_span_attributes(data.service_name, data.call_type, postgres_operation(data)))
         attrs.update(
             {
                 LiteLLM.REDIS_FAMILIES
