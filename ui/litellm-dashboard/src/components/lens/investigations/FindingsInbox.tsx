@@ -102,6 +102,7 @@ export function FindingsInbox({ lenses, onOpen }: { lenses: readonly Lens[]; onO
                 key={row.key}
                 onClick={() => onOpen(row)}
                 data-testid="inbox-row"
+                aria-label={row.title}
                 className="h-9 cursor-pointer border-b border-border/60 text-[12px] transition-colors duration-150 hover:bg-trace-row-hover motion-reduce:transition-none"
               >
                 <td className="px-3">
