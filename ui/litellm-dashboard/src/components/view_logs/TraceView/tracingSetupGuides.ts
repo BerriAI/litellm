@@ -383,7 +383,7 @@ try {
   const { text } = await generateText({
     model,
     prompt: "What is an agent trace?",
-    experimental_telemetry: { isEnabled: true, functionId: AGENT_NAME },
+    telemetry: { functionId: AGENT_NAME },
   });
   console.log(text);
 } finally {

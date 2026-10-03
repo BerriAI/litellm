@@ -617,6 +617,7 @@ function ConnectAgent({
           <p className="mb-3 text-sm leading-6 text-muted-foreground">
             {guide.existingModel ? "Keep your existing model settings. " : "Save and run this example. "}
             Replace <code>research_agent</code> with your agent’s name.
+            {!guide.existingModel && " Use a model configured on this proxy."}
           </p>
           <CodeBlock code={quickstart} tabs={<FileLabel>{guide.fileName}</FileLabel>} wrap />
           {guide.note && <p className="mt-3 text-sm leading-6 text-muted-foreground">{guide.note}</p>}

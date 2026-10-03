@@ -125,6 +125,7 @@ describe("TracingSetupCard", () => {
     expect(card).toHaveTextContent("npm install ai @ai-sdk/otel");
     expect(card).toHaveTextContent('const AGENT_NAME = "research_agent"');
     expect(card).toHaveTextContent("functionId: AGENT_NAME");
+    expect(card).toHaveTextContent("Use a model configured on this proxy.");
     expect(screen.getByText(/^import \{ createOpenAICompatible/)).toHaveTextContent(
       'const model = litellm("openai/gpt-6-sol")',
     );
@@ -155,8 +156,7 @@ describe("TracingSetupCard", () => {
     expect(card).toHaveTextContent("Connection details");
   });
 
-  it("offers a scoped tracing key only to callers allowed to set key routes", async () => {
-    const user = userEvent.setup();
+  it("offers a scoped tracing key only to callers allowed to set key routes", () => {
     const { card } = renderCard({ canMintTracingKey: false });
     expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send a test trace" })).toBeVisible();
