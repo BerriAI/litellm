@@ -1,6 +1,7 @@
 "use client";
 
 import moment from "moment";
+import { useTheme } from "next-themes";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cva.config";
@@ -35,7 +36,7 @@ export function bucketRuns(runs: readonly TraceSummary[], range: TimeWindow, buc
   const placed = runs.map((run) => ({
     index: Math.floor((moment(run.start_time).valueOf() - range.startMs) / width),
     failed: run.error_count > 0,
-    agent: traceAgentNames(run)[0] ?? "",
+    agents: traceAgentNames(run).length ? traceAgentNames(run) : [""],
   }));
   return Array.from({ length: buckets }, (_, i) => {
     const hits = placed.filter((p) => p.index === i);
@@ -44,7 +45,7 @@ export function bucketRuns(runs: readonly TraceSummary[], range: TimeWindow, buc
       endMs: range.startMs + (i + 1) * width,
       runs: hits.length,
       failed: hits.filter((p) => p.failed).length,
-      agents: hits.filter((p) => !p.failed).map((p) => p.agent),
+      agents: hits.filter((p) => !p.failed).flatMap((p) => p.agents),
     };
   });
 }
@@ -166,6 +167,7 @@ function DotField({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const progress = useRiseIn();
+  const { resolvedTheme } = useTheme();
   useEffect(() => {
     const node = canvas.current;
     if (!node) return;
@@ -176,7 +178,7 @@ function DotField({
     const observer = new ResizeObserver(paint);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [buckets, max, band, hover, progress]);
+  }, [buckets, max, band, hover, progress, resolvedTheme]);
   return (
     <canvas
       ref={canvas}
