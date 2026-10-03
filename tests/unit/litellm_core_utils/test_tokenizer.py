@@ -1,8 +1,10 @@
+from collections.abc import Callable
 import copy
 import os
 import pickle
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 from typing import Final, Literal
 
@@ -19,6 +21,24 @@ from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_J
 
 ENCODINGS: Final = ("cl100k_base", "o200k_base", "p50k_base", "p50k_edit", "o200k_harmony")
 UNICODE_TEXTS: Final = ("hello world", "café 漢字 🙂", "", "a\ud800b", "\ud83d\ude42", "🙂\ud83d\ude42\udfff", " " * 64)
+
+
+@pytest.mark.parametrize("missing", ("tokenizers", "unrelated_dependency"))
+def test_added_token_metadata_reports_only_missing_tokenizer_extra(
+    missing: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]
+) -> None:
+    tokenizer: Final = HuggingFaceTokenizer.from_str(TOKENIZER_JSON)
+    failure: Final = ModuleNotFoundError("dependency unavailable", name=missing)
+
+    fail_optional_import("tokenizers", failure)
+    with pytest.raises(ImportError) as error:
+        tokenizer.get_added_tokens_decoder()
+
+    if missing == "tokenizers":
+        assert "litellm[tokenizers]" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
 
 
 @pytest.mark.parametrize("name", ENCODINGS)
@@ -401,3 +421,32 @@ def test_huggingface_encoding_exposes_the_tokenizers_lookup_and_mutation_surface
     assert merged.offsets == type(expected).merge([expected, reference.encode("more")]).offsets
     with pytest.raises(ValueError, match="direction"):
         actual.pad(8, direction="sideways")
+
+
+def test_runtime_tokenizer_aliases_preserve_python_and_native_types() -> None:
+    from litellm.litellm_core_utils.tokenizer import HuggingFace, Tokenizer
+    assert isinstance(ReferenceTokenizer.from_str(TOKENIZER_JSON), HuggingFace)
+    assert isinstance(HuggingFaceTokenizer.from_str(TOKENIZER_JSON), HuggingFace)
+    assert isinstance(tiktoken.get_encoding("cl100k_base"), Tokenizer)
+
+
+def test_missing_tokenizer_extra_warns_once_and_preserves_fallback(
+    fail_optional_import: Callable[[str, ModuleNotFoundError], None],
+) -> None:
+    from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer
+    _load_huggingface_tokenizer.cache_clear()
+    fail_optional_import("tokenizers", ModuleNotFoundError("missing", name="tokenizers"))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default", RuntimeWarning)
+        first: Final = _select_tokenizer("llama-3")
+        second: Final = _select_tokenizer("llama-3")
+    assert first["type"] == second["type"] == "openai_tokenizer"
+    assert len(caught) == 1
+    assert "litellm[tokenizers]" in str(caught[0].message)
+    assert "token limits" in str(caught[0].message)
+
+
+def test_unknown_tokenizer_attribute_raises_attribute_error() -> None:
+    from litellm.litellm_core_utils import tokenizer
+    with pytest.raises(AttributeError, match="not_a_tokenizer"):
+        getattr(tokenizer, "not_a_tokenizer")

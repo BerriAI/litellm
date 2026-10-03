@@ -4,13 +4,32 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Final
 
+from collections.abc import Callable
+
+import boto3
 import pytest
 
 import litellm.integrations.focus.destinations.s3_destination as s3_module
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.destinations.s3_destination import FocusS3Destination
+
+
+@pytest.mark.parametrize("missing", ("boto3", "unrelated_dependency"))
+def test_s3_upload_reports_only_missing_aws_extra(missing: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]) -> None:
+    destination: Final = FocusS3Destination(prefix="exports", config={"bucket_name": "bucket"})
+    failure: Final = ModuleNotFoundError("dependency unavailable", name=missing)
+
+    fail_optional_import("boto3", failure)
+    with pytest.raises(ImportError) as error:
+        destination._upload(content=b"payload", object_key="file.bin")
+
+    if missing == "boto3":
+        assert "litellm[aws]" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
 
 
 def _window(freq: str = "hourly", hour: int = 5) -> FocusTimeWindow:
@@ -81,7 +100,7 @@ def test_should_upload_with_configured_client(monkeypatch: pytest.MonkeyPatch):
 
         return SimpleNamespace(put_object=put_object)
 
-    monkeypatch.setattr(s3_module.boto3, "client", fake_client)
+    monkeypatch.setattr(boto3, "client", fake_client)
 
     dest._upload(content=b"payload", object_key="path/file.bin")
 

@@ -19,6 +19,7 @@ from litellm.constants import (
     S3_PARTITION_GRANULARITY_ENV_VAR,
     S3_PREFIX_DIGEST_CHARS,
 )
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.utils import StandardLoggingPayload
 
@@ -168,6 +169,7 @@ class S3Logger:
         s3_log_prompts_only: bool | None = None,
         **kwargs,
     ):
+        require_aws_sdk()
         import boto3
 
         try:

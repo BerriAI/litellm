@@ -8,6 +8,7 @@ from typing import Final, Protocol
 
 import litellm
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 
 
 class _DynamoTable(Protocol):
@@ -23,6 +24,7 @@ class DyanmoDBLogger:
 
     def __init__(self):
         # Instance variables
+        require_aws_sdk()
         import boto3
 
         self.dynamodb: Final[_DynamoResource] = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])

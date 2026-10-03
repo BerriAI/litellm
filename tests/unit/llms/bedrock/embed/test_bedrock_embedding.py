@@ -84,7 +84,7 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
         assert isinstance(response.data[0]["embedding"], list)
         assert len(response.data[0]["embedding"]) == 3  # Based on mock response
 
-        headers = mock_post.call_args.kwargs.get("headers", {})
+        headers = httpx.Headers(mock_post.call_args.kwargs.get("headers", {}))
         assert "Authorization" in headers
         assert headers["Authorization"] == f"Bearer {test_api_key}"
 
@@ -122,7 +122,7 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
-        headers = mock_post.call_args.kwargs.get("headers", {})
+        headers = httpx.Headers(mock_post.call_args.kwargs.get("headers", {}))
         assert "Authorization" in headers
         assert headers["Authorization"] == f"Bearer {test_api_key}"
 
@@ -152,7 +152,7 @@ async def test_async_bedrock_embedding_with_bearer_token():
 
         assert isinstance(response, litellm.EmbeddingResponse)
 
-        headers = mock_post.call_args.kwargs.get("headers", {})
+        headers = httpx.Headers(mock_post.call_args.kwargs.get("headers", {}))
         assert "Authorization" in headers
         assert headers["Authorization"] == f"Bearer {test_api_key}"
 
@@ -1121,7 +1121,7 @@ def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(mo
         )
 
     assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
-    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+    assert httpx.Headers(mock_post.call_args.kwargs["headers"])["Authorization"] == "Bearer env-bearer-token-12345"
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,7 @@ from litellm.constants import (
     SQS_API_VERSION,
     SQS_SEND_MESSAGE_ACTION,
 )
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
@@ -68,6 +69,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_app_encryption_aad: str | None = None,
         **kwargs,
     ) -> None:
+        require_aws_sdk()
         try:
             verbose_logger.debug("in init sqs logger - sqs_callback_params %s", litellm.aws_sqs_callback_params)
 

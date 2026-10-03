@@ -341,3 +341,13 @@ async def test_s3_cache_async_disconnect(mock_s3_dependencies):
 
     # Should not raise any exceptions
     await cache.disconnect()
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.caching.s3_cache import S3Cache
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        S3Cache(s3_bucket_name="test-bucket")

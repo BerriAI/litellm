@@ -5129,3 +5129,13 @@ async def test_repeated_failure_notifications_upload_once(
     await sink.async_send_batch()
     await asyncio.sleep(0)
     assert upload.await_count == 1
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.integrations.s3_v2 import S3Logger
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        S3Logger()

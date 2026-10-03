@@ -159,19 +159,27 @@ jobs:
       - name: Check locked runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          for extra in core cli mcp proxy; do
+          for extra in core cli aws tokenizers aws,tokenizers sdk-extras mcp proxy; do
             args=()
-            if [ "$extra" != core ]; then args=(--extra "$extra"); fi
+            if [ "$extra" = aws,tokenizers ]; then
+              args=(--extra aws --extra tokenizers)
+            elif [ "$extra" != core ]; then
+              args=(--extra "$extra")
+            fi
             UV_PROJECT_ENVIRONMENT=".venv-$extra" .github/scripts/uv_sync_with_retries.sh --frozen --no-dev --no-editable --python ${{ matrix.python-version }} "${args[@]}"
             uv pip check --python ".venv-$extra"
-            if [ "$extra" = core ]; then
-              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+            if [ "$extra" != mcp ] && [ "$extra" != proxy ] && [ "$extra" != cli ]; then
+              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile "$extra")
             elif [ "$extra" = cli ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile cli)
             else
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "${checker[@]}")
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
+            if [ "$extra" = proxy ]; then
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile proxy)
+            fi
             if [ "$extra" = core ] || [ "$extra" = proxy ]; then
               (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile "$extra")
             fi
@@ -191,22 +199,30 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         run: |
           wheel=$(realpath dist/mcp-check/litellm_core-[0-9]*.whl)
-          for extra in core cli mcp proxy; do
+          for extra in core cli aws tokenizers aws,tokenizers sdk-extras mcp proxy; do
             args=()
-            if [ "$extra" != core ]; then args=(--extra "$extra"); fi
+            if [ "$extra" = aws,tokenizers ]; then
+              args=(--extra aws --extra tokenizers)
+            elif [ "$extra" != core ]; then
+              args=(--extra "$extra")
+            fi
             uv pip compile pyproject.toml --no-sources --find-links dist/mcp-check "${args[@]}" --python-version ${{ matrix.python-version }} --resolution lowest-direct -o "lowest-$extra.txt"
             uv venv --python ${{ matrix.python-version }} ".venv-lowest-$extra"
             uv pip sync --find-links dist/mcp-check --python ".venv-lowest-$extra" "lowest-$extra.txt"
             uv pip install --python ".venv-lowest-$extra" --no-deps "$wheel"
             uv pip check --python ".venv-lowest-$extra"
-            if [ "$extra" = core ]; then
-              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+            if [ "$extra" != mcp ] && [ "$extra" != proxy ] && [ "$extra" != cli ]; then
+              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile "$extra")
             elif [ "$extra" = cli ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile cli)
             else
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "${checker[@]}")
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
+            if [ "$extra" = proxy ]; then
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile proxy)
+            fi
             if [ "$extra" = core ] || [ "$extra" = proxy ]; then
               (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile "$extra")
             fi

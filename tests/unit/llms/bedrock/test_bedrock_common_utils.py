@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from typing import Final
 
 import pytest
 
@@ -1050,6 +1052,22 @@ def test_unmapped_openai_family_model_routes_to_converse():
     assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
     imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
     assert BedrockModelInfo.get_bedrock_route(imported) == "openai"
+
+
+@pytest.mark.parametrize("missing", ("botocore", "botocore.parsers", "unrelated_dependency"))
+def test_event_stream_missing_dependency_guidance(
+    missing: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]
+) -> None:
+    from litellm.llms.bedrock.common_utils import create_event_stream_parser
+    failure: Final = ModuleNotFoundError("unavailable", name=missing)
+    fail_optional_import("botocore.parsers", failure)
+    with pytest.raises(ImportError) as error:
+        create_event_stream_parser()
+    if missing == "unrelated_dependency":
+        assert error.value is failure
+    else:
+        assert "litellm[aws]" in str(error.value)
+        assert error.value.__cause__ is failure
 
 
 @pytest.mark.parametrize(

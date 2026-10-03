@@ -5,6 +5,8 @@ Bedrock Mantle is Amazon Bedrock's OpenAI-compatible inference engine (Project M
 API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 """
 
+from collections.abc import Callable
+
 import json
 import asyncio
 from collections.abc import Mapping
@@ -23,6 +25,26 @@ from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatCon
 from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
 from litellm.types.utils import LlmProviders
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
+
+
+@pytest.mark.parametrize("missing", ("botocore", "unrelated_dependency"))
+def test_mantle_signing_reports_only_missing_aws_extra(
+    missing: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]
+) -> None:
+    config: Final = BedrockMantleChatConfig()
+    failure: Final = ModuleNotFoundError("dependency unavailable", name=missing)
+
+    fail_optional_import("botocore.exceptions", failure)
+    with pytest.raises(ImportError) as error:
+        config.sign_request(
+            headers={}, optional_params={}, request_data={}, api_base="https://example.com"
+        )
+
+    if missing == "botocore":
+        assert "litellm[aws]" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
 
 
 @pytest.fixture

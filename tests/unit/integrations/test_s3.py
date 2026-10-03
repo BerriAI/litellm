@@ -319,3 +319,13 @@ def test_legacy_s3_logger_ignores_partition_granularity_and_keeps_daily_folder()
 
     key = mock_s3_client.put_object.call_args.kwargs["Key"]
     assert key.startswith("logs/2026-07-30/time-12-00-00-")
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.integrations.s3 import S3Logger
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        S3Logger()

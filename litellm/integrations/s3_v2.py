@@ -47,6 +47,7 @@ from litellm.integrations.s3 import (
     resolve_s3_partition_granularity,
     resolve_sse_params,
 )
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -163,6 +164,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_callback_params_override: dict | None = None,
         **kwargs,
     ):
+        require_aws_sdk()
         try:
             _masker: Final = SensitiveDataMasker()
             if s3_callback_params_override is not None:

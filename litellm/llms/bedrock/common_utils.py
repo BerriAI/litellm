@@ -18,6 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
     from botocore.model import ServiceModel, Shape
+    from botocore.parsers import EventStreamJSONParser
 
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
@@ -1818,15 +1819,23 @@ def build_bedrock_stream_error(
     return build_bedrock_stream_event_error(exception_type, status_code, response_dict["body"])
 
 
+def create_event_stream_parser() -> EventStreamJSONParser:
+    try:
+        from botocore.parsers import EventStreamJSONParser
+    except ModuleNotFoundError as error:
+        if error.name not in ("botocore", "botocore.parsers"):
+            raise
+        raise ImportError('Install Bedrock event-stream support with pip install "litellm[aws]"') from error
+    return EventStreamJSONParser()
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
     """
 
     def __init__(self):
-        from botocore.parsers import EventStreamJSONParser
-
-        self.parser = EventStreamJSONParser()
+        self.parser = create_event_stream_parser()
 
     def _parse_message_from_event(self, event) -> str | None:
         response_stream_shape: Final = get_bedrock_response_stream_shape()

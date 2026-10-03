@@ -1,3 +1,4 @@
+import pytest
 import datetime
 from unittest.mock import patch
 
@@ -88,3 +89,13 @@ def test_load_credentials_assumes_role_with_session_tags(monkeypatch):
     assert credentials.access_key == "ASIASMCHATTAGGED"
     assert aws_region_name == "us-east-1"
     assert "aws_session_tags" not in optional_params
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.llms.sagemaker.chat.handler import SagemakerChatHandler
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        SagemakerChatHandler()._load_credentials({})

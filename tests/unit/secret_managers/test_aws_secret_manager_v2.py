@@ -197,3 +197,13 @@ def test_prepare_request_env_bedrock_runtime_endpoint_still_wins(monkeypatch: py
         },
     )
     assert endpoint_url == "https://secretsmanager.eu-west-1.amazonaws.com"
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        AWSSecretsManagerV2()._prepare_request("GetSecretValue", "test-secret")
