@@ -42,28 +42,5 @@ cache_id = budget_alert_class.get_id(user_info)  # Returns user_id
 
 To add a new budget alert type, simply create a new class that extends `BaseBudgetAlertType` and implements all the required methods, then add it to the dictionary in the `get_budget_alert_type()` function.
 
-## Filter Slack budget alerts by key alias
-
-Set `general_settings.alerting_args.slack_budget_alert_key_aliases` to send Slack budget alerts only for matching virtual key aliases:
-
-```yaml
-general_settings:
-  alerting: ["slack"]
-  alert_types: ["budget_alerts"]
-  alerting_args:
-    slack_budget_alert_key_aliases:
-      - "github-example-*"
-```
-
-Patterns are nonempty strings matched against the whole alias using Python's case-sensitive `fnmatchcase` glob rules. Exact aliases, `*`, `?` and character classes such as `[ab]` are supported. Any matching pattern permits the alert
-
-Omitting the setting or setting it to `null` preserves existing behavior. An empty list `[]` disables Slack budget alerts. When a list is configured, only `KEY` budget events with a present, nonempty matching `key_alias` are sent to Slack. User, team, organization, project, proxy and all other non-key budget events are excluded, even if they carry an associated key alias
-
-This only filters Slack delivery for `budget_alerts`, including immediate and digest alerts. Budget enforcement, thresholds, alert cache and deduplication remain unchanged. Webhook, email and Microsoft Teams delivery, and other Slack alert types, are unaffected
-
-The filter applies when an alert enters the Slack queue or digest. Changing it does not retract alerts already queued or accumulated in a digest
-
-The manual Slack service test sends a budget alert without an entity alias. With this filter configured, that budget test is suppressed even if the endpoint reports success. Other enabled alert types tested by that endpoint are unaffected. Omit the setting or use `null` to check Slack connectivity with the manual budget test
-
 ## Further Reading
 - [Doc setting up Alerting on LiteLLM Proxy (Gateway)](https://docs.litellm.ai/docs/proxy/alerting)
