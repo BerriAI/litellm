@@ -38,15 +38,8 @@ class _DeviceCodeInfo(TypedDict):
     verification_uri: ReadOnly[NotRequired[str]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
-class _AccessTokenPollInfo(TypedDict):
-    access_token: ReadOnly[NotRequired[str]]
-    error: ReadOnly[NotRequired[object]]
-
-
 _API_KEY_INFO_ADAPTER: Final = TypeAdapter(_ApiKeyInfo)
 _DEVICE_CODE_INFO_ADAPTER: Final = TypeAdapter(_DeviceCodeInfo)
-_ACCESS_TOKEN_POLL_INFO_ADAPTER: Final = TypeAdapter(_AccessTokenPollInfo)
 
 
 class Authenticator:
@@ -319,7 +312,7 @@ class Authenticator:
                     },
                 )
                 resp.raise_for_status()
-                resp_json = _ACCESS_TOKEN_POLL_INFO_ADAPTER.validate_python(resp.json())
+                resp_json = resp.json()
 
                 if "access_token" in resp_json:
                     verbose_logger.info("Authentication successful!")

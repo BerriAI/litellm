@@ -7981,7 +7981,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        prefetched_source_data = None
+        prefetch_json: object = None
         prefetch_params: Final = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
@@ -8000,9 +8000,12 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = _PREFETCHED_SOURCE_DATA.validate_python(prefetch_resp.json())
+            prefetch_json = prefetch_resp.json()
 
         try:
+            prefetched_source_data: Final = (
+                None if prefetch_params is None else _PREFETCHED_SOURCE_DATA.validate_python(prefetch_json)
+            )
             url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
@@ -8078,7 +8081,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        prefetched_source_data = None
+        prefetch_json: object = None
         prefetch_params: Final = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
@@ -8097,9 +8100,12 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = _PREFETCHED_SOURCE_DATA.validate_python(prefetch_resp.json())
+            prefetch_json = prefetch_resp.json()
 
         try:
+            prefetched_source_data: Final = (
+                None if prefetch_params is None else _PREFETCHED_SOURCE_DATA.validate_python(prefetch_json)
+            )
             url, data, files = video_provider_config.transform_video_edit_request(
                 prompt=prompt,
                 video_id=video_id,
