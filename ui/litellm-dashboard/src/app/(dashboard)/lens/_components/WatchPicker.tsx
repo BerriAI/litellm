@@ -132,7 +132,7 @@ export function WatchPicker({
               onClick={() => toggle(watch.id)}
               className={`flex h-[5.25rem] flex-col justify-start gap-1 rounded-xl px-3.5 py-3 text-left outline-none transition-all duration-200 ease-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-[0.97] ${
                 on
-                  ? "bg-background text-foreground ring-[1.5px] ring-foreground"
+                  ? "bg-background text-foreground ring-[1.5px] ring-inset ring-foreground"
                   : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
