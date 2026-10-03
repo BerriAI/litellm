@@ -144,8 +144,8 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
     return _Launch(process, port, log_path)
 
 
-def _lost_port_race(launch: _Launch) -> bool:
-    return launch.process.poll() is not None and _BIND_COLLISION in launch.log.read_text()
+def _lost_port_race(exit_code: int | None, log: Path) -> bool:
+    return exit_code is not None and _BIND_COLLISION in log.read_text()
 
 
 def _wait_until_ready(launch: _Launch) -> None:
@@ -167,13 +167,14 @@ def _launch_until_bound(
     launch: Final = _launch(command, root, environment, output)
     try:
         _wait_until_ready(launch)
-        assert launch.process.poll() is None or (attempts > 1 and _lost_port_race(launch)), (
+        exit_code: Final = launch.process.poll()
+        assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
             "Owned proxy exited before readiness"
         )
     except BaseException:
         _stop(launch.process)
         raise
-    if launch.process.poll() is None:
+    if exit_code is None:
         return launch
     _stop(launch.process)
     return _launch_until_bound(command, root, environment, output, attempts - 1)
