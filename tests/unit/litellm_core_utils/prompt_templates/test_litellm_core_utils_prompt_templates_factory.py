@@ -15,10 +15,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    _sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
+    _sanitize_anthropic_tool_use_id,
+    _sort_bedrock_assistant_content_blocks,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
@@ -29,6 +30,266 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
 from litellm.utils import validate_and_fix_openai_messages
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+@pytest.mark.parametrize("block_cache_control", [False, True])
+def test_anthropic_list_content_preserves_message_cache_control(role, block_cache_control):
+    message_cache_control: Final = {"type": "ephemeral"}
+    block_cache: Final = {"type": "ephemeral", "ttl": "1h"}
+    content: Final = [
+        {"type": "text", "text": "first", **({"cache_control": block_cache} if block_cache_control else {})},
+        {"type": "text", "text": "second"},
+    ]
+    message: Final = {"role": role, "content": content, "cache_control": message_cache_control}
+    messages: Final = [message] if role == "user" else [{"role": "user", "content": "hi"}, message]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    expected: Final = [
+        {"type": "text", "text": "first", **({"cache_control": block_cache} if block_cache_control else {})},
+        {
+            "type": "text",
+            "text": "second",
+            **({} if block_cache_control else {"cache_control": message_cache_control}),
+        },
+    ]
+    assert result[-1]["content"] == expected
+
+
+def test_anthropic_list_message_cache_control_skips_separate_thinking_blocks():
+    thinking_block: Final = {
+        "type": "thinking",
+        "thinking": "reasoning",
+        "signature": "valid-signature",
+    }
+    cache_control: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer"}],
+            "thinking_blocks": [thinking_block],
+            "cache_control": cache_control,
+        },
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[-1]["content"] == [
+        thinking_block,
+        {"type": "text", "text": "answer", "cache_control": cache_control},
+    ]
+
+
+@pytest.mark.parametrize("call_field", ["tool_calls", "function_call"])
+def test_anthropic_list_message_cache_control_follows_tool_calls(call_field):
+    cache_control: Final = {"type": "ephemeral"}
+    call: Final = (
+        [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]
+        if call_field == "tool_calls"
+        else {"name": "lookup", "arguments": "{}"}
+    )
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "checking"}],
+            "cache_control": cache_control,
+            call_field: call,
+        },
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+    blocks: Final = result[-1]["content"]
+
+    assert blocks[0] == {"type": "text", "text": "checking"}
+    assert blocks[-1]["type"] == "tool_use"
+    assert blocks[-1]["cache_control"] == cache_control
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_anthropic_list_message_cache_control_preserves_caller_block(role):
+    block: Final = (
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "document"}}
+        if role == "user"
+        else {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}}
+    )
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": role, "content": [block], "cache_control": {"type": "ephemeral"}},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert "cache_control" not in block
+    assert result[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert result[-1]["content"][-1] is not block
+
+
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_anthropic_skipped_list_block_does_not_suppress_message_cache_control(role):
+    skipped_block: Final = (
+        {"type": "unknown", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+        if role == "user"
+        else {"type": "thinking", "thinking": "unsigned", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    )
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": role,
+            "content": [skipped_block, {"type": "text", "text": "retained"}],
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[-1]["content"][-1] == {"type": "text", "text": "retained", "cache_control": {"type": "ephemeral"}}
+    assert all(block.get("type") != skipped_block["type"] for block in result[-1]["content"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block_cache_control", [False, True])
+async def test_bedrock_list_content_preserves_message_cache_control(block_cache_control):
+    content: Final = [
+        {"type": "text", "text": "first", **({"cache_control": {"type": "ephemeral"}} if block_cache_control else {})},
+        {"type": "text", "text": "second"},
+    ]
+    messages: Final = [{"role": "user", "content": content, "cache_control": {"type": "ephemeral"}}]
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    sync_result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    async_result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages, model=model, llm_provider="bedrock"
+    )
+
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    expected: Final = (
+        [{"text": "first"}, cache_point, {"text": "second"}]
+        if block_cache_control
+        else [{"text": "first"}, {"text": "second"}, cache_point]
+    )
+    assert sync_result[0]["content"] == expected
+    assert async_result[0]["content"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block_cache_control", [False, True])
+@pytest.mark.parametrize("with_tool_calls", [False, True])
+async def test_bedrock_assistant_list_preserves_message_cache_control(block_cache_control, with_tool_calls):
+    content: Final = [
+        {
+            "type": "text",
+            "text": "checking",
+            **({"cache_control": {"type": "ephemeral"}} if block_cache_control else {}),
+        }
+    ]
+    assistant_message: Final = {
+        "role": "assistant",
+        "content": content,
+        "cache_control": {"type": "ephemeral"},
+        **(
+            {"tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]}
+            if with_tool_calls
+            else {}
+        ),
+    }
+    messages: Final = [{"role": "user", "content": "hi"}, assistant_message]
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    sync_result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    async_result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages, model=model, llm_provider="bedrock"
+    )
+
+    for result in (sync_result, async_result):
+        blocks = result[-1]["content"]
+        assert sum("cachePoint" in block for block in blocks) == 1
+        if not block_cache_control:
+            assert blocks[-1] == {"cachePoint": {"type": "default"}}
+            if with_tool_calls:
+                assert "toolUse" in blocks[-2]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_assistant_string_preserves_message_cache_control():
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "checking", "cache_control": {"type": "ephemeral"}},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    expected: Final = [{"text": "checking"}, {"cachePoint": {"type": "default"}}]
+
+    sync_result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    async_result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages, model=model, llm_provider="bedrock"
+    )
+
+    assert sync_result[-1]["content"] == expected
+    assert async_result[-1]["content"] == expected
+
+
+@pytest.mark.asyncio
+async def test_bedrock_assistant_message_cache_point_stays_before_following_assistant_text():
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "cached prefix"}],
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "uncached suffix"}]},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    expected: Final = [
+        {"text": "cached prefix"},
+        {"cachePoint": {"type": "default"}},
+        {"text": "uncached suffix"},
+    ]
+
+    sync_result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    async_result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages, model=model, llm_provider="bedrock"
+    )
+
+    assert sync_result[-1]["content"] == expected
+    assert async_result[-1]["content"] == expected
+
+
+def test_bedrock_assistant_content_sorting_keeps_cache_point_boundaries():
+    first_cache_point: Final = {"cachePoint": {"type": "default"}}
+    second_cache_point: Final = {"cachePoint": {"type": "default", "ttl": "5m"}}
+    before_cache_point: Final = {"text": "before cache point"}
+    after_first_cache_point: Final = {"text": "after first cache point"}
+    after_second_cache_point: Final = {"text": "after second cache point"}
+    first_tool_use: Final = {"toolUse": {"toolUseId": "call_1", "name": "first"}}
+    second_tool_use: Final = {"toolUse": {"toolUseId": "call_2", "name": "second"}}
+    reasoning: Final = {"reasoningContent": {"reasoningText": {"text": "reasoning"}}}
+
+    result: Final = _sort_bedrock_assistant_content_blocks(
+        [
+            first_tool_use,
+            before_cache_point,
+            first_cache_point,
+            second_tool_use,
+            after_first_cache_point,
+            reasoning,
+            second_cache_point,
+            after_second_cache_point,
+        ]
+    )
+
+    assert result == [
+        before_cache_point,
+        first_tool_use,
+        first_cache_point,
+        reasoning,
+        after_first_cache_point,
+        second_tool_use,
+        second_cache_point,
+        after_second_cache_point,
+    ]
 
 
 def _get_gemini_function_response_inline_data_parts(result):
