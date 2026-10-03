@@ -888,6 +888,37 @@ class APIConnectionError(openai.APIConnectionError):
         return _message
 
 
+class IncompleteStreamError(APIError):
+    """Raised when a stream ends without a terminal finish_reason or [DONE].
+
+    Only raised under ``strict_stream_completion``. The default remains the
+    synthesized ``finish_reason="stop"``, because several backends close the
+    connection at EOF instead of sending a terminator and would otherwise start
+    failing.
+    """
+
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        request: httpx.Request | None = None,
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+    ) -> None:
+        super().__init__(
+            status_code=500,
+            message=message,
+            llm_provider=llm_provider,
+            model=model,
+            request=request or httpx.Request(method="POST", url="https://api.openai.com/v1"),
+            litellm_debug_info=litellm_debug_info,
+            max_retries=max_retries,
+            num_retries=num_retries,
+        )
+
+
 # raised if an invalid request (not get, delete, put, post) is made
 class APIResponseValidationError(openai.APIResponseValidationError):
     def __init__(
