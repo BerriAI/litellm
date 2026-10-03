@@ -10,7 +10,7 @@ const personPeriodFields = {
   gateway_recorded_spend: z.number(),
   recorded_spend_per_attributed_pr: z.number().nullable(),
   spend_observation: z.enum(["records_present", "no_records"]),
-  pr_numbers: z.array(z.number()),
+  pr_urls: z.array(z.string()),
 };
 const personPeriodSchema = z.object(personPeriodFields);
 const periodFields = {
@@ -18,13 +18,12 @@ const periodFields = {
   merged_prs: z.number(),
   median_merge_hours: z.number().nullable(),
   human_authored: z.number(),
-  devin_authored: z.number(),
-  other_bot_authored: z.number(),
+  agent_authored: z.number(),
   missing_author: z.number(),
-  devin_without_requester: z.number(),
+  agents_without_requester: z.number(),
   matched_internal_prs: z.number(),
-  new_bug_labeled_issues: z.number(),
-  new_regression_labeled_issues: z.number(),
+  new_bug_labeled_issues: z.number().nullable(),
+  new_regression_labeled_issues: z.number().nullable(),
   explicitly_titled_revert_prs: z.number(),
   matched_users_recorded_spend: z.number(),
   spend_observation: z.enum(["records_present", "no_records"]),
@@ -36,9 +35,17 @@ const periods = <T extends z.ZodType>(schema: T) => z.object({ current: schema, 
 const personFields = {
   name: z.string(),
   email: z.string(),
-  github_logins: z.array(z.string()),
+  logins: z.array(z.string()),
   periods: periods(personPeriodSchema),
 };
+const branchCostFields = {
+  repo: z.string(),
+  branch: z.string(),
+  spend: z.number().nullable(),
+  requests: z.number(),
+  status: z.enum(["matched", "unattributed", "ambiguous", "unavailable"]),
+};
+const branchSpendFields = { repo: z.string(), branch: z.string(), spend: z.number(), requests: z.number() };
 const pullFields = {
   number: z.number(),
   title: z.string(),
@@ -49,16 +56,46 @@ const pullFields = {
   author: z.string(),
   agent: z.boolean(),
   merged_at: z.string(),
-  merge_hours: z.number(),
+  merge_hours: z.number().nullable(),
+  repo: z.string(),
+  source_repo: z.string(),
+  source_branch: z.string(),
+  branch_cost: z.object(branchCostFields),
 };
 const snapshotFields = {
-  repo: z.string(),
+  source_provider: z.enum(["github", "gitlab"]),
+  repos: z.array(z.string()),
+  unmatched_logins: z.array(z.string()),
+  unlinked_branches: z.array(z.object(branchSpendFields)),
   captured_at: z.string(),
   periods: periods(periodSchema),
   people: z.array(z.object(personFields)),
   pulls: periods(z.array(z.object(pullFields))),
 };
 export const observedSnapshotSchema = z.object(snapshotFields);
+const settingsFields = {
+  source_provider: z.enum(["github", "gitlab"]),
+  api_url: z.string(),
+  repos: z.array(z.string()),
+  has_token: z.boolean(),
+  connection_type: z.enum(["token", "app"]),
+  update_interval_minutes: z.number(),
+  ready: z.boolean(),
+};
+export const observedSettingsSchema = z.object(settingsFields);
+const statusFields = {
+  running: z.boolean(),
+  phase: z.string(),
+  stage: z.string(),
+  done: z.number(),
+  total: z.number(),
+  error: z.string().nullable(),
+  finished_at: z.string().nullable().optional(),
+};
+export const observedStatusSchema = z.object(statusFields);
+export const observedReportResponseSchema = z.object({ report: observedSnapshotSchema.nullable() });
+export type ObservedSettings = z.infer<typeof observedSettingsSchema>;
+export type ObservedStatus = z.infer<typeof observedStatusSchema>;
 
 export type ObservedSnapshot = z.infer<typeof observedSnapshotSchema>;
 export type ObservedPerson = ObservedSnapshot["people"][number];
@@ -67,15 +104,42 @@ export type Period = keyof ObservedSnapshot["periods"];
 export type Comparison = Exclude<Period, "current">;
 export type PeopleSort = "merged" | "spend" | "cost" | "name";
 
-export const number = (value: number) => value.toLocaleString("en-US", { maximumFractionDigits: 1 });
+export const number = (value: number | null) =>
+  value === null ? "Unavailable" : value.toLocaleString("en-US", { maximumFractionDigits: 1 });
 export function money(value: number | null) {
   if (value === null) return "Unavailable";
   if (value > 0 && value < 0.01) return "<$0.01";
   return value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 }
-export const duration = (value: number | null) => (value === null ? "Unavailable" : `${number(value)}h`);
+export function duration(value: number | null) {
+  if (value === null) return "Unavailable";
+  if (value === 0) return "0m";
+  if (value < 1 / 60) return "<1m";
+  if (value < 1) return `${number(value * 60)}m`;
+  return `${number(value)}h`;
+}
 export const change = (current: number, baseline: number) =>
   baseline === 0 ? null : ((current - baseline) / baseline) * 100;
+
+export const accountLogins = (value: string) => [
+  ...new Set(
+    value
+      .split(/[\s,]+/)
+      .map((login) => login.replace(/^@/, "").toLowerCase())
+      .filter(Boolean),
+  ),
+];
+export const repositoryNames = (value: string) => [
+  ...new Set(
+    value
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map((repo) => {
+        const path = repo.replace(/^https:\/\/[^/]+\//, "");
+        return path.replace(/\/$/, "").replace(/\.git$/, "");
+      }),
+  ),
+];
 
 export function dateRange(window: { start: string; end: string }) {
   const date = (value: string) =>
@@ -96,7 +160,7 @@ export function visiblePeople(people: ObservedPerson[], query: string, sort: Peo
   };
   return people
     .filter((person) =>
-      [person.name, person.email, ...person.github_logins].join(" ").toLowerCase().includes(query.trim().toLowerCase()),
+      [person.name, person.email, ...person.logins].join(" ").toLowerCase().includes(query.trim().toLowerCase()),
     )
     .toSorted((a, b) => (sort === "name" ? a.name.localeCompare(b.name) : value(b) - value(a)));
 }
@@ -111,4 +175,26 @@ export function weeklyMerges(snapshot: ObservedSnapshot, period: Period) {
         return day >= week * 7 && day < (week + 1) * 7;
       }).length,
   );
+}
+
+export function syncMessage(status: ObservedStatus, report: ObservedSnapshot | null) {
+  if (status.running) return status.total ? `${status.stage} · ${status.done} / ${status.total}` : status.stage;
+  return report ? `Updated ${new Date(report.captured_at).toLocaleString()}` : "Ready to sync";
+}
+
+export function recordedBranches(snapshot: ObservedSnapshot) {
+  const matched = snapshot.pulls.current.flatMap((pull) => {
+    const cost = pull.branch_cost;
+    if (cost.status !== "matched" || cost.spend === null) return [];
+    return [{ repo: cost.repo, branch: cost.branch, spend: cost.spend, requests: cost.requests }];
+  });
+  return [
+    ...new Map([...matched, ...snapshot.unlinked_branches].map((row) => [`${row.repo}\n${row.branch}`, row])).values(),
+  ].toSorted((a, b) => b.spend - a.spend);
+}
+
+export function changeTerms(provider: ObservedSnapshot["source_provider"]) {
+  return provider === "gitlab"
+    ? { singular: "MR", plural: "MRs", requests: "Merge requests", lower: "merge requests" }
+    : { singular: "PR", plural: "PRs", requests: "Pull requests", lower: "pull requests" };
 }

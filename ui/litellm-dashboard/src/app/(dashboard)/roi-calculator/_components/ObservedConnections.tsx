@@ -1,32 +1,365 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowLeft, ArrowRight, Check, CheckCircle2, Github, Gitlab, KeyRound, LockKeyhole } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Github, Gitlab, ArrowLeft, KeyRound } from "lucide-react";
+import { z } from "zod";
+import { apiClient } from "@/components/networking";
+import { extractProxyErrorMessage } from "@/lib/http/client";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { observedSettingsSchema, repositoryNames, type ObservedSettings } from "./observedData";
 
-type Provider = "GitHub" | "GitLab";
-const providerIcons = { GitHub: Github, GitLab: Gitlab };
-
-type Step = "provider" | "authorize" | "repositories" | "complete";
-const stepTitle: Record<Step, string> = {
-  provider: "Connect your code",
-  authorize: "Connect your code",
-  repositories: "Choose your repositories",
-  complete: "Ready to measure",
+const appFields = {
+  configured: z.boolean(),
+  can_install: z.boolean().optional().default(false),
+  api_url: z.string().nullable(),
+  callback_url: z.string().nullable(),
 };
+const appSchema = z.object(appFields);
+const appsSchema = z.object({ github: appSchema, gitlab: appSchema });
+const repositoriesSchema = z.object({
+  repositories: z.array(z.object({ name: z.string(), visibility: z.string(), archived: z.boolean() })),
+  has_more: z.boolean(),
+});
+const defaultUrl = { github: "https://api.github.com", gitlab: "https://gitlab.com/api/v4" };
 
-export default function ObservedConnections({ repo, onClose }: { repo: string; onClose: () => void }) {
-  const [provider, setProvider] = useState<Provider>("GitHub");
-  const [method, setMethod] = useState<"app" | "token">("app");
-  const [step, setStep] = useState<Step>("provider");
-  const [selected, setSelected] = useState(true);
-  const [instance, setInstance] = useState("https://gitlab.com");
-  const Icon = providerIcons[provider];
-  const exampleRepo = provider === "GitHub" ? repo : "engineering/example-project";
+function TokenFields({
+  label,
+  provider,
+  token,
+  onToken,
+  apiUrl,
+  onUrl,
+  hasToken,
+}: {
+  label: string;
+  provider: ObservedSettings["source_provider"];
+  token: string;
+  onToken: (value: string) => void;
+  apiUrl: string;
+  onUrl: (value: string) => void;
+  hasToken: boolean;
+}) {
+  return (
+    <>
+      <label htmlFor="roi-source-token" className="block text-sm font-medium">
+        {label} access token
+      </label>
+      <Input
+        id="roi-source-token"
+        type="password"
+        autoComplete="off"
+        value={token}
+        onChange={(event) => onToken(event.target.value)}
+        placeholder={hasToken ? "Leave blank to keep the saved token" : "Optional for public repositories"}
+      />
+      <p className="text-xs text-muted-foreground">
+        {provider === "github"
+          ? "Fine-grained token: read access to pull requests, issues, and metadata"
+          : "Token with read_api scope"}
+      </p>
+      <details className="text-sm">
+        <summary className="cursor-pointer">Self-hosted instance</summary>
+        <label htmlFor="roi-source-url" className="mt-3 block text-xs">
+          API URL
+        </label>
+        <Input id="roi-source-url" value={apiUrl} onChange={(event) => onUrl(event.target.value)} />
+      </details>
+    </>
+  );
+}
+function AppMessage({ configured, label }: { configured: boolean; label: string }) {
+  return (
+    <p className="text-sm text-muted-foreground">
+      {configured
+        ? `You’ll authorize ${label}, then choose repositories`
+        : `Register the ${label} app in gateway settings, or connect with a token`}
+    </p>
+  );
+}
 
+function RepositoryChoices({
+  available,
+  repos,
+  setRepos,
+  query,
+  setQuery,
+  page,
+  setPage,
+}: {
+  available: z.infer<typeof repositoriesSchema> | null;
+  repos: string;
+  setRepos: (value: string) => void;
+  query: string;
+  setQuery: (value: string) => void;
+  page: number;
+  setPage: (value: number) => void;
+}) {
+  return (
+    <>
+      <Input
+        aria-label="Find repositories"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setPage(1);
+        }}
+        placeholder="Find repositories…"
+      />
+      <div className="max-h-48 overflow-y-auto rounded-lg border divide-y">
+        {!available && (
+          <p role="status" className="p-3 text-sm text-muted-foreground">
+            Loading repositories…
+          </p>
+        )}
+        {available?.repositories.length === 0 && (
+          <p className="p-3 text-sm text-muted-foreground">No repositories found</p>
+        )}
+        {available?.repositories
+          .filter((repo) => !repo.archived)
+          .map((repo) => (
+            <label key={repo.name} className="flex cursor-pointer items-center gap-3 p-3 text-sm">
+              <input
+                type="checkbox"
+                checked={repositoryNames(repos).includes(repo.name)}
+                onChange={(event) =>
+                  setRepos(
+                    (event.target.checked
+                      ? [...new Set([...repositoryNames(repos), repo.name])]
+                      : repositoryNames(repos).filter((name) => name !== repo.name)
+                    ).join(", "),
+                  )
+                }
+              />
+              <span className="flex-1">{repo.name}</span>
+              <span className="text-xs text-muted-foreground">{repo.visibility}</span>
+            </label>
+          ))}
+      </div>
+      <div className="flex justify-between">
+        <Button size="sm" variant="ghost" disabled={page === 1} onClick={() => setPage(page - 1)}>
+          Previous
+        </Button>
+        <Button size="sm" variant="ghost" disabled={!available?.has_more} onClick={() => setPage(page + 1)}>
+          Next
+        </Button>
+      </div>
+    </>
+  );
+}
+
+function ConnectionMethod({
+  method,
+  setMethod,
+  label,
+  provider,
+  token,
+  setToken,
+  apiUrl,
+  setApiUrl,
+  connected,
+  apps,
+  busy,
+  connect,
+}: {
+  method: "app" | "token";
+  setMethod: (value: "app" | "token") => void;
+  label: string;
+  provider: ObservedSettings["source_provider"];
+  token: string;
+  setToken: (value: string) => void;
+  apiUrl: string;
+  setApiUrl: (value: string) => void;
+  connected: ObservedSettings;
+  apps: z.infer<typeof appsSchema> | null;
+  busy: boolean;
+  connect: () => void;
+}) {
+  const connectLabel = method === "app" ? `Connect ${label}` : "Continue";
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          variant={method === "app" ? "secondary" : "outline"}
+          aria-pressed={method === "app"}
+          onClick={() => setMethod("app")}
+        >
+          Connect with app
+        </Button>
+        <Button
+          variant={method === "token" ? "secondary" : "outline"}
+          aria-pressed={method === "token"}
+          onClick={() => setMethod("token")}
+        >
+          <KeyRound />
+          Access token
+        </Button>
+      </div>
+      {method === "token" && (
+        <TokenFields
+          label={label}
+          provider={provider}
+          token={token}
+          onToken={setToken}
+          apiUrl={apiUrl}
+          onUrl={setApiUrl}
+          hasToken={connected.has_token && connected.connection_type === "token"}
+        />
+      )}
+      {method === "app" && <AppMessage configured={Boolean(apps?.[provider].configured)} label={label} />}
+      <Button
+        className="w-full"
+        disabled={busy || (method === "app" && !apps?.[provider].configured)}
+        onClick={connect}
+      >
+        {busy ? "Connecting…" : connectLabel}
+      </Button>
+    </>
+  );
+}
+
+export default function ObservedConnections({
+  accessToken,
+  settings,
+  onClose,
+  onSaved,
+}: {
+  accessToken: string;
+  settings: ObservedSettings;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [connected, setConnected] = useState(settings);
+  const [provider, setProvider] = useState(settings.source_provider);
+  const [apiUrl, setApiUrl] = useState(settings.api_url);
+  const [method, setMethod] = useState<"app" | "token">(settings.has_token ? settings.connection_type : "app");
+  const [step, setStep] = useState<"connect" | "repos">(settings.has_token || settings.ready ? "repos" : "connect");
+  const [token, setToken] = useState("");
+  const [repos, setRepos] = useState(settings.repos.join(", "));
+  const [apps, setApps] = useState<z.infer<typeof appsSchema> | null>(null);
+  const [available, setAvailable] = useState<z.infer<typeof repositoriesSchema> | null>(null);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const label = provider === "github" ? "GitHub" : "GitLab";
+  const manageApp =
+    connected.connection_type === "app" && connected.source_provider === "github" && apps?.github.can_install;
+  useEffect(() => {
+    const controller = new AbortController();
+    apiClient
+      .get<unknown>("/roi-calculator/observed/apps", { accessToken, signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted) setApps(appsSchema.parse(data));
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) setError(extractProxyErrorMessage(reason));
+      });
+    return () => controller.abort();
+  }, [accessToken]);
+  useEffect(() => {
+    if (step !== "repos" || (!connected.has_token && connected.source_provider === "github")) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      apiClient
+        .get<unknown>("/roi-calculator/observed/repositories", {
+          accessToken,
+          signal: controller.signal,
+          query: { query, page },
+        })
+        .then((data) => {
+          if (!controller.signal.aborted) setAvailable(repositoriesSchema.parse(data));
+        })
+        .catch((reason: unknown) => {
+          if (!controller.signal.aborted) setError(extractProxyErrorMessage(reason));
+        });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [accessToken, step, connected, query, page]);
+  function selectProvider(value: ObservedSettings["source_provider"]) {
+    setProvider(value);
+    setApiUrl(value === settings.source_provider ? settings.api_url : defaultUrl[value]);
+    setToken("");
+    setError("");
+  }
+  function searchRepositories(value: string) {
+    setAvailable(null);
+    setError("");
+    setQuery(value);
+  }
+  function changePage(value: number) {
+    setAvailable(null);
+    setError("");
+    setPage(value);
+  }
+  async function connect(install = false) {
+    setBusy(true);
+    setError("");
+    try {
+      if (method === "app" || install) {
+        const sameApp = connected.source_provider === provider && connected.connection_type === "app";
+        const firstInstallation = provider === "github" && !sameApp && apps?.github.can_install;
+        const result = z.object({ url: z.string().url() }).parse(
+          await apiClient.post<unknown>(`/roi-calculator/observed/oauth/${provider}/start`, {
+            accessToken,
+            credentials: "include",
+            query: { install: install || Boolean(firstInstallation) },
+          }),
+        );
+        window.location.assign(result.url);
+        return;
+      }
+      const same = provider === connected.source_provider && apiUrl === connected.api_url;
+      const keepToken = same && connected.has_token && connected.connection_type === "token";
+      const result = observedSettingsSchema.parse(
+        await apiClient.put<unknown>("/roi-calculator/observed/settings", {
+          accessToken,
+          body: {
+            source_provider: provider,
+            api_url: apiUrl,
+            token: token || (keepToken ? undefined : ""),
+            repos: same ? connected.repos : [],
+            update_interval_minutes: connected.update_interval_minutes,
+          },
+        }),
+      );
+      setConnected(result);
+      setToken("");
+      setRepos(result.repos.join(", "));
+      setAvailable(null);
+      setStep("repos");
+    } catch (reason) {
+      setError(extractProxyErrorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function save() {
+    setBusy(true);
+    setError("");
+    try {
+      await apiClient.put<unknown>("/roi-calculator/observed/settings", {
+        accessToken,
+        body: {
+          source_provider: connected.source_provider,
+          api_url: connected.api_url,
+          repos: repositoryNames(repos),
+          update_interval_minutes: connected.update_interval_minutes,
+        },
+      });
+      await apiClient.post<unknown>("/roi-calculator/observed/sync", { accessToken });
+      onSaved();
+      onClose();
+    } catch (reason) {
+      setError(extractProxyErrorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <Dialog
       open
@@ -36,184 +369,88 @@ export default function ObservedConnections({ repo, onClose }: { repo: string; o
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <div className="mb-2 flex items-center gap-2">
-            <Badge variant="secondary">Setup preview</Badge>
-            <span className="text-xs text-muted-foreground">No credentials are saved</span>
-          </div>
-          <DialogTitle>{stepTitle[step]}</DialogTitle>
+          <DialogTitle>{step === "connect" ? "Connect your code" : "Choose repositories"}</DialogTitle>
           <DialogDescription>
-            {step === "complete"
-              ? "That is the proposed setup flow. Your report is still using the validated GitHub snapshot."
-              : "Connect once. See shipping, quality, and recorded AI spend together."}
+            {step === "connect" ? "GitHub or GitLab, with an app or access token" : "Select repositories to compare"}
           </DialogDescription>
         </DialogHeader>
-        {step === "provider" && (
-          <div className="space-y-5 py-2">
-            <div className="grid grid-cols-2 gap-3" role="group" aria-label="Code provider">
-              {(["GitHub", "GitLab"] as const).map((name) => (
-                <Button
-                  key={name}
-                  variant={provider === name ? "default" : "outline"}
-                  className="h-12"
-                  aria-pressed={provider === name}
-                  onClick={() => setProvider(name)}
-                >
-                  {name === "GitHub" ? <Github /> : <Gitlab />}
-                  {name}
-                </Button>
-              ))}
-            </div>
-            {provider === "GitLab" && (
-              <div className="space-y-2">
-                <label htmlFor="gitlab-instance" className="text-sm font-medium">
-                  GitLab instance
-                </label>
-                <Input id="gitlab-instance" value={instance} onChange={(event) => setInstance(event.target.value)} />
-                <p className="text-xs text-muted-foreground">GitLab.com or your self-managed instance</p>
+        <div className="space-y-4 py-2">
+          {step === "connect" ? (
+            <>
+              <div className="grid grid-cols-2 gap-3" role="group" aria-label="Code provider">
+                {(["github", "gitlab"] as const).map((value) => (
+                  <Button
+                    key={value}
+                    variant={provider === value ? "default" : "outline"}
+                    aria-pressed={provider === value}
+                    onClick={() => selectProvider(value)}
+                  >
+                    {value === "github" ? <Github /> : <Gitlab />}
+                    {value === "github" ? "GitHub" : "GitLab"}
+                  </Button>
+                ))}
               </div>
-            )}
-            <div className="space-y-2">
-              <button
-                type="button"
-                aria-pressed={method === "app"}
-                onClick={() => setMethod("app")}
-                className={`flex w-full items-start gap-3 rounded-lg border p-4 text-left ${method === "app" ? "border-primary bg-primary/5" : "border-border"}`}
-              >
-                <Icon className="mt-0.5 size-5" />
-                <span className="flex-1">
-                  <span className="flex items-center gap-2 font-medium">
-                    Connect with {provider} <Badge variant="secondary">Recommended</Badge>
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {provider === "GitHub"
-                      ? "Install the app and choose which repositories it can read"
-                      : "Authorize the OAuth app with read-only access"}
-                  </span>
-                </span>
-                {method === "app" && <Check className="size-4" />}
-              </button>
-              <button
-                type="button"
-                aria-pressed={method === "token"}
-                onClick={() => setMethod("token")}
-                className={`flex w-full items-start gap-3 rounded-lg border p-4 text-left ${method === "token" ? "border-primary bg-primary/5" : "border-border"}`}
-              >
-                <KeyRound className="mt-0.5 size-5" />
-                <span className="flex-1">
-                  <span className="font-medium">Use an access token</span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    Bring your own token with read access
-                  </span>
-                </span>
-                {method === "token" && <Check className="size-4" />}
-              </button>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <LockKeyhole className="size-3.5" />
-              Pull request and issue metadata. No source code or model required
-            </div>
-            <Button className="w-full" onClick={() => setStep("authorize")}>
-              Preview {method === "app" ? `${provider} authorization` : "token setup"}
-              <ArrowRight />
-            </Button>
-          </div>
-        )}
-        {step === "authorize" && (
-          <div className="space-y-5 py-2">
-            <div className="rounded-lg border p-5">
-              <Icon className="mb-4 size-7" />
-              <h3 className="font-medium">
-                {method === "app" ? `Authorize LiteLLM on ${provider}` : `${provider} access token`}
-              </h3>
-              {method === "app" ? (
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  In the live flow, {provider} opens to approve read access to{" "}
-                  {provider === "GitHub"
-                    ? "repository metadata, pull requests, and issues"
-                    : "your profile and project API"}
-                  . You return here to choose repositories.
-                </p>
-              ) : (
-                <div className="mt-4 space-y-2">
-                  <label htmlFor="example-token" className="text-sm">
-                    Access token
-                  </label>
-                  <Input id="example-token" type="password" value="example-token-only" readOnly />
-                  <p className="text-xs text-muted-foreground">
-                    Example only. Do not enter a real token in this prototype
-                  </p>
-                </div>
-              )}
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              This preview does not contact {provider}. The production flow requires{" "}
-              {method === "app"
-                ? "a configured app and callback URL"
-                : "server-side token validation and encrypted storage"}
-              .
-            </p>
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep("provider")}>
-                <ArrowLeft />
-                Back
-              </Button>
-              <Button onClick={() => setStep("repositories")}>
-                Continue with example
-                <ArrowRight />
-              </Button>
-            </div>
-          </div>
-        )}
-        {step === "repositories" && (
-          <div className="space-y-5 py-2">
-            <label className="flex cursor-pointer items-center gap-3 rounded-lg border p-4">
-              <input
-                type="checkbox"
-                checked={selected}
-                onChange={(event) => setSelected(event.target.checked)}
-                className="size-4 accent-primary"
+              <ConnectionMethod
+                method={method}
+                setMethod={setMethod}
+                label={label}
+                provider={provider}
+                token={token}
+                setToken={setToken}
+                apiUrl={apiUrl}
+                setApiUrl={setApiUrl}
+                connected={connected}
+                apps={apps}
+                busy={busy}
+                connect={() => connect()}
               />
-              <Icon className="size-4" />
-              <span className="flex-1 text-sm font-medium">{exampleRepo}</span>
-              <Badge variant="secondary">{provider === "GitHub" ? "Public" : "Example"}</Badge>
-            </label>
-            <div className="rounded-lg bg-muted/50 p-4 text-sm">
-              <div className="flex items-center gap-2 font-medium">
-                <CheckCircle2 className="size-4 text-emerald-600" />
-                Gateway spend is already connected
-              </div>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                Match repository contributors to gateway users, then load merged PRs and issues. No estimator to
-                configure
-              </p>
-            </div>
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep("authorize")}>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" onClick={() => setStep("connect")}>
                 <ArrowLeft />
-                Back
+                Change connection
               </Button>
-              <Button disabled={!selected} onClick={() => setStep("complete")}>
-                Preview finish
-                <ArrowRight />
+              {manageApp && (
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => connect(true)}>
+                  Manage GitHub repositories
+                </Button>
+              )}
+              <label htmlFor="roi-repositories" className="block text-sm font-medium">
+                Repositories
+              </label>
+              <Input
+                id="roi-repositories"
+                value={repos}
+                onChange={(event) => setRepos(event.target.value)}
+                placeholder={
+                  provider === "github" ? "owner/repo, owner/another-repo" : "group/project, group/subgroup/project"
+                }
+              />
+              {(connected.has_token || connected.source_provider === "gitlab") && (
+                <>
+                  <RepositoryChoices
+                    available={available}
+                    repos={repos}
+                    setRepos={setRepos}
+                    query={query}
+                    setQuery={searchRepositories}
+                    page={page}
+                    setPage={changePage}
+                  />
+                </>
+              )}
+              <Button className="w-full" disabled={busy || !repositoryNames(repos).length} onClick={save}>
+                {busy ? "Starting sync…" : "Save and sync"}
               </Button>
-            </div>
-          </div>
-        )}
-        {step === "complete" && (
-          <div className="space-y-5 py-3">
-            <div className="rounded-lg border p-5">
-              <CheckCircle2 className="mb-3 size-8 text-emerald-600" />
-              <p className="font-medium">
-                {provider} via {method === "app" ? "app" : "token"}
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">{exampleRepo}</p>
-              <p className="mt-4 text-xs text-muted-foreground">Preview complete. No new connection was created</p>
-            </div>
-            <Button className="w-full" onClick={onClose}>
-              Back to report
-            </Button>
-          </div>
-        )}
+            </>
+          )}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

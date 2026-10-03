@@ -18,12 +18,12 @@ const period = (merged: number, spend: number | null) => ({
   gateway_recorded_spend: spend ?? 0,
   recorded_spend_per_attributed_pr: spend !== null && merged > 0 ? spend / merged : null,
   spend_observation: spend === null ? ("no_records" as const) : ("records_present" as const),
-  pr_numbers: [],
+  pr_urls: [],
 });
 const person = (name: string, merged: number, spend: number | null): ObservedPerson => ({
   name,
   email: `${name}@example.test`,
-  github_logins: [`old-${name}`],
+  logins: [`old-${name}`],
   periods: { current: period(merged, spend), previous: period(0, null), last_year: period(0, null) },
 });
 
@@ -50,6 +50,19 @@ describe("observed ROI metrics", () => {
     expect(visiblePeople(people, "", "cost").map((row) => row.name)).toEqual(["Ari", "Bea", "Cam"]);
     expect(people.map((row) => row.name)).toEqual(["Ari", "Bea", "Cam"]);
     expect(visiblePeople(people, "missing", "name")).toEqual([]);
+  });
+
+  it("keeps short elapsed merge times from rounding to zero hours", () => {
+    expect(duration(null)).toBe("Unavailable");
+    expect(duration(0)).toBe("0m");
+    expect(duration(16 / 3600)).toBe("<1m");
+    expect(duration(59 / 3600)).toBe("<1m");
+    expect(duration(1 / 60)).toBe("1m");
+    expect(duration(79 / 3600)).toBe("1.3m");
+    expect(duration(140 / 3600)).toBe("2.3m");
+    expect(duration(0.5)).toBe("30m");
+    expect(duration(1)).toBe("1h");
+    expect(duration(3.82)).toBe("3.8h");
   });
 
   it("aligns comparisons to their own UTC windows and counts each boundary once", () => {

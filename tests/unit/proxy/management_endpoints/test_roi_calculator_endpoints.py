@@ -120,6 +120,15 @@ class _ConfigRepository:
         self.values = MappingProxyType({**self.values, param_name: param_value})
         return self.values[param_name]
 
+    async def set_param_if_revision(self, param_name: str, param_value: object, revision: int) -> bool:
+        from litellm.proxy.roi_calculator.settings import StoredROISettings
+
+        stored: Final = StoredROISettings.model_validate(self.values.get(param_name, {}))
+        if stored.revision != revision:
+            return False
+        await self.set_param(param_name, param_value)
+        return True
+
 
 def _client(
     role: LitellmUserRoles, repository: _ConfigRepository, transport: httpx.AsyncBaseTransport | None = None

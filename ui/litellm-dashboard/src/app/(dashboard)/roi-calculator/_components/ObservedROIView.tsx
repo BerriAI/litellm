@@ -1,11 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, CalendarDays, ChevronRight, Github, Info, Link2, Search } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CalendarDays,
+  ChevronRight,
+  Github,
+  Gitlab,
+  Link2,
+  Search,
+  RefreshCw,
+  Users,
+} from "lucide-react";
 import { apiClient } from "@/components/networking";
+import { extractProxyErrorMessage } from "@/lib/http/client";
 import { Page, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,14 +24,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import ObservedConnections from "./ObservedConnections";
-import { CoverageDetails, PersonDetails, PullList } from "./ObservedDetails";
+import ObservedAccounts from "./ObservedAccounts";
+import { useObservedReport, type ObservedViewData } from "./useObservedReport";
+import { BranchSpend, PersonDetails, PullList } from "./ObservedDetails";
 import {
   change,
+  syncMessage,
   dateRange,
+  changeTerms,
   duration,
   money,
   number,
-  observedSnapshotSchema,
   visiblePeople,
   weeklyMerges,
   type Comparison,
@@ -29,8 +43,16 @@ import {
   type PeopleSort,
 } from "./observedData";
 
-function Delta({ current, baseline, neutral = false }: { current: number; baseline: number; neutral?: boolean }) {
-  const delta = change(current, baseline);
+function Delta({
+  current,
+  baseline,
+  neutral = false,
+}: {
+  current: number | null;
+  baseline: number | null;
+  neutral?: boolean;
+}) {
+  const delta = current === null || baseline === null ? null : change(current, baseline);
   if (delta === null) return <span className="text-xs text-muted-foreground">No baseline</span>;
   const Icon = delta >= 0 ? ArrowUp : ArrowDown;
   return (
@@ -50,30 +72,16 @@ function Metric({
   detail,
   current,
   baseline,
-  onInfo,
 }: {
   label: string;
   value: string;
   detail: string;
-  current?: number;
-  baseline?: number;
-  onInfo?: () => void;
+  current?: number | null;
+  baseline?: number | null;
 }) {
   return (
     <div className="min-w-0 px-5 py-5">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-        {label}
-        {onInfo && (
-          <button
-            type="button"
-            aria-label={`About ${label}`}
-            onClick={onInfo}
-            className="rounded hover:text-foreground"
-          >
-            <Info className="size-3.5" />
-          </button>
-        )}
-      </div>
+      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">{label}</div>
       <div className="mt-3 flex flex-wrap items-baseline gap-3">
         <span className="text-3xl font-semibold tracking-tight tabular-nums">{value}</span>
         {current !== undefined && baseline !== undefined && <Delta current={current} baseline={baseline} />}
@@ -84,6 +92,7 @@ function Metric({
 }
 
 function ShippingTrend({ snapshot, comparison }: { snapshot: ObservedSnapshot; comparison: Comparison }) {
+  const terms = changeTerms(snapshot.source_provider);
   const current = weeklyMerges(snapshot, "current");
   const baseline = weeklyMerges(snapshot, comparison);
   const max = Math.max(1, ...current, ...baseline);
@@ -105,7 +114,7 @@ function ShippingTrend({ snapshot, comparison }: { snapshot: ObservedSnapshot; c
       <div
         className="mt-5 grid grid-cols-4 gap-6"
         role="img"
-        aria-label={`Merged PRs by week. Current: ${current.join(", ")}. Comparison: ${baseline.join(", ")}`}
+        aria-label={`Merged ${terms.plural} by week. Current: ${current.join(", ")}. Comparison: ${baseline.join(", ")}`}
       >
         {current.map((value, week) => (
           <div key={week} className="min-w-0">
@@ -142,6 +151,7 @@ function PeopleTable({
   comparison: Comparison;
   onSelect: (person: ObservedPerson) => void;
 }) {
+  const terms = changeTerms(snapshot.source_provider);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<PeopleSort>("merged");
   const people = visiblePeople(snapshot.people, query, sort);
@@ -166,9 +176,9 @@ function PeopleTable({
               if (value) setSort(value);
             }}
             items={[
-              { value: "merged", label: "Most merged PRs" },
+              { value: "merged", label: `Most merged ${terms.plural}` },
               { value: "spend", label: "Highest spend" },
-              { value: "cost", label: "Highest cost / PR" },
+              { value: "cost", label: `Highest cost / ${terms.singular}` },
               { value: "name", label: "Name" },
             ]}
           >
@@ -176,9 +186,9 @@ function PeopleTable({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="merged">Most merged PRs</SelectItem>
+              <SelectItem value="merged">Most merged {terms.plural}</SelectItem>
               <SelectItem value="spend">Highest spend</SelectItem>
-              <SelectItem value="cost">Highest cost / PR</SelectItem>
+              <SelectItem value="cost">Highest cost / {terms.singular}</SelectItem>
               <SelectItem value="name">Name</SelectItem>
             </SelectContent>
           </Select>
@@ -189,14 +199,14 @@ function PeopleTable({
           <TableHeader>
             <TableRow className="bg-muted/30">
               <TableHead className="pl-5">Engineer</TableHead>
-              <TableHead className="text-right">Merged PRs</TableHead>
+              <TableHead className="text-right">Merged {terms.plural}</TableHead>
               <TableHead>Authored / agent</TableHead>
               <TableHead className="text-right">
                 {comparison === "previous" ? "vs. previous" : "vs. last year"}
               </TableHead>
               <TableHead className="text-right">Median merge</TableHead>
               <TableHead className="text-right">Recorded spend</TableHead>
-              <TableHead className="text-right">Spend / PR</TableHead>
+              <TableHead className="text-right">Spend / {terms.singular}</TableHead>
               <TableHead>
                 <span className="sr-only">Details</span>
               </TableHead>
@@ -283,13 +293,14 @@ function PeopleTable({
           <span className="size-2 rounded-sm bg-violet-400" />
           Agent, explicit requester
         </span>
-        Spend / PR is recorded period spend divided by matched PRs
+        Spend / {terms.singular} is recorded period spend divided by matched {terms.plural}
       </p>
     </div>
   );
 }
 
 function Quality({ snapshot, comparison }: { snapshot: ObservedSnapshot; comparison: Comparison }) {
+  const terms = changeTerms(snapshot.source_provider);
   const current = snapshot.periods.current;
   const baseline = snapshot.periods[comparison];
   const rows = [
@@ -306,10 +317,10 @@ function Quality({ snapshot, comparison }: { snapshot: ObservedSnapshot; compari
       detail: "Opened during the period and labeled as regressions",
     },
     {
-      label: "Revert-titled PRs",
+      label: `Revert-titled ${terms.plural}`,
       current: current.explicitly_titled_revert_prs,
       baseline: baseline.explicitly_titled_revert_prs,
-      detail: "Merged PRs whose titles explicitly indicate a revert",
+      detail: `Merged ${terms.plural} whose titles explicitly indicate a revert`,
     },
   ];
   return (
@@ -331,8 +342,8 @@ function Quality({ snapshot, comparison }: { snapshot: ObservedSnapshot; compari
                   <p className="font-medium">{row.label}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{row.detail}</p>
                 </TableCell>
-                <TableCell className="text-right font-medium">{row.current}</TableCell>
-                <TableCell className="text-right text-muted-foreground">{row.baseline}</TableCell>
+                <TableCell className="text-right font-medium">{number(row.current)}</TableCell>
+                <TableCell className="text-right text-muted-foreground">{number(row.baseline)}</TableCell>
                 <TableCell className="pr-5 text-right">
                   <Delta current={row.current} baseline={row.baseline} neutral />
                 </TableCell>
@@ -349,11 +360,26 @@ function Quality({ snapshot, comparison }: { snapshot: ObservedSnapshot; compari
   );
 }
 
-function Report({ snapshot }: { snapshot: ObservedSnapshot }) {
+function Report({
+  snapshot,
+  accessToken,
+  readOnly,
+  onRefresh,
+  onConnect,
+  actions,
+}: {
+  snapshot: ObservedSnapshot;
+  accessToken: string;
+  readOnly: boolean;
+  onRefresh: () => void;
+  onConnect: () => void;
+  actions: React.ReactNode;
+}) {
   const [comparison, setComparison] = useState<Comparison>("previous");
-  const [connections, setConnections] = useState(false);
-  const [coverage, setCoverage] = useState(false);
-  const [person, setPerson] = useState<ObservedPerson | null>(null);
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const [personEmail, setPersonEmail] = useState<string | null>(null);
+  const person = snapshot.people.find((entry) => entry.email === personEmail) ?? null;
+  const terms = changeTerms(snapshot.source_provider);
   const current = snapshot.periods.current;
   const baseline = snapshot.periods[comparison];
   const cost =
@@ -371,21 +397,24 @@ function Report({ snapshot }: { snapshot: ObservedSnapshot }) {
           <div>
             <div className="flex items-center gap-3">
               <PageHeaderTitle>ROI Calculator</PageHeaderTitle>
-              <Badge variant="secondary">Prototype</Badge>
             </div>
             <PageHeaderDescription>Are we shipping more, with fewer bugs, at a better cost?</PageHeaderDescription>
           </div>
-          <Button variant="outline" onClick={() => setConnections(true)}>
-            <Link2 />
-            Connections
-          </Button>
+          <div className="flex gap-2">
+            {!readOnly && (
+              <Button variant="outline" onClick={onConnect}>
+                <Link2 />
+                Connections
+              </Button>
+            )}
+          </div>
         </div>
       </PageHeader>
+      {actions}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm">
-          <Github className="size-4" />
-          <span className="font-medium">{snapshot.repo}</span>
-          <Badge variant="secondary">Validated snapshot</Badge>
+          {snapshot.source_provider === "github" ? <Github className="size-4" /> : <Gitlab className="size-4" />}
+          <span className="font-medium">{snapshot.repos.join(", ")}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-2 rounded-md border px-3 py-2 text-xs">
@@ -414,7 +443,7 @@ function Report({ snapshot }: { snapshot: ObservedSnapshot }) {
       </div>
       <div className="grid grid-cols-1 divide-y rounded-xl border sm:grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-y-0">
         <Metric
-          label="Merged PRs"
+          label={`Merged ${terms.plural}`}
           value={number(current.merged_prs)}
           current={current.merged_prs}
           baseline={baseline.merged_prs}
@@ -433,39 +462,44 @@ function Report({ snapshot }: { snapshot: ObservedSnapshot }) {
           current={current.new_bug_labeled_issues}
           baseline={baseline.new_bug_labeled_issues}
           detail={`${number(baseline.new_bug_labeled_issues)} in comparison · bug-labeled issues`}
-          onInfo={() => setCoverage(true)}
         />
         <Metric
-          label="Recorded spend / matched PR"
+          label={`Recorded spend / matched ${terms.singular}`}
           value={money(cost)}
           detail={
             baselineCost === null
               ? "No gateway records for comparison"
               : `${money(baselineCost)} in comparison · gateway only`
           }
-          onInfo={() => setCoverage(true)}
         />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>
-          {number(current.matched_internal_prs)} PRs matched to {snapshot.people.length} engineers ·{" "}
-          {number(current.devin_without_requester)} agent PRs without a requester
+          {number(current.matched_internal_prs)} {terms.plural} matched to {snapshot.people.length} engineers ·{" "}
+          {number(current.agents_without_requester)} agent {terms.plural} without a requester
         </span>
-        <Button size="sm" variant="ghost" onClick={() => setCoverage(true)}>
-          Data coverage
-          <ChevronRight />
-        </Button>
+        {!readOnly && (
+          <Button size="sm" variant="outline" onClick={() => setAccountEmail("")}>
+            <Users />
+            Link accounts
+          </Button>
+        )}
       </div>
       <Tabs defaultValue="people" className="gap-5">
         <PageTabsList>
           <PageTabsTrigger value="people">
             Engineers <span className="ml-1.5 text-muted-foreground">{snapshot.people.length}</span>
           </PageTabsTrigger>
-          <PageTabsTrigger value="pulls">Pull requests</PageTabsTrigger>
+          <PageTabsTrigger value="pulls">{terms.requests}</PageTabsTrigger>
           <PageTabsTrigger value="quality">Quality</PageTabsTrigger>
+          <PageTabsTrigger value="branches">Branch spend</PageTabsTrigger>
         </PageTabsList>
         <TabsContent value="people">
-          <PeopleTable snapshot={snapshot} comparison={comparison} onSelect={setPerson} />
+          <PeopleTable
+            snapshot={snapshot}
+            comparison={comparison}
+            onSelect={(selected) => setPersonEmail(selected.email)}
+          />
         </TabsContent>
         <TabsContent value="pulls" className="space-y-5">
           <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
@@ -474,8 +508,8 @@ function Report({ snapshot }: { snapshot: ObservedSnapshot }) {
               <div>
                 <h2 className="text-sm font-medium">Behind the numbers</h2>
                 <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                  {number(current.devin_authored + current.other_bot_authored)} of {number(current.merged_prs)} PRs were
-                  authored by agents or bots. The mix of work changed.
+                  {number(current.agent_authored)} of {number(current.merged_prs)} {terms.plural} were authored by
+                  agents or bots.
                 </p>
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
                   Human-authored median merge time:{" "}
@@ -487,97 +521,216 @@ function Report({ snapshot }: { snapshot: ObservedSnapshot }) {
               </div>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t pt-4">
                 <span className="text-xs text-muted-foreground">
-                  {number(current.devin_without_requester)} agent PRs have no requester
+                  {number(current.agents_without_requester)} agent {terms.plural} have no requester
                 </span>
-                <Button size="sm" variant="ghost" onClick={() => setCoverage(true)}>
-                  Data coverage
-                  <ChevronRight />
-                </Button>
               </div>
             </div>
           </div>
 
           <p className="mb-4 text-xs text-muted-foreground">
-            All repository PRs, including agent work without a known requester
+            All repository {terms.plural}, including agent work without a known requester
           </p>
-          <PullList pulls={snapshot.pulls.current} />
+          <PullList pulls={snapshot.pulls.current} provider={snapshot.source_provider} />
         </TabsContent>
         <TabsContent value="quality">
           <Quality snapshot={snapshot} comparison={comparison} />
         </TabsContent>
+        <TabsContent value="branches">
+          <BranchSpend snapshot={snapshot} />
+        </TabsContent>
       </Tabs>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
         <span>Comparing with {dateRange(baseline.window)} · All dates UTC</span>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 hover:text-foreground"
-          onClick={() => setCoverage(true)}
-        >
-          <Info className="size-3.5" />
-          How these metrics are calculated
-        </button>
+        <span>Spend recorded by this gateway · Merge time is elapsed time, not effort</span>
       </div>
-      {connections && <ObservedConnections repo={snapshot.repo} onClose={() => setConnections(false)} />}
-      {coverage && <CoverageDetails snapshot={snapshot} onClose={() => setCoverage(false)} />}
+      {accountEmail !== null && (
+        <ObservedAccounts
+          accessToken={accessToken}
+          people={snapshot.people}
+          initialEmail={accountEmail}
+          onClose={() => setAccountEmail(null)}
+          onSaved={onRefresh}
+        />
+      )}
       {person && (
         <PersonDetails
           key={person.email}
           person={person}
           snapshot={snapshot}
           comparison={comparison}
-          onClose={() => setPerson(null)}
+          onClose={() => setPersonEmail(null)}
+          onEdit={
+            readOnly
+              ? undefined
+              : () => {
+                  setAccountEmail(person.email);
+                  setPersonEmail(null);
+                }
+          }
         />
       )}
     </Page>
   );
 }
 
-export default function ObservedROIView({ accessToken }: { accessToken: string | null }) {
-  const [snapshot, setSnapshot] = useState<ObservedSnapshot | null>(null);
-  const [error, setError] = useState(false);
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    if (!accessToken) return;
-    const controller = new AbortController();
-    apiClient
-      .get<unknown>("/roi-calculator/observed-preview", { accessToken, signal: controller.signal })
-      .then((data) => {
-        if (!controller.signal.aborted) {
-          setSnapshot(observedSnapshotSchema.parse(data));
-          setError(false);
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setError(true);
-      });
-    return () => controller.abort();
-  }, [accessToken, retry]);
-  if (snapshot) return <Report snapshot={snapshot} />;
-  if (error)
-    return (
-      <Page>
-        <PageHeaderTitle>ROI prototype unavailable</PageHeaderTitle>
-        <p className="text-sm text-muted-foreground">
-          This preview needs its private snapshot service. Check the preview server, then retry.
-        </p>
-        <Button
-          className="w-fit"
-          variant="outline"
-          onClick={() => {
-            setError(false);
-            setRetry(retry + 1);
-          }}
-        >
-          Retry
-        </Button>
-      </Page>
-    );
+function SyncActions({
+  data,
+  error,
+  busy,
+  readOnly,
+  onSync,
+  onRetry,
+}: {
+  data: ObservedViewData | null;
+  error: string;
+  busy: boolean;
+  readOnly: boolean;
+  onSync: (cancel: boolean) => void;
+  onRetry: () => void;
+}) {
+  const message = error || data?.status.error;
   return (
+    <div className="space-y-2">
+      {message && (
+        <div
+          role="alert"
+          className="flex items-center justify-between rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
+        >
+          <span>{message}</span>
+          <Button size="sm" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {data && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span role="status">{syncMessage(data.status, data.report)}</span>
+          {!readOnly && data.settings.ready && (
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => onSync(data.status.running)}>
+              <RefreshCw className={data.status.running ? "animate-spin" : ""} />
+              {data.status.running ? "Cancel sync" : "Sync now"}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmptyReport({
+  data,
+  readOnly,
+  onConnect,
+}: {
+  data: ObservedViewData;
+  readOnly: boolean;
+  onConnect: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-4 rounded-xl border p-12 text-center">
+      <h2 className="text-lg font-medium">
+        {data.status.running ? "Reading repository activity" : "Connect your repositories"}
+      </h2>
+      <p className="max-w-md text-sm text-muted-foreground">
+        {data.status.running
+          ? "Your report will appear here when the first sync finishes"
+          : "Compare merged changes, issue trends, and recorded AI spend across your team"}
+      </p>
+      {!readOnly && !data.status.running && (
+        <Button onClick={onConnect}>
+          <Link2 />
+          {data.settings.ready ? "Connections" : "Connect GitHub or GitLab"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export default function ObservedROIView({
+  accessToken,
+  isViewOnly = false,
+}: {
+  accessToken: string;
+  isViewOnly?: boolean;
+}) {
+  const { data, error, refresh } = useObservedReport(accessToken);
+  const [connections, setConnections] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      ["github", "gitlab"].includes(new URLSearchParams(window.location.search).get("connected") ?? ""),
+  );
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState("");
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (!isViewOnly && ["github", "gitlab"].includes(url.searchParams.get("connected") ?? "")) {
+      url.searchParams.delete("connected");
+      window.history.replaceState(window.history.state, "", url);
+    }
+  }, [isViewOnly]);
+  async function sync(cancel: boolean) {
+    setBusy(true);
+    setActionError("");
+    try {
+      if (cancel) await apiClient.delete("/roi-calculator/observed/sync", { accessToken });
+      else await apiClient.post("/roi-calculator/observed/sync", { accessToken });
+      refresh();
+    } catch (reason) {
+      setActionError(extractProxyErrorMessage(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const actions = (
+    <SyncActions
+      data={data}
+      error={error || actionError}
+      busy={busy}
+      readOnly={isViewOnly}
+      onSync={sync}
+      onRetry={refresh}
+    />
+  );
+  const content = data?.report ? (
+    <Report
+      snapshot={data.report}
+      accessToken={accessToken}
+      readOnly={isViewOnly}
+      onRefresh={refresh}
+      onConnect={() => setConnections(true)}
+      actions={actions}
+    />
+  ) : (
     <Page>
-      <Skeleton className="h-8 w-52" />
-      <Skeleton className="h-32 w-full" />
-      <Skeleton className="h-96 w-full" />
-      <p className="text-sm text-muted-foreground">Loading validated repository and gateway data…</p>
+      <PageHeader>
+        <PageHeaderTitle>ROI Calculator</PageHeaderTitle>
+        <PageHeaderDescription>Are we shipping more, with fewer bugs, at a better cost?</PageHeaderDescription>
+      </PageHeader>
+      {actions}
+      {!data && !error && (
+        <>
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-96 w-full" />
+        </>
+      )}
+      {data && <EmptyReport data={data} readOnly={isViewOnly} onConnect={() => setConnections(true)} />}
     </Page>
+  );
+  const showConnections = connections && data && !isViewOnly;
+  return (
+    <>
+      {content}
+      {showConnections && (
+        <ObservedConnections
+          accessToken={accessToken}
+          settings={data.settings}
+          onClose={() => {
+            setConnections(false);
+            refresh();
+          }}
+          onSaved={refresh}
+        />
+      )}
+    </>
   );
 }

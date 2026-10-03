@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -25,6 +26,10 @@ class ROISettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     source_provider: Literal["github", "gitlab"] = "github"
+    connection_type: Literal["token", "app"] = "token"
+    oauth_refresh_token: SecretStr = SecretStr("")
+    oauth_expires_at: datetime | None = None
+    ignored_logins: tuple[str, ...] = ()
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     gitlab_token: SecretStr = SecretStr("")
     github_api_url: str = "https://api.github.com"
