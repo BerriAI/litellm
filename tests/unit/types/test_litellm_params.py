@@ -103,6 +103,7 @@ OPTION_NAMES: Final = (
     "use_litellm_proxy",
     "use_chat_completions_api",
     "use_in_pass_through",
+    "kubernetes_pod_discovery",
     "allowed_openai_params",
     "fallbacks",
     "context_window_fallback_dict",

@@ -6,6 +6,12 @@ from typing import Final, Literal
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
 
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
+KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS: Final = float(
+    os.getenv("KUBERNETES_POD_DISCOVERY_REFRESH_INTERVAL_SECONDS", "5")
+)
+KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS: Final = float(
+    os.getenv("KUBERNETES_POD_DISCOVERY_IDLE_EVICTION_SECONDS", "300")
+)
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
