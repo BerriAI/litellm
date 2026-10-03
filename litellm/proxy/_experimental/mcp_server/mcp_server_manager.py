@@ -3949,19 +3949,15 @@ class MCPServerManager:
     def _caller_sign_in_subject_token(
         oauth2_headers: Mapping[str, str] | None,
         raw_headers: Mapping[str, str] | None,
-        user_api_key_auth: UserAPIKeyAuth | None,
     ) -> str | None:
-        """The bearer a caller sign-in provider validates: custom auth admits the caller on its own IdP token
-        in ``Authorization``, so that token is the subject there and only a virtual key is withheld."""
-        admitted_on_own_bearer: Final = (
-            user_api_key_auth is not None
-            and user_api_key_auth.authenticated_by_custom_auth
-            and not _has_explicit_litellm_admission_header(raw_headers)
-        )
-        if not admitted_on_own_bearer:
-            return MCPServerManager._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
+        """The bearer a caller sign-in provider validates. An admission that consumed ``Authorization`` (custom
+        auth, built-in OAuth2, JWT) did so on the caller's own IdP token, so that token is the subject; only a
+        virtual key, or a bearer repeating ``x-litellm-api-key``, is withheld."""
         bearer: Final = MCPServerManager._extract_bearer_token(oauth2_headers, raw_headers)
         if bearer is None or bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX):
+            return None
+        admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
+        if admission_header and strip_auth_scheme(admission_header, "Bearer") == bearer:
             return None
         return bearer
 
@@ -4282,9 +4278,7 @@ class MCPServerManager:
                     caller_sign_in_for,
                 )
 
-                sign_in_subject: Final = self._caller_sign_in_subject_token(
-                    oauth2_headers, raw_headers, user_api_key_auth
-                )
+                sign_in_subject: Final = self._caller_sign_in_subject_token(oauth2_headers, raw_headers)
                 if sign_in_subject is None and caller_sign_in_for(server, user_api_key_auth) is not None:
                     raise_token_exchange_challenge(
                         server, root_path=get_request_root_path(), resource_metadata=resource_metadata
@@ -6042,7 +6036,7 @@ class MCPServerManager:
         incoming_bearer_token: Final = (
             inbound_authorization[len("bearer ") :] if inbound_authorization.lower().startswith("bearer ") else None
         )
-        incoming_subject_token: Final = self._caller_sign_in_subject_token(None, raw_headers, user_api_key_auth)
+        incoming_subject_token: Final = self._caller_sign_in_subject_token(None, raw_headers)
 
         pre_hook_kwargs: Final = {
             "guardrail_context": guardrail_context,

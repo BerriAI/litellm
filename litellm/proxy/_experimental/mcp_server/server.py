@@ -1786,7 +1786,7 @@ if MCP_AVAILABLE:
             resource_metadata = get_passthrough_resource_metadata_url(scope, server_name)
             subject_token = (
                 operations.global_mcp_server_manager._caller_sign_in_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
-                    oauth2_headers, raw_headers, user_api_key_auth
+                    oauth2_headers, raw_headers
                 )
                 if server is not None
                 else None

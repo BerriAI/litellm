@@ -6937,13 +6937,6 @@ class TestMCPServerManager:
         ("raw_headers", "api_key", "expected_bearer", "expected_subject"),
         [
             pytest.param(
-                {"authorization": "Bearer eyJ.x.y"},
-                "eyJ.x.y",
-                "eyJ.x.y",
-                None,
-                id="idp-token-as-admission-stays-raw-bearer",
-            ),
-            pytest.param(
                 {"authorization": "Bearer sk-1234"},
                 "sk-1234",
                 "sk-1234",
@@ -6987,29 +6980,42 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("raw_headers", "api_key", "expected_subject"),
+        ("raw_headers", "api_key", "custom_auth", "expected_subject"),
         [
-            pytest.param({"authorization": "Bearer eyJ.x.y"}, "eyJ.x.y", "eyJ.x.y", id="idp-bearer-is-the-subject"),
-            pytest.param({"authorization": "Bearer sk-1234"}, "sk-1234", None, id="virtual-key-is-not-a-subject"),
+            pytest.param(
+                {"authorization": "Bearer eyJ.x.y"}, "eyJ.x.y", True, "eyJ.x.y", id="custom-auth-idp-bearer-is-the-subject"
+            ),
+            pytest.param(
+                {"authorization": "Bearer eyJ.x.y"},
+                "eyJ.x.y",
+                False,
+                "eyJ.x.y",
+                id="built-in-oauth2-admission-bearer-is-the-subject",
+            ),
+            pytest.param(
+                {"authorization": "Bearer sk-1234"}, "sk-1234", True, None, id="virtual-key-is-not-a-subject"
+            ),
             pytest.param(
                 {"x-litellm-api-key": "ca-key", "authorization": "Bearer ca-key"},
                 "ca-key",
+                True,
                 None,
                 id="explicit-key-admission-repeated-in-authorization-is-not-a-subject",
             ),
         ],
     )
-    async def test_pre_call_tool_check_hands_sign_in_the_bearer_custom_auth_admitted(
-        self, raw_headers, api_key, expected_subject
+    async def test_pre_call_tool_check_hands_sign_in_the_bearer_that_admitted_the_caller(
+        self, raw_headers, api_key, custom_auth, expected_subject
     ):
-        """Custom auth admits the caller on its own IdP token in ``Authorization`` with no
-        ``x-litellm-api-key``, so that token is the sign-in subject as it was before the subject split."""
+        """Custom auth and the built-in OAuth2 admission both admit the caller on its own IdP token in
+        ``Authorization`` with no ``x-litellm-api-key`` and record it as ``api_key``; that token is the
+        sign-in subject as the raw bearer was before the subject split."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", allowed_tools=None
         )
         admitted = UserAPIKeyAuth(api_key=api_key, user_id="u")
-        admitted.authenticated_by_custom_auth = True
+        admitted.authenticated_by_custom_auth = custom_auth
         proxy_logging = MagicMock()
         proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})

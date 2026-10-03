@@ -164,16 +164,19 @@ async def preflight_caller_sign_in(
     resource_metadata: str | None,
     connecting: Callable[[], Awaitable[bool]],
 ) -> None:
-    """Run every provider's connect-time check against the subject token, so a bearer the IdP will
-    reject surfaces as a challenge here rather than a JSON-RPC error at the first tool call. A fail-closed
-    provider outage is the connect's 503 only while ``connecting``; on an open session the tool-call hook
-    answers it inside the JSON-RPC envelope, with its guardrail Logs row."""
+    """Run every provider's connect-time check against the subject token while ``connecting``, so a bearer
+    the IdP will reject surfaces as a challenge here rather than a JSON-RPC error at the first tool call, and
+    a fail-closed provider outage is the connect's 503. On an open session nothing is exchanged here: the
+    tool-call hook runs the one exchange and answers inside the JSON-RPC envelope, with its guardrail Logs
+    row."""
     from fastapi import HTTPException  # noqa: PLC0415  # lazy: fastapi import stays off the cold path
 
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
         raise_token_exchange_challenge,
     )
 
+    if not await connecting():
+        return
     for provider in _providers():
         if provider.caller_sign_in(server, user_api_key_auth) is None:
             continue
@@ -187,7 +190,6 @@ async def preflight_caller_sign_in(
             case Unavailable(fail_open=True):
                 continue
             case Unavailable(detail=detail, fail_open=False):
-                if await connecting():
-                    raise HTTPException(status_code=503, detail=detail)
+                raise HTTPException(status_code=503, detail=detail)
             case _ as verdict:
                 assert_never(verdict)

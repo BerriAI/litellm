@@ -3974,7 +3974,7 @@ async def test_owner_mismatch_on_a_torn_down_session_is_refused_before_the_body_
             litellm.callbacks, guardrail, require_self=False
         )
 
-    assert guardrail.preflight_calls == ["entra.jwt.token"]
+    assert guardrail.preflight_calls == []
     handle_request_mock.assert_not_awaited()
     statuses = [m["status"] for m in sent_messages if m.get("type") == "http.response.start"]
     assert statuses == [403]
@@ -12635,6 +12635,53 @@ class TestConnectSignInPreflight:
         assert guardrail.preflight_calls == []
 
     @pytest.mark.asyncio
+    async def test_built_in_oauth2_admitted_bearer_is_pre_flighted_not_challenged(self):
+        """The built-in OAuth2 admission records the caller's token as ``api_key`` without the custom-auth
+        marker; that token is still the sign-in subject, so connect pre-flights it instead of challenging."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(
+                ["catalog"],
+                guardrail,
+                [server],
+                raw_headers={"authorization": "Bearer entra.jwt.token"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="entra.jwt.token", user_id="u-1"),
+            )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == ["entra.jwt.token"]
+
+    @pytest.mark.asyncio
+    async def test_rejected_subject_on_an_open_session_is_left_to_the_tool_call_hook(self):
+        """Only the connect pre-flights the subject. On an open session the gate must not exchange at all, so
+        the tool-call hook runs the one exchange and answers a rejection inside the JSON-RPC envelope with its
+        guardrail Logs row, as base did."""
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Rejected
+
+        async def _open_session() -> bool:
+            return False
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub",
+            preflight_result=Rejected("the Entra OBO exchange was rejected (AADSTS5002723)"),
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(["catalog"], guardrail, [server], connecting=_open_session)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == []
+
+    @pytest.mark.asyncio
     async def test_rejected_subject_challenges_at_connect(self):
         from litellm.proxy._experimental.mcp_server.caller_sign_in import Rejected
 
@@ -12691,8 +12738,9 @@ class TestConnectSignInPreflight:
     )
     async def test_fail_closed_outage_is_the_connects_503_only_on_initialize(self, rpc_method, session_id, reaches):
         """Only the ``initialize`` POST turns a fail-closed provider outage into the connect's 503. Every other
-        JSON-RPC POST on the gated route must reach the session manager with its body intact, so the tools/call
-        hook answers the outage inside the result envelope and writes the guardrail Logs row, as base did."""
+        JSON-RPC POST on the gated route must reach the session manager with its body intact and without a gate
+        exchange, so the tools/call hook runs the one exchange, answers the outage inside the result envelope and
+        writes the guardrail Logs row, as base did."""
         from litellm.proxy._experimental.mcp_server import server as server_module
         from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
 
@@ -12766,7 +12814,7 @@ class TestConnectSignInPreflight:
             if session_id:
                 server_module._remove_stateful_session_tracking(session_id)
 
-        assert guardrail.preflight_calls == ["entra.jwt.token"]
+        assert guardrail.preflight_calls == (["entra.jwt.token"] if reaches is None else [])
         assert delivered == ({} if reaches is None else {reaches: body})
         send.assert_not_awaited()
 
