@@ -1123,19 +1123,12 @@ class Router:
         self._routing_groups_input: list[RoutingGroup | dict] | None = routing_groups
 
         ## SETTING FALLBACKS ##
-        ### validate if it's set + in correct format
         _fallbacks = fallbacks or litellm.fallbacks
-
-        self.validate_fallbacks(fallback_param=_fallbacks)
-        ### set fallbacks
-        self.fallbacks = _fallbacks
-
-        if default_fallbacks is not None or litellm.default_fallbacks is not None:
-            _fallbacks = default_fallbacks or litellm.default_fallbacks
-            if self.fallbacks is not None:
-                self.fallbacks.append({"*": _fallbacks})
-            else:
-                self.fallbacks = [{"*": _fallbacks}]
+        self.default_fallbacks: list[str] = (
+            default_fallbacks if default_fallbacks is not None else (litellm.default_fallbacks or [])
+        ).copy()
+        self._materialized_default_fallback: dict[str, list[str]] | None = None
+        self._set_fallbacks(_fallbacks)
 
         self.context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
 
@@ -12240,6 +12233,37 @@ class Router:
         ]
         return _settings_to_return
 
+    def _set_fallbacks(self, fallbacks: list | None) -> None:
+        """Build the effective fallbacks without changing the caller's list.
+
+        Track only the wildcard we add ourselves, so an explicit wildcard
+        remains authoritative when default_fallbacks changes at runtime.
+        """
+        self.validate_fallbacks(fallback_param=fallbacks)
+        effective = [
+            fallback
+            for fallback in (fallbacks or [])
+            if self._materialized_default_fallback is None or fallback != self._materialized_default_fallback
+        ]
+        self._materialized_default_fallback = None
+        if self.default_fallbacks and not any("*" in fallback for fallback in effective):
+            self._materialized_default_fallback = {"*": list(self.default_fallbacks)}
+            effective.append(self._materialized_default_fallback)
+        self.fallbacks = effective if effective or fallbacks is not None else None
+
+    def _update_fallback_settings(self, kwargs: dict) -> None:
+        """Apply runtime fallbacks and default_fallbacks together.
+
+        The effective list depends on both, so rebuild it once after either
+        value changes.
+        """
+        if "fallbacks" not in kwargs and "default_fallbacks" not in kwargs:
+            return
+        if "default_fallbacks" in kwargs:
+            self.default_fallbacks = (kwargs["default_fallbacks"] or []).copy()
+        requested: list | None = kwargs.get("fallbacks", self.fallbacks)
+        self._set_fallbacks(requested)
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -12255,7 +12279,8 @@ class Router:
         _existing_router_settings: Final = self.get_settings()
         rebuild_routing_groups = False
         routing_args_updated = False
-        for var in kwargs:
+        self._update_fallback_settings(kwargs)
+        for var in [name for name in kwargs if name not in ("fallbacks", "default_fallbacks")]:
             if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
