@@ -990,6 +990,12 @@
         "supports_audio_output": {
           "type": "boolean"
         },
+        "supports_bedrock_runtime_chat_completions_response_format": {
+          "type": "boolean"
+        },
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
+          "type": "boolean"
+        },
         "supports_computer_use": {
           "type": "boolean"
         },
@@ -1060,6 +1066,9 @@
           "type": "boolean"
         },
         "supports_reasoning": {
+          "type": "boolean"
+        },
+        "supports_regex_lookaround": {
           "type": "boolean"
         },
         "supports_response_schema": {

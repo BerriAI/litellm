@@ -71,7 +71,7 @@ async def test_mcp_server_manager_https_server():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         await mcp_server_manager.load_servers_from_config(
@@ -179,7 +179,7 @@ async def test_mcp_http_transport_list_tools_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -256,7 +256,7 @@ async def test_mcp_http_transport_call_tool_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -322,7 +322,7 @@ async def test_mcp_http_transport_call_tool_error_mock():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load server config with HTTP transport
@@ -1101,7 +1101,7 @@ async def test_list_tools_only_returns_allowed_servers(monkeypatch):
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Call list_tools
@@ -1398,7 +1398,7 @@ async def test_mcp_server_manager_alias_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
@@ -1458,7 +1458,7 @@ async def test_mcp_server_manager_server_name_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
@@ -1518,7 +1518,7 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
         return mock_client
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Get tools from server
@@ -2514,7 +2514,7 @@ async def test_filter_tools_by_allowed_tools_integration():
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
@@ -2628,7 +2628,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering
@@ -2730,7 +2730,7 @@ async def test_filter_tools_no_restrictions_integration():
 
         # Mock the MCPClient constructor
         with patch(
-            "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+            "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
             mock_client_constructor,
         ):
             # Call _get_tools_from_mcp_servers which should apply the filtering

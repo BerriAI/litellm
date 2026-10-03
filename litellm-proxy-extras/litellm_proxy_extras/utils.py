@@ -353,9 +353,8 @@ class ProxyExtrasDBManager:
             pass
 
     @staticmethod
-    def _failed_migration_logs(migration_name: str) -> Optional[str]:
-        """Return failed migration logs, or None if the ledger is unavailable."""
-        database_url = os.getenv("DATABASE_URL")
+    def _read_migration_ledger(query: str, params: tuple[str, ...]) -> "tuple[object, ...] | None":
+        database_url: Final = os.getenv("DATABASE_URL")
         if not database_url:
             return None
 
@@ -364,28 +363,37 @@ class ProxyExtrasDBManager:
         except ImportError:
             return None
 
-        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
-        ledger_table = psycopg.sql.SQL("{}.{}").format(
-            psycopg.sql.Identifier(
-                ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
-            ),
+        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        ledger_table: Final = psycopg.sql.SQL("{}.{}").format(
+            psycopg.sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
             psycopg.sql.Identifier("_prisma_migrations"),
         )
         try:
-            with psycopg.connect(
-                cleaned_url, connect_timeout=10, autocommit=True
-            ) as conn:
-                row = conn.execute(
-                    psycopg.sql.SQL(
-                        "SELECT logs FROM {} "
-                        "WHERE migration_name = %s AND finished_at IS NULL "
-                        "AND rolled_back_at IS NULL"
-                    ).format(ledger_table),
-                    (migration_name,),
-                ).fetchone()
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+                row: Final = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return None
-        return (row[0] or "") if row else ""
+        return tuple(row) if row is not None else ()
+
+    @staticmethod
+    def _failed_migration_logs(migration_name: str, started_at: str) -> Optional[str]:
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
+            "SELECT logs FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
+            "AND finished_at IS NULL AND rolled_back_at IS NULL",
+            (migration_name, started_at),
+        )
+        if row is None:
+            return None
+        return row[0] if row and isinstance(row[0], str) else ""
+
+    @staticmethod
+    def _failed_migration_recovered(migration_name: str, started_at: str) -> bool:
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
+            "SELECT 1 FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
+            "AND (finished_at IS NOT NULL OR rolled_back_at IS NOT NULL)",
+            (migration_name, started_at),
+        )
+        return bool(row)
 
     @staticmethod
     def _resolve_specific_migration(migration_name: str):
@@ -1103,6 +1111,11 @@ class ProxyExtrasDBManager:
         return None
 
     @staticmethod
+    def _v2_failed_migration_started_at(stderr: str, migration_name: str) -> "str | None":
+        match: Final = re.search(rf"`{re.escape(migration_name)}` migration started at ([^\r\n]+?) failed", stderr)
+        return match.group(1) if match else None
+
+    @staticmethod
     def _v2_roll_back_migration_best_effort(migration_name: str) -> None:
         from litellm_proxy_extras.migration_lock import migration_environment
 
@@ -1130,8 +1143,11 @@ class ProxyExtrasDBManager:
 
         if "P3009" in stderr:
             migration_name = ProxyExtrasDBManager._v2_failed_migration_name(stderr)
-            if migration_name:
-                ledger_logs = ProxyExtrasDBManager._failed_migration_logs(migration_name)
+            started_at: Final = (
+                ProxyExtrasDBManager._v2_failed_migration_started_at(stderr, migration_name) if migration_name else None
+            )
+            if migration_name and started_at:
+                ledger_logs: Final = ProxyExtrasDBManager._failed_migration_logs(migration_name, started_at)
                 if ledger_logs and _MIGRATION_DEADLOCK_MARKER in ledger_logs:
                     logger.info(
                         "Migration %s failed in a concurrent migrate deploy "
@@ -1139,6 +1155,14 @@ class ProxyExtrasDBManager:
                         migration_name,
                     )
                     ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                    return budget.spend()
+                if ProxyExtrasDBManager._failed_migration_recovered(migration_name, started_at):
+                    logger.info(
+                        "Migration %s started at %s was already rolled back or completed by a concurrent "
+                        "migrate deploy, retrying",
+                        migration_name,
+                        started_at,
+                    )
                     return budget.spend()
             raise RuntimeError(
                 "Migration completion could not be verified. LiteLLM startup has stopped.\n\n"

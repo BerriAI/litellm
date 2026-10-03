@@ -561,3 +561,29 @@ async def test_boot_leaves_the_database_alone_unless_a_migration_was_requested_a
     assert result is outcome
     assert len(database_handles_taken) == (0 if outcome is None else 1)
     assert len(logged) == (0 if outcome is None else 1)
+
+
+@pytest.mark.asyncio
+async def test_guardrail_params_move_to_the_new_key_and_legacy_plaintext_rows_are_left_alone():
+    legacy_params = {"guardrail": "generic_guardrail_api", "api_key": "legacy-plaintext-key"}
+    tables: Tables = {
+        "LiteLLM_GuardrailsTable": [
+            {
+                "guardrail_id": "guardrail-1",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "api_key": "litellm_enc::" + _encrypted("guardrail-vendor-key"),
+                },
+            },
+            {"guardrail_id": "guardrail-legacy", "litellm_params": dict(legacy_params)},
+        ]
+    }
+    database = _FakeDatabase(tables)
+
+    assert await reencrypt_stored_values(database, from_key=PREVIOUS_KEY, to_key=NEW_KEY) == 1
+
+    migrated_key = tables["LiteLLM_GuardrailsTable"][0]["litellm_params"]["api_key"]
+    assert migrated_key.startswith("litellm_enc::")
+    assert decrypt_if_encrypted_with(migrated_key.removeprefix("litellm_enc::"), NEW_KEY) == "guardrail-vendor-key"
+    assert tables["LiteLLM_GuardrailsTable"][1]["litellm_params"] == legacy_params
+    assert database.writes == [("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1")]

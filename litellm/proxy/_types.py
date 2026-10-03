@@ -16,6 +16,7 @@ from pydantic import (
     JsonValue,
     PositiveInt,
     PrivateAttr,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
@@ -46,6 +47,8 @@ from litellm.types.mcp import (
     MCPCredentials,
     MCPTransport,
     MCPTransportType,
+    MCPUpstreamProtocol,
+    validate_mcp_protocol_transport,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
@@ -508,6 +511,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mistral",
         "/typesafe",
         "/laya",
+        "/bespoke",
         "/openrouter",
         "/milvus",
         "/gigachat",
@@ -543,6 +547,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
+        "/v1/traces/{trace_id}/spans/{span_id}/error",
     ]
 
     anthropic_routes = [
@@ -1672,6 +1677,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
+    @model_validator(mode="after")
+    def validate_protocol_transport(self) -> "NewMCPServerRequest":
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (self.mcp_info or {}).get("protocol_version", "auto")
+            ),
+            self.transport,
+        )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
@@ -1754,6 +1769,18 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+
+    @model_validator(mode="after")
+    def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
+        if not {"transport", "mcp_info"}.issubset(self.model_fields_set):
+            return self
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (self.mcp_info or {}).get("protocol_version", "auto")
+            ),
+            self.transport,
+        )
+        return self
 
     @model_validator(mode="before")
     @classmethod

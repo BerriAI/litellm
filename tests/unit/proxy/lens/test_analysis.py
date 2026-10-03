@@ -19,7 +19,7 @@ from litellm.proxy.lens.models import (
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from tests.unit.proxy.lens.test_state import NOW, lens, finding
+from tests.unit.proxy.lens.test_state import NOW, issue_brief, lens, finding
 
 
 @pytest.mark.asyncio
@@ -964,3 +964,35 @@ async def test_invalid_candidate_response_preserves_other_findings_and_reports_i
     assert tuple(result.finding for result in results if result.finding is not None) == (finding("run"),)
     assert sum(result.finding is None for result in results) == 1
     assert max(counts.get_nowait() for _ in range(counts.qsize())) == 1
+
+
+@pytest.mark.asyncio
+async def test_investigator_keeps_the_issue_brief() -> None:
+    execution: Final = Execution(
+        id="run1", source="traces", trace_id="t", team_id="alpha", name="search", start_time="", span_count=1
+    )
+    examined: Final = Examined(
+        execution=execution,
+        observations=(),
+        parts=(TracePart(execution_id="run1", span_id="span", name="search", kind="tool", content="timeout"),),
+        partial=False,
+        cannot_assess=False,
+    )
+    draft: Final = finding("run1").model_copy(update={"brief": issue_brief("No repo tool")})
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        return ModelResult(content='{"action":"submit","finding":' + draft.model_dump_json() + "}", cost=0)
+
+    async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(execution=execution, parts=examined.parts)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await investigate(
+        claim,
+        Candidate(check_id="retries", title="Retries", hypothesis="Unrecovered", execution_ids=("run1",)),
+        (examined,),
+        read,
+        model,
+    )
+    assert result.finding is not None
+    assert result.finding.brief == draft.brief

@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import type { components } from "@/lib/http/schema";
 import { useEffect, useState } from "react";
@@ -28,7 +29,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { LensFinding } from "./LensFinding";
-import { apiClient } from "@/components/networking";
+import { apiClient as liveApiClient } from "@/components/networking";
 import { TracePanel } from "./TracePanel";
 import { LensSetup } from "./LensSetup";
 import { LensRuns } from "./LensRuns";
@@ -37,13 +38,7 @@ import { WorkerSetup } from "./WorkerSetup";
 import { useAnalysisKeyInfo } from "./AnalysisKeyDetails";
 import { uiHref } from "@/utils/uiHref";
 import { ApiError } from "@/lib/http/client";
-import {
-  InvestigationList,
-  InvestigationExample,
-  MonitoringSetup,
-  InvestigationSummary,
-  InvestigationFailure,
-} from "./LensOverview";
+import { InvestigationList, MonitoringSetup, InvestigationSummary, InvestigationFailure } from "./LensOverview";
 import { LensWelcome } from "./LensWelcome";
 import {
   workerConnected,
@@ -56,6 +51,7 @@ import {
   type Finding,
   type Settings,
   type Job,
+  watches,
 } from "./lensData";
 
 const money = (n: number) =>
@@ -70,10 +66,19 @@ function emptyFindingTitle(active: boolean, scanned: boolean, status?: string) {
   return scanned ? "No matching findings" : "Ready for the first analysis";
 }
 
-export function LensView({ accessToken, readOnly = false }: { accessToken: string; readOnly?: boolean }) {
+export function LensView({
+  accessToken,
+  readOnly = false,
+  onDemo,
+}: {
+  accessToken: string;
+  readOnly?: boolean;
+  onDemo?: () => void;
+}) {
+  const demo = useLensDemo();
+  const apiClient = demo?.client ?? liveApiClient;
   const client = useQueryClient();
   const [workerSetup, setWorkerSetup] = useState(false);
-  const [showExample, setShowExample] = useState(false);
   const [monitoring, setMonitoring] = useState(false);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -85,6 +90,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
     queryKey: key,
     queryFn: () => apiClient.get<LensList>("/lens", { accessToken }),
     refetchInterval: (current) => {
+      if (demo) return false;
       const running = current.state.data?.lenses.some((item) =>
         item.jobs.some((job) => ["queued", "running"].includes(job.status)),
       );
@@ -100,7 +106,10 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
     queryFn: () =>
       apiClient.get<{ data: import("./lensData").AnalysisModelInfo[] }>("/model_group/info", { accessToken }),
   });
-  const [selected, setSelected] = useQueryState("lens", parseAsString.withOptions({ history: "push" }));
+  const [liveSelected, setLiveSelected] = useQueryState("lens", parseAsString.withOptions({ history: "push" }));
+  const [demoSelected, setDemoSelected] = useState<string | null>(null);
+  const selected = demo ? demoSelected : liveSelected;
+  const setSelected = demo ? setDemoSelected : setLiveSelected;
   const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
   const [batchId, setBatchId] = useState("latest");
   const [historyOffset, setHistoryOffset] = useState(0);
@@ -146,7 +155,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
     queryKey: ["lens-activity-available", accessToken],
     queryFn: () => apiClient.get<{ traces: boolean; requests: boolean }>("/lens/activity/available", { accessToken }),
     enabled: loaded,
-    refetchInterval: 5000,
+    refetchInterval: demo ? (false as const) : 5000,
   };
   const activity = useQuery(activityOptions);
   const tracesReady = activity.data?.traces === true && !activity.error;
@@ -157,7 +166,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
     queryKey: ["lens-history", lens?.id, historyOffset, accessToken],
     enabled: !!lens,
     queryFn: () => apiClient.get<Job[]>(`/lens/${lens?.id}/runs`, { accessToken, query: { offset: historyOffset } }),
-    refetchInterval: 10000,
+    refetchInterval: demo ? (false as const) : 10000,
   };
   const history = useQuery(historyQuery);
   const historical = useQuery({
@@ -297,7 +306,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           }}
           onConnect={() => setWorkerSetup(true)}
           onCreate={() => setEditing("new")}
-          onExample={() => setShowExample(true)}
+          onDemo={activity.isSuccess && !ready ? onDemo : undefined}
         />
       )}
       {showReadiness && !ready && (
@@ -573,13 +582,13 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
                   </div>
                 )}
                 <div className="pt-2">
-                  <h3 className="text-base font-semibold">What should we look out for?</h3>
+                  <h3 className="text-base font-semibold">Watch for</h3>
                   <p className="mt-1 text-xs text-muted-foreground">Specific problems or patterns to investigate.</p>
                 </div>
                 {batchSettings?.checks.map((c, index) => (
                   <div key={c.id} className="flex items-start gap-3 border-b py-4">
                     <span className="mt-0.5 text-xs tabular-nums text-muted-foreground">{index + 1}.</span>
-                    <p className="text-sm leading-6 flex-1">{c.instruction}</p>
+                    <CheckSummary check={c} />
                     {!c.enabled && <span className="text-xs text-muted-foreground">Disabled</span>}
                   </div>
                 ))}
@@ -687,7 +696,6 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           }
         />
       )}
-      {showExample && <InvestigationExample onClose={() => setShowExample(false)} />}
       {monitoring && lens && (
         <MonitoringSetup
           settings={lens.settings}
@@ -762,5 +770,16 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
         </SheetContent>
       </Sheet>
     </section>
+  );
+}
+
+function CheckSummary({ check }: { check: Settings["checks"][number] }) {
+  const watch = watches.find((item) => item.id === check.id);
+  if (!watch) return <p className="flex-1 text-sm leading-6">{check.instruction}</p>;
+  return (
+    <p className="grid flex-1 gap-0.5">
+      <span className="text-sm font-medium">{watch.name}</span>
+      <span className="text-xs text-muted-foreground">{watch.summary}</span>
+    </p>
   );
 }
