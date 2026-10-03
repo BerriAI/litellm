@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { z } from "zod/v4";
+import { z } from "zod";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { FieldGroup } from "@/components/ui/field";

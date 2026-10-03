@@ -1,6 +1,6 @@
 import { TriangleAlert } from "lucide-react";
 import { useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { modelPatchUpdateCall } from "./networking";
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/ui/field";

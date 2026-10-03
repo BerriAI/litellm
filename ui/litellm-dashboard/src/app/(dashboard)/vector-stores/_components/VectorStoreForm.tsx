@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { CircleHelp, Eye, EyeOff, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useWatch } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
 import {
   VectorStoreProviders,

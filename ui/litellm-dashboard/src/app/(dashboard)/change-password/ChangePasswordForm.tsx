@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { CircleAlert } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";

@@ -1,7 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import {
