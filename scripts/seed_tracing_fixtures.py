@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import binascii
@@ -14,18 +16,19 @@ from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from uuid import uuid4
 
 import httpx
-from prisma import Json, Prisma
-from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace
 from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing.config import trace_storage_config
 from litellm.tracing.types import SpendLogRecord
+
+if TYPE_CHECKING:
+    from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 TRACE_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces/tests/fixtures"
@@ -194,6 +197,8 @@ def rebase_spend(
 
 
 def postgres_row(row: SpendLogRecord) -> LiteLLM_SpendLogsCreateWithoutRelationsInput:
+    from prisma import Json
+
     return LiteLLM_SpendLogsCreateWithoutRelationsInput(
         request_id=row["request_id"],
         call_type=row["call_type"],
@@ -222,6 +227,8 @@ def postgres_row(row: SpendLogRecord) -> LiteLLM_SpendLogsCreateWithoutRelations
 
 
 async def seed() -> int:
+    from prisma import Prisma
+
     fixtures: Final = spend_fixtures()
     spends: Final = tuple(chain.from_iterable(rows for _, rows in fixtures))
     by_name: Final = MappingProxyType(dict(fixtures))
