@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import moment from "moment";
 import { useMemo, useState } from "react";
@@ -9,7 +10,7 @@ import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
 import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
 import type { TraceSummary } from "./traceTypes";
-import { previewText } from "./traceUtils";
+import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { ActiveDot } from "./ActiveDot";
@@ -27,7 +28,7 @@ export function filterRuns(
   return runs.filter((run) => {
     const haystack = [run.trace_id, previewText(run.input_preview), run.name].map((s) => s.toLowerCase());
     const matchesQuery = !q || haystack.some((text) => text.includes(q));
-    const matchesAgent = agent === ALL_AGENTS || run.service === agent;
+    const matchesAgent = agent === ALL_AGENTS || traceAgentNames(run).includes(agent);
     const failed = run.error_count > 0;
     const matchesStatus = status === "all" || (status === "error" ? failed : !failed);
     return matchesQuery && matchesAgent && matchesStatus;
@@ -61,6 +62,7 @@ interface AgentTracesSectionProps {
   onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  onDemo?: () => void;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -102,7 +104,9 @@ export function AgentTracesSection({
   onRunOpenChange,
   readOnly = false,
   canMintTracingKey = false,
+  onDemo,
 }: AgentTracesSectionProps) {
+  const demo = useLensDemo();
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
   const [agent, setAgent] = useState(ALL_AGENTS);
@@ -121,7 +125,7 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  const agents = useMemo(() => Array.from(new Set(traces.traces.map((t) => t.service))).sort(), [traces.traces]);
+  const agents = useMemo(() => Array.from(new Set(traces.traces.flatMap(traceAgentNames))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
   const range = useMemo(
@@ -160,10 +164,11 @@ export function AgentTracesSection({
     checking: traces.isFetching,
   };
 
-  if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
+  if (setup.disabledDetail != null)
+    return <TracingSetupCard detail={setup.disabledDetail} onDemo={onDemo} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
   if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} {...setupProps} />;
+    return <TracingSetupCard detail={null} onDemo={onDemo} {...setupProps} />;
   if (showSetup) {
     return (
       <div>
@@ -185,11 +190,7 @@ export function AgentTracesSection({
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
-      {setup.received && (
-        <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
-          Traces received. Select a run to inspect it.
-        </p>
-      )}
+      <TracesReceived received={setup.received} />
       <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
       <RunsToolbar
         query={query}
@@ -200,19 +201,25 @@ export function AgentTracesSection({
         onAgentChange={setAgent}
         onStatusChange={setStatus}
       >
-        <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-          <ActiveDot />
-          Set up tracing
-        </Button>
+        {!demo && (
+          <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
+            <ActiveDot />
+            Set up tracing
+          </Button>
+        )}
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}
             rangeHours={timeControls.rangeHours}
             onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
             live={isLiveTail}
+            showLive={!demo}
             onLiveChange={timeControls.onLiveChange}
-            zoomed={zoom !== null}
-            onResetZoom={() => setZoom(null)}
+            onRefresh={() => {
+              setZoom(null);
+              checkTraces();
+            }}
+            refreshing={traces.isFetching}
           />
         )}
       </RunsToolbar>
@@ -234,6 +241,16 @@ export function AgentTracesSection({
         onResetZoom={() => setZoom(null)}
       />
     </div>
+  );
+}
+
+function TracesReceived({ received }: { received: boolean }) {
+  const demo = useLensDemo();
+  if (!received || demo) return null;
+  return (
+    <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
+      Traces received. Select a run to inspect it.
+    </p>
   );
 }
 

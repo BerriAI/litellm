@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
+from pydantic import ConfigDict, TypeAdapter
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -58,6 +59,7 @@ from litellm.llms.deepgram.common_utils import (
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
+from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
@@ -634,6 +636,62 @@ async def typesafe_proxy_route(
         is_streaming_request=False,
     )
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.post(
+    "/laya/v1/systemone",
+    tags=["Laya Pass-through", "pass-through"],
+)
+async def laya_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    return await _oss_decision_proxy_route("laya", request, fastapi_response, user_api_key_dict)
+
+
+@router.post("/bespoke/v1/systemone", tags=["Bespoke Nimble Pass-through", "pass-through"])
+async def bespoke_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    return await _oss_decision_proxy_route("bespoke", request, fastapi_response, user_api_key_dict)
+
+
+async def _oss_decision_proxy_route(
+    provider: OssDecisionProvider, request: Request, fastapi_response: Response, user_api_key_dict: UserAPIKeyAuth
+) -> Response:
+    body: Final = TypeAdapter(dict[str, object]).validate_python(await _read_request_body(request))
+    try:
+        _ = validate_oss_request(provider, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        connection: Final = oss_connection(provider)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503, detail=f"{provider} server is not configured correctly; check {provider.upper()}_API_BASE"
+        ) from exc
+    base_url: Final = httpx.URL(connection.api_base)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, "/v1/systemone"),
+    )
+    authorization: Final[Mapping[str, str]] = (
+        MappingProxyType({"Authorization": f"Bearer {connection.api_key}"})
+        if connection.api_key
+        else MappingProxyType({})
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint="v1/systemone",
+        target=str(updated_url),
+        custom_headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),
+        custom_llm_provider=provider,
+        is_streaming_request=False,
+    )
+    return TypeAdapter(Response, config=ConfigDict(arbitrary_types_allowed=True)).validate_python(
+        await endpoint_func(request, fastapi_response, user_api_key_dict)
+    )
 
 
 @router.api_route(

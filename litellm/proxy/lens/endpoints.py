@@ -9,12 +9,15 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime, BaseModel, Field, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, Field
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ModelAccessDeniedProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_model
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
+from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
     Claim,
     Execution,
@@ -127,20 +130,60 @@ def validate_selection(settings: LensSettings) -> None:
             raise HTTPException(422, "Choose execution IDs returned by the activity preview")
 
 
-def validate_model(settings: LensSettings, auth: UserAPIKeyAuth) -> None:
-    from litellm.proxy.proxy_server import llm_router
+async def validate_model(settings: LensSettings, auth: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     validate_selection(settings)
-    if llm_router is None or settings.model not in llm_router.get_model_names(team_id=auth.team_id):
+    deployments: Final = (
+        llm_router.get_model_list(model_name=settings.model, team_id=auth.team_id) if llm_router else ()
+    )
+    if not deployments:
         raise HTTPException(400, "Choose a model configured on this LiteLLM instance")
-    allowed_models: Final = TypeAdapter(tuple[str, ...]).validate_python(auth.model_dump().get("models") or ())
-    if (
-        auth.user_role != LitellmUserRoles.PROXY_ADMIN
-        and allowed_models
-        and settings.model not in allowed_models
-        and "all-proxy-models" not in allowed_models
-    ):
-        raise HTTPException(403, "This key does not have access to the analysis model")
+    if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
+        try:
+            await can_key_call_model(
+                model=settings.model,
+                llm_model_list=deployments,
+                valid_token=auth,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+            )
+        except ModelAccessDeniedProxyException as exc:
+            raise HTTPException(403, "This key does not have access to the analysis model") from exc
+    for deployment in deployments:
+        deployment_prices(Deployment.model_validate(deployment))
+
+
+async def worker_supports_model(worker: Worker, settings: LensSettings) -> bool:
+    if worker.revoked or worker.analysis_key_id is None:
+        return False
+    try:
+        auth: Final = await validate_key(worker.analysis_key_id)
+        if auth is None:
+            return False
+        await validate_model(settings, auth)
+    except KeyNotFoundError:
+        return False
+    except HTTPException as exc:
+        if exc.status_code not in (400, 401, 403):
+            raise
+        return False
+    return True
+
+
+async def validate_workers(settings: LensSettings, scope: Scope) -> None:
+    workers: Final = repository().eligible_workers(scope)
+    first: Final = await anext(workers, None)
+    if first is None or await worker_supports_model(first, settings):
+        return
+    async for worker in workers:
+        if await worker_supports_model(worker, settings):
+            return
+    raise HTTPException(
+        400,
+        "No worker can use this analysis model. Choose a model available to the worker's virtual key, "
+        "or update its model access and pricing.",
+    )
 
 
 @router.get("", response_model=LensList)
@@ -156,7 +199,8 @@ async def list_lenses(auth: Auth, storage: StorageDep) -> LensList:
 @router.post("", response_model=Lens)
 async def create_lens(settings: LensSettings, auth: Auth) -> Lens:
     scope: Final = user_scope(auth, write=True)
-    validate_model(settings, auth)
+    await validate_model(settings, auth)
+    await validate_workers(settings, scope)
     now: Final = datetime.now(timezone.utc)
     lens: Final = Lens(
         id=str(uuid4()),
@@ -183,8 +227,10 @@ async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
 
 @router.put("/{lens_id}", response_model=Lens)
 async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
-    await get_lens(lens_id, user_scope(auth, write=True))
-    validate_model(settings, auth)
+    lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
+    validate_selection(settings)
+    if settings.model != lens.settings.model or (settings.enabled and not lens.settings.enabled):
+        await validate_model(settings, auth)
     return required(
         await repository().update(
             lens_id,
@@ -202,9 +248,10 @@ async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
 
 @router.post("/{lens_id}/runs", response_model=Lens)
 async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
-    await get_lens(lens_id, user_scope(auth, write=True))
-    if body.settings is not None:
-        validate_model(body.settings, auth)
+    lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
+    settings: Final = body.settings or lens.settings
+    await validate_model(settings, auth)
+    await validate_workers(settings, lens.scope)
     now: Final = datetime.now(timezone.utc)
     job_id: Final = str(uuid4())
     return required(
@@ -528,10 +575,16 @@ async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
 
 
 async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Claim | None:
+    active: Final = current_job(candidate)
+    if not await worker_supports_model(worker, active.settings if active else candidate.settings):
+        return None
     job_id: Final = str(uuid4())
 
     def schedule(e: Lens) -> Lens:
         scheduled: Final = queue_job(e, now, job_id) if e.settings.enabled and e.next_run_at <= now else e
+        job: Final = current_job(scheduled)
+        if job and job.settings.model != (active.settings.model if active else candidate.settings.model):
+            return e
         return claim_job(scheduled, worker, now)
 
     updated: Final = await repository().update(candidate.id, schedule, changed_only=True)

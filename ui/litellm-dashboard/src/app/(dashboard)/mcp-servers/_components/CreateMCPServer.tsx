@@ -48,6 +48,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import { StdioDisabledBanner, TransportSelectItems } from "./StdioAvailability";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
@@ -82,6 +83,7 @@ interface CreateMCPServerProps {
   existingServers?: MCPServer[];
   prefillData?: DiscoverableMCPServer | null;
   onBackToDiscovery?: () => void;
+  stdioEnabled?: boolean;
 }
 
 const payloadErrorMessage = (result: Exclude<BuildCreatePayloadResult, { kind: "ok" }>): string => {
@@ -113,6 +115,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   existingServers,
   prefillData,
   onBackToDiscovery,
+  stdioEnabled = true,
 }) => {
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: CREATE_DEFAULTS });
   const registry = useMountRegistry();
@@ -750,11 +753,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                           <SelectValue placeholder="Select transport" />
                         </SelectTrigger>
                         <SelectContent>
-                          {TRANSPORT_ITEMS.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
+                          <TransportSelectItems stdioEnabled={stdioEnabled} />
                         </SelectContent>
                       </Select>
                     )}
@@ -917,6 +916,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   {transportType !== "stdio" && transportType !== "" && isAwsSigV4AuthType && <AwsSigV4Fields />}
 
                   {/* Stdio Configuration - only show for stdio transport */}
+                  {transportType === "stdio" && !stdioEnabled && <StdioDisabledBanner />}
                   <StdioConfiguration isVisible={transportType === "stdio"} />
                 </div>
 

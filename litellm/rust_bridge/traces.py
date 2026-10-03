@@ -1,12 +1,32 @@
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypedDict, cast
+from typing import Final, Literal, Protocol, TypedDict, TypeVar, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.trace_queries import (
+    LENS_AGENTS,
+    LENS_AVAILABILITY,
+    LENS_CONTENT,
+    LENS_EVIDENCE,
+    LENS_SAMPLE,
+    ActivityAvailability,
+    AgentRow,
+    CountRow,
+    ExecutionRow,
+    LensAccessParams,
+    LensContentParams,
+    LensEvidenceParams,
+    LensSampleParams,
+    ParamsT,
+    PartRow,
+    ReadQuery,
+    ReadQueryName,
+    RowT,
+)
+from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 
 
 class DecodedEvent(TypedDict):
@@ -19,6 +39,7 @@ class NormalizedSpan(BaseModel):
 
     observation_type: Literal["agent", "llm", "tool", "chain", "framework"]
     agent_name: str
+    framework: str
     litellm_request_id: str
     model: str
     input_tokens: int = Field(ge=0, le=2**32 - 1)
@@ -56,25 +77,17 @@ class DecodedSpan(TypedDict):
     consumed_attributes: ReadOnly[tuple[str, str]]
 
 
-ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "span_error", "spend_by_response_ids"]
+class AllQueryScope(TypedDict):
+    kind: ReadOnly[Literal["all"]]
 
 
-class AdminQueryScope(TypedDict):
-    kind: ReadOnly[Literal["admin"]]
+class OwnedQueryScope(TypedDict):
+    kind: ReadOnly[Literal["owned"]]
+    user_id: ReadOnly[str]
+    team_ids: ReadOnly[tuple[str, ...]]
 
 
-class TeamQueryScope(TypedDict):
-    kind: ReadOnly[Literal["team"]]
-    team_id: ReadOnly[str]
-
-
-class KeyQueryScope(TypedDict):
-    kind: ReadOnly[Literal["key"]]
-    team_id: ReadOnly[str]
-    api_key_hash: ReadOnly[str]
-
-
-QueryScope = AdminQueryScope | TeamQueryScope | KeyQueryScope
+QueryScope = AllQueryScope | OwnedQueryScope
 
 
 class NativeStore(Protocol):
@@ -86,13 +99,14 @@ class NativeStore(Protocol):
 
     def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
 
-    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[str]: ...
+    def query_help(self, scope: QueryScope, secret: str) -> Awaitable[JsonValue]: ...
 
-    def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
+    def query(
+        self, name: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]
+    ) -> Awaitable[str]: ...
 
-    def query(self, name: ReadQueryName, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
-
+@runtime_checkable
 class NativeTraces(Protocol):
     NativeTraceConfig: type["NativeConfig"]
     NativeTraceStorage: type[NativeStore]
@@ -108,13 +122,14 @@ class NativeTraces(Protocol):
     def trace_normalized_field_definitions(self) -> list[dict[str, str]]: ...
 
 
-class QueryResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    data: list[dict[str, JsonValue]]
-
-
-QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
+QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | float | list[str]])
 _FIELD_DEFINITIONS_ADAPTER: Final = TypeAdapter(tuple[NormalizedFieldDefinition, ...])
+_SQL_RESPONSE: Final = TypeAdapter(TraceSQLResponse)
+_HELP_RESPONSE: Final = TypeAdapter(TraceQueryHelp)
+_ResponseT: Final = TypeVar("_ResponseT")
+_NATIVE_ADAPTER: Final[TypeAdapter[NativeTraces]] = TypeAdapter(
+    NativeTraces, config=ConfigDict(arbitrary_types_allowed=True)
+)
 
 
 class NativeConfig(Protocol):
@@ -132,7 +147,7 @@ def _native() -> NativeTraces:
     native: Final = get_native_bridge()
     if native is None:
         raise RuntimeError("Agent tracing requires the Rust extension")
-    return cast(NativeTraces, native)  # cast-ok: the native extension is validated against this protocol at call sites
+    return _NATIVE_ADAPTER.validate_python(native)
 
 
 def decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]:
@@ -155,6 +170,20 @@ def encode_error(message: str) -> bytes:
     return _native().trace_encode_error(message)
 
 
+def _decode_query_response(adapter: TypeAdapter[_ResponseT], body: str) -> _ResponseT:
+    try:
+        return adapter.validate_json(body)
+    except ValidationError as error:
+        raise RuntimeError("Native trace query returned an invalid response") from error
+
+
+def _validate_query_response(adapter: TypeAdapter[_ResponseT], value: JsonValue) -> _ResponseT:
+    try:
+        return adapter.validate_python(value)
+    except ValidationError as error:
+        raise RuntimeError("Native trace query returned an invalid response") from error
+
+
 class ClickHouseStorage:
     def __init__(self, config: TraceStorageConfig) -> None:
         native: Final = _native()
@@ -171,35 +200,30 @@ class ClickHouseStorage:
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)
 
-    async def query(
-        self, name: ReadQueryName, parameters: Mapping[str, object] | None = None
-    ) -> list[dict[str, JsonValue]]:
-        result: Final = await self._native.query(
-            name, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
-        )
-        return QueryResponse.model_validate_json(result).data
+    async def query(self, query: ReadQuery[ParamsT, RowT], parameters: ParamsT) -> tuple[RowT, ...]:
+        validated: Final = query.parameters.model_validate(parameters)
+        result: Final = await self._native.query(query.name, QUERY_PARAMETERS.validate_python(validated.model_dump()))
+        return _decode_query_response(query.response, result).data
 
-    async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> str:
-        return await self._native.query_sql(sql, scope, secret)
+    async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> TraceSQLResponse:
+        result: Final = await self._native.query_sql(sql, scope, secret)
+        return _decode_query_response(_SQL_RESPONSE, result)
 
-    async def query_help(self, scope: QueryScope, secret: str) -> str:
-        return await self._native.query_help(scope, secret)
+    async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
+        result: Final = await self._native.query_help(scope, secret)
+        return _validate_query_response(_HELP_RESPONSE, result)
 
-    async def _lens_query(self, name: str, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
-        result: Final = await self._native.lens_query(name, QUERY_PARAMETERS.validate_python(parameters))
-        return QueryResponse.model_validate_json(result).data
+    async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
+        return await self.query(LENS_SAMPLE, parameters)
 
-    async def lens_sample(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
-        return await self._lens_query("sample", parameters)
+    async def lens_availability(self, parameters: LensAccessParams) -> tuple[ActivityAvailability, ...]:
+        return await self.query(LENS_AVAILABILITY, parameters)
 
-    async def lens_availability(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
-        return await self._lens_query("availability", parameters)
+    async def lens_agents(self, parameters: LensAccessParams) -> tuple[AgentRow, ...]:
+        return await self.query(LENS_AGENTS, parameters)
 
-    async def lens_agents(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
-        return await self._lens_query("agents", parameters)
+    async def lens_content(self, parameters: LensContentParams) -> tuple[PartRow, ...]:
+        return await self.query(LENS_CONTENT, parameters)
 
-    async def lens_content(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
-        return await self._lens_query("content", parameters)
-
-    async def lens_evidence(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
-        return await self._lens_query("evidence", parameters)
+    async def lens_evidence(self, parameters: LensEvidenceParams) -> tuple[CountRow, ...]:
+        return await self.query(LENS_EVIDENCE, parameters)

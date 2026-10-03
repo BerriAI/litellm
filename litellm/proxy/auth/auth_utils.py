@@ -1883,6 +1883,16 @@ def _extract_model_candidates_from_request(
     llm_router: Router | None = None,
     team_id: str | None = None,
 ) -> list[str]:
+    if route.rstrip("/") in ("/laya/v1/systemone", "/bespoke/v1/systemone"):
+        from litellm.llms.oss_decision import validate_oss_model
+
+        provider: Final = "bespoke" if route.startswith("/bespoke/") else "laya"
+        try:
+            decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(request_data)
+            decision_model: Final = validate_oss_model(provider, decision_request.get("model"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _dedupe_model_candidates((f"{provider}/{decision_model}",))
     if route == "/cost/predict-cache":
         prediction_models: Final = _cache_prediction_model_candidates(request_data, llm_router, team_id)  # pyright: ignore[reportUnknownArgumentType]  # the typed reader validates each deployment ID from this legacy payload
         return _dedupe_model_candidates(prediction_models)

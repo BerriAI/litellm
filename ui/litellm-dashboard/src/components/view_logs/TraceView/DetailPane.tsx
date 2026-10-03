@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import { PanelRightClose } from "lucide-react";
 import { useState } from "react";
@@ -104,6 +105,7 @@ function SpanPane({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("content");
+  const demo = useLensDemo();
   const traceId = trace.summary.trace_id;
   const detailQuery = useSpanDetail(
     accessToken,
@@ -162,9 +164,13 @@ function SpanPane({
       </div>
       <PaneFooter>
         <CopyButton
-          value={agentHandoffText(traceId, span.span_id, trace.summary.trace_ref)}
+          value={
+            demo
+              ? demo.copyTrace(traceId, span.span_id)
+              : agentHandoffText(traceId, span.span_id, trace.summary.trace_ref)
+          }
           label="Copy step"
-          copiedLabel="Command copied"
+          copiedLabel={demo ? "Step copied" : "Command copied"}
         />
         <div className="ml-auto flex items-center gap-3 text-[13px] text-trace-duration tabular-nums">
           <Meta label="time" value={fmtMs(span.duration_ms)} />
@@ -186,6 +192,7 @@ function GroupMetric({ label, value }: { label: string; value: string }) {
 
 /** ×N group: rollup of every invocation plus the first failure's message. */
 function GroupPane({ trace, row, onClose }: { trace: Trace; row: GroupRowData; onClose: () => void }) {
+  const demo = useLensDemo();
   const tokens = row.members.reduce((sum, m) => sum + m.input_tokens + m.output_tokens, 0);
   const firstFailure = row.members.find((m) => m.status === "error" && m.error);
   return (
@@ -222,7 +229,11 @@ function GroupPane({ trace, row, onClose }: { trace: Trace; row: GroupRowData; o
       </div>
       <PaneFooter>
         <CopyButton
-          value={agentHandoffText(trace.summary.trace_id, (firstFailure ?? row.members[0]).span_id)}
+          value={
+            demo
+              ? demo.copyTrace(trace.summary.trace_id, (firstFailure ?? row.members[0]).span_id)
+              : agentHandoffText(trace.summary.trace_id, (firstFailure ?? row.members[0]).span_id)
+          }
           label="Copy group sample"
         />
       </PaneFooter>

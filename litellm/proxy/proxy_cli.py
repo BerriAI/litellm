@@ -1447,9 +1447,11 @@ def run_server(
                         sys.exit(1)
             else:
                 print(
-                    "Unable to connect to DB. DATABASE_URL found in environment, but the prisma CLI is neither on "
-                    "PATH nor importable as a package."
+                    "\033[1;31mLiteLLM Proxy: a database URL is set but the prisma CLI is neither on PATH nor importable "
+                    "as a package, so the database cannot be set up. Install it with `pip install 'litellm[extra_proxy]'` "
+                    "or run a shipped LiteLLM image.\033[0m"
                 )
+                sys.exit(1)
         pgbouncer_settings: Final = PgBouncerSettings()
         upstream_database_url: Final = os.getenv("DATABASE_URL")
         if pgbouncer_settings.enabled and upstream_database_url is not None:
