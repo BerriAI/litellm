@@ -2506,25 +2506,41 @@ def test_tool_changes_beta_requires_system_tool_reference(role: str, content: ob
     assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
 
 
+def _pre_stream_exception_for(error_type: str, message: str, status_code: int, model: str) -> Exception:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    body: Final = json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+    with pytest.raises(Exception, match=message) as raised:
+        exception_type(
+            model=model,
+            original_exception=AnthropicError(status_code=status_code, message=body),
+            custom_llm_provider="anthropic",
+        )
+    return raised.value
+
+
 @pytest.mark.parametrize(
-    ("status_code", "expected", "expected_status"),
-    [
-        (429, "RateLimitError", 429),
-        (500, "InternalServerError", 500),
-        (529, "InternalServerError", 500),
-        (503, "ServiceUnavailableError", 503),
-        (504, "Timeout", 504),
-        (502, "APIError", 502),
-    ],
+    "error_type",
+    ["overloaded_error", "api_error", "timeout_error", "rate_limit_error", "invalid_request_error", "never_seen_error"],
 )
-def test_anthropic_error_frame_exception_is_the_pre_stream_class_for_that_status(
-    status_code: int, expected: str, expected_status: int
-) -> None:
+def test_anthropic_error_frame_exception_matches_the_pre_stream_mapping_for_that_frame(error_type: str) -> None:
+    from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP, anthropic_error_frame_exception
+
+    status_code: Final = ANTHROPIC_ERROR_STATUS_CODE_MAP.get(error_type, 500)
+    pre_stream: Final = _pre_stream_exception_for(error_type, "upstream said no", status_code, "claude-sonnet-4-5")
+
+    error: Final = anthropic_error_frame_exception(error_type, "upstream said no", status_code, "claude-sonnet-4-5")
+
+    assert type(error) is type(pre_stream)
+    assert getattr(error, "status_code", None) == getattr(pre_stream, "status_code", None)
+    assert "upstream said no" in str(error)
+
+
+def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal_server_error() -> None:
     import litellm
     from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 
-    error = anthropic_error_frame_exception("upstream said no", status_code, "claude-sonnet-4-5")
+    error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
-    assert type(error) is getattr(litellm, expected)
-    assert error.status_code == expected_status
-    assert "upstream said no" in str(error)
+    assert type(error) is litellm.InternalServerError

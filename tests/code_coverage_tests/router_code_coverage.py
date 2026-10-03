@@ -99,7 +99,7 @@ ignored_function_names = [
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
     "_mid_stream_retry_trigger",  # Tested through the retry policy mid-stream budget test in test_router.py
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
-    "_anthropic_messages_retry_policy_in_force",  # Tested through the retry budget precedence test in test_router.py
+    "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
     "_anthropic_messages_plain_retry_budget",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_should_retry",  # Tested through every mid-stream retry test in test_router.py
     "_aanthropic_messages_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py

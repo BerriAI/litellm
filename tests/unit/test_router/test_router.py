@@ -14524,7 +14524,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     """Regression for #24004: a retriable SSE `event: error` frame
     (overloaded_error/internal_server_error) that arrives before any real
     content must trigger the router's fallback chain instead of passing
-    through to the client silently."""
+    through to the client silently. The frame carries the error a 529 answer maps to, an InternalServerError,
+    so a failed fallback answers the status every other litellm path gives an overload."""
     router = _anthropic_messages_make_router()
     source = _AnthropicMessagesFakeByteStream([_anthropic_messages_overloaded_error_chunk()])
     fallback_stream = _AnthropicMessagesFallbackByteStream([_anthropic_messages_content_chunk("fallback answer")])
@@ -14544,7 +14545,8 @@ async def test_anthropic_messages_fallback_on_pre_first_chunk_error_event():
     mock_fallback.assert_awaited_once()
     raised = mock_fallback.await_args.kwargs["e"]
     assert isinstance(raised, MidStreamFallbackError)
-    assert raised.status_code == 503
+    assert isinstance(raised.original_exception, litellm.InternalServerError)
+    assert raised.status_code == 500
     assert raised.is_pre_first_chunk is True
     assert source.closed is True
 
@@ -15347,7 +15349,7 @@ def _anthropic_messages_error_frame(error_type: str) -> bytes:
 
 _ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES: Final = (
     pytest.param("api_error", RetryPolicy(InternalServerErrorRetries=1), id="api_error-500-internal-server"),
-    pytest.param("overloaded_error", RetryPolicy(ServiceUnavailableErrorRetries=1), id="overloaded-503-unavailable"),
+    pytest.param("overloaded_error", RetryPolicy(InternalServerErrorRetries=1), id="overloaded-internal-server"),
     pytest.param("rate_limit_error", RetryPolicy(RateLimitErrorRetries=1), id="rate-limit-429"),
     pytest.param("timeout_error", RetryPolicy(TimeoutErrorRetries=1), id="timeout-504"),
 )
@@ -15360,7 +15362,8 @@ async def test_anthropic_messages_error_frame_is_retried_under_the_class_the_pre
 ):
     """An `event: error` frame before content carried a generic error, so a policy naming only error classes
     granted it no retry while the hold still counted the policy: one attempt, then an HTTP error with no
-    bytes out. The frame now takes the class the pre-stream mapping raises for an answer with its status."""
+    bytes out. The frame now takes the class the pre-stream mapping raises for an answer carrying its body, so
+    an overloaded frame counts as the InternalServerError a 529 answer is, not a ServiceUnavailableError."""
     router = _anthropic_messages_retry_router(num_retries=0, retry_policy=policy)
     provider = _AnthropicMessagesScriptedProvider(
         lambda: _AnthropicMessagesFakeByteStream(
@@ -15378,21 +15381,66 @@ async def test_anthropic_messages_error_frame_is_retried_under_the_class_the_pre
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_error_frame_outside_the_policy_class_reaches_the_client_with_its_status():
-    """An overloaded frame keeps its 503, a ServiceUnavailableError, so a policy granting only
-    InternalServerError retries leaves it unretried and the client gets that error."""
+    """A rate limit frame is the RateLimitError a 429 answer is, so a policy granting only InternalServerError
+    retries leaves it unretried and the client gets that error with its status."""
     router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
     provider = _AnthropicMessagesScriptedProvider(
         lambda: _AnthropicMessagesFakeByteStream(
-            [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("rate_limit_error")]
         )
     )
 
     stream = await _anthropic_messages_stream_through_router(router, provider)
-    with pytest.raises(litellm.ServiceUnavailableError) as raised:
+    with pytest.raises(litellm.RateLimitError) as raised:
         [chunk async for chunk in stream]
 
-    assert raised.value.status_code == 503
+    assert raised.value.status_code == 429
     assert len(provider.calls) == 1
+
+
+_ANTHROPIC_MESSAGES_MALFORMED_POLICIES: Final = (
+    pytest.param({"glm": {"RateLimitErrorRetries": "many"}}, id="string-budget"),
+    pytest.param({"glm": 5}, id="group-policy-is-an-int"),
+    pytest.param(5, id="policy-map-is-an-int"),
+    pytest.param({"glm": [1]}, id="group-policy-is-a-list"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", _ANTHROPIC_MESSAGES_MALFORMED_POLICIES)
+@pytest.mark.parametrize("where", ["request", "router"])
+async def test_anthropic_messages_malformed_retry_policy_leaves_a_healthy_stream_alone(policy, where):
+    """The hold decision resolves the group's retry policy before the first byte, so a policy that does not
+    parse used to fail every stream of that group with a 500 before any attempt. It now governs nothing."""
+    router = _anthropic_messages_retry_router(num_retries=0)
+    request_kwargs = {"model_group_retry_policy": policy} if where == "request" else {}
+    if where == "router":
+        router.model_group_retry_policy = policy
+    provider = _AnthropicMessagesScriptedProvider(_anthropic_messages_retried_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, **request_kwargs)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", _ANTHROPIC_MESSAGES_MALFORMED_POLICIES)
+async def test_anthropic_messages_malformed_retry_policy_falls_back_to_the_plain_budget(policy):
+    router = _anthropic_messages_retry_router(num_retries=1)
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("overloaded_error")]
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider, model_group_retry_policy=policy)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 1), (1, 1)]
 
 
 class _AnthropicMessagesAlternatingDeployments(CustomRoutingStrategyBase):

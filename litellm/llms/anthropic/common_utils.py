@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import json
 import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
@@ -19,14 +20,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
-from litellm.exceptions import (
-    APIError,
-    InternalServerError,
-    RateLimitError,
-    ServiceUnavailableError,
-    Timeout,
-    UnsupportedParamsError,
-)
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -81,19 +75,20 @@ ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
 )
 
 
-def anthropic_error_frame_exception(message: str, status_code: int, model: str) -> Exception:
-    """The exception the pre-stream mapping raises for an HTTP answer with the frame's status, so a retry
-    policy's per-class budget governs an `event: error` frame the way it governs the error before the stream
-    opened; the frame's status stays the one the client sees."""
-    if status_code == 429:
-        return RateLimitError(message=message, llm_provider="anthropic", model=model)
-    if status_code in (500, 529):
-        return InternalServerError(message=message, llm_provider="anthropic", model=model)
-    if status_code == 503:
-        return ServiceUnavailableError(message=message, llm_provider="anthropic", model=model)
-    if status_code == 504:
-        return Timeout(message=message, model=model, llm_provider="anthropic", exception_status_code=status_code)
-    return APIError(status_code=status_code, message=message, llm_provider="anthropic", model=model)
+def anthropic_error_frame_exception(error_type: str, message: str, status_code: int, model: str) -> Exception:
+    """The exception the pre-stream mapping raises for an HTTP answer carrying this frame's body and status, so a
+    retry policy's per-class budget governs an `event: error` frame the way it governs the same error before the
+    stream opened: an overloaded frame is the InternalServerError a real 529 answer is, whatever status the frame
+    map gives it."""
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+    frame_body: Final = json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+    frame_error: Final = AnthropicError(status_code=status_code, message=frame_body)
+    try:
+        exception_type(model=model, original_exception=frame_error, custom_llm_provider="anthropic")
+    except Exception as raised:  # noqa: BLE001  # exception_type hands the mapped error back by raising it
+        return raised
+    return frame_error
 
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")

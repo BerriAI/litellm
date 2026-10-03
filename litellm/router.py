@@ -482,6 +482,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
+_RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
@@ -5652,12 +5653,12 @@ class Router:
                         continue
                     if retriable_pending_error:
                         assert error_event is not None
-                        _error_type, message, status_code = error_event
+                        error_type, message, status_code = error_event
                         raise MidStreamFallbackError(
                             message=message,
                             model=model,
                             llm_provider="anthropic",
-                            original_exception=anthropic_error_frame_exception(message, status_code, model),
+                            original_exception=anthropic_error_frame_exception(error_type, message, status_code, model),
                             is_pre_first_chunk=True,
                         )
                     for buffered_chunk in buffered_lifecycle_chunks:
@@ -5729,17 +5730,27 @@ class Router:
         return cast("dict[str, RetryPolicy] | None", configured)  # cast-ok: same type as the router attribute
 
     def _anthropic_messages_resolved_retry_policy(self, kwargs: Mapping[str, object]) -> RetryPolicy | None:
-        """The retry policy for this request's model group, unless the request opted out with num_retries=0."""
+        """
+        The retry policy for this request's model group, unless the request opted out with num_retries=0.
+        A policy that does not resolve to a RetryPolicy governs nothing here, so the stream runs as it would
+        with none; the pre-stream retry loop still reports the malformed policy when an attempt fails.
+        """
         if kwargs.get("num_retries") == 0:
             return None
-        return resolve_retry_policy(
-            retry_policy=self.retry_policy,
-            model_group=_request_model_group(kwargs),
-            model_group_retry_policy=self._anthropic_messages_group_retry_policy(kwargs),
-        )
-
-    def _anthropic_messages_retry_policy_in_force(self, kwargs: Mapping[str, object]) -> bool:
-        return self._anthropic_messages_resolved_retry_policy(kwargs) is not None
+        model_group: Final = _request_model_group(kwargs)
+        try:
+            return _RESOLVED_RETRY_POLICY_ADAPTER.validate_python(
+                resolve_retry_policy(
+                    retry_policy=self.retry_policy,
+                    model_group=model_group,
+                    model_group_retry_policy=self._anthropic_messages_group_retry_policy(kwargs),
+                )
+            )
+        except (TypeError, ValidationError) as malformed:
+            verbose_router_logger.warning(
+                "The retry policy for %s is not a RetryPolicy, streaming without one: %s", model_group, malformed
+            )
+            return None
 
     def _anthropic_messages_plain_retry_budget(self, kwargs: Mapping[str, object]) -> int:
         """
@@ -5757,14 +5768,10 @@ class Router:
         return self.num_retries if self.num_retries is not None else 0
 
     def _anthropic_messages_policy_retries(self, trigger: Exception, kwargs: Mapping[str, object]) -> int | None:
-        if not self._anthropic_messages_retry_policy_in_force(kwargs):
+        policy: Final = self._anthropic_messages_resolved_retry_policy(kwargs)
+        if policy is None:
             return None
-        return _get_num_retries_from_retry_policy(
-            exception=trigger,
-            model_group=_request_model_group(kwargs),
-            model_group_retry_policy=self._anthropic_messages_group_retry_policy(kwargs),
-            retry_policy=self.retry_policy,
-        )
+        return _get_num_retries_from_retry_policy(exception=trigger, retry_policy=policy)
 
     def _anthropic_messages_retry_budget(self, trigger: Exception, kwargs: Mapping[str, object]) -> tuple[int, bool]:
         """
