@@ -3241,7 +3241,9 @@ def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
     key: Final = cast("Mapping[str, object]", model_info).get("key")  # cast-ok: partial dicts may omit "key"
     if not isinstance(key, str):
         return False
-    raw_entry: Final = cast("Mapping[str, object] | None", litellm.model_cost.get(key))
+    raw_entry: Final = cast(  # cast-ok: cost rows are heterogeneous value dicts
+        "Mapping[str, object] | None", litellm.model_cost.get(key)
+    )
     if _model_cost_entry_has_pricing(raw_entry):
         return False
     return match_capability_generalizations(key) is not None
