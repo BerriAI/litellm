@@ -207,3 +207,29 @@ class TestGigachatApiBaseResolvesProvider:
         assert dynamic_api_key == "gigachat-key-from-env"
         assert returned_api_base == "https://gigachat.devices.sberbank.ru/api/v1"
         assert model == "GigaChat-2"
+
+
+class TestInferredJsonProviderKeepsItsServerKeyOnTrustedOrigins:
+    """An api_base inferred as Alpha.sh, a JSON provider that restricts its server key, gets it only on the trusted origin."""
+
+    MODEL = "Qwen/Qwen3.8-27B-FP8"
+
+    @pytest.fixture(autouse=True)
+    def _server_key(self, monkeypatch):
+        monkeypatch.setenv("ALPHA_API_KEY", "sk-alpha-server")
+        monkeypatch.delenv("ALPHA_API_BASE", raising=False)
+
+    @pytest.mark.parametrize("api_base", ["https://alpha.sh/v1", "https://alpha.sh:443/v1"])
+    def test_trusted_origin_resolves_with_the_server_key(self, api_base):
+        _, provider, api_key, _ = get_llm_provider(model=self.MODEL, api_base=api_base)
+        assert provider == "alpha"
+        assert api_key == "sk-alpha-server"
+
+    def test_plaintext_http_is_refused_instead_of_sending_the_server_key(self):
+        with pytest.raises(Exception, match="ALPHA_API_KEY"):
+            get_llm_provider(model=self.MODEL, api_base="http://alpha.sh/v1")
+
+    def test_an_explicit_key_is_used_as_given(self):
+        _, provider, api_key, _ = get_llm_provider(model=self.MODEL, api_base="http://alpha.sh/v1", api_key="sk-caller")
+        assert provider == "alpha"
+        assert api_key == "sk-caller"
