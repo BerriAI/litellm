@@ -1278,6 +1278,100 @@ async fn duplicate_span_preview_matches_diagnostic(
 }
 
 #[rstest]
+#[case::below_boundary(999, 0)]
+#[case::at_boundary(1000, 0)]
+#[case::above_boundary(1001, 0)]
+#[case::two_full_pages(2000, 0)]
+#[case::third_page(2001, 0)]
+#[case::combined_byte_limit(2000, 2500)]
+#[tokio::test]
+async fn trace_detail_loads_all_spans_with_bounded_reads(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] span_count: usize,
+    #[case] name_bytes: usize,
+) -> TestResult {
+    let database = database?;
+    ensure_schema(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "trace_test",
+        7,
+    )
+    .await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let rows = (0..span_count)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp + (span_count - index) as i64, "TraceId": "boundary-trace",
+                "SpanId": format!("{index:016x}"), "SpanName": "x".repeat(name_bytes),
+                "TeamId": "visible", "ApiKeyHash": "key"
+            }))
+        })
+        .chain(std::iter::once(serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": "boundary-trace", "SpanId": "foreign",
+            "TeamId": "hidden", "ApiKeyHash": "key"
+        }))))
+        .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
+        (
+            "team_ids".into(),
+            Parameter::Strings(vec!["visible".into()]),
+        ),
+        ("trace_id".into(), Parameter::Text("boundary-trace".into())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+    ]);
+    let response = execute_named_read(
+        &database.client,
+        &reader,
+        ReadQuery::TraceSpans,
+        &parameters,
+    )
+    .await;
+    if name_bytes > 0 {
+        assert!(matches!(
+            response,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::ResponseTooLarge
+            ))
+        ));
+        return Ok(());
+    }
+    let response: serde_json::Value = serde_json::from_str(&response?)?;
+    let spans = response["data"].as_array().ok_or("trace spans")?;
+    assert_eq!(spans.len(), span_count);
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| span["span_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        (0..span_count)
+            .rev()
+            .map(|index| format!("{index:016x}"))
+            .collect::<Vec<_>>()
+    );
+    assert!(spans.iter().all(|span| span["team_id"] == "visible"));
+    if span_count > litellm_storage_clickhouse::READ_LIMITS.result_rows as usize {
+        assert!(matches!(
+            execute_read(
+                &database.client,
+                &reader,
+                "SELECT number FROM numbers(1001)",
+                &BTreeMap::new(),
+            )
+            .await,
+            Err(Error::Storage(
+                litellm_storage_clickhouse::Error::QueryFailed(_)
+            ))
+        ));
+    }
+    Ok(())
+}
+
+#[rstest]
 fn schema_includes_every_migration_file() -> TestResult {
     let files = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))?
         .filter_map(|entry| entry.ok())
