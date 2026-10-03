@@ -79,8 +79,6 @@ IGNORE_FUNCTIONS = [
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
-    "_run_tool_loop_rounds",  # max depth set (rounds_left, default DEFAULT_TOOL_LOOP_MAX_ROUNDS=20); fails closed by raising ToolLoopMaxRoundsExceeded at the cap.
-    "_arun_tool_loop_rounds",  # max depth set (rounds_left), same shape as _run_tool_loop_rounds.
 ]
 
 

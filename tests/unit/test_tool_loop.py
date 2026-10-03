@@ -247,6 +247,119 @@ def test_stream_rejected_before_any_request(respx_mock: respx.MockRouter) -> Non
     assert route.call_count == 0
 
 
+def test_custom_tool_call_raises_type_error_without_executing(respx_mock: respx.MockRouter) -> None:
+    custom_response: Final = _openai_response(
+        None,
+        [{"id": "call_custom", "type": "custom", "custom": {"name": "apply_patch", "input": "*** patch"}}],
+    )
+    route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(200, json=custom_response)
+    )
+    executor_called: Final = []
+
+    def executor(tc: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executor_called.append(tc)
+        return _tool_result(tc)
+
+    with pytest.raises(TypeError, match="custom tool call call_custom"):
+        litellm.run_tool_loop(
+            model="openai/gpt-5-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=WEATHER_TOOLS,
+            execute_tool=executor,
+            api_key="sk-test",
+        )
+
+    assert executor_called == []
+    assert route.call_count == 1
+
+
+def _responses_payload(response_id: str, output: list) -> dict:
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "gpt-5.5",
+        "output": output,
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": None,
+        "temperature": None,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": None,
+        "user": None,
+    }
+
+
+def test_responses_bridge_replays_reasoning_items_across_rounds(respx_mock: respx.MockRouter) -> None:
+    round_one: Final = _responses_payload(
+        "resp_1",
+        [
+            {"type": "reasoning", "id": "rs_abc123", "summary": [], "encrypted_content": "enc_xyz"},
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+        ],
+    )
+    round_two: Final = _responses_payload(
+        "resp_2",
+        [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Paris is 72F", "annotations": []}],
+            }
+        ],
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)]
+    )
+    executed: Final = []
+
+    def executor(tc: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tc)
+        return _tool_result(tc)
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/responses/gpt-5.5",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=executor,
+        api_key="sk-test",
+    )
+
+    assert answer == "Paris is 72F"
+    assert route.call_count == 2
+    assert [tc.id for tc in executed] == ["fc_1"]
+
+    second_input: Final = _request_bodies(respx_mock)[1]["input"]
+    item_types: Final = [item.get("type") for item in second_input]
+    reasoning_index: Final = next(i for i, item in enumerate(second_input) if item.get("type") == "reasoning")
+    function_call_index: Final = next(
+        i for i, item in enumerate(second_input) if item.get("type") == "function_call"
+    )
+    reasoning_item: Final = second_input[reasoning_index]
+    assert reasoning_item["id"] == "rs_abc123"
+    assert reasoning_item["encrypted_content"] == "enc_xyz"
+    assert reasoning_index < function_call_index, f"reasoning item must precede function_call: {item_types}"
+
+
 async def test_arun_tool_loop_two_rounds(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 

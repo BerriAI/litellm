@@ -1,7 +1,7 @@
 """Client-side tool-calling loop helpers for litellm.completion."""
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Final, TypeAlias
+from typing import TypeAlias, cast
 
 from typing_extensions import TypedDict, Unpack
 
@@ -39,6 +39,12 @@ def _validate_tool_loop_args(max_rounds: int, completion_kwargs: _ToolLoopComple
         raise ValueError("run_tool_loop requires whole responses; stream=True is not supported")
 
 
+def _expect_model_response(response: object) -> ModelResponse:
+    if not isinstance(response, ModelResponse):
+        raise TypeError(f"run_tool_loop requires completion to return a ModelResponse, got {type(response).__name__}")
+    return response
+
+
 def _assistant_tool_call(tool_call: ChatCompletionMessageToolCall) -> ChatCompletionAssistantToolCall:
     return ChatCompletionAssistantToolCall(
         id=tool_call.id,
@@ -52,90 +58,34 @@ def _assistant_tool_call(tool_call: ChatCompletionMessageToolCall) -> ChatComple
 def _assistant_message(
     message: Message, tool_calls: tuple[ChatCompletionMessageToolCall, ...]
 ) -> ChatCompletionAssistantMessage:
-    assistant_tool_calls: Final = [_assistant_tool_call(tc) for tc in tool_calls]
-    thinking_blocks: Final = getattr(message, "thinking_blocks", None)
-    if thinking_blocks is not None:
-        return ChatCompletionAssistantMessage(
-            role="assistant",
-            content=message.content,
-            tool_calls=assistant_tool_calls,
-            thinking_blocks=thinking_blocks,
+    return cast(  # cast-ok: dict literal with thinking_blocks and reasoning_items spread in only when set
+        "ChatCompletionAssistantMessage",
+        {
+            "role": "assistant",
+            "content": message.content,
+            "tool_calls": [_assistant_tool_call(tc) for tc in tool_calls],
+            **{
+                key: value
+                for key, value in (
+                    ("thinking_blocks", getattr(message, "thinking_blocks", None)),
+                    ("reasoning_items", getattr(message, "reasoning_items", None)),
+                )
+                if value is not None
+            },
+        },
+    )
+
+
+def _function_tool_call(tool_call: object) -> ChatCompletionMessageToolCall:
+    if not isinstance(tool_call, ChatCompletionMessageToolCall):
+        raise TypeError(
+            f"run_tool_loop only executes function tool calls, got custom tool call {getattr(tool_call, 'id', None)}"
         )
-    return ChatCompletionAssistantMessage(role="assistant", content=message.content, tool_calls=assistant_tool_calls)
+    return tool_call
 
 
 def _function_tool_calls(message: Message) -> tuple[ChatCompletionMessageToolCall, ...]:
-    return tuple(
-        tool_call for tool_call in message.tool_calls or () if isinstance(tool_call, ChatCompletionMessageToolCall)
-    )
-
-
-def _run_tool_loop_rounds(
-    *,
-    model: str,
-    history: tuple[AllMessageValues, ...],
-    tools: Sequence[ChatCompletionToolParam],
-    execute_tool: ToolExecutor,
-    max_rounds: int,
-    rounds_left: int,
-    **completion_kwargs: Unpack[_ToolLoopCompletionKwargs],
-) -> str | None:
-    import litellm
-
-    response: Final = litellm.completion(model=model, messages=list(history), tools=list(tools), **completion_kwargs)
-    if not isinstance(response, ModelResponse):
-        raise TypeError(f"run_tool_loop requires completion to return a ModelResponse, got {type(response).__name__}")
-    message: Final = response.choices[0].message
-    if not message.tool_calls:
-        return message.content
-    if rounds_left == 1:
-        raise ToolLoopMaxRoundsExceeded(max_rounds)
-    tool_calls: Final = _function_tool_calls(message)
-    tool_results: Final = tuple(execute_tool(tool_call) for tool_call in tool_calls)
-    return _run_tool_loop_rounds(
-        model=model,
-        history=(*history, _assistant_message(message, tool_calls), *tool_results),
-        tools=tools,
-        execute_tool=execute_tool,
-        max_rounds=max_rounds,
-        rounds_left=rounds_left - 1,
-        **completion_kwargs,
-    )
-
-
-async def _arun_tool_loop_rounds(
-    *,
-    model: str,
-    history: tuple[AllMessageValues, ...],
-    tools: Sequence[ChatCompletionToolParam],
-    execute_tool: AsyncToolExecutor,
-    max_rounds: int,
-    rounds_left: int,
-    **completion_kwargs: Unpack[_ToolLoopCompletionKwargs],
-) -> str | None:
-    import litellm
-
-    response: Final = await litellm.acompletion(
-        model=model, messages=list(history), tools=list(tools), **completion_kwargs
-    )
-    if not isinstance(response, ModelResponse):
-        raise TypeError(f"arun_tool_loop requires acompletion to return a ModelResponse, got {type(response).__name__}")
-    message: Final = response.choices[0].message
-    if not message.tool_calls:
-        return message.content
-    if rounds_left == 1:
-        raise ToolLoopMaxRoundsExceeded(max_rounds)
-    tool_calls: Final = _function_tool_calls(message)
-    tool_results: Final = tuple([await execute_tool(tool_call) for tool_call in tool_calls])
-    return await _arun_tool_loop_rounds(
-        model=model,
-        history=(*history, _assistant_message(message, tool_calls), *tool_results),
-        tools=tools,
-        execute_tool=execute_tool,
-        max_rounds=max_rounds,
-        rounds_left=rounds_left - 1,
-        **completion_kwargs,
-    )
+    return tuple(_function_tool_call(tool_call) for tool_call in message.tool_calls or ())
 
 
 def run_tool_loop(
@@ -145,7 +95,7 @@ def run_tool_loop(
     tools: Sequence[ChatCompletionToolParam],
     execute_tool: ToolExecutor,
     max_rounds: int = DEFAULT_TOOL_LOOP_MAX_ROUNDS,
-    **completion_kwargs: Unpack[_ToolLoopCompletionKwargs],
+    **completion_kwargs: Unpack[_ToolLoopCompletionKwargs],  # kwargs-ok: forwarded verbatim to litellm.completion
 ) -> str | None:
     """Call completion, execute each requested tool, and repeat until the model answers.
 
@@ -158,16 +108,26 @@ def run_tool_loop(
             model="anthropic/claude-sonnet-5-5", messages=messages, tools=tools, execute_tool=execute
         )
     """
+    import litellm
+
     _validate_tool_loop_args(max_rounds, completion_kwargs)
-    return _run_tool_loop_rounds(
-        model=model,
-        history=tuple(messages),
-        tools=tools,
-        execute_tool=execute_tool,
-        max_rounds=max_rounds,
-        rounds_left=max_rounds,
-        **completion_kwargs,
-    )
+    history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
+    for round_number in range(1, max_rounds + 1):
+        message = (
+            _expect_model_response(
+                litellm.completion(model=model, messages=list(history), tools=list(tools), **completion_kwargs)
+            )
+            .choices[0]
+            .message
+        )
+        if not message.tool_calls:
+            return message.content
+        tool_calls = _function_tool_calls(message)
+        if round_number == max_rounds:
+            break
+        tool_results = tuple(execute_tool(tool_call) for tool_call in tool_calls)
+        history = (*history, _assistant_message(message, tool_calls), *tool_results)
+    raise ToolLoopMaxRoundsExceeded(max_rounds)
 
 
 async def arun_tool_loop(
@@ -177,7 +137,7 @@ async def arun_tool_loop(
     tools: Sequence[ChatCompletionToolParam],
     execute_tool: AsyncToolExecutor,
     max_rounds: int = DEFAULT_TOOL_LOOP_MAX_ROUNDS,
-    **completion_kwargs: Unpack[_ToolLoopCompletionKwargs],
+    **completion_kwargs: Unpack[_ToolLoopCompletionKwargs],  # kwargs-ok: forwarded verbatim to litellm.acompletion
 ) -> str | None:
     """Async version of run_tool_loop, awaiting each execute_tool call in order.
 
@@ -190,13 +150,23 @@ async def arun_tool_loop(
             model="anthropic/claude-sonnet-5-5", messages=messages, tools=tools, execute_tool=execute
         )
     """
+    import litellm
+
     _validate_tool_loop_args(max_rounds, completion_kwargs)
-    return await _arun_tool_loop_rounds(
-        model=model,
-        history=tuple(messages),
-        tools=tools,
-        execute_tool=execute_tool,
-        max_rounds=max_rounds,
-        rounds_left=max_rounds,
-        **completion_kwargs,
-    )
+    history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
+    for round_number in range(1, max_rounds + 1):
+        message = (
+            _expect_model_response(
+                await litellm.acompletion(model=model, messages=list(history), tools=list(tools), **completion_kwargs)
+            )
+            .choices[0]
+            .message
+        )
+        if not message.tool_calls:
+            return message.content
+        tool_calls = _function_tool_calls(message)
+        if round_number == max_rounds:
+            break
+        tool_results = tuple([await execute_tool(tool_call) for tool_call in tool_calls])
+        history = (*history, _assistant_message(message, tool_calls), *tool_results)
+    raise ToolLoopMaxRoundsExceeded(max_rounds)
