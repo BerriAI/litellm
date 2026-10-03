@@ -646,7 +646,7 @@ variable "gateway_metrics_port" {
   default     = null
 
   validation {
-    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && var.gateway_metrics_port != 4000)
+    condition     = try(var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && var.gateway_metrics_port != 4000, true)
     error_message = "gateway_metrics_port must be between 1 and 65535 and must not be 4000 (the gateway port)."
   }
 }
