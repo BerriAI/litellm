@@ -650,6 +650,8 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_image_4K",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
+        "output_cost_per_image_first_megapixel",
+        "input_cost_per_megapixel",
         "cost_per_second",
         "input_cost_per_second",
         "output_cost_per_second",
@@ -838,6 +840,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "regional_processing_uplift_multiplier_eu": {"type": "number"},
                 "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
+                "input_cost_per_megapixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
                 "cost_per_second": {"type": "number"},
@@ -904,6 +907,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_image_token": {"type": "number"},
                 "output_cost_per_video_token": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
+                "output_cost_per_image_first_megapixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_720p": {"type": "number"},
@@ -1975,6 +1979,100 @@ class TestProxyFunctionCalling:
             f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
             f"(without config context). Description: {description}"
         )
+
+
+@pytest.mark.parametrize("model", ("azure_ai/flux.2-pro", "azure_ai/FLUX.2-flex"))
+@pytest.mark.parametrize(
+    "prices", ({"output_cost_per_image": 0.7}, {"output_cost_per_image": 0.0}, {"input_cost_per_pixel": 1e-7})
+)
+def test_register_model_preserves_legacy_flux2_image_price_overrides(
+    model: str, prices: dict[str, float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+    litellm.get_model_info.cache_clear()
+    litellm.utils._invalidate_model_cost_lowercase_map()
+    old_flat_price: Final = litellm.model_cost[model].get("output_cost_per_image")
+    expected: Final = prices.get(
+        "output_cost_per_image",
+        old_flat_price if old_flat_price is not None else prices.get("input_cost_per_pixel", 0) * 1024 * 1280,
+    )
+    litellm.register_model({model: prices}, persist_across_reloads=False)
+    response: Final = ImageResponse(
+        data=[{"b64_json": "aW1n"}], hidden_params={"reference_image_pixels": (1024 * 1280,)}
+    )
+
+    assert litellm.completion_cost(
+        model=model, completion_response=response, call_type="image_generation", size="1024x1280"
+    ) == pytest.approx(expected)
+    assert litellm.completion_cost(
+        model=model, completion_response=response, call_type="image_edit", size="1024x1280"
+    ) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("model", ("azure_ai/flux.2-pro", "azure_ai/FLUX.2-flex"))
+@pytest.mark.parametrize("flat_price", (0.7, 0.0))
+@pytest.mark.parametrize(
+    ("megapixel_prices", "output_price", "reference_price"),
+    (
+        pytest.param({"input_cost_per_megapixel": 0.2}, None, 0.2, id="flat-plus-reference"),
+        pytest.param({"output_cost_per_pixel": 0.1 / (1024 * 1024)}, None, 0.0, id="flat-plus-output-pixel"),
+        pytest.param(
+            {"input_cost_per_megapixel": 0.2, "output_cost_per_pixel": 0.1 / (1024 * 1024)},
+            None,
+            0.2,
+            id="flat-plus-both-rates",
+        ),
+        pytest.param({"input_cost_per_megapixel": 0.0}, None, 0.0, id="free-reference"),
+        pytest.param({"output_cost_per_image_first_megapixel": 0.4}, 0.4, 0.0, id="explicit-first-megapixel"),
+        pytest.param(
+            {
+                "output_cost_per_image_first_megapixel": 0.4,
+                "output_cost_per_pixel": 0.1 / (1024 * 1024),
+                "input_cost_per_megapixel": 0.2,
+            },
+            0.5,
+            0.2,
+            id="explicit-first-and-additional-megapixel",
+        ),
+        pytest.param({"output_cost_per_image_first_megapixel": 0.0}, 0.0, 0.0, id="free-first-megapixel"),
+    ),
+)
+def test_register_model_preserves_explicit_flux2_mixed_pricing(
+    model: str,
+    flat_price: float,
+    megapixel_prices: dict[str, float],
+    output_price: float | None,
+    reference_price: float,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            model: {
+                "litellm_provider": "azure_ai",
+                "mode": "image_generation",
+                "output_cost_per_image": 0.9,
+                "output_cost_per_image_first_megapixel": 0.6,
+                "output_cost_per_pixel": 0.5 / (1024 * 1024),
+                "input_cost_per_megapixel": 0.3,
+            }
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    litellm.utils._invalidate_model_cost_lowercase_map()
+    litellm.register_model({model: {"output_cost_per_image": flat_price, **megapixel_prices}})
+    response: Final = ImageResponse(
+        data=[{"b64_json": "aW1n"}], hidden_params={"reference_image_pixels": (1024 * 1024,)}
+    )
+    expected: Final = (flat_price if output_price is None else output_price) + reference_price
+
+    for call_type in ("image_generation", "image_edit"):
+        assert litellm.completion_cost(
+            model=model, completion_response=response, call_type=call_type, size="1536x1024"
+        ) == pytest.approx(expected)
 
 
 def test_register_model_with_scientific_notation():
