@@ -39,7 +39,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -69,7 +69,7 @@ jobs:
       verdict: ${{ steps.classify.outputs.verdict }}
     steps:
       - name: Checkout scripts and prompts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             .github
@@ -123,7 +123,7 @@ jobs:
 
       - name: Keep the verdict
         if: steps.classify.outputs.verdict != ''
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: classification-${{ github.event.issue.number || github.event.inputs.issue_number }}
           path: classification.json
@@ -139,7 +139,7 @@ jobs:
       issues: write
     steps:
       - name: Checkout scripts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
             .github
