@@ -1729,11 +1729,16 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
-def _find_server_tool_result(
+ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+
+
+def find_anthropic_server_tool_result(
     tool_id: str,
     web_search_results: Sequence[object] | None,
     tool_results: Sequence[object] | None,
 ) -> dict[str, object] | None:
+    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
     candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
@@ -1805,11 +1810,7 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        server_tool_result = (
-            _find_server_tool_result(tool_id, web_search_results, tool_results)
-            if tool_id.startswith("srvtoolu_")
-            else None
-        )
+        server_tool_result = find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         if server_tool_result is not None:
             anthropic_tool_invoke.append(
                 {

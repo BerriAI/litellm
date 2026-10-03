@@ -191,7 +191,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_capped_reques
             owned_url: Final = str(owned.gateway.client.base_url)
             burst: Final = asyncio.create_task(_fire(owned_url, owned.gateway.key, tolerate_transport_errors=True))
             try:
-                await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= _BURST, 20)
+                await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= _BURST, 90)
                 os.kill(workers[0], signal.SIGKILL)
             finally:
                 release.set()

@@ -25,6 +25,9 @@ from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    find_anthropic_server_tool_result,
+)
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -139,35 +142,22 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
-def _as_object_iterable(value: object | None) -> Iterable[object] | None:
-    if not isinstance(value, Iterable):
-        return None
-    return value
-
-
-def _has_server_tool_result(tool_call_id: str, results: Iterable[object] | None) -> bool:
-    return any(isinstance(result, dict) and result.get("tool_use_id") == tool_call_id for result in results or ())
-
-
 def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> bool:
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
 
     tool_call_id: Final = _attribute_or_key(tool_call, "id")
-    if not isinstance(tool_call_id, str) or not tool_call_id.startswith("srvtoolu_"):
+    provider_specific_fields: Final = _validated_object_mapping(_attribute_or_key(message, "provider_specific_fields"))
+    if not isinstance(tool_call_id, str) or provider_specific_fields is None:
         return True
 
-    provider_specific_fields: Final = _attribute_or_key(message, "provider_specific_fields")
-    if not isinstance(provider_specific_fields, dict):
-        return True
-
-    server_tool_result_keys: Final = ("web_search_results", "tool_results")
-    return not any(
-        _has_server_tool_result(
+    return (
+        find_anthropic_server_tool_result(
             tool_call_id,
-            _as_object_iterable(provider_specific_fields.get(result_key)),
+            _as_object_list(provider_specific_fields.get("web_search_results")),
+            _as_object_list(provider_specific_fields.get("tool_results")),
         )
-        for result_key in server_tool_result_keys
+        is None
     )
 
 
