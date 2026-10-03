@@ -11380,6 +11380,49 @@ export interface paths {
         patch: operations["openrouter_proxy_route_openrouter__endpoint__patch"];
         trace?: never;
     };
+    "/oracle_router/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Oracle Router Feedback
+         * @description Complete a program: its model slot is released now, its verifier runs in the background.
+         *
+         *     The key that started the program (or an admin) may complete it. 404 when no ORACLE router holds a
+         *     program with that id, which also covers programs completed earlier.
+         */
+        post: operations["submit_oracle_router_feedback_oracle_router_feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oracle_router/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Oracle Router State
+         * @description Decision-maker state, active bindings and recent verified feedback for every ORACLE router. Admin only.
+         */
+        get: operations["get_oracle_router_state_oracle_router_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organization/daily/activity": {
         parameters: {
             query?: never;
@@ -35044,6 +35087,10 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Oracle Router Config */
+            oracle_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -39237,6 +39284,46 @@ export interface components {
             type: "update_file";
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * OracleRouterFeedbackRequest
+         * @description Report that a program finished. ``score`` is optional when the router's verifier grades it.
+         */
+        OracleRouterFeedbackRequest: {
+            /**
+             * Cost
+             * @description Overrides the spend LiteLLM accumulated for the program
+             */
+            cost?: number | null;
+            /**
+             * Payload
+             * @description Passed to the verifier unchanged
+             */
+            payload?: {
+                [key: string]: unknown;
+            };
+            /** Program Id */
+            program_id: string;
+            /** Score */
+            score?: number | null;
+        };
+        /** OracleRouterFeedbackResponse */
+        OracleRouterFeedbackResponse: {
+            /** Model */
+            model: string;
+            /** Pending Verifications */
+            pending_verifications: number;
+            /** Program Id */
+            program_id: string;
+            /** Router Name */
+            router_name: string;
+        };
+        /** OracleRouterStateResponse */
+        OracleRouterStateResponse: {
+            /** Routers */
+            routers: {
+                [key: string]: unknown;
+            }[];
         };
         /** OrgMember */
         OrgMember: {
@@ -45272,7 +45359,7 @@ export interface components {
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality";
+            router_type?: "complexity" | "adaptive" | "quality" | "oracle";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -49685,6 +49772,10 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Oracle Router Config */
+            oracle_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -65829,6 +65920,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_oracle_router_feedback_oracle_router_feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OracleRouterFeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OracleRouterFeedbackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_oracle_router_state_oracle_router_state_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OracleRouterStateResponse"];
                 };
             };
         };

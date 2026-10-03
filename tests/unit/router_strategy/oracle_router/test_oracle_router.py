@@ -113,6 +113,41 @@ async def test_first_request_binds_and_later_requests_reuse_the_binding():
 
 
 @pytest.mark.asyncio
+async def test_concurrent_first_requests_of_one_program_share_a_single_binding():
+    class _SlowMaker(_RecordingMaker):
+        async def select(self, context: ProgramContext) -> str:
+            await asyncio.sleep(0.01)  # a decision maker that does I/O (pre_routing, custom)
+            return await super().select(context)
+
+    router, maker = _router(maker=_SlowMaker())
+    responses = await asyncio.gather(
+        *(
+            router.async_pre_routing_hook(
+                model="oracle", request_kwargs={"metadata": {"program_id": "t1"}}, messages=_messages()
+            )
+            for _ in range(3)
+        )
+    )
+    assert {response.model for response in responses} == {"smart"}
+    assert maker.selections == 1 and router.programs_bound == 1 and router.binding("t1").model == "smart"
+
+
+@pytest.mark.asyncio
+async def test_a_non_finite_verifier_score_is_a_failed_verification():
+    class _NaN:
+        async def verify(self, outcome: ProgramOutcome) -> float:
+            return float("nan")
+
+    router, maker = _router(verifier=_NaN())
+    await router.async_pre_routing_hook(
+        model="oracle", request_kwargs={"metadata": {"program_id": "t"}}, messages=_messages()
+    )
+    result = await router.complete("t")
+    assert result != result and router.verifications_failed == 1 and maker.updates == []
+    assert router.binding("t") is None  # the slot was released all the same
+
+
+@pytest.mark.asyncio
 async def test_requests_without_a_program_id_route_statelessly_and_never_learn():
     router, maker = _router()
     kwargs = {"metadata": {}}

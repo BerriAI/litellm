@@ -7,7 +7,7 @@ from litellm import Router
 from litellm.router_strategy.oracle_router.config import PROGRAM_ID_METADATA_KEY
 from litellm.router_strategy.oracle_router.decision import PreRoutingDecisionMaker, ProgramContext
 from litellm.router_strategy.oracle_router.hooks import OracleRouterPostCallHook
-from litellm.types.router import LiteLLM_Params, RequestType
+from litellm.types.router import Deployment, LiteLLM_Params, RequestType
 
 
 def _oracle(router: Router, name: str):
@@ -114,6 +114,63 @@ def test_deleting_the_deployment_unregisters_the_router_and_its_hook():
     router.delete_deployment(id=router.get_model_ids(model_name="oracle")[0])
     assert "oracle" not in router.oracle_routers
     assert all(hook.oracle_router is not before for hook in _oracle_hooks())
+
+
+def test_deployment_input_costs_prefer_litellm_params_over_model_info_and_skip_unknown_models():
+    model_list = _model_list()
+    model_list[1]["litellm_params"]["input_cost_per_token"] = 2e-6
+    model_list[1]["model_info"] = {"input_cost_per_token": 9e-6}
+    model_list[2]["model_info"] = {"input_cost_per_token": 1e-7}
+    router = Router(model_list=model_list)
+    assert router._deployment_input_costs(["smart", "fast", "ghost"]) == {"smart": 2e-6, "fast": 1e-7}
+
+
+def test_deployment_adaptive_prefs_read_model_info_where_declared():
+    model_list = _model_list()
+    model_list[1]["model_info"] = {"adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}}
+    router = Router(model_list=model_list)
+    prefs = router._deployment_adaptive_prefs(["smart", "fast", "ghost"])
+    assert set(prefs) == {"smart"} and prefs["smart"].quality_tier == 3
+    assert prefs["smart"].strengths == [RequestType.CODE_GENERATION]
+
+
+def test_resolve_strategy_router_finds_registered_strategy_routers_only():
+    quality = {
+        "model_name": "tiered",
+        "litellm_params": {
+            "model": "auto_router/quality_router",
+            "quality_router_default_model": "fast",
+            "quality_router_config": {"available_models": ["smart", "fast"]},
+        },
+    }
+    model_list = _model_list(extra=(quality,))
+    model_list[1]["model_info"] = {"litellm_routing_preferences": {"quality_tier": 3}}
+    model_list[2]["model_info"] = {"litellm_routing_preferences": {"quality_tier": 1}}
+    router = Router(model_list=model_list)
+    assert router._resolve_strategy_router("tiered") is router.quality_routers["tiered"][0].strategy
+    assert router._resolve_strategy_router("smart") is None and router._resolve_strategy_router("ghost") is None
+
+
+def test_init_oracle_router_deployment_registers_the_router_and_finalize_is_idempotent():
+    router = Router(model_list=_model_list()[1:])  # the two plain deployments, no oracle router yet
+    deployment = Deployment(
+        model_name="late-oracle",
+        litellm_params=LiteLLM_Params(
+            model="auto_router/oracle_router", oracle_router_config={"available_models": ["smart", "fast"]}
+        ),
+    )
+    router.init_oracle_router_deployment(deployment=deployment)
+    oracle = _oracle(router, "late-oracle")
+    assert oracle.models == ("smart", "fast") and oracle.router_name == "late-oracle"
+    router._sync_oracle_router_hooks()
+    router._sync_oracle_router_hooks()
+    assert len([hook for hook in _oracle_hooks() if hook.oracle_router is oracle]) == 1
+    router._finalize_oracle_router_if_configured()  # nothing new in model_list: the registry is untouched
+    assert _oracle(router, "late-oracle") is oracle
+    with pytest.raises(ValueError, match="oracle_router_config is required"):
+        router.init_oracle_router_deployment(
+            deployment=Deployment(model_name="bare", litellm_params=LiteLLM_Params(model="auto_router/oracle_router"))
+        )
 
 
 def test_strategy_router_dependencies_cover_available_models():

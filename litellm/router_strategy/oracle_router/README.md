@@ -19,7 +19,8 @@ model_list:
 ```
 
 Clients send `metadata.program_id` (or `litellm_session_id`, or the `x-litellm-program-id` header)
-with every request of a task. Requests without any id are routed statelessly and never learn.
+with every request of a task. Requests without any id are routed statelessly and never learn. Concurrent
+first requests of one program wait for the decision in flight, so a program is bound exactly once.
 
 ## Decision makers
 
@@ -34,12 +35,14 @@ with every request of a task. Requests without any id are routed statelessly and
 
 | `type` | scores a finished program by |
 |---|---|
-| `guardrail` | applying the LiteLLM guardrail named `guardrail` to the program's final turn, with the transcript as `structured_messages` and the feedback `payload` as `request_data["metadata"]`: pass = 1, blocked = 0. An `llm_as_a_judge` guardrail is the usual choice |
+| `guardrail` | applying the LiteLLM guardrail named `guardrail` to the program's final turn, with the transcript as `structured_messages` and the feedback `payload` as `request_data["metadata"]`: pass = 1, blocked = 0 (read from the status the guardrail records, so an `llm_as_a_judge` with `on_failure: log` still scores 0 when the answer fails). A guardrail that could not evaluate the program, for example a judge whose model was unreachable, counts as a failed verification and teaches the decision maker nothing |
 | `reported` (default) | `metadata.program_score` on the last request, or `POST /oracle_router/feedback` |
 | `custom` | `path: pkg.mod:Factory`, called with no arguments; must expose `async verify(outcome)` |
 
 A verified score `s` adds `s` successes and `1 - s` failures to the cell of the model that served the
-program. Updates are applied in verification-arrival order.
+program. Updates are applied in verification-arrival order. A verifier that raises, or returns a score
+that is not a finite number, counts as a failed verification (`verifications_failed` in the state) and
+never reaches the decision maker.
 
 ## Finishing a program
 

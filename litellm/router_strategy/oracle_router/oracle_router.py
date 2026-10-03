@@ -151,6 +151,7 @@ class OracleRouter:
             "bandit" if config.decision_maker.type in _LEARNING_DECISION_MAKERS else "classifier_plugin"
         )
         self._bindings: Final[dict[str, ProgramBinding]] = {}  # mutable-ok: the lookup table
+        self._binding_in_flight: Final[dict[str, asyncio.Event]] = {}  # mutable-ok: programs being bound right now
         self._tasks: Final[set[asyncio.Task[float]]] = set()  # mutable-ok: in-flight verifications
         self._history: Final[deque[FeedbackRecord]] = deque(maxlen=FEEDBACK_HISTORY_SIZE)  # mutable-ok: bounded log
         self._update_lock: Final = asyncio.Lock()
@@ -177,17 +178,34 @@ class OracleRouter:
         )
         for program_id in expired:
             self._bindings.pop(program_id, None)
-        overflow: Final = len(self._bindings) - self.config.max_programs
+        overflow: Final = len(self._bindings) + 1 - self.config.max_programs  # +1: room for the program being bound
         oldest: Final = tuple(sorted(self._bindings, key=lambda pid: self._bindings[pid].bound_at))[: max(overflow, 0)]
         for program_id in oldest:
             self._bindings.pop(program_id, None)
         self.programs_evicted += len(expired) + len(oldest)
 
     async def bind(self, program_id: str, prompt: str, api_key_hash: str | None) -> ProgramBinding:
-        """Bind a new program, or return its existing row."""
+        """Bind a new program, or return its existing row.
+
+        Concurrent first requests of one program (a harness that fans out) wait for the decision in
+        flight instead of each asking the decision maker, so a program is bound exactly once.
+        """
+        in_flight = self._binding_in_flight.get(program_id)  # rebind-ok: re-read after each wait
+        while in_flight is not None:
+            await in_flight.wait()
+            in_flight = self._binding_in_flight.get(program_id)
         existing: Final = self._bindings.get(program_id)
         if existing is not None:
             return existing
+        event: Final = asyncio.Event()
+        self._binding_in_flight[program_id] = event
+        try:
+            return await self._bind(program_id, prompt, api_key_hash)
+        finally:
+            self._binding_in_flight.pop(program_id, None)
+            event.set()
+
+    async def _bind(self, program_id: str, prompt: str, api_key_hash: str | None) -> ProgramBinding:
         now: Final = self._clock()
         if len(self._bindings) >= min(PROGRAM_SWEEP_THRESHOLD, self.config.max_programs):
             self._evict_expired(now)

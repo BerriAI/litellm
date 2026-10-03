@@ -5,6 +5,7 @@ when the request carried ``metadata.program_done`` it completes the program: the
 and the verifier runs in the background. Nothing here can fail a request.
 """
 
+import math
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
@@ -33,9 +34,10 @@ def _score(metadata: Mapping[str, object]) -> float | None:
     if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
         return None
     try:
-        return float(raw)
+        score: Final = float(raw)
     except ValueError:
         return None
+    return score if math.isfinite(score) else None  # a NaN would corrupt a bandit cell for good
 
 
 class OracleRouterPostCallHook(CustomLogger):
