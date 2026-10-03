@@ -236,3 +236,38 @@ def test_safe_json_structure_keeps_tuples_and_drops_non_string_keys():
     assert structure == {"models": ("A", "B"), "tags": ["X", "Y"], "nested": {"deep": ("C",)}}
     assert type(structure["models"]) is tuple
     assert json.loads(safe_dumps(data)) == {"models": ["a", "b"], "tags": ["x", "y"], "nested": {"deep": ["c"]}}
+
+
+def test_ensure_ascii_default_escapes_non_ascii():
+    # Default stays json.dumps-compatible: non-ASCII is escaped
+    assert safe_dumps({"text": "Привет"}) == '{"text": "\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442"}'
+
+
+def test_ensure_ascii_false_keeps_non_ascii():
+    data = {"text": "Привет, 世界", "nested": ["ü", {"k": "é"}]}
+    result = safe_dumps(data, ensure_ascii=False)
+    assert result == '{"text": "Привет, 世界", "nested": ["ü", {"k": "é"}]}'
+    assert json.loads(result) == json.loads(safe_dumps(data))
+
+
+def test_ensure_ascii_false_unpaired_surrogate_falls_back_to_escaped_json():
+    data = {"t": "a\ud800b"}
+    result = safe_dumps(data, ensure_ascii=False)
+    result.encode("utf-8")
+    assert result == '{"t": "a\\ud800b"}'
+    assert json.loads(result) == data
+
+
+def test_ensure_ascii_false_surrogate_fallback_escapes_all_non_ascii():
+    # The fallback is the previous escaped output as a whole, not a partial repair
+    data = {"t": "Привет \ud800", "u": "こんにちは"}
+    result = safe_dumps(data, ensure_ascii=False)
+    result.encode("utf-8")
+    assert result == safe_dumps(data)
+    assert json.loads(result) == data
+
+
+def test_ensure_ascii_false_valid_non_ascii_not_escaped_alongside_ascii_only_default():
+    result = safe_dumps({"t": "Ünïcödé"}, ensure_ascii=False)
+    assert result == '{"t": "Ünïcödé"}'
+    result.encode("utf-8")
