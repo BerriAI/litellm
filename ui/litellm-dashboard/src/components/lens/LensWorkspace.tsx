@@ -8,6 +8,7 @@ import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { DemoNotice } from "@/components/shared/DemoNotice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LensDemoContext, useLensDemo } from "./LensDemoContext";
+import { LensServicesContext } from "./services";
 import { LensPreviewTarget } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
@@ -37,11 +38,13 @@ function DemoSession({ initialTab, onExit }: { initialTab: Tab; onExit: () => vo
     [client],
   );
   return (
-    <LensDemoContext.Provider value={demo}>
-      <QueryClientProvider client={client}>
-        <LensContent accessToken="lens-demo" userRole="" readOnly initialTab={initialTab} onExit={onExit} />
-      </QueryClientProvider>
-    </LensDemoContext.Provider>
+    <LensServicesContext.Provider value={demo.services}>
+      <LensDemoContext.Provider value={demo}>
+        <QueryClientProvider client={client}>
+          <LensContent accessToken="lens-demo" userRole="" readOnly initialTab={initialTab} onExit={onExit} />
+        </QueryClientProvider>
+      </LensDemoContext.Provider>
+    </LensServicesContext.Provider>
   );
 }
 

@@ -9,6 +9,7 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { type Lens, type Job } from "../../model/types";
+import type { LensWrite } from "../../api/mutations";
 
 export function InvestigationActions({
   lens,
@@ -25,7 +26,7 @@ export function InvestigationActions({
   active: Job | undefined;
   setEditing: (mode: "new" | "edit" | "duplicate") => void;
   setMonitoring: (open: boolean) => void;
-  update: (path: string, body: unknown, method?: "post" | "put" | "patch") => Promise<void>;
+  update: (write: LensWrite) => Promise<void>;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -45,7 +46,7 @@ export function InvestigationActions({
           {lens.settings.enabled ? (
             <DropdownMenuItem
               disabled={busy}
-              onClick={() => update(`/lens/${lens.id}`, { ...lens.settings, enabled: false }, "put")}
+              onClick={() => update((api) => api.saveLens(lens.id, { ...lens.settings, enabled: false }))}
             >
               <Pause />
               Pause monitoring
@@ -58,7 +59,7 @@ export function InvestigationActions({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button disabled={busy || !!active || !ready} onClick={() => update(`/lens/${lens.id}/runs`, {})}>
+      <Button disabled={busy || !!active || !ready} onClick={() => update((api) => api.startRun(lens.id))}>
         <Play className="size-3" />
         Run now
       </Button>

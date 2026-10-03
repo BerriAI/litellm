@@ -4,7 +4,7 @@ import { Controller, useFormContext } from "react-hook-form";
 import { lensQueries } from "../../api/queries";
 
 import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../../api/useLensApi";
+import { useLensApi } from "../../services";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Input } from "@/components/ui/input";
 import type { WorkerFormInput } from "./workerSchema";
@@ -15,8 +15,8 @@ export function AnalysisAccessFields({ accessToken }: { accessToken: string }) {
     register,
     formState: { errors },
   } = useFormContext<WorkerFormInput>();
-  const apiClient = useLensApi();
-  const models = useQuery(lensQueries.models(apiClient, accessToken));
+  const api = useLensApi(accessToken);
+  const models = useQuery(lensQueries.models(api));
   return (
     <div className="space-y-5">
       <div className="space-y-2">

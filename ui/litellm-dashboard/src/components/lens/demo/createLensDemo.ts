@@ -1,5 +1,8 @@
-import { createApiClient } from "@/lib/http/client";
+import { ApiError } from "@/lib/http/client";
+import type { TracesApi } from "@/components/view_logs/TraceView/tracesApi";
 import type { LensDemo } from "../LensDemoContext";
+import type { LensServices } from "../services";
+import type { LensApi } from "../api/service";
 import type { Trace, Span, SpanDetail } from "@/components/view_logs/TraceView/traceTypes";
 import type { Lens, Finding, Job, Settings } from "../model/types";
 import { withReleaseCases } from "./lensDemoLongTrace";
@@ -108,6 +111,8 @@ function makeTrace(scene: Scenario, index: number, now: number) {
   }));
   return { trace, details };
 }
+
+export type LensDemoData = ReturnType<typeof createLensDemoData>;
 
 export function createLensDemoData(now = Date.now()) {
   const runs = scenarios.map((scene, index) => {
@@ -331,57 +336,73 @@ export function createLensDemoData(now = Date.now()) {
   return { runs, lenses };
 }
 
-function readDemoTrace(data: ReturnType<typeof createLensDemoData>, url: URL): unknown {
-  const parts = url.pathname.split("/").filter(Boolean);
-  if (parts[0] !== "v1" || parts[1] !== "traces") return undefined;
-  if (!parts[2]) {
-    const start = Number(url.searchParams.get("start_ms") ?? 0);
-    const end = Number(url.searchParams.get("end_ms") ?? Infinity);
-    return {
-      data: data.runs
-        .map((run) => run.trace.summary)
-        .filter((trace) => Date.parse(trace.start_time) >= start && Date.parse(trace.start_time) <= end),
-      next_cursor: null,
-    };
-  }
-  const run = data.runs.find(({ trace }) => trace.summary.trace_id === parts[2]);
-  if (!parts[3]) return run?.trace;
-  if (parts[3] === "spans" && !parts[5]) return run?.details.find((span) => span.span_id === parts[4]);
-  if (parts[3] === "spans" && parts[5] === "error") {
-    const span = run?.trace.spans.find((item) => item.span_id === parts[4]);
-    return span
-      ? { span_id: span.span_id, message: span.error ?? "", total_chars: span.error?.length ?? 0, next_cursor: null }
-      : undefined;
-  }
-  return undefined;
+const notInDemo = (): Promise<never> =>
+  Promise.reject(new ApiError("This item is not in the demo", 404, { detail: "This item is not in the demo" }));
+const readOnly = (): Promise<never> =>
+  Promise.reject(new ApiError("Demo data is read-only", 403, { detail: "Demo data is read-only" }));
+const found = <T>(value: T | undefined): Promise<T> => (value === undefined ? notInDemo() : Promise.resolve(value));
+
+function demoLensApi(data: LensDemoData): LensApi {
+  const jobs = (lensId: string) => data.lenses.find((lens) => lens.id === lensId)?.jobs;
+  return {
+    scope: "demo",
+    lenses: async () => ({ lenses: data.lenses, workers: [], tracing_enabled: true }),
+    activity: async () => ({ traces: true, requests: false }),
+    runs: (lensId, offset) => found(jobs(lensId)?.slice(offset)),
+    run: (lensId, jobId) => found(jobs(lensId)?.find((job) => job.id === jobId)),
+    execution: notInDemo,
+    sample: notInDemo,
+    agents: notInDemo,
+    models: async () => ({ data: [] }),
+    modelDetails: async () => ({ data: [] }),
+    keys: notInDemo,
+    keyInfo: notInDemo,
+    saveLens: readOnly,
+    startRun: readOnly,
+    cancelRun: readOnly,
+    reviewFinding: readOnly,
+    registerWorker: readOnly,
+    setWorkerBillingKey: readOnly,
+    revokeWorker: readOnly,
+    generateAnalysisKey: readOnly,
+    deleteKeys: readOnly,
+  };
 }
 
-export function createLensDemo(now = Date.now()): LensDemo {
-  const data = createLensDemoData(now);
-  const read = (url: URL): unknown => {
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (url.pathname === "/lens") return { lenses: data.lenses, workers: [], tracing_enabled: true };
-    if (url.pathname === "/lens/activity/available") return { traces: true, requests: false };
-    if (url.pathname === "/models" || url.pathname === "/model_group/info") return { data: [] };
-    if (parts[0] === "lens" && parts[2] === "runs") {
-      const jobs = data.lenses.find((lens) => lens.id === parts[1])?.jobs;
-      return parts[3]
-        ? jobs?.find((job) => job.id === parts[3])
-        : jobs?.slice(Number(url.searchParams.get("offset") ?? 0));
-    }
-    return readDemoTrace(data, url);
-  };
+function demoTracesApi(data: LensDemoData): TracesApi {
+  const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
   return {
-    client: createApiClient({
-      getBaseUrl: () => "https://lens-demo.invalid",
-      fetchImpl: async (input, init) => {
-        if (init?.method !== "GET") return Response.json({ detail: "Demo data is read-only" }, { status: 403 });
-        const result = read(new URL(String(input)));
-        return result === undefined
-          ? Response.json({ detail: "This item is not in the demo" }, { status: 404 })
-          : Response.json(result);
-      },
+    list: async ({ startMs, endMs }) => ({
+      data: data.runs
+        .map((item) => item.trace.summary)
+        .filter((trace) => Date.parse(trace.start_time) >= startMs && Date.parse(trace.start_time) <= endMs),
+      next_cursor: null,
     }),
+    anyRecorded: async () => data.runs.length > 0,
+    trace: (traceId) => found(run(traceId)?.trace),
+    span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),
+    spanError: async (traceId, spanId) => {
+      const span = run(traceId)?.trace.spans.find((item) => item.span_id === spanId);
+      return found(
+        span && {
+          span_id: span.span_id,
+          message: span.error ?? "",
+          total_chars: span.error?.length ?? 0,
+          next_cursor: null,
+        },
+      );
+    },
+  };
+}
+
+export interface LensDemoSession extends LensDemo {
+  readonly services: LensServices;
+}
+
+export function createLensDemo(now = Date.now()): LensDemoSession {
+  const data = createLensDemoData(now);
+  return {
+    services: { lens: demoLensApi(data), traces: demoTracesApi(data) },
     copyTrace: (traceId, spanId) => {
       const run = data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
       return JSON.stringify(spanId ? run?.details.find((span) => span.span_id === spanId) : run, null, 2);

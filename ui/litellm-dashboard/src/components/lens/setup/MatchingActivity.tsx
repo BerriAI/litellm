@@ -10,7 +10,7 @@ import { lensQueries } from "../api/queries";
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../api/useLensApi";
+import { useLensApi } from "../services";
 import { Button } from "@/components/ui/button";
 
 import { TraceSheet } from "../investigations/TraceSheet";
@@ -34,7 +34,7 @@ export function MatchingActivity({
 }) {
   const { control, setValue } = useFormContext<InvestigationInput>();
   const selection = useWatch({ control, name: "selection" });
-  const apiClient = useLensApi();
+  const api = useLensApi(accessToken);
   const id = useId();
   const [offset, setOffset] = useState(0);
   const [scope, setScope] = useState(selection);
@@ -57,12 +57,10 @@ export function MatchingActivity({
   const validSampling = percent > 0 && percent <= 100 && validCap;
   const validFilters = (scope.filters ?? []).every((f) => f.key.trim() && f.value.trim());
   const valid = validWindow && validSampling && validFilters;
-  const discovery = useQuery(
-    lensQueries.discovery(apiClient, accessToken, { value: selection, asOf, enabled: validWindow }),
-  );
-  const agents = useQuery(lensQueries.agents(apiClient, accessToken, asOf, selection.source));
+  const discovery = useQuery(lensQueries.discovery(api, { value: selection, asOf, enabled: validWindow }));
+  const agents = useQuery(lensQueries.agents(api, asOf, selection.source));
   const previewInput = { scope, offset, asOf, enabled: valid };
-  const preview = useQuery(lensQueries.preview(apiClient, accessToken, previewInput));
+  const preview = useQuery(lensQueries.preview(api, previewInput));
   const empty = preview.data?.eligible === 0;
   useEffect(() => {
     if (!empty || !valid) return;

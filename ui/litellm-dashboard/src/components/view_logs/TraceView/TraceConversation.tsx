@@ -5,9 +5,8 @@ import { useState } from "react";
 import { ChevronRight, Wrench } from "lucide-react";
 import { cn } from "@/lib/cva.config";
 import { CopyButton } from "./CopyButton";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
+import { useTracesApi } from "@/components/lens/services";
 import { Button } from "@/components/ui/button";
-import { agentTraceSpanCall } from "../../networking";
 import { buildConversation, conversationSteps, CONVERSATION_PAGE_SIZE, type ConversationItem } from "./conversation";
 import { ErrorBlock } from "./DetailContent";
 import { Markdown, ToolCallBlock } from "./MessageCard";
@@ -23,7 +22,7 @@ export function TraceConversation({
   accessToken: string;
   onOpenStep: (id: string) => void;
 }) {
-  const demo = useLensDemo();
+  const traces = useTracesApi(accessToken);
   const [limit, setLimit] = useState(CONVERSATION_PAGE_SIZE);
   const steps = conversationSteps(trace.spans);
   const visible = steps.slice(0, limit);
@@ -31,12 +30,7 @@ export function TraceConversation({
   const queries = useQueries({
     queries: visible.map((span) => ({
       queryKey: ["agentTraceSpan", traceId, traceRef, span.span_id, accessToken],
-      queryFn: (): Promise<SpanDetail> =>
-        demo
-          ? demo.client.get<SpanDetail>(
-              `/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(span.span_id)}`,
-            )
-          : agentTraceSpanCall(accessToken, traceId, span.span_id, traceRef),
+      queryFn: (): Promise<SpanDetail> => traces.span(traceId, span.span_id, traceRef),
       staleTime: Infinity,
       retry: false,
     })),

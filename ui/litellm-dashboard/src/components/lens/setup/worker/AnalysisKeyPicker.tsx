@@ -5,7 +5,7 @@ import { analysisKeysQuery, type Key } from "../../api/queries";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useLensApi } from "../../api/useLensApi";
+import { useLensApi } from "../../services";
 import { AnalysisKeyDetails } from "./AnalysisKeyDetails";
 import type { WorkerFormInput } from "./workerSchema";
 import {
@@ -20,11 +20,11 @@ import {
 export function AnalysisKeyPicker({ accessToken }: { accessToken: string }) {
   const { control } = useFormContext<WorkerFormInput>();
   const value = useWatch({ control, name: "analysisKey" });
-  const apiClient = useLensApi();
+  const api = useLensApi(accessToken);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Key | null>(value ? { token: value } : null);
 
-  const keyPages = useInfiniteQuery(analysisKeysQuery(apiClient, accessToken, query));
+  const keyPages = useInfiniteQuery(analysisKeysQuery(api, query));
   const keys = keyPages.data?.pages.flatMap((page) => page.keys) ?? [];
   const choice = keys.find((key) => key.token === value) ?? (selected?.token === value ? selected : null);
   const loading = keyPages.isFetching;

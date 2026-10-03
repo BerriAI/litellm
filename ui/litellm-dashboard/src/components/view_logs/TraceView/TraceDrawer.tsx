@@ -1,5 +1,6 @@
 "use client";
 import { useLensDemo } from "@/components/lens/LensDemoContext";
+import { useTracesApi } from "@/components/lens/services";
 
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
@@ -11,7 +12,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import { agentTraceCall, getProxyBaseUrl } from "../../networking";
+import { getProxyBaseUrl } from "../../networking";
 import { DetailPane } from "./DetailPane";
 import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
@@ -369,14 +370,11 @@ interface RunViewProps {
 
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
 export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
-  const demo = useLensDemo();
+  const traces = useTracesApi(accessToken);
   const [view, setView] = useState<TraceView>("steps");
   const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
-    queryFn: () =>
-      demo
-        ? demo.client.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`)
-        : agentTraceCall(accessToken, traceId, traceRef),
+    queryFn: () => traces.trace(traceId, traceRef),
     staleTime: 30_000,
   });
   const trace = traceQuery.data;

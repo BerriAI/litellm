@@ -10,6 +10,7 @@ import { InvestigationSummary } from "./InvestigationSummary";
 import { InvestigationFailure } from "./InvestigationFailure";
 import { scopeLabel, sourceLabels } from "../../model/format";
 import { type Lens } from "../../model/types";
+import type { LensWrite } from "../../api/mutations";
 
 import { InvestigationActions } from "./InvestigationActions";
 import { RunPicker } from "./RunPicker";
@@ -33,7 +34,7 @@ export function InvestigationDetail({
   busy: boolean;
   setEditing: (mode: "new" | "edit" | "duplicate") => void;
   setMonitoring: (open: boolean) => void;
-  update: (path: string, body: unknown, method?: "post" | "put" | "patch") => Promise<void>;
+  update: (write: LensWrite) => Promise<void>;
   connected: boolean;
   results: ReturnType<typeof useInvestigationResults>;
 }) {
@@ -96,7 +97,7 @@ export function InvestigationDetail({
               readOnly
                 ? undefined
                 : () => {
-                    void update(`/lens/${lens.id}/cancel`, {});
+                    void update((api) => api.cancelRun(lens.id));
                   }
             }
           />
