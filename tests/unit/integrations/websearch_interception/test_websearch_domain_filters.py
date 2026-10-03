@@ -43,8 +43,8 @@ class TestExtractWebSearchDomainFilters:
             }
         ]
         assert _extract_web_search_domain_filters(tools) == {
-            "allowed_domains": ["docs.litellm.ai"],
-            "blocked_domains": ["twitter.com", "x.com"],
+            "allowed_domains": ("docs.litellm.ai",),
+            "blocked_domains": ("twitter.com", "x.com"),
         }
 
     def test_returns_none_without_domain_limits(self):
@@ -65,7 +65,7 @@ class TestExtractWebSearchDomainFilters:
                 "allowed_domains": ["docs.litellm.ai", 42, None],
             }
         ]
-        assert _extract_web_search_domain_filters(tools) == {"allowed_domains": ["docs.litellm.ai"]}
+        assert _extract_web_search_domain_filters(tools) == {"allowed_domains": ("docs.litellm.ai",)}
 
 
 class TestDeploymentHookStashesDomainFilters:
@@ -86,8 +86,8 @@ class TestDeploymentHookStashesDomainFilters:
         out = await logger.async_pre_call_deployment_hook(kwargs, None)
         assert out is not None
         assert kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] == {
-            "allowed_domains": ["docs.litellm.ai"],
-            "blocked_domains": ["twitter.com"],
+            "allowed_domains": ("docs.litellm.ai",),
+            "blocked_domains": ("twitter.com",),
         }
 
     @pytest.mark.asyncio
