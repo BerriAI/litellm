@@ -38,16 +38,24 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
-from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
+from litellm.types.utils import InternalCallOrigin
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
+
+_INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
@@ -220,6 +228,14 @@ class LLMCallEvent:
     # actually attempted — router pre-call rejections, SDK failures before the
     # provider handoff, and standalone guardrail runs all lack it.
     upstream_started: bool
+    # When the request handed off to the provider, in epoch seconds. A close with no
+    # carrier (a destination logger never sees ``pre_call``) starts its span here,
+    # not at the logging object's creation, which predates routing and the cache.
+    upstream_start_seconds: float | None
+    # The litellm feature that made this call on the caller's behalf (an
+    # ``InternalCallOrigin`` such as ``autorouter_classifier``), ``None`` for the
+    # caller's own provider attempt.
+    purpose: str | None
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
@@ -242,11 +258,29 @@ class LLMCallEvent:
             auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             upstream_started=kwargs.get("api_call_start_time") is not None,
+            upstream_start_seconds=_epoch_seconds(kwargs.get("api_call_start_time")),
+            purpose=internal_call_origin(payload, kwargs),
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             trace=trace,
             session_id=caller_session_id(kwargs, trace),
         )
+
+
+def _epoch_seconds(value: object) -> float | None:
+    return to_seconds(value) if isinstance(value, (datetime, float, int, str)) and not isinstance(value, bool) else None
+
+
+def internal_call_origin(payload: StandardLoggingPayload | None, kwargs: Mapping[str, object]) -> str | None:
+    """The ``InternalCallOrigin`` a litellm-made sub-call carries in its request metadata, else ``None``."""
+    return next(
+        (
+            origin
+            for metadata in _metadata_dicts(payload, kwargs)
+            if (origin := as_str(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))) in _INTERNAL_CALL_ORIGINS
+        ),
+        None,
+    )
 
 
 def caller_session_id(kwargs: Mapping[str, object], trace: TraceControls) -> str | None:

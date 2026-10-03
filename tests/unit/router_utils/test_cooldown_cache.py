@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # Add the parent directory to the system path
-
+from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -582,3 +582,48 @@ class TestCooldownSurvivesUnrelatedCacheTraffic:
         assert [model_id] == [entry[0] for entry in active], (
             "unrelated router cache traffic must not evict a cooldown that is still running"
         )
+
+
+class TestCooldownStoreCallsDeclareTheirKeyFamily:
+    """Every cooldown store call runs inside ``service_target("router_cooldowns")`` so the
+    Redis service spans read ``redis.set router_cooldowns`` / ``redis.mget router_cooldowns``,
+    the sync paths included (the async MGET already did)."""
+
+    def _cooldown_cache_with_recording_store(self, seen: list[tuple[str, str | None]]) -> CooldownCache:
+        cc = CooldownCache(cache=DualCache(in_memory_cache=InMemoryCache()), default_cooldown_time=60.0)
+        store = MagicMock()
+
+        def _set_cache(**_kwargs):
+            seen.append(("set", current_service_target()))
+
+        def _batch_get_cache(**_kwargs):
+            seen.append(("mget", current_service_target()))
+            return []
+
+        store.set_cache.side_effect = _set_cache
+        store.batch_get_cache.side_effect = _batch_get_cache
+        cc._cooldown_store = store
+        return cc
+
+    def test_sync_cooldown_write_runs_under_router_cooldowns(self):
+        seen: list[tuple[str, str | None]] = []
+        cc = self._cooldown_cache_with_recording_store(seen)
+
+        cc.add_deployment_to_cooldown(
+            model_id="dep-1",
+            original_exception=Exception("Internal server error"),
+            exception_status=500,
+            cooldown_time=30.0,
+        )
+
+        assert seen == [("set", "router_cooldowns")]
+        assert current_service_target() is None
+
+    def test_sync_cooldown_reads_run_under_router_cooldowns(self):
+        seen: list[tuple[str, str | None]] = []
+        cc = self._cooldown_cache_with_recording_store(seen)
+
+        assert cc.get_active_cooldowns(["dep-1"], parent_otel_span=None) == []
+        assert cc.get_min_cooldown(["dep-1"], parent_otel_span=None) == 60.0
+
+        assert seen == [("mget", "router_cooldowns"), ("mget", "router_cooldowns")]

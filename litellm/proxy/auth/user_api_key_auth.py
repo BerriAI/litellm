@@ -22,6 +22,7 @@ from fastapi.security.api_key import APIKeyHeader
 from starlette.exceptions import WebSocketException
 
 import litellm
+from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache
@@ -73,7 +74,12 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
-from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects, prefetch_identity_keys
+from litellm.proxy.auth.auth_object_prefetch import (
+    AUTH_OBJECTS_TARGET,
+    AuthObjectRefs,
+    prefetch_auth_objects,
+    prefetch_identity_keys,
+)
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
@@ -3497,8 +3503,13 @@ async def user_api_key_auth(
 
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it
     # triggers (key/user/team object reads) nest under it instead of flattening
-    # onto the server span. No-op when OTel V2 isn't active.
-    with phase_span(f"auth {route}"), spend_counter_batch_scope(_spend_counter_redis_cache()):
+    # onto the server span, and name every cache read in it an auth-object read.
+    # No-op when OTel V2 isn't active.
+    with (
+        phase_span(f"auth {route}"),
+        service_target(AUTH_OBJECTS_TARGET),
+        spend_counter_batch_scope(_spend_counter_redis_cache()),
+    ):
         try:
             user_api_key_auth_obj: Final = await _user_api_key_auth_builder(
                 request=request,

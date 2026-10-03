@@ -20,6 +20,7 @@ from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
@@ -41,7 +42,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
 )
-from litellm.proxy.utils import invalidate_config_param
+from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -1668,6 +1669,7 @@ UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
 
+@with_service_target(CONFIG_PARAMS_TARGET)
 async def get_ui_settings_cached() -> dict[str, JsonValue]:
     """
     Return the persisted UI settings dict, using DualCache for reads.
@@ -1747,6 +1749,7 @@ async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping
     tags=["UI Settings"],
     response_model=UISettingsResponse,
 )
+@with_service_target(CONFIG_PARAMS_TARGET)
 async def get_ui_settings():
     """
     Get UI-specific configuration flags.
@@ -1825,6 +1828,7 @@ async def get_ui_settings():
     tags=["UI Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@with_service_target(CONFIG_PARAMS_TARGET)
 async def update_ui_settings(
     settings_body: dict[str, object] = Body(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

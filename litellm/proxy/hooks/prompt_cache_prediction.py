@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.anthropic.prompt_cache_prediction import PromptPrefix, parse_observed_cache
@@ -94,6 +95,7 @@ class PromptCacheObserver(CustomLogger):
         self.cache = internal_usage_cache.dual_cache
         self.clock = clock
 
+    @with_service_target("prompt_cache_predictions")
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:

@@ -12,6 +12,7 @@ from starlette.types import Scope
 from typing_extensions import assert_never
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -60,6 +61,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
     get_management_object_ttl,
     user_object_permission_id_cache_key,
@@ -3091,6 +3093,7 @@ class MCPRequestHandler:
         return object_permission
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _user_object_permission_id(
         user_id: str, prisma_client: "PrismaClient", *, check_db_only: bool = False
     ) -> str | None:
@@ -3395,6 +3398,7 @@ class MCPRequestHandler:
     _AGENT_NO_PERMISSION_SENTINEL = "__agent_no_mcp_permission__"
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _agent_object_permission_id(agent_id: str, prisma_client: "PrismaClient") -> str | None:
         """The permission row this agent's row links to, or ``None`` when it links none.
 

@@ -31,8 +31,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.affinity_cache import claim_affinity_pin
+from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin
 from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -4180,6 +4181,7 @@ class ComplexityRouter(CustomLogger):
             return response
         return response.model_copy(update={"session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds})
 
+    @with_service_target(ROUTER_SESSION_PINS_TARGET)
     async def async_pre_routing_hook(
         self,
         model: str,

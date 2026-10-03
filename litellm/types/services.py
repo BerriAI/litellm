@@ -101,6 +101,7 @@ class ServiceLoggerPayload(BaseModel):
     duration: float = Field(description="How long did the request take?")
     call_type: str = Field(description="The call of the service, being made")
     caller: str | None = Field(None, description="The litellm call chain that made the service call, innermost first")
+    target: str | None = Field(None, description="The key family the call served, e.g. llm_response or auth_objects")
     event_metadata: dict | None = Field(description="The metadata logged during service success/failure")
 
     def to_json(self, **kwargs):

@@ -19,10 +19,12 @@ import openai
 import pytest
 import respx
 from fastapi import HTTPException
+from opentelemetry import trace
 
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -18882,3 +18884,110 @@ async def test_router_subclass_overriding_async_get_healthy_deployments_with_the
     response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_failure_rpm_increment_declares_the_router_usage_key_family():
+    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
+    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
+    from unittest.mock import AsyncMock
+
+    from litellm._internal_context import current_service_target
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+    seen: list[str | None] = []
+
+    async def _increment(**_kwargs):
+        seen.append(current_service_target())
+
+    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
+        await router.async_deployment_callback_on_failure(
+            kwargs={
+                "call_type": "acompletion",
+                "litellm_params": {
+                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                    "model_info": {"id": "dep-1"},
+                },
+            },
+            completion_response=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert seen == ["router_usage"]
+    assert current_service_target() is None
+
+class _SpanRecordingInMemoryCache(InMemoryCache):
+    """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_span_names: list[str] = []
+
+    async def async_batch_get_cache(self, keys, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_batch_get_cache(keys, **kwargs)
+
+    async def async_get_cache(self, key, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_get_cache(key, **kwargs)
+
+
+@pytest.fixture
+def v2_span_exporter(monkeypatch):
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+    from litellm.proxy import proxy_server
+
+    config = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    return exporter
+
+
+@pytest.mark.asyncio
+async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(v2_span_exporter):
+    """Picking a deployment opens ``route {model_group}`` (the requested group, not the deployment
+    it picks) under the server span, and the cooldown reads it issues run inside it, so their Redis
+    spans nest there instead of lying flat under the request."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "a"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_key": "fake", "mock_response": "b"},
+                "model_info": {"id": "dep-b"},
+            },
+        ]
+    )
+    recording_cache = _SpanRecordingInMemoryCache()
+    router.cache.in_memory_cache = recording_cache
+    router.cooldown_cache.cooldown_store.in_memory_cache = recording_cache
+
+    with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
+        deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    (route_span,) = v2_span_exporter.get_finished_spans()
+    assert route_span.name == "route gpt-group"
+    assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
+    assert route_span.end_time is not None
+    assert recording_cache.active_span_names and set(recording_cache.active_span_names) == {"route gpt-group"}

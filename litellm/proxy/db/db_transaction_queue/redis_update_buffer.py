@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from redis.exceptions import RedisError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
@@ -58,6 +59,8 @@ from litellm.types.caching import (
     RedisPipelineRpushOperation,
 )
 from litellm.types.services import ServiceTypes
+
+SPEND_QUEUE_TARGET: Final = "spend_queue"
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -160,6 +163,7 @@ class RedisUpdateBuffer:
             return False
         return _use_redis_transaction_buffer
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def _store_transactions_in_redis(
         self,
         transactions: Mapping[str, BaseDailySpendTransaction] | None,
@@ -201,6 +205,7 @@ class RedisUpdateBuffer:
                 str(e),
             )
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def store_in_memory_spend_updates_in_redis(
         self,
         spend_update_queue: SpendUpdateQueue,
@@ -483,6 +488,7 @@ class RedisUpdateBuffer:
         if window_spend_update_transactions and window_spend_update_queue is not None:
             await window_spend_update_queue.update_queue.put(window_spend_update_transactions)
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def restore_transactions_to_redis(
         self,
         db_spend_update_transactions: DBSpendUpdateTransactions | None = None,
@@ -543,6 +549,7 @@ class RedisUpdateBuffer:
                 str(e),
             )
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def store_spend_logs_in_redis(
         self,
         rows: Sequence[SpendLogRow],
@@ -572,6 +579,7 @@ class RedisUpdateBuffer:
         verbose_proxy_logger.info("Spend tracking - parked %d spend log rows in Redis for a later flush", len(rows))
         return True
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_spend_logs_from_redis_buffer(self, limit: int) -> tuple[dict[str, object], ...]:
         """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
         if self.redis_cache is None or not self._should_commit_spend_updates_to_redis():
@@ -604,6 +612,7 @@ class RedisUpdateBuffer:
         """
         return {key.replace(prefix, "", 1): value for key, value in data.items()}
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_all_update_transactions_from_redis_buffer(
         self,
     ) -> DBSpendUpdateTransactions | None:
@@ -671,6 +680,7 @@ class RedisUpdateBuffer:
 
         return combined_transaction
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def get_all_transactions_from_redis_buffer_pipeline(
         self,
     ) -> tuple[
@@ -783,6 +793,7 @@ class RedisUpdateBuffer:
             service_type=ServiceTypes.REDIS_DAILY_TAG_SPEND_UPDATE_QUEUE,
         )
 
+    @with_service_target(SPEND_QUEUE_TARGET)
     async def _lpop_daily_spend_transactions(
         self,
         redis_key: str,

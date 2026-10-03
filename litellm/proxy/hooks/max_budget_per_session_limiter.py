@@ -19,6 +19,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
@@ -83,6 +84,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         else:
             self.increment_script = None
 
+    @with_service_target("session_budgets")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -127,6 +129,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
         return None
 
+    @with_service_target("session_budgets")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         After a successful LLM call, increment the session spend by the response cost.
@@ -208,6 +211,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     def _make_cache_key(self, session_id: str) -> str:
         return f"{{session_budget:{session_id}}}:spend"
 
+    @with_service_target("session_budgets")
     async def _get_current_spend(self, cache_key: str) -> float:
         """Read current accumulated spend for a session."""
         if self.internal_usage_cache.dual_cache.redis_cache is not None:

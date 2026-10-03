@@ -12,6 +12,7 @@ from typing import Final, Generic, Literal, Protocol, TypeVar
 from typing_extensions import assert_never
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
@@ -37,6 +38,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
@@ -45,8 +47,9 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
 )
 from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
-from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
@@ -473,6 +476,7 @@ class ResetBudgetJob:
         new_batch: Final[Callable[[], PrismaBatch]] = self.prisma_client.db.batch_
         return new_batch
 
+    @with_service_target(POD_LOCK_TARGET)
     async def _lease_is_held(self, lock_manager: PodLockManager) -> bool:
         """True only when the lease is readable and someone holds it.
 
@@ -570,6 +574,7 @@ class ResetBudgetJob:
         )
 
     @staticmethod
+    @with_service_target(SPEND_COUNTERS_TARGET)
     async def _invalidate_spend_counter(counter_key: str) -> None:
         """Drop a spend counter so the next read reseeds from the committed DB
         row, the only value that includes increments that raced the reset.
@@ -604,6 +609,7 @@ class ResetBudgetJob:
         await ResetBudgetJob._invalidate_user_api_key_cache_entry(GLOBAL_PROXY_SPEND_CACHE_KEY)
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:
         """Drop a stale management-cache entry so the next read fetches from DB.
 
@@ -1373,6 +1379,7 @@ class ResetBudgetJob:
             return outcome
 
     @staticmethod
+    @with_service_target(SPEND_COUNTERS_TARGET)
     async def _reset_expired_window(
         window: dict,
         counter_key: str,
@@ -1448,6 +1455,7 @@ class ResetBudgetJob:
             )
 
     @staticmethod
+    @with_service_target(SPEND_COUNTERS_TARGET)
     async def _window_carried_spend(
         window: Mapping[str, object], counter_key: str, spend_counter_cache: DualCache
     ) -> float:

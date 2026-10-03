@@ -198,10 +198,58 @@ def guardrail_span_name(data: "GuardrailSpanData") -> str:
     return f"execute_guardrail {data.guardrail_name}".strip()
 
 
+_SERVICE_VERB_BY_CALL_TYPE: Final[dict[str, str]] = {
+    "get_cache": "get",
+    "async_get_cache": "get",
+    "batch_get_cache": "mget",
+    "async_batch_get_cache": "mget",
+    "set_cache": "set",
+    "async_set_cache": "set",
+    "async_set_cache_pipeline": "set",
+    "async_set_cache_pipeline_with_ttls": "set",
+    "async_set_cache_sadd": "sadd",
+    "increment_cache": "incr",
+    "async_increment": "incr",
+    "async_increment_pipeline": "incr",
+    "delete_cache": "delete",
+    "async_delete_cache": "delete",
+    "async_rpush": "rpush",
+    "async_lpop": "lpop",
+    "async_scan_iter": "scan",
+    "async_lpop_pipeline": "lpop",
+    "async_rpush_pipeline": "rpush",
+    "async_rpush_and_trim": "rpush",
+    "increment_cache_ttl": "ttl",
+    "increment_cache_expire": "expire",
+    "async_ping": "ping",
+    "sync_ping": "ping",
+    "redis_async_ping": "ping",
+    "redis_sync_ping": "ping",
+    "request_redis_batch": "pipeline",
+    "post_call_redis_batch": "pipeline",
+}
+
+
+def service_operation(data: "ServiceSpanData") -> str | None:
+    """``"redis.get"`` when the call type is a known datastore verb, else ``None``
+    (Postgres helpers stay function-named until they get ``db.select {table}`` names)."""
+    if not data.call_type:
+        return None
+    verb: Final = _SERVICE_VERB_BY_CALL_TYPE.get(data.call_type)
+    if verb is None:
+        return None
+    return f"{data.service_name}.{verb}"
+
+
 def service_span_name(data: "ServiceSpanData") -> str:
-    """``"{service} {call_type}"`` e.g. ``"redis set"`` — service name alone when
-    no call type is known, so identically-named calls stay distinguishable."""
-    return f"{data.service_name} {data.call_type or ''}".strip()
+    """``"{service}.{verb} {target}"`` (``"redis.get llm_response"``) for a known datastore
+    verb, ``"{service}.{verb}"`` (``"redis.pipeline"``) when the producer declared no
+    target, else ``"{service} {call_type}"`` (``"postgres get_data"``) — service name alone
+    when no call type is known, so identically-named calls stay distinguishable."""
+    operation: Final = service_operation(data)
+    if operation is None:
+        return f"{data.service_name} {data.call_type or ''}".strip()
+    return f"{operation} {data.target}" if data.target else operation
 
 
 def root_roles() -> list[SpanRole]:

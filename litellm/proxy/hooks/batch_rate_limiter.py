@@ -27,6 +27,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
     _count_entry_tokens,
@@ -840,6 +841,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if (descriptor := tpd_descriptors_by_counter.get(counter_key)) is not None
         )
 
+    @with_service_target("rate_limits")
     async def count_input_file_usage(
         self,
         file_id: str,
@@ -1177,6 +1179,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return file_content
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,

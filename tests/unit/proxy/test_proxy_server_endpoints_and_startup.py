@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
+from litellm._internal_context import current_service_target
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
@@ -15489,3 +15490,47 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=0.97),
         call(api_provider="openai", capture_rate=None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_update_cache_reads_and_writes_declare_the_auth_objects_key_family():
+    """The post-call spend write-back reads and rewrites the cached auth objects, so its
+    Redis spans must read ``redis.mget auth_objects`` / ``redis.set auth_objects`` (the key
+    family the auth phase declares) and the global spend scalar ``redis.set spend_counters``,
+    never a bare ``redis.mget`` with no owner."""
+    from litellm.caching.caching import DualCache
+
+    original_cache = litellm.proxy.proxy_server.user_api_key_cache
+    cache = DualCache()
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    seen: list[tuple[str, str | None]] = []
+
+    async def _mget(keys, **_kwargs):
+        seen.append(("mget", current_service_target()))
+        return [{"user_id": "u1", "spend": 1.0} for _ in keys]
+
+    async def _set_pipeline(**_kwargs):
+        seen.append(("set", current_service_target()))
+
+    try:
+        with (
+            patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=_mget)),
+            patch.object(cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_set_pipeline)),
+        ):
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id="u1",
+                end_user_id=None,
+                team_id=None,
+                response_cost=2.0,
+                parent_otel_span=None,
+            )
+            pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            if pending:
+                await asyncio.wait(pending, timeout=5)
+    finally:
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+
+    assert seen, "update_cache must touch the cache for a priced user request"
+    assert {target for _, target in seen} == {"auth_objects"}
+    assert current_service_target() is None

@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
@@ -64,6 +65,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception:
             pass
 
+    @with_service_target("rate_limits")
     async def check_key_in_limits(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -201,6 +203,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             llm_provider=llm_provider,
         )
 
+    @with_service_target("rate_limits")
     async def get_all_cache_objects(
         self,
         current_global_requests: str | None,
@@ -243,6 +246,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             request_count_end_user_id=results[5],
         )
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -489,6 +493,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )  # don't block execution for cache updates
         )
 
+    @with_service_target("rate_limits")
     async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -694,6 +699,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception as e:
             self.print_verbose(e)
 
+    @with_service_target("rate_limits")
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
@@ -766,6 +772,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 
+    @with_service_target("rate_limits")
     async def get_internal_user_object(
         self,
         user_id: str,
@@ -800,6 +807,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             verbose_proxy_logger.debug("Parallel Request Limiter: Error getting user object", str(e))
             return None
 
+    @with_service_target("rate_limits")
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
         Retrieve the key's remaining rate limits.

@@ -32,6 +32,7 @@ from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import (
     BatchResult,
@@ -1169,6 +1170,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache
         )
 
+    @with_service_target("rate_limits")
     async def in_memory_cache_sliding_window(
         self,
         keys: list[str],
@@ -1525,6 +1527,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 continue
             await self._refund_counter_increments(self._counter_refunds_from_batch_values(group_keys, group_values))
 
+    @with_service_target("rate_limits")
     async def should_rate_limit(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -2021,6 +2024,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     local_only=True,
                 )
 
+    @with_service_target("rate_limits")
     async def atomic_check_and_increment_by_n(
         self,
         descriptors: list[RateLimitDescriptor],
@@ -2533,6 +2537,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ),
         )
 
+    @with_service_target("rate_limits")
     async def reserve_tpm_tokens(
         self,
         descriptors: list[RateLimitDescriptor],
@@ -2616,6 +2621,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             parent_otel_span=parent_otel_span,
         )
 
+    @with_service_target("rate_limits")
     async def reserve_io_tokens(
         self,
         descriptors: Sequence[RateLimitDescriptor],
@@ -2701,6 +2707,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         assert itpm_response is not None
         return itpm_response, itpm_reserved, 0
 
+    @with_service_target("rate_limits")
     async def enforce_project_io_token_quota_for_frame(
         self,
         user_api_key_dict: UserAPIKeyAuth | None,
@@ -3965,6 +3972,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if cancellation is not None:
                 raise cancellation
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -4383,6 +4391,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         batch.script(TOKEN_INCREMENT_SCRIPT, script, keys, args).on_settled(fall_back)
         return True
 
+    @with_service_target("rate_limits")
     async def async_increment_tokens_with_ttl_preservation(
         self,
         pipeline_operations: list["RedisPipelineIncrementOperation"],
@@ -4494,6 +4503,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ttl=operation["ttl"],
                 )
 
+    @with_service_target("rate_limits")
     async def async_increment_reservation_aware_tokens(
         self,
         pipeline_operations: Sequence[ReservationAwareIncrementOperation],
@@ -4986,6 +4996,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
+    @with_service_target("rate_limits")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
@@ -5032,6 +5043,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
 
+    @with_service_target("rate_limits")
     async def async_logging_hook(
         self,
         kwargs: dict,
@@ -5102,6 +5114,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             completion_tokens,
         )
 
+    @with_service_target("rate_limits")
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         On failure: decrement max_parallel_requests and refund the upfront
@@ -5209,6 +5222,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
+    @with_service_target("rate_limits")
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -5229,6 +5243,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         await self._release_stashed_parallel_slot(get_request_stash(), None)
 
+    @with_service_target("rate_limits")
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
         Release completed-request slots and update rate limit headers in the response.
@@ -5283,6 +5298,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if popped is not None:
                 await self.batch_enqueued_token_store.refund(reservation=popped, litellm_parent_otel_span=span)
 
+    @with_service_target("rate_limits")
     async def async_post_call_failure_hook(
         self,
         request_data: dict,

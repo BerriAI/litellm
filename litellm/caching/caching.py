@@ -13,16 +13,19 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel
 
 import litellm
+from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
+from litellm.integrations.otel.runtime import phase_span
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
@@ -57,6 +60,21 @@ def _native_response(result: object) -> object:
         except ValueError:
             return result
     return result
+
+
+RESPONSE_CACHE_TARGET: Final = "llm_response"
+
+
+@contextmanager
+def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
+    """The ``cache.get llm_response`` / ``cache.set llm_response`` span a response-cache read or write runs
+    inside, so its datastore spans nest under it and read by purpose. Entered by the facade methods so every
+    caller gets it (the native bridge calls them straight); a call already inside the phase keeps it."""
+    if current_service_target() == RESPONSE_CACHE_TARGET:
+        yield
+        return
+    with phase_span(f"cache.{operation} {RESPONSE_CACHE_TARGET}"), service_target(RESPONSE_CACHE_TARGET):
+        yield
 
 
 def print_verbose(print_statement):
@@ -615,32 +633,33 @@ class Cache:
         try:  # never block execution
             if self.should_use_cache(**kwargs) is not True:
                 return
-            if "cache_key" in kwargs:
-                cache_key = kwargs["cache_key"]
-            else:
-                cache_key = self.get_cache_key(**kwargs)
-            if cache_key is not None and self._native_cache is not None:
-                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
-                if request is None:
-                    return None
-                if not self._is_semantic_cache():
-                    return self._native_cache.lookup(request)
-                response, similarity = self._native_cache.lookup_semantic(request)
-                self._stamp_semantic_similarity(kwargs, similarity)
-                return response
-            if cache_key is not None:
-                cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
-                max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
-                cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
-                if dynamic_cache_object is not None:
-                    cached_result = dynamic_cache_object.get_cache(cache_key, **cache_lookup_kwargs)
+            with response_cache_phase("get"):
+                if "cache_key" in kwargs:
+                    cache_key = kwargs["cache_key"]
                 else:
-                    cached_result = self.cache.get_cache(cache_key, **cache_lookup_kwargs)
-                self._update_metadata_from_cache_lookup_kwargs(
-                    original_kwargs=kwargs,
-                    cache_lookup_kwargs=cache_lookup_kwargs,
-                )
-                return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    cache_key = self.get_cache_key(**kwargs)
+                if cache_key is not None and self._native_cache is not None:
+                    request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
+                    if request is None:
+                        return None
+                    if not self._is_semantic_cache():
+                        return self._native_cache.lookup(request)
+                    response, similarity = self._native_cache.lookup_semantic(request)
+                    self._stamp_semantic_similarity(kwargs, similarity)
+                    return response
+                if cache_key is not None:
+                    cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
+                    max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
+                    cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
+                    if dynamic_cache_object is not None:
+                        cached_result = dynamic_cache_object.get_cache(cache_key, **cache_lookup_kwargs)
+                    else:
+                        cached_result = self.cache.get_cache(cache_key, **cache_lookup_kwargs)
+                    self._update_metadata_from_cache_lookup_kwargs(
+                        original_kwargs=kwargs,
+                        cache_lookup_kwargs=cache_lookup_kwargs,
+                    )
+                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -656,27 +675,30 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
 
-            if "cache_key" in kwargs:
-                cache_key = kwargs["cache_key"]
-            else:
-                cache_key = self.get_cache_key(**kwargs)
-            if cache_key is not None and self._native_cache is not None:
-                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
-                if request is None:
-                    return None
-                if not self._is_semantic_cache():
-                    return await self._native_cache.async_lookup(request)
-                response, similarity = await self._native_cache.async_lookup_semantic(request)
-                self._stamp_semantic_similarity(kwargs, similarity)
-                return response
-            if cache_key is not None:
-                cache_control_args: Final = kwargs.get("cache", {})
-                max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
-                if dynamic_cache_object is not None:
-                    cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
+            with response_cache_phase("get"):
+                if "cache_key" in kwargs:
+                    cache_key = kwargs["cache_key"]
                 else:
-                    cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
-                return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    cache_key = self.get_cache_key(**kwargs)
+                if cache_key is not None and self._native_cache is not None:
+                    request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
+                    if request is None:
+                        return None
+                    if not self._is_semantic_cache():
+                        return await self._native_cache.async_lookup(request)
+                    response, similarity = await self._native_cache.async_lookup_semantic(request)
+                    self._stamp_semantic_similarity(kwargs, similarity)
+                    return response
+                if cache_key is not None:
+                    cache_control_args: Final = kwargs.get("cache", {})
+                    max_age: Final = cache_control_args.get(
+                        "s-max-age", cache_control_args.get("s-maxage", float("inf"))
+                    )
+                    if dynamic_cache_object is not None:
+                        cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
+                    else:
+                        cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
+                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -725,13 +747,14 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
-            if self._native_cache is not None:
-                request = self._native_request(kwargs)
-                if request is not None:
-                    self._native_cache.store(request, _native_response(result))
-                return
-            cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
-            self.cache.set_cache(cache_key, cached_data, **kwargs)
+            with response_cache_phase("set"):
+                if self._native_cache is not None:
+                    request = self._native_request(kwargs)
+                    if request is not None:
+                        self._native_cache.store(request, _native_response(result))
+                    return
+                cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
+                self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
 
@@ -749,20 +772,21 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
-            if self._native_cache is not None:
-                request = self._native_request(kwargs)
-                if request is not None:
-                    await self._native_cache.async_store(request, _native_response(result))
-                return
-            if self.type == "redis" and self.redis_flush_size is not None:
-                # high traffic - fill in results in memory and then flush
-                await self.batch_cache_write(result, **kwargs)
-            else:
-                cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
-                if dynamic_cache_object is not None:
-                    await dynamic_cache_object.async_set_cache(cache_key, cached_data, **kwargs)
+            with response_cache_phase("set"):
+                if self._native_cache is not None:
+                    request = self._native_request(kwargs)
+                    if request is not None:
+                        await self._native_cache.async_store(request, _native_response(result))
+                    return
+                if self.type == "redis" and self.redis_flush_size is not None:
+                    # high traffic - fill in results in memory and then flush
+                    await self.batch_cache_write(result, **kwargs)
                 else:
-                    await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
+                    cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
+                    if dynamic_cache_object is not None:
+                        await dynamic_cache_object.async_set_cache(cache_key, cached_data, **kwargs)
+                    else:
+                        await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
 
@@ -909,47 +933,50 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
 
-            input_count: Final = len(kwargs["input"]) if isinstance(kwargs["input"], list) else 1
-            if len(result.data) != input_count:
-                verbose_logger.debug(
-                    "LiteLLM Cache: skipping embedding cache write, %d inputs but %d embeddings in the response",
-                    input_count,
-                    len(result.data),
-                )
-                return
+            with response_cache_phase("set"):
+                input_count: Final = len(kwargs["input"]) if isinstance(kwargs["input"], list) else 1
+                if len(result.data) != input_count:
+                    verbose_logger.debug(
+                        "LiteLLM Cache: skipping embedding cache write, %d inputs but %d embeddings in the response",
+                        input_count,
+                        len(result.data),
+                    )
+                    return
 
-            # set default ttl if not set
-            if self.ttl is not None:
-                kwargs["ttl"] = self.ttl
+                # set default ttl if not set
+                if self.ttl is not None:
+                    kwargs["ttl"] = self.ttl
 
-            cache_list: Final = []
-            if isinstance(kwargs["input"], list):
-                for idx, i in enumerate(kwargs["input"]):
-                    (
-                        cache_key,
-                        cached_data,
-                        kwargs,
-                    ) = self.add_embedding_response_to_cache(result, i, kwargs, idx)
+                cache_list: Final = []
+                if isinstance(kwargs["input"], list):
+                    for idx, i in enumerate(kwargs["input"]):
+                        (
+                            cache_key,
+                            cached_data,
+                            kwargs,
+                        ) = self.add_embedding_response_to_cache(result, i, kwargs, idx)
+                        cache_list.append((cache_key, cached_data))
+                elif isinstance(kwargs["input"], str):
+                    cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(
+                        result, kwargs["input"], kwargs
+                    )
                     cache_list.append((cache_key, cached_data))
-            elif isinstance(kwargs["input"], str):
-                cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(result, kwargs["input"], kwargs)
-                cache_list.append((cache_key, cached_data))
 
-            if self._native_cache is not None:
-                entries: Final = tuple(
-                    (request, cached_data["response"])
-                    for cache_key, cached_data in cache_list
-                    if (request := self._native_request(MappingProxyType({**kwargs, "cache_key": cache_key})))
-                    is not None
-                )
-                await self._native_cache.async_store_batch(
-                    tuple(request for request, _ in entries),
-                    tuple(response for _, response in entries),
-                )
-            elif dynamic_cache_object is not None:
-                await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
-            else:
-                await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+                if self._native_cache is not None:
+                    entries: Final = tuple(
+                        (request, cached_data["response"])
+                        for cache_key, cached_data in cache_list
+                        if (request := self._native_request(MappingProxyType({**kwargs, "cache_key": cache_key})))
+                        is not None
+                    )
+                    await self._native_cache.async_store_batch(
+                        tuple(request for request, _ in entries),
+                        tuple(response for _, response in entries),
+                    )
+                elif dynamic_cache_object is not None:
+                    await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+                else:
+                    await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
 

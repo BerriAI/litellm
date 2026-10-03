@@ -4,12 +4,14 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.config_sync_pubsub import (
     _ConfigSyncPubSub,
     _pubsub_capable_client,
     coordination_redis_cache,
 )
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 
 if TYPE_CHECKING:
     from litellm.caching.in_memory_cache import InMemoryCache
@@ -123,6 +125,7 @@ async def publish_auth_cache_invalidation(
     await asyncio.sleep(0)
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.
@@ -204,6 +207,7 @@ class AuthCacheInvalidationSubscriber:
                 continue
             self._apply_message(message)
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     def _apply_message(self, message: object) -> None:
         data: Final = message.get("data") if isinstance(message, dict) else None
         parsed: Final = _message_from_data(data)

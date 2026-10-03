@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_a
 
 import httpx
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -54,6 +55,8 @@ from litellm.exceptions import (
     ModifyResponseException,
     SensitiveDataRouteException,
 )
+
+GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 
 # Per-process secret tagging each recorded marker. The deployment hook only
 # honors markers carrying this token, so a caller cannot forge the metadata
@@ -474,6 +477,7 @@ class CustomGuardrail(CustomLogger):
     def _scanned_texts_cache_key(self, session_id: str) -> str:
         return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     async def filter_new_texts_for_session(
         self,
         texts: list[str] | None,
@@ -518,6 +522,7 @@ class CustomGuardrail(CustomLogger):
         seen: Final[set[str]] = {str(h) for h in cached} if isinstance(cached, list) else set()
         return [text for text in texts if self._scanned_text_hash(text) not in seen]
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     async def mark_texts_scanned(
         self,
         texts: list[str] | None,

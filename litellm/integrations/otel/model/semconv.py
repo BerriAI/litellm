@@ -300,6 +300,9 @@ class LiteLLM:
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
     REQUEST_ROUTE: Final = "litellm.request.route"
+    # Which litellm feature made this LLM call when it is not the caller's own
+    # provider attempt (e.g. ``autorouter_classifier``); absent on the real call.
+    REQUEST_PURPOSE: Final = "litellm.request.purpose"
     TOOLS_DECLARED: Final = "litellm.request.tools.declared"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
     GUARDRAIL_MODE: Final = "litellm.guardrail.mode"
@@ -327,6 +330,9 @@ class LiteLLM:
     SERVICE_NAME: Final = "litellm.service.name"
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     SERVICE_CALLER: Final = "litellm.service.caller"
+    SERVICE_TARGET: Final = "litellm.service.target"
+    # The sorted, comma-joined key families one Redis pipeline carried ops for; bounded, unlike the keys.
+    REDIS_FAMILIES: Final = "litellm.redis.families"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
     # The logical name of the MCP server a tool call was routed to. There is no
     # semconv key for an MCP server's *name* (the convention uses ``server.address``

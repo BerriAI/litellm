@@ -23,8 +23,15 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 from opentelemetry.trace import SpanKind  # noqa: E402
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 
-from litellm._internal_context import in_post_response_phase, post_response_phase  # noqa: E402
-from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY  # noqa: E402
+from litellm._internal_context import (  # noqa: E402
+    in_post_response_phase,
+    post_response_phase,
+    service_target,
+)
+from litellm.constants import (  # noqa: E402
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.otel import (  # noqa: E402
     GenAI,
     LiteLLM,
@@ -45,6 +52,7 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     set_mcp_message_transport_span,
     set_request_root_span,
 )
+from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 #  Fixtures
@@ -127,11 +135,7 @@ def _emit_llm(logger, kwargs=None, *, ambient=None, fail=False):
     if kwargs is None:
         kwargs = _kwargs()
     payload = kwargs.get("standard_logging_object") or {}
-    with (
-        trace.use_span(ambient, end_on_exit=False)
-        if ambient is not None
-        else contextlib.nullcontext()
-    ):
+    with trace.use_span(ambient, end_on_exit=False) if ambient is not None else contextlib.nullcontext():
         logger.log_pre_api_call(model=payload.get("model"), messages=[], kwargs=kwargs)
     hook = logger.async_log_failure_event if fail else logger.async_log_success_event
     asyncio.run(hook(kwargs, None, None, None))
@@ -409,9 +413,7 @@ def test_sync_log_event_is_noop():
 def test_missing_standard_logging_object_is_noop():
     """No carrier (``pre_call`` never ran) → the callback emits nothing."""
     logger, exporter = _logger()
-    asyncio.run(
-        logger.async_log_success_event({"litellm_params": {}}, None, None, None)
-    )
+    asyncio.run(logger.async_log_success_event({"litellm_params": {}}, None, None, None))
     assert exporter.get_finished_spans() == ()
 
 
@@ -426,9 +428,7 @@ def test_no_span_when_pre_call_never_ran():
         error_information={"error_class": "ProxyException", "error_code": "401"},
     )
     # No log_pre_api_call: the call never started.
-    asyncio.run(
-        logger.async_log_failure_event(_kwargs(payload=payload), None, None, None)
-    )
+    asyncio.run(logger.async_log_failure_event(_kwargs(payload=payload), None, None, None))
     assert exporter.get_finished_spans() == ()  # no phantom LLM span
 
 
@@ -598,11 +598,7 @@ def test_mcp_tool_call_stateless_omits_session_id():
     logger, exporter = _logger()
     payload = _mcp_payload()
     del payload["metadata"]["mcp_tool_call_metadata"]["mcp_session_id"]
-    asyncio.run(
-        logger.async_log_success_event(
-            {"standard_logging_object": payload}, None, None, None
-        )
-    )
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": payload}, None, None, None))
     (span,) = exporter.get_finished_spans()
     assert "mcp.session.id" not in span.attributes
     assert span.attributes["mcp.method.name"] == "tools/call"
@@ -636,11 +632,7 @@ def test_mcp_tool_call_failure_marks_error():
         status="failure",
         error_information={"error_class": "MCPError", "error_message": "upstream 500"},
     )
-    asyncio.run(
-        logger.async_log_failure_event(
-            {"standard_logging_object": payload}, None, None, None
-        )
-    )
+    asyncio.run(logger.async_log_failure_event({"standard_logging_object": payload}, None, None, None))
     (span,) = exporter.get_finished_spans()
     assert span.name == "tools/call get_weather"
     assert span.status.status_code is StatusCode.ERROR
@@ -667,14 +659,8 @@ def test_mcp_tool_call_metadata_read_from_nested_metadata_not_top_level():
     # Move the real metadata to the top level only, mirroring the old buggy read
     # location. ``call_type`` still classifies this as an MCP call, so the span is
     # emitted, but none of its fields are reachable from the wrong nesting level.
-    payload["mcp_tool_call_metadata"] = payload["metadata"].pop(
-        "mcp_tool_call_metadata"
-    )
-    asyncio.run(
-        logger.async_log_success_event(
-            {"standard_logging_object": payload}, None, None, None
-        )
-    )
+    payload["mcp_tool_call_metadata"] = payload["metadata"].pop("mcp_tool_call_metadata")
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": payload}, None, None, None))
     (span,) = exporter.get_finished_spans()
     assert span.name == "tools/call"
     assert "mcp.session.id" not in span.attributes
@@ -741,11 +727,7 @@ def test_mcp_tool_call_names_its_rpc_system_and_upstream():
     dependency ``:0``, which is worse than leaving the span unclassified.
     """
     logger, exporter = _logger()
-    asyncio.run(
-        logger.async_log_success_event(
-            {"standard_logging_object": _mcp_payload()}, None, None, None
-        )
-    )
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": _mcp_payload()}, None, None, None))
     (span,) = exporter.get_finished_spans()
     assert span.attributes["rpc.system"] == "jsonrpc"
     assert span.attributes["server.address"] == "weather.example.com"
@@ -774,9 +756,7 @@ def test_mcp_tool_call_omits_rpc_system_without_a_complete_upstream(resource):
         del payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"]
     else:
         payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_resource"] = resource
-    asyncio.run(
-        logger.async_log_success_event({"standard_logging_object": payload}, None, None, None)
-    )
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": payload}, None, None, None))
     (span,) = exporter.get_finished_spans()
     assert "rpc.system" not in span.attributes
     assert "server.port" not in span.attributes
@@ -792,20 +772,14 @@ def test_mcp_list_tools_omits_rpc_system_without_an_upstream():
     dependency node in every consumer that aggregates on it.
     """
     logger, exporter = _logger()
-    asyncio.run(
-        logger.async_log_success_event(
-            {"standard_logging_object": _mcp_list_payload()}, None, None, None
-        )
-    )
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": _mcp_list_payload()}, None, None, None))
     (span,) = exporter.get_finished_spans()
     assert "rpc.system" not in span.attributes
     assert "server.address" not in span.attributes
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_nests_under_transport_without_propagated_context(
-    make_payload, span_name
-):
+def test_mcp_span_nests_under_transport_without_propagated_context(make_payload, span_name):
     """Almost no MCP client implements SEP-414, so ``params._meta`` normally carries
     no trace context. Rooting the span there split one tool call into two traces
     joined only by a link, which is how it surfaced in APM: the ``POST`` transaction
@@ -813,15 +787,9 @@ def test_mcp_span_nests_under_transport_without_propagated_context(
     honor the span nests under the transport span instead, and records no link since
     the transport is now the real parent."""
     logger, exporter = _logger()
-    transport = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    transport = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(transport)
-    asyncio.run(
-        logger.async_log_success_event(
-            {"standard_logging_object": make_payload()}, None, None, None
-        )
-    )
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": make_payload()}, None, None, None))
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
     assert span.parent is not None
@@ -831,9 +799,7 @@ def test_mcp_span_nests_under_transport_without_propagated_context(
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_nests_under_this_messages_transport_not_the_session_opener(
-    make_payload, span_name
-):
+def test_mcp_span_nests_under_this_messages_transport_not_the_session_opener(make_payload, span_name):
     """A *stateful* streamable-HTTP session runs every message on the single task
     spawned by that session's ``initialize`` POST, so the ``_request_root_span``
     ContextVar the ASGI request task writes is frozen at ``initialize`` inside the
@@ -843,19 +809,13 @@ def test_mcp_span_nests_under_this_messages_transport_not_the_session_opener(
     current message's transport on the request task and publishes it, so the span
     parents to the POST that actually carried this message."""
     logger, exporter = _logger()
-    session_opener = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
-    this_message = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    session_opener = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    this_message = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
 
     async def session_task():
         token = set_mcp_message_transport_span(this_message)
         try:
-            await logger.async_log_success_event(
-                {"standard_logging_object": make_payload()}, None, None, None
-            )
+            await logger.async_log_success_event({"standard_logging_object": make_payload()}, None, None, None)
         finally:
             reset_mcp_message_transport_span(token)
 
@@ -877,26 +837,18 @@ def test_mcp_span_nests_under_this_messages_transport_not_the_session_opener(
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_roots_without_transport_or_propagated_context(
-    make_payload, span_name
-):
+def test_mcp_span_roots_without_transport_or_propagated_context(make_payload, span_name):
     """With neither a remote parent nor a transport span there is nothing to nest
     under, so the span legitimately starts its own root trace with no links."""
     logger, exporter = _logger()
-    asyncio.run(
-        logger.async_log_success_event(
-            {"standard_logging_object": make_payload()}, None, None, None
-        )
-    )
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": make_payload()}, None, None, None))
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
     assert span.parent is None
     assert span.links == ()
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_links_propagated_meta_trace_context_and_nests_under_transport(
-    make_payload, span_name
-):
+def test_mcp_span_links_propagated_meta_trace_context_and_nests_under_transport(make_payload, span_name):
     """When the client propagates W3C trace context in the request's
     ``params._meta`` (SEP-414), the MCP span still nests under the gateway's own
     transport span — one renderable trace — and records the client's context as a
@@ -904,19 +856,11 @@ def test_mcp_span_links_propagated_meta_trace_context_and_nests_under_transport(
     trace whose root span never reaches the gateway's tracing backend, leaving the
     span unreachable from the trace view."""
     logger, exporter = _logger()
-    transport = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    transport = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(transport)
-    token = set_mcp_message_trace_carrier(
-        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
-    )
+    token = set_mcp_message_trace_carrier({"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"})
     try:
-        asyncio.run(
-            logger.async_log_success_event(
-                {"standard_logging_object": make_payload()}, None, None, None
-            )
-        )
+        asyncio.run(logger.async_log_success_event({"standard_logging_object": make_payload()}, None, None, None))
     finally:
         reset_mcp_message_trace_carrier(token)
     transport.end()
@@ -924,29 +868,19 @@ def test_mcp_span_links_propagated_meta_trace_context_and_nests_under_transport(
     assert span.parent is not None
     assert span.parent.span_id == transport.get_span_context().span_id
     assert span.context.trace_id == transport.get_span_context().trace_id
-    assert [link.context.trace_id for link in span.links] == [
-        0x11111111111111111111111111111111
-    ]
+    assert [link.context.trace_id for link in span.links] == [0x11111111111111111111111111111111]
     assert [link.context.span_id for link in span.links] == [0x2222222222222222]
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_without_transport_roots_and_links_propagated_context(
-    make_payload, span_name
-):
+def test_mcp_span_without_transport_roots_and_links_propagated_context(make_payload, span_name):
     """With no transport span at all there is nothing of the gateway's to anchor
     to, so the span starts its own root trace — and the client context stays a
     span link there too, so the event keeps one shape everywhere."""
     logger, exporter = _logger()
-    token = set_mcp_message_trace_carrier(
-        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
-    )
+    token = set_mcp_message_trace_carrier({"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"})
     try:
-        asyncio.run(
-            logger.async_log_success_event(
-                {"standard_logging_object": make_payload()}, None, None, None
-            )
-        )
+        asyncio.run(logger.async_log_success_event({"standard_logging_object": make_payload()}, None, None, None))
     finally:
         reset_mcp_message_trace_carrier(token)
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
@@ -960,19 +894,11 @@ def test_mcp_span_links_unsampled_client_traceparent():
     remote context, so the link is recorded; the span's own recording follows the
     transport's sampling decision, never the client's flag."""
     logger, exporter = _logger()
-    transport = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    transport = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(transport)
-    token = set_mcp_message_trace_carrier(
-        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-00"}
-    )
+    token = set_mcp_message_trace_carrier({"traceparent": "00-11111111111111111111111111111111-2222222222222222-00"})
     try:
-        asyncio.run(
-            logger.async_log_success_event(
-                {"standard_logging_object": _mcp_list_payload()}, None, None, None
-            )
-        )
+        asyncio.run(logger.async_log_success_event({"standard_logging_object": _mcp_list_payload()}, None, None, None))
     finally:
         reset_mcp_message_trace_carrier(token)
     transport.end()
@@ -992,9 +918,7 @@ def test_mcp_span_ignores_client_supplied_baggage(make_payload, span_name):
     extracts trace context only, so the spoofed keys never reach the span while the
     legitimate traceparent parenting still works."""
     logger, exporter = _logger()
-    transport = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    transport = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(transport)
     token = set_mcp_message_trace_carrier(
         {
@@ -1003,11 +927,7 @@ def test_mcp_span_ignores_client_supplied_baggage(make_payload, span_name):
         }
     )
     try:
-        asyncio.run(
-            logger.async_log_success_event(
-                {"standard_logging_object": make_payload()}, None, None, None
-            )
-        )
+        asyncio.run(logger.async_log_success_event({"standard_logging_object": make_payload()}, None, None, None))
     finally:
         reset_mcp_message_trace_carrier(token)
     transport.end()
@@ -1029,11 +949,7 @@ def test_mcp_span_carries_authenticated_identity(make_payload, span_name):
     span — parented to an empty remote context — would carry no team/key attribute at
     all, so it couldn't be attributed or filtered by team in the traces backend."""
     logger, exporter = _logger()
-    asyncio.run(
-        logger.async_log_success_event(
-            {"standard_logging_object": make_payload()}, None, None, None
-        )
-    )
+    asyncio.run(logger.async_log_success_event({"standard_logging_object": make_payload()}, None, None, None))
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
     assert span.attributes[LiteLLM.TEAM_ID] == "t1"
 
@@ -1044,17 +960,11 @@ def test_mcp_span_malformed_traceparent_nests_under_transport():
     falls back to nesting under the transport span rather than starting a
     disconnected root trace."""
     logger, exporter = _logger()
-    transport = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    transport = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(transport)
     token = set_mcp_message_trace_carrier({"traceparent": "not-a-valid-traceparent"})
     try:
-        asyncio.run(
-            logger.async_log_success_event(
-                {"standard_logging_object": _mcp_list_payload()}, None, None, None
-            )
-        )
+        asyncio.run(logger.async_log_success_event({"standard_logging_object": _mcp_list_payload()}, None, None, None))
     finally:
         reset_mcp_message_trace_carrier(token)
     transport.end()
@@ -1069,23 +979,15 @@ def test_mcp_span_with_propagated_context_nests_under_this_messages_transport():
     carrying this message, not the stale session anchor — otherwise the tool call
     is attributed to whichever request opened the session."""
     logger, exporter = _logger()
-    session_opener = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
-    this_message = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    session_opener = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    this_message = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(session_opener)
     trace_token = set_mcp_message_trace_carrier(
         {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
     )
     transport_token = set_mcp_message_transport_span(this_message)
     try:
-        asyncio.run(
-            logger.async_log_success_event(
-                {"standard_logging_object": _mcp_list_payload()}, None, None, None
-            )
-        )
+        asyncio.run(logger.async_log_success_event({"standard_logging_object": _mcp_list_payload()}, None, None, None))
     finally:
         reset_mcp_message_transport_span(transport_token)
         reset_mcp_message_trace_carrier(trace_token)
@@ -1103,9 +1005,7 @@ def test_pre_call_idempotent_keeps_first_span():
     span (with the true start time) is kept, not replaced."""
     logger, _ = _logger()
     kwargs = _kwargs()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     with trace.use_span(server, end_on_exit=False):
         logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
         first = logger._open_llm_calls["call_1"]
@@ -1124,9 +1024,7 @@ def test_llm_span_parents_to_ambient_server_span():
     """The span is opened at ``pre_call`` while the server span is the active
     context, so it nests under it natively (no ``litellm_parent_otel_span``)."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     _emit_llm(logger, ambient=server)
     server.end()
     by_name = {s.name: s for s in exporter.get_finished_spans()}
@@ -1158,9 +1056,7 @@ def test_llm_span_anchors_to_root_even_inside_active_phase_span():
     span is the *active* context. The LLM span must still parent to the request
     root (the server span), never to the auth span it happens to be nested in."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(server)
     kwargs = _kwargs()
     # ``auth`` phase span is the active span when pre_call + close run.
@@ -1183,9 +1079,7 @@ def test_live_llm_span_anchors_to_root_with_no_active_span():
     instead of orphaning — and the detached close just ends it, in the right
     trace."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(server)
     kwargs = _kwargs()
     logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
@@ -1203,9 +1097,7 @@ def test_deferred_llm_span_reads_anchor_at_close():
     sync-only provider's thread-pool call) the span defers; the close — back on the
     request task, anchor visible — must parent it to the root, not orphan it."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     kwargs = _kwargs()
     # pre_call with NO anchor and no active span → deferred.
     logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
@@ -1228,9 +1120,7 @@ def test_synthetic_error_log_produces_no_llm_span():
     from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(server)
     payload = _payload(
         status="failure",
@@ -1255,19 +1145,12 @@ def test_create_request_started_span_captures_anchor():
     from litellm.integrations.otel.plumbing.context import request_root_span
 
     logger, _ = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     with trace.use_span(server, end_on_exit=False):
-        returned = logger.create_litellm_proxy_request_started_span(
-            start_time=datetime.now(), headers=None
-        )
+        returned = logger.create_litellm_proxy_request_started_span(start_time=datetime.now(), headers=None)
     server.end()
     assert returned.get_span_context().span_id == server.get_span_context().span_id
-    assert (
-        request_root_span().get_span_context().span_id
-        == server.get_span_context().span_id
-    )
+    assert request_root_span().get_span_context().span_id == server.get_span_context().span_id
 
 
 def test_guardrail_span_anchors_to_root_inside_active_phase_span():
@@ -1275,9 +1158,7 @@ def test_guardrail_span_anchors_to_root_inside_active_phase_span():
     span must still be a sibling of the LLM call under the request root, not a
     child of auth."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(server)
     entry = {"guardrail_name": "my_guard", "guardrail_status": "success"}
     with trace.use_span(server, end_on_exit=False):
@@ -1315,9 +1196,7 @@ def test_async_post_call_failure_hook_stamps_error_on_root_span():
     set_request_root_span(server)
     exc = _proxy_exc("litellm.BadRequestError: messages is required", 400)
     result = asyncio.run(
-        logger.async_post_call_failure_hook(
-            request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth()
-        )
+        logger.async_post_call_failure_hook(request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth())
     )
     server.end()
     assert result is None
@@ -1478,9 +1357,7 @@ def test_record_error_attributes_on_span_does_not_duplicate_an_already_stamped_e
     set_request_root_span(server)
     exc = _proxy_exc("Authentication Error, invalid key", 401)
     asyncio.run(
-        logger.async_post_call_failure_hook(
-            request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth()
-        )
+        logger.async_post_call_failure_hook(request_data={}, original_exception=exc, user_api_key_dict=UserAPIKeyAuth())
     )
     logger.record_error_attributes_on_span(server, exc, 400)
     server.end()
@@ -1562,14 +1439,8 @@ def test_real_logging_pre_call_opens_span_end_to_end():
         # pre_call fires log_pre_api_call → opens the boundary span on the obj.
         logging_obj.pre_call(input="hi", api_key="sk-test")
         # The success callback closes it, reading the typed payload.
-        logging_obj.model_call_details["standard_logging_object"] = _payload(
-            litellm_call_id="call_e2e"
-        )
-        asyncio.run(
-            logger.async_log_success_event(
-                logging_obj.model_call_details, None, None, None
-            )
-        )
+        logging_obj.model_call_details["standard_logging_object"] = _payload(litellm_call_id="call_e2e")
+        asyncio.run(logger.async_log_success_event(logging_obj.model_call_details, None, None, None))
     finally:
         monkeypatch.undo()
     (span,) = exporter.get_finished_spans()
@@ -1586,9 +1457,7 @@ def test_deferred_span_parents_to_ambient_at_close():
     kwargs = _kwargs()
     # pre_call with NO ambient span (the thread-pool case) → deferred.
     logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     # The close callback runs with the (worker-copied) server span ambient.
     with trace.use_span(server, end_on_exit=False):
         asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
@@ -1647,9 +1516,7 @@ def test_provider_model_and_team_metadata_on_real_boundary_flow():
     import json
 
     logger, exporter = _logger(team_metadata_keys=["tier", "cost_center"])
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     payload = _payload(
         hidden_params={"litellm_model_name": "azure/my-deployment"},
         metadata={
@@ -1688,9 +1555,7 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
     sibling such as ``requester_ip_address`` is not stamped from here even though
     the default allowlist names it, and an unlisted caller key is not promoted."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     data = {
         "model": "gpt-4o",
         "metadata": {"requester_ip_address": "127.0.0.1", "requester_metadata": {"trace_id": "abc"}},
@@ -1700,9 +1565,7 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
         # pre-call seeds baggage + stamps the active server span
         await logger.async_pre_call_hook(_Auth(), None, data, "completion")
         # a later service call (same task) must inherit the identity
-        await logger.async_service_success_hook(
-            payload=_ServicePayload("redis", "set"), parent_otel_span=server
-        )
+        await logger.async_service_success_hook(payload=_ServicePayload("redis", "set"), parent_otel_span=server)
 
     with trace.use_span(server, end_on_exit=False):
         asyncio.run(_flow())
@@ -1714,9 +1577,7 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
     assert redis.attributes[LiteLLM.KEY_HASH] == "hash1"
     assert redis.attributes[f"{LiteLLM.METADATA_PREFIX}user_api_key_user_id"] == "u1"
     srv = spans[LITELLM_PROXY_REQUEST_SPAN_NAME]
-    assert (
-        srv.attributes[LiteLLM.TEAM_ID] == "t1"
-    )  # stamped directly on the server span
+    assert srv.attributes[LiteLLM.TEAM_ID] == "t1"  # stamped directly on the server span
     assert srv.attributes[f"{LiteLLM.METADATA_PREFIX}user_api_key_user_id"] == "u1"
     assert not any(
         k in (f"{LiteLLM.METADATA_PREFIX}requester_ip_address", f"{LiteLLM.METADATA_PREFIX}trace_id")
@@ -1773,18 +1634,17 @@ class _Service:
 
 
 class _ServicePayload:
-    def __init__(self, service="redis", call_type="set", error=None, caller=None):
+    def __init__(self, service="redis", call_type="set", error=None, caller=None, target=None):
         self.service = _Service(service)
         self.call_type = call_type
         self.caller = caller
+        self.target = target
         self.error = error
 
 
 def _service_parent(logger):
     """Helper: a live PROXY_REQUEST span to parent service spans under."""
-    return logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    return logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
 
 
 async def _redis_get_through_service_logger(logger):
@@ -1810,29 +1670,176 @@ async def _redis_get_through_service_logger(logger):
             MagicMock(get_cache=MagicMock(return_value=None)),
         ),
     ):
-        cache = RedisCache(
-            host="127.0.0.1", port=6379, service_logger_obj=ServiceLogging()
-        )
+        cache = RedisCache(host="127.0.0.1", port=6379, service_logger_obj=ServiceLogging())
         await cache.async_get_cache("otel-naming-key")
-        await asyncio.gather(
-            *(t for t in asyncio.all_tasks() if t is not asyncio.current_task())
-        )
+        await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
 
 
 def test_redis_service_span_is_named_by_operation_and_keeps_the_caller_chain_as_an_attribute():
-    """``redis async_get_cache``, not ``redis async_get_cache <- caller <- caller``: the stack
-    walk that used to be spliced into the span name rides on ``litellm.service.caller`` instead,
-    so one operation is one span name and ``db.operation.name`` is the bare operation."""
+    """``redis.get``, not ``redis async_get_cache <- caller <- caller``: the stack walk that
+    used to be spliced into the span name rides on ``litellm.service.caller`` instead, and the
+    method name on ``db.operation.name``, so one operation is one span name."""
     logger, exporter = _logger()
     asyncio.run(_redis_get_through_service_logger(logger))
     (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
-    assert span.name == "redis async_get_cache"
+    assert span.name == "redis.get"
     assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
     assert span.attributes["db.operation.name"] == "async_get_cache"
-    callers = span.attributes[LiteLLM.SERVICE_CALLER].split(" <- ")
-    assert callers[0] == "_redis_get_through_service_logger" and len(callers) == 2, (
-        callers
+    assert span.attributes[LiteLLM.SERVICE_CALLER] == "_redis_get_through_service_logger"
+    assert LiteLLM.SERVICE_TARGET not in span.attributes
+
+
+def test_service_span_is_named_by_purpose_when_the_producer_declares_a_target():
+    """``redis.get llm_response``, the ``{operation} {target}`` shape the OTel database
+    conventions ask for, while the raw method name stays on the attributes dashboards
+    filter on (``litellm.service.call_type``, ``db.operation.name`` and the V1 ``call_type``)."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload(
+                    "redis",
+                    "async_get_cache",
+                    caller="_retrieve_from_cache <- _async_get_cache",
+                    target="llm_response",
+                ),
+                parent_otel_span=parent,
+            )
+        )
+    finally:
+        parent.end()
+    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
+    assert span.name == "redis.get llm_response"
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
+    assert span.attributes["db.operation.name"] == "async_get_cache"
+    assert span.attributes["call_type"] == "async_get_cache"
+    assert span.attributes[LiteLLM.SERVICE_TARGET] == "llm_response"
+    assert span.attributes[LiteLLM.SERVICE_CALLER] == "_retrieve_from_cache <- _async_get_cache"
+
+
+@pytest.mark.parametrize(
+    ("call_type", "targeted", "untargeted"),
+    [
+        ("async_get_cache", "redis.get auth_objects", "redis.get"),
+        ("async_batch_get_cache", "redis.mget auth_objects", "redis.mget"),
+        ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects", "redis.set"),
+        ("async_increment_pipeline", "redis.incr auth_objects", "redis.incr"),
+        ("async_delete_cache", "redis.delete auth_objects", "redis.delete"),
+        ("async_scan_iter", "redis.scan auth_objects", "redis.scan"),
+        ("request_redis_batch", "redis.pipeline auth_objects", "redis.pipeline"),
+        ("async_frobnicate", "redis async_frobnicate", "redis async_frobnicate"),
+    ],
+)
+def test_service_span_verb_follows_the_cache_method_behind_the_call(call_type, targeted, untargeted):
+    """Every known Redis method renders as ``redis.{verb}``, with the key family appended when
+    the producer declared one, so one trace never mixes ``redis.get llm_response`` with
+    ``redis async_get_cache``; an unknown method keeps the raw ``{service} {call_type}`` name."""
+    from litellm.integrations.otel.model.payloads import ServiceSpanData
+    from litellm.integrations.otel.model.spans import service_span_name
+
+    assert (
+        service_span_name(ServiceSpanData(service_name="redis", call_type=call_type, target="auth_objects")) == targeted
     )
+    assert service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)) == untargeted
+
+
+def test_postgres_service_span_keeps_its_function_name_inside_a_targeted_phase():
+    """A DB helper that runs inside ``service_target("auth_objects")`` (the whole auth phase
+    does) is still ``postgres get_data``: the verb scheme is for cache methods, the Postgres
+    rename to ``db.select {table}`` is a separate change."""
+    from litellm.integrations.otel.model.payloads import ServiceSpanData
+    from litellm.integrations.otel.model.spans import service_span_name
+
+    data = ServiceSpanData(service_name="postgres", call_type="get_data", target="auth_objects")
+    assert service_span_name(data) == "postgres get_data"
+
+
+def test_service_target_declared_by_the_producer_rides_the_service_logger_payload():
+    """``service_target`` is a contextvar the real ``ServiceLogging`` stamps onto the payload,
+    so a producer names its key family once and every cache read inside picks it up."""
+    logger, exporter = _logger()
+
+    async def _lookup():
+        with service_target("llm_response"):
+            await _redis_get_through_service_logger(logger)
+
+    asyncio.run(_lookup())
+    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
+    assert span.name == "redis.get llm_response"
+    assert span.attributes[LiteLLM.SERVICE_TARGET] == "llm_response"
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "async_get_cache"
+
+
+def test_response_cache_lookup_nests_its_redis_read_under_a_cache_get_span_on_the_request_root():
+    """The lookup runs inside a live ``cache.get llm_response`` phase span, a child of the
+    server span, so the Redis GET is its child and sits before ``chat {model}`` in causal order
+    instead of landing flat on the root."""
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+
+    async def _lookup():
+        with logger.start_phase_span("cache.get llm_response"):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_get_cache", target="llm_response"),
+                parent_otel_span=server,
+            )
+
+    try:
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(_lookup())
+    finally:
+        server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    phase = by_name["cache.get llm_response"]
+    redis = by_name["redis.get llm_response"]
+    request_ctx = server.get_span_context()
+    assert phase.kind is SpanKind.INTERNAL
+    assert phase.parent.span_id == request_ctx.span_id
+    assert not phase.links
+    assert redis.parent.span_id == phase.context.span_id
+    assert redis.context.trace_id == request_ctx.trace_id
+    assert not redis.links
+
+
+def test_response_cache_write_from_the_post_response_phase_is_one_linked_trace():
+    """The write runs after the response is on the wire, so its ``cache.set llm_response``
+    span detaches from the request as a linked root (the request trace keeps its real
+    duration), and the Redis SET it issues nests under that root instead of detaching
+    into a third, unrelated trace."""
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+
+    async def _write_task():
+        with logger.start_phase_span("cache.set llm_response"):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_set_cache", target="llm_response"),
+                parent_otel_span=server,
+            )
+
+    async def _request():
+        with post_response_phase():
+            task = asyncio.create_task(_write_task())
+        await task
+
+    try:
+        with trace.use_span(server, end_on_exit=False):
+            asyncio.run(_request())
+    finally:
+        server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    phase = by_name["cache.set llm_response"]
+    redis = by_name["redis.set llm_response"]
+    request_ctx = server.get_span_context()
+    assert phase.parent is None
+    assert phase.context.trace_id != request_ctx.trace_id
+    assert [(link.context.trace_id, link.context.span_id) for link in phase.links] == [
+        (request_ctx.trace_id, request_ctx.span_id)
+    ]
+    assert redis.parent.span_id == phase.context.span_id
+    assert redis.context.trace_id == phase.context.trace_id
+    assert not redis.links
 
 
 def test_async_service_success_hook_emits_service_span():
@@ -1946,11 +1953,7 @@ def test_metrics_only_ping_without_timing_or_parent_is_noop():
     per-request ``self`` latency hook, in-memory queue gauges) — not a traceable
     operation, so no span is emitted."""
     logger, exporter = _logger()
-    asyncio.run(
-        logger.async_service_success_hook(
-            payload=_ServicePayload(), parent_otel_span=None
-        )
-    )
+    asyncio.run(logger.async_service_success_hook(payload=_ServicePayload(), parent_otel_span=None))
     assert exporter.get_finished_spans() == ()
 
 
@@ -2009,22 +2012,13 @@ def test_metrics_only_services_emit_no_span():
 
 def test_service_span_inherits_parent_when_provided():
     logger, exporter = _logger()
-    parent = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    parent = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     try:
-        asyncio.run(
-            logger.async_service_success_hook(
-                payload=_ServicePayload(), parent_otel_span=parent
-            )
-        )
+        asyncio.run(logger.async_service_success_hook(payload=_ServicePayload(), parent_otel_span=parent))
     finally:
         parent.end()
     by_name = {s.name: s for s in exporter.get_finished_spans()}
-    assert (
-        by_name["redis set"].parent.span_id
-        == by_name[LITELLM_PROXY_REQUEST_SPAN_NAME].get_span_context().span_id
-    )
+    assert by_name["redis set"].parent.span_id == by_name[LITELLM_PROXY_REQUEST_SPAN_NAME].get_span_context().span_id
 
 
 def test_service_span_prefers_ambient_context_over_threaded_parent():
@@ -2034,9 +2028,7 @@ def test_service_span_prefers_ambient_context_over_threaded_parent():
     ambient has no live span (a background service call)."""
     logger, exporter = _logger()
     ambient = logger._emitter.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
-    threaded = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    threaded = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     try:
         with trace.use_span(ambient, end_on_exit=False):
             asyncio.run(
@@ -2137,9 +2129,7 @@ def test_service_call_under_a_remote_parent_is_never_detached():
     assert list(span.links) == []
 
 
-def _service_hook_from_post_response_task(
-    logger, payload, *, parent, ambient, end_time
-):
+def _service_hook_from_post_response_task(logger, payload, *, parent, ambient, end_time):
     """Log ``payload`` the way the proxy's post-response tail does: the hook runs on a
     task spawned from inside ``post_response_phase`` while the server span is still open."""
 
@@ -2153,9 +2143,7 @@ def _service_hook_from_post_response_task(
                     end_time=end_time,
                 )
             )
-        assert not in_post_response_phase(), (
-            "the phase must not leak into the request task"
-        )
+        assert not in_post_response_phase(), "the phase must not leak into the request task"
         await task
 
     if ambient is None:
@@ -2174,9 +2162,7 @@ def test_service_call_from_the_post_response_phase_detaches_before_the_server_sp
     so the call ends before its parent does. Timing alone would keep it a child;
     being dispatched from the post-response phase is what detaches it, with a link."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     assert server.is_recording()
     try:
         _service_hook_from_post_response_task(
@@ -2188,7 +2174,7 @@ def test_service_call_from_the_post_response_phase_detaches_before_the_server_sp
         )
     finally:
         server.end(end_time=to_ns(_REQUEST_END))
-    span = {s.name: s for s in exporter.get_finished_spans()}["redis async_set_cache"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis.set"]
     request_ctx = server.get_span_context()
     assert span.end_time < server.end_time
     assert span.parent is None
@@ -2237,7 +2223,9 @@ def test_redis_write_from_a_success_callback_detaches_while_the_server_span_is_s
     class _RedisWritingCallback(CustomLogger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
             await logger.async_service_success_hook(
-                payload=_ServicePayload("redis", "async_increment", caller="async_increment_cache <- async_log_success_event"),
+                payload=_ServicePayload(
+                    "redis", "async_increment", caller="async_increment_cache <- async_log_success_event"
+                ),
                 parent_otel_span=None,
                 start_time=_REQUEST_END - 0.5,
                 end_time=_REQUEST_END - 0.1,
@@ -2273,7 +2261,7 @@ def test_redis_write_from_a_success_callback_detaches_while_the_server_span_is_s
             asyncio.run(_request())
     finally:
         server.end(end_time=to_ns(_REQUEST_END))
-    span = {s.name: s for s in exporter.get_finished_spans()}["redis async_increment"]
+    span = {s.name: s for s in exporter.get_finished_spans()}["redis.incr"]
     request_ctx = server.get_span_context()
     assert span.end_time < server.end_time
     assert span.parent is None
@@ -2303,13 +2291,9 @@ def test_create_proxy_request_started_span_returns_ambient_span():
     )
     assert exporter.get_finished_spans() == ()
     # With an active server span, return it (do NOT create a new one).
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     with trace.use_span(server, end_on_exit=False):
-        got = logger.create_litellm_proxy_request_started_span(
-            start_time=datetime.now(timezone.utc), headers=None
-        )
+        got = logger.create_litellm_proxy_request_started_span(start_time=datetime.now(timezone.utc), headers=None)
     server.end()
     assert got is server
 
@@ -2341,9 +2325,7 @@ def test_default_config_reads_env(monkeypatch):
     monkeypatch.delenv("OTEL_EXPORTER", raising=False)
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_PROTOCOL", raising=False)
     logger = OpenTelemetryV2(
-        tracer_provider=providers.build_tracer_provider(
-            OpenTelemetryV2Config(exporter="in_memory")
-        )
+        tracer_provider=providers.build_tracer_provider(OpenTelemetryV2Config(exporter="in_memory"))
     )
     assert logger.config.exporter == "console"
 
@@ -2381,9 +2363,7 @@ def test_select_global_otel_v2_logger_reuses_existing_preset_logger():
 
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     tp = providers.build_tracer_provider(cfg)
-    preset_logger = OpenTelemetryV2(
-        config=cfg, callback_name="arize", tracer_provider=tp
-    )
+    preset_logger = OpenTelemetryV2(config=cfg, callback_name="arize", tracer_provider=tp)
 
     chosen = select_global_otel_v2_logger([object(), preset_logger, object()])
     assert chosen is preset_logger
@@ -2444,14 +2424,10 @@ def test_publish_global_otel_v2_provider_sets_selected_logger_provider(monkeypat
     monkeypatch.setattr(otel_logger, "_published_v2_provider", None)
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     tp = providers.build_tracer_provider(cfg)
-    preset_logger = OpenTelemetryV2(
-        config=cfg, callback_name="arize", tracer_provider=tp
-    )
+    preset_logger = OpenTelemetryV2(config=cfg, callback_name="arize", tracer_provider=tp)
 
     published = []
-    chosen = publish_global_otel_v2_provider(
-        [object(), preset_logger], published.append
-    )
+    chosen = publish_global_otel_v2_provider([object(), preset_logger], published.append)
 
     assert chosen is preset_logger
     assert published == [preset_logger._tracer_provider]
@@ -2475,9 +2451,7 @@ def test_registers_into_litellm_service_callback(monkeypatch):
     # A second OTel logger sees one is already registered and does not duplicate.
     OpenTelemetryV2(config=cfg, tracer_provider=tp)
     otel_registrations = [
-        cb
-        for cb in litellm.service_callback
-        if cb.__class__.__module__.startswith("litellm.integrations.otel")
+        cb for cb in litellm.service_callback if cb.__class__.__module__.startswith("litellm.integrations.otel")
     ]
     assert len(otel_registrations) == 1
 
@@ -2500,9 +2474,7 @@ def test_registers_into_litellm_input_callback(monkeypatch):
 
     OpenTelemetryV2(config=cfg, tracer_provider=tp)
     otel_registrations = [
-        cb
-        for cb in litellm.input_callback
-        if cb.__class__.__module__.startswith("litellm.integrations.otel")
+        cb for cb in litellm.input_callback if cb.__class__.__module__.startswith("litellm.integrations.otel")
     ]
     assert len(otel_registrations) == 1
 
@@ -2540,9 +2512,7 @@ def test_registers_into_async_success_and_failure_callbacks(monkeypatch):
         litellm._async_failure_callback,
     ):
         otel_registrations = [
-            cb
-            for cb in callback_list
-            if cb.__class__.__module__.startswith("litellm.integrations.otel")
+            cb for cb in callback_list if cb.__class__.__module__.startswith("litellm.integrations.otel")
         ]
         assert len(otel_registrations) == 1
 
@@ -2589,14 +2559,8 @@ def test_boundary_span_closes_without_proxy_fanout(monkeypatch):
     assert "pt_leak" in logger._open_llm_calls
     # The close runs through the real async_success_handler, which iterates
     # _async_success_callback — where the logger self-registered.
-    logging_obj.model_call_details["standard_logging_object"] = _payload(
-        litellm_call_id="pt_leak"
-    )
-    asyncio.run(
-        logging_obj.async_success_handler(
-            result=None, start_time=datetime.now(), end_time=datetime.now()
-        )
-    )
+    logging_obj.model_call_details["standard_logging_object"] = _payload(litellm_call_id="pt_leak")
+    asyncio.run(logging_obj.async_success_handler(result=None, start_time=datetime.now(), end_time=datetime.now()))
     assert "pt_leak" not in logger._open_llm_calls  # carrier closed, not leaked
     (span,) = exporter.get_finished_spans()
     assert span.name == "chat gpt-4o"
@@ -2623,18 +2587,14 @@ def test_guardrail_span_parents_to_ambient_server_span():
     ambient, so with no explicit anchor set the guardrail span parents to it.
     (Auth already finished, so no phase span is active.)"""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     entry = _guardrail_entry(start=1000.0, end=1000.5)
     try:
         with trace.use_span(server, end_on_exit=False):
             logger.emit_guardrail_span(entry)
     finally:
         server.end()
-    g = {s.name: s for s in exporter.get_finished_spans()}[
-        "execute_guardrail openai-moderation"
-    ]
+    g = {s.name: s for s in exporter.get_finished_spans()}["execute_guardrail openai-moderation"]
     assert g.parent.span_id == server.get_span_context().span_id
 
 
@@ -2642,18 +2602,14 @@ def test_guardrail_span_uses_actual_execution_timestamps():
     """A pre_call guardrail's span carries its real start/end (from the logging
     entry), so it sorts before the LLM call instead of at emission time."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     entry = _guardrail_entry(start=1700.0, end=1700.25)
     try:
         with trace.use_span(server, end_on_exit=False):
             logger.emit_guardrail_span(entry)
     finally:
         server.end()
-    g = {s.name: s for s in exporter.get_finished_spans()}[
-        "execute_guardrail openai-moderation"
-    ]
+    g = {s.name: s for s in exporter.get_finished_spans()}["execute_guardrail openai-moderation"]
     assert g.start_time == to_ns(1700.0)
     assert g.end_time == to_ns(1700.25)
 
@@ -2664,9 +2620,7 @@ def test_emit_guardrail_span_anchors_to_root_not_ambient_phase_span():
     ambient, so a guardrail emitted mid-``auth`` is a sibling of the LLM call, not
     a child of ``auth``."""
     logger, exporter = _logger()
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     set_request_root_span(server)
     entry = _guardrail_entry(start=2000.0, end=2000.1)
     with logger.start_phase_span("auth /chat/completions"):
@@ -2725,11 +2679,7 @@ def _emitted_metric_names(reader) -> set:
     if data is None:
         return set()
     return {
-        m.name
-        for rm in data.resource_metrics
-        for sm in rm.scope_metrics
-        for m in sm.metrics
-        if any(m.data.data_points)
+        m.name for rm in data.resource_metrics for sm in rm.scope_metrics for m in sm.metrics if any(m.data.data_points)
     }
 
 
@@ -2786,23 +2736,11 @@ def test_invalid_metric_filter_logged_once_records_nothing(caplog, monkeypatch):
 
     with caplog.at_level(logging.ERROR, logger="LiteLLM"):
         # Neither call may raise; the bad filter is caught in the logger.
-        asyncio.run(
-            logger.async_log_success_event(
-                _metric_success_kwargs(), response_obj, start, end
-            )
-        )
-        asyncio.run(
-            logger.async_log_success_event(
-                _metric_success_kwargs(), response_obj, start, end
-            )
-        )
+        asyncio.run(logger.async_log_success_event(_metric_success_kwargs(), response_obj, start, end))
+        asyncio.run(logger.async_log_success_event(_metric_success_kwargs(), response_obj, start, end))
 
     assert _emitted_metric_names(reader) == set()  # nothing recorded
-    errors = [
-        r
-        for r in caplog.records
-        if r.levelno == logging.ERROR and "metric filter" in r.getMessage()
-    ]
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR and "metric filter" in r.getMessage()]
     assert len(errors) == 1  # logged once, second bad record does not re-log
 
 
@@ -2919,9 +2857,7 @@ def _phoenix_routing_logger(capture_kind):
     )
     default_exporter = InMemorySpanExporter()
     tracer_provider = providers.build_tracer_provider(cfg, exporter=default_exporter)
-    logger = OpenTelemetryV2(
-        config=cfg, callback_name="arize_phoenix", tracer_provider=tracer_provider
-    )
+    logger = OpenTelemetryV2(config=cfg, callback_name="arize_phoenix", tracer_provider=tracer_provider)
     return logger, default_exporter, captured
 
 
@@ -2971,9 +2907,7 @@ def test_project_routing_resolves_at_pre_call_before_payload_exists():
     logger, default_exporter, captured = _phoenix_routing_logger("capture_route_c")
     auth_md = {"phoenix_project_name": "team-proj"}
     litellm_params = {"metadata": {"user_api_key_auth_metadata": auth_md}}
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     with trace.use_span(server, end_on_exit=False):
         logger.log_pre_api_call(
             model="gpt-4o",
@@ -2984,9 +2918,7 @@ def test_project_routing_resolves_at_pre_call_before_payload_exists():
     assert len(captured) == 1  # routed exporter already built at pre_call
 
     close_kwargs = {
-        "standard_logging_object": _payload(
-            metadata={"user_api_key_auth_metadata": auth_md}
-        ),
+        "standard_logging_object": _payload(metadata={"user_api_key_auth_metadata": auth_md}),
         "litellm_params": litellm_params,
     }
     asyncio.run(logger.async_log_success_event(close_kwargs, None, None, None))
@@ -2999,9 +2931,7 @@ def test_project_routing_resolves_at_pre_call_before_payload_exists():
     assert routed_span.parent is None
     (link,) = routed_span.links
     assert link.context.span_id == server.get_span_context().span_id
-    assert all(
-        s.name != "chat gpt-4o" for s in default_exporter.get_finished_spans()
-    )
+    assert all(s.name != "chat gpt-4o" for s in default_exporter.get_finished_spans())
 
 
 def test_evicted_provider_still_exports_span_opened_before_eviction(monkeypatch):
@@ -3013,9 +2943,7 @@ def test_evicted_provider_still_exports_span_opened_before_eviction(monkeypatch)
     monkeypatch.setattr(routing_mod, "_MAX_CACHED_PROVIDERS", 1)
     logger, _default_exporter, captured = _phoenix_routing_logger("capture_evict")
     md_a = {"user_api_key_auth_metadata": {"phoenix_project_name": "proj-a"}}
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     with trace.use_span(server, end_on_exit=False):
         logger.log_pre_api_call(
             model="gpt-4o",
@@ -3066,9 +2994,7 @@ def test_deferred_pre_call_does_not_churn_tenant_cache(monkeypatch):
     monkeypatch.setattr(routing_mod, "_shutdown_provider", lambda p: shut_down.append(p))
     logger, _default, captured = _phoenix_routing_logger("capture_deferred_churn")
     md_a = {"user_api_key_auth_metadata": {"phoenix_project_name": "proj-a"}}
-    server = logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
-    )
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     with trace.use_span(server, end_on_exit=False):
         _emit_llm(
             logger,
@@ -3132,9 +3058,7 @@ def test_success_without_pre_call_emits_deferred_span():
     logger, exporter = _logger()
     # No log_pre_api_call: this logger never receives the input hook. The
     # request-level provider-handoff stamp is present (pre_call ran globally).
-    asyncio.run(
-        logger.async_log_success_event({**_kwargs(), "api_call_start_time": 100.0}, None, 100.0, 101.5)
-    )
+    asyncio.run(logger.async_log_success_event({**_kwargs(), "api_call_start_time": 100.0}, None, 100.0, 101.5))
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].attributes.get("gen_ai.operation.name")
@@ -3174,9 +3098,7 @@ def test_failure_without_pre_call_emits_deferred_error_span():
         error_information={"error_class": "RateLimitError", "error_code": "429"},
     )
     asyncio.run(
-        logger.async_log_failure_event(
-            {**_kwargs(payload=payload), "api_call_start_time": 100.0}, None, None, None
-        )
+        logger.async_log_failure_event({**_kwargs(payload=payload), "api_call_start_time": 100.0}, None, None, None)
     )
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
@@ -3238,3 +3160,165 @@ def test_provisional_close_then_payload_close_does_not_duplicate():
     server.end()
     llm_spans = [s for s in exporter.get_finished_spans() if s.name.startswith("chat")]
     assert len(llm_spans) == 1
+
+
+def test_pipeline_op_count_lands_as_an_int_on_both_metadata_keys():
+    """A ``RedisBatch`` flush reports ``call_type=request_redis_batch`` with
+    ``event_metadata={"op_count": N}``; the span is ``redis.pipeline`` (no ``[N]`` in the
+    name) and the count survives sanitization as an int on the namespaced V2 key and the
+    bare V1 key, so a dashboard can sum it."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "request_redis_batch"),
+                parent_otel_span=parent,
+                event_metadata={"op_count": 3},
+            )
+        )
+    finally:
+        parent.end()
+    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
+    assert span.name == "redis.pipeline"
+    assert span.attributes[LiteLLM.SERVICE_CALL_TYPE] == "request_redis_batch"
+    v2_count = span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"]
+    v1_count = span.attributes["op_count"]
+    assert (v2_count, v1_count) == (3, 3)
+    assert type(v2_count) is int and type(v1_count) is int
+
+
+_REDIS_CACHE_MODULES = (
+    "litellm/caching/redis_cache.py",
+    "litellm/caching/redis_cluster_cache.py",
+    "litellm/caching/redis_semantic_cache.py",
+    "litellm/caching/dual_cache.py",
+    "litellm/caching/redis_batch.py",
+)
+
+
+def _redis_call_types_emitted_by_the_cache_layer():
+    """Every ``call_type`` literal the Redis cache layer hands to the service logger, plus the
+    two ``RedisBatch`` names it passes as ``call_type=self.name``."""
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[4]
+    sources = "\n".join((repo / module).read_text() for module in _REDIS_CACHE_MODULES)
+    literal = frozenset(re.findall(r'call_type="([a-z_]+)"', sources))
+    batch_names = frozenset(re.findall(r'RedisBatch\([^)]*name="([a-z_]+)"', sources))
+    return sorted(literal | batch_names)
+
+
+def test_no_call_type_the_redis_cache_layer_emits_can_fall_back_to_the_raw_method_name():
+    """The ``{service} {call_type}`` branch exists for services without a verb scheme; for Redis
+    it must be unreachable, or one trace mixes ``redis.get llm_response`` with ``redis async_get_cache``
+    again the moment a cache method is added without a verb."""
+    from litellm.integrations.otel.model.payloads import ServiceSpanData
+    from litellm.integrations.otel.model.spans import service_span_name
+
+    call_types = _redis_call_types_emitted_by_the_cache_layer()
+    assert {"async_get_cache", "async_batch_get_cache", "request_redis_batch", "post_call_redis_batch"} <= set(
+        call_types
+    )
+    fallbacks = [
+        call_type
+        for call_type in call_types
+        if not service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)).startswith("redis.")
+    ]
+    assert fallbacks == []
+
+
+def test_mixed_pipeline_families_land_on_their_own_bounded_attribute():
+    """A flush that carried several owners' ops is ``redis.pipeline mixed``; the sorted family
+    list goes to ``litellm.redis.families`` (not under ``litellm.metadata.``) while ``op_count``
+    stays an int on ``litellm.metadata.op_count``, and the legacy vocabulary keeps the bare keys."""
+    logger, exporter = _logger()
+    parent = _service_parent(logger)
+    try:
+        asyncio.run(
+            logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "request_redis_batch", target="mixed"),
+                parent_otel_span=parent,
+                event_metadata={"op_count": 3, "families": "auth_objects,spend_counters"},
+            )
+        )
+    finally:
+        parent.end()
+    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
+    assert span.name == "redis.pipeline mixed"
+    assert span.attributes[LiteLLM.REDIS_FAMILIES] == "auth_objects,spend_counters"
+    assert span.attributes["families"] == "auth_objects,spend_counters"
+    assert f"{LiteLLM.METADATA_PREFIX}families" not in span.attributes
+    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"] == 3
+    assert type(span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"]) is int
+
+
+def test_deferred_close_starts_at_the_provider_handoff_not_the_logging_objects_birth():
+    """A destination logger never sees ``pre_call``, so its copy of ``chat`` is created at
+    close. Starting it at the logging object's ``start_time`` makes it span routing and the
+    cache lookup; the provider handoff stamp is where the attempt really began."""
+    logger, exporter = _logger()
+    handoff = datetime(2026, 5, 26, 12, 0, 0, 500000, tzinfo=timezone.utc)
+    logging_start = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+    kwargs = {**_kwargs(), "api_call_start_time": handoff}
+
+    asyncio.run(logger.async_log_success_event(kwargs, None, logging_start, None))
+
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "chat gpt-4o"
+    assert span.start_time == to_ns(handoff)
+
+
+def test_a_call_made_inside_a_phase_nests_under_it_and_names_its_purpose():
+    """The auto-router classifier is a chat call litellm makes while picking a deployment. It
+    belongs under ``route {model_group}``, not beside the caller's own ``chat``, and carries a
+    bounded purpose so the two are told apart without reading model names."""
+    logger, exporter = _logger()
+    root = logger.tracer.start_span("POST /v1/chat/completions", kind=SpanKind.SERVER)
+    set_request_root_span(root)
+    classifier_kwargs = _kwargs(_payload(model="gpt-4o-mini"))
+    classifier_kwargs["litellm_params"]["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] = (
+        AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+    )
+
+    with trace.use_span(root, end_on_exit=True):
+        with logger.start_phase_span("route auto-router") as route:
+            _emit_llm(logger, classifier_kwargs)
+        _emit_llm(logger, _kwargs())
+
+    by_name = {span.name: span for span in exporter.get_finished_spans()}
+    classifier = by_name["chat gpt-4o-mini"]
+    assert classifier.parent.span_id == route.get_span_context().span_id
+    assert classifier.attributes[LiteLLM.REQUEST_PURPOSE] == AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+    assert by_name["route auto-router"].parent.span_id == root.get_span_context().span_id
+    provider_call = by_name["chat gpt-4o"]
+    assert provider_call.parent.span_id == root.get_span_context().span_id
+    assert LiteLLM.REQUEST_PURPOSE not in provider_call.attributes
+
+
+def test_a_classifier_closed_without_a_carrier_still_nests_under_the_route_phase():
+    """A key or team destination logger is a success callback only, so it creates the classifier's
+    span at close. That span belongs under ``route {model_group}`` in the destination's trace just as
+    it does in the operator's, not beside the routing it was part of."""
+    logger, exporter = _logger()
+    root = logger.tracer.start_span("POST /v1/chat/completions", kind=SpanKind.SERVER)
+    set_request_root_span(root)
+    handoff = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+    classifier_kwargs = {
+        **_kwargs(_payload(model="gpt-4o-mini", litellm_call_id="call_classifier")),
+        "api_call_start_time": handoff,
+    }
+    classifier_kwargs["litellm_params"]["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] = (
+        AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+    )
+
+    with trace.use_span(root, end_on_exit=True):
+        with logger.start_phase_span("route auto-router") as route:
+            asyncio.run(logger.async_log_success_event(classifier_kwargs, None, None, None))
+        asyncio.run(logger.async_log_success_event({**_kwargs(), "api_call_start_time": handoff}, None, None, None))
+
+    by_name = {span.name: span for span in exporter.get_finished_spans()}
+    assert by_name["chat gpt-4o-mini"].parent.span_id == route.get_span_context().span_id
+    assert by_name["chat gpt-4o-mini"].attributes[LiteLLM.REQUEST_PURPOSE] == AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+    assert by_name["chat gpt-4o"].parent.span_id == root.get_span_context().span_id
