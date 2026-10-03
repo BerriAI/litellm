@@ -111,4 +111,8 @@ describe("isReceiving", () => {
     expect(isReceiving(now - 6 * 60_000, now)).toBe(false);
     expect(isReceiving(null, now)).toBe(false);
   });
+
+  it("does not call traffic live when the latest trace is dated in the future", () => {
+    expect(isReceiving(now + 60_000, now)).toBe(false);
+  });
 });
