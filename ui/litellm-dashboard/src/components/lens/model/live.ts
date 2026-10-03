@@ -1,0 +1,205 @@
+import type { Job, Review, Settings } from "./types";
+
+export type Outcome = "issue" | "clear" | "unknown";
+
+export interface Conclusion {
+  checkId: string;
+  label: string;
+  latest: string;
+  count: number;
+  issue: boolean;
+}
+
+export interface Phase {
+  span: number;
+  typed: number;
+  verdict: boolean;
+}
+
+export interface LiveStats {
+  perSecond: number | null;
+  tokens: number;
+  cost: number;
+  elapsedSeconds: number;
+}
+
+const PACE_WINDOW_MS = 3200;
+const MIN_STEP_MS = 140;
+const COMPACT_STEP_MS = 700;
+const READ_SHARE = 0.35;
+const TYPE_SHARE = 0.45;
+const REPLAY_ON_OPEN = 3;
+
+const PROVIDER_ACCENT: Readonly<Record<string, string>> = { cerebras: "#f05a28" };
+
+export function reviewKey(review: Pick<Review, "execution_id" | "at">): string {
+  return `${review.execution_id}@${review.at}`;
+}
+
+export function providerOf(model: string): string {
+  const slash = model.indexOf("/");
+  return slash > 0 ? model.slice(0, slash).toLowerCase() : "";
+}
+
+export function modelName(model: string): string {
+  return model.slice(model.indexOf("/") + 1);
+}
+
+export function providerAccent(provider: string): string | undefined {
+  return PROVIDER_ACCENT[provider];
+}
+
+export function outcome(review: Pick<Review, "cannot_assess" | "verdicts">): Outcome {
+  if (review.cannot_assess) return "unknown";
+  return review.verdicts.some((v) => v.kind === "issue") ? "issue" : "clear";
+}
+
+export function verdictLine(review: Pick<Review, "cannot_assess" | "verdicts">): string {
+  const issue = review.verdicts.find((v) => v.kind === "issue");
+  if (issue) return issue.summary;
+  if (review.cannot_assess) return "Not enough evidence to judge";
+  return review.verdicts[0]?.summary ?? "No issue observed";
+}
+
+export function unseen(reviews: readonly Review[], seen: ReadonlySet<string>): Review[] {
+  return reviews.filter((review) => !seen.has(reviewKey(review)));
+}
+
+export function stepDuration(backlog: number): number {
+  return Math.max(MIN_STEP_MS, Math.min(PACE_WINDOW_MS, Math.round(PACE_WINDOW_MS / Math.max(1, backlog))));
+}
+
+export function playbackPhase(elapsed: number, duration: number, spans: number, chars: number): Phase {
+  if (duration < COMPACT_STEP_MS) return { span: -1, typed: chars, verdict: true };
+  const t = Math.max(0, elapsed) / duration;
+  const reading = t < READ_SHARE;
+  const span = reading && spans > 0 ? Math.min(spans - 1, Math.floor((t / READ_SHARE) * spans)) : -1;
+  const typing = Math.min(1, Math.max(0, (t - READ_SHARE) / TYPE_SHARE));
+  return { span, typed: Math.round(typing * chars), verdict: t >= READ_SHARE + TYPE_SHARE };
+}
+
+export function conclusions(reviews: readonly Review[], checks: Settings["checks"] = []): Conclusion[] {
+  const instructions = new Map(checks.map((check) => [check.id, check.instruction]));
+  const verdicts = reviews.flatMap((review) => review.verdicts);
+  const grouped = verdicts.reduce(
+    (groups, verdict) => {
+      const prior = groups.get(verdict.check_id);
+      return new Map(groups).set(verdict.check_id, {
+        checkId: verdict.check_id,
+        label: instructions.get(verdict.check_id) ?? verdict.summary,
+        latest: verdict.summary,
+        count: (prior?.count ?? 0) + 1,
+        issue: (prior?.issue ?? false) || verdict.kind === "issue",
+      });
+    },
+    new Map<string, Conclusion>(),
+  );
+  return [...grouped.values()].sort((a, b) => Number(b.issue) - Number(a.issue) || b.count - a.count);
+}
+
+export function readingStart(job: Pick<Job, "steps" | "created_at">): string {
+  return job.steps.find((step) => step.kind === "stage" && step.label === "Reading executions")?.at ?? job.created_at;
+}
+
+export function liveStats(job: Job, now: number): LiveStats {
+  const models = job.steps.filter((step) => step.kind === "model");
+  const end = job.finished_at ? Date.parse(job.finished_at) : now;
+  const elapsedSeconds = Math.max(0, Math.floor((end - Date.parse(readingStart(job))) / 1000));
+  return {
+    perSecond: elapsedSeconds > 0 && job.reviewed > 0 ? job.reviewed / elapsedSeconds : null,
+    tokens: models.reduce((sum, step) => sum + step.prompt_tokens + step.completion_tokens, 0),
+    cost: job.cost,
+    elapsedSeconds,
+  };
+}
+
+export function rateLabel(perSecond: number | null): string {
+  if (perSecond === null) return "–";
+  return perSecond >= 1 ? `${perSecond.toFixed(1)} traces/s` : `${(perSecond * 60).toFixed(1)} traces/min`;
+}
+
+export function tokenLabel(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tok`;
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`;
+}
+
+export interface Playback {
+  played: readonly Review[];
+  current: Review | null;
+  pending: readonly Review[];
+  seen: ReadonlySet<string>;
+  startedAt: number;
+  duration: number;
+}
+
+export type PlaybackAction =
+  | { type: "enqueue"; reviews: readonly Review[] }
+  | { type: "tick"; now: number }
+  | { type: "settle" };
+
+const PLAYED_LIMIT = 200;
+
+export function startPlayback(reviews: readonly Review[], live: boolean): Playback {
+  const replay = live ? Math.min(REPLAY_ON_OPEN, reviews.length) : 0;
+  const shown = reviews.slice(0, reviews.length - replay);
+  return {
+    played: live ? shown : shown.slice(0, -1),
+    current: live ? null : shown.at(-1) ?? null,
+    pending: reviews.slice(shown.length),
+    seen: new Set(reviews.map(reviewKey)),
+    startedAt: Number.NEGATIVE_INFINITY,
+    duration: 0,
+  };
+}
+
+function enqueue(state: Playback, reviews: readonly Review[]): Playback {
+  const fresh = unseen(reviews, state.seen);
+  if (!fresh.length) return state;
+  return {
+    ...state,
+    pending: [...state.pending, ...fresh],
+    seen: new Set([...state.seen, ...fresh.map(reviewKey)]),
+  };
+}
+
+function advance(state: Playback, now: number): Playback {
+  const [next, ...rest] = state.pending;
+  if (!next) return state;
+  if (state.current && now - state.startedAt < state.duration) return state;
+  return {
+    ...state,
+    played: state.current ? [...state.played, state.current].slice(-PLAYED_LIMIT) : state.played,
+    current: next,
+    pending: rest,
+    startedAt: now,
+    duration: stepDuration(state.pending.length),
+  };
+}
+
+function settle(state: Playback): Playback {
+  const all = [...state.played, ...(state.current ? [state.current] : []), ...state.pending];
+  return {
+    ...state,
+    played: all.slice(0, -1).slice(-PLAYED_LIMIT),
+    current: all.at(-1) ?? null,
+    pending: [],
+    startedAt: Number.NEGATIVE_INFINITY,
+    duration: 0,
+  };
+}
+
+export function playbackReducer(state: Playback, action: PlaybackAction): Playback {
+  switch (action.type) {
+    case "enqueue":
+      return enqueue(state, action.reviews);
+    case "tick":
+      return advance(state, action.now);
+    case "settle":
+      return settle(state);
+  }
+}
+
+export function shownCount(reviewed: number, playback: Pick<Playback, "played" | "current" | "pending">): number {
+  const local = playback.played.length + (playback.current ? 1 : 0);
+  return Math.max(local, reviewed - playback.pending.length);
+}
