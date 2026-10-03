@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { GuardrailJumpLink, LogDetailContent } from "./LogDetailContent";
@@ -34,6 +34,33 @@ const createLogEntry = (overrides: Partial<LogEntry> = {}): LogEntry =>
   }) as LogEntry;
 
 describe("LogDetailContent", () => {
+  it("resets WebSocket pagination for a different log but preserves it when the same log refreshes", () => {
+    const response = {
+      results: Array.from({ length: 101 }, (_, index) => ({
+        type: "response.completed",
+        response: { id: `resp_${index}`, output: [] },
+      })),
+    };
+    const log = createLogEntry({ request_id: "websocket-first", response });
+    const { rerender } = render(<LogDetailContent logEntry={log} />);
+    fireEvent.click(screen.getByRole("button", { name: "Next turns" }));
+    expect(screen.getByText("Turns 51–100 of 101")).toBeInTheDocument();
+
+    rerender(<LogDetailContent logEntry={{ ...log, response: { ...response } }} />);
+    expect(screen.getByText("Turns 51–100 of 101")).toBeInTheDocument();
+
+    rerender(<LogDetailContent logEntry={{ ...log, request_id: "websocket-second" }} />);
+    expect(screen.getByText("Turns 1–50 of 101")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous turns" })).toBeDisabled();
+    expect(screen.queryByText("Turn 51 · Completed")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next turns" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next turns" }));
+    expect(screen.getByText("Turns 101–101 of 101")).toBeInTheDocument();
+
+    rerender(<LogDetailContent logEntry={log} />);
+    expect(screen.getByText("Turns 1–50 of 101")).toBeInTheDocument();
+  });
+
   it("should render the component successfully", () => {
     render(<LogDetailContent logEntry={createLogEntry()} />);
 
