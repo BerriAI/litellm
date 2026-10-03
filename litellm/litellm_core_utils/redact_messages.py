@@ -121,6 +121,8 @@ def _redact_choice_content(choice):
 
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
+    if not output_items:
+        return
     for output_item in output_items:
         if getattr(output_item, "text", None) is not None:
             output_item.text = REDACTED_BY_LITELLM
@@ -147,6 +149,8 @@ def _redact_responses_api_output(output_items):
 
 def _redact_responses_api_output_dict(output_items, redacted_str: str):
     """Helper to redact ResponsesAPIResponse output items in dict form."""
+    if not output_items:
+        return
     for output_item in output_items:
         if not isinstance(output_item, dict):
             continue
