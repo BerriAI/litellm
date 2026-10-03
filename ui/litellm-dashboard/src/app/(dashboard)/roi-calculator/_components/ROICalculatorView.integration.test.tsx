@@ -124,6 +124,7 @@ const idleStatus = {
 
 describe("ROICalculatorView", () => {
   beforeEach(() => {
+    window.history.replaceState(null, "", "/roi-calculator/");
     vi.mocked(apiClient.get).mockReset();
     vi.mocked(apiClient.put).mockReset();
     vi.mocked(apiClient.post).mockReset();
@@ -359,6 +360,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
+    expect(window.location.search).toBe("?demo=1");
     expect(screen.getByRole("tab", { name: "Branches" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("searchbox")).toHaveValue("");
     expect(screen.getByRole("cell", { name: "$9.10" })).toBeVisible();
@@ -381,9 +383,33 @@ describe("ROICalculatorView", () => {
 
     expect(screen.getByText("Improve request routing")).toBeVisible();
     expect(screen.queryByText("Sample usage breakdown")).not.toBeInTheDocument();
+    expect(window.location.search).toBe("");
     expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.put).not.toHaveBeenCalled();
+  });
+
+  it("opens a demo link with sample data even while live analysis is running", async () => {
+    window.history.replaceState(null, "", "/roi-calculator/?demo=1");
+    const demoSummary = { ...summary, mode: "demo", metrics: { ...summary.metrics, total_spend: 38.4 } };
+    const runningStatus = { ...idleStatus, running: true, phase: "estimating", total: 1 };
+    vi.mocked(apiClient.get).mockImplementation((path: string, options) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (path === "/roi-calculator/report") {
+        return Promise.resolve({ report: options?.query?.mode === "demo" ? demoSummary : summary });
+      }
+      return Promise.resolve(runningStatus);
+    });
+    render(<ROICalculatorView accessToken="token" />);
+    expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
+    expect(screen.getByText("$38.40")).toBeVisible();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
+    expect(apiClient.post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Exit demo" }));
+    expect(screen.getByRole("progressbar")).toBeVisible();
+    expect(screen.getByText("$20.00")).toBeVisible();
+    expect(window.location.search).toBe("");
   });
 
   it("returns to Overview and shows the last sync time when completion is polled from Settings", async () => {

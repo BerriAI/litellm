@@ -44,6 +44,13 @@ const IDLE_STATUS: ROISyncStatus = {
   error: null,
 };
 
+function updateDemoUrl(enabled: boolean) {
+  const url = new URL(window.location.href);
+  if (enabled) url.searchParams.set("demo", "1");
+  else url.searchParams.delete("demo");
+  window.history.replaceState(null, "", url);
+}
+
 export default function ROICalculatorView({
   accessToken,
   userRole = null,
@@ -78,15 +85,20 @@ export default function ROICalculatorView({
   React.useEffect(() => {
     if (!accessToken) return;
     let cancelled = false;
+    const demoRequested = new URLSearchParams(window.location.search).get("demo") === "1";
     Promise.all([
       apiClient.get<ROISettings>("/roi-calculator/settings", { accessToken }),
       apiClient.get<ROIReportResponse>("/roi-calculator/report", { accessToken }),
       apiClient.get<ROISyncStatus>("/roi-calculator/sync", { accessToken }),
+      demoRequested
+        ? apiClient.get<ROIReportResponse>("/roi-calculator/report", { accessToken, query: { mode: "demo" } })
+        : Promise.resolve(null),
     ])
-      .then(([nextSettings, reportResponse, syncStatus]) => {
+      .then(([nextSettings, reportResponse, syncStatus, sampleResponse]) => {
         if (cancelled) return;
         setSettings(nextSettings);
         setSummary(reportResponse.report);
+        setSampleSummary(sampleResponse?.report ?? null);
         setStatus(syncStatus);
         statusRef.current = syncStatus;
         setError(null);
@@ -202,6 +214,7 @@ export default function ROICalculatorView({
         query: { mode: "demo" },
       });
       setSampleSummary(response.report);
+      updateDemoUrl(true);
       setView("branches");
       setQuery("");
     } catch (reason) {
@@ -265,7 +278,14 @@ export default function ROICalculatorView({
           )}
         </PageHeaderDescription>
       </PageHeader>
-      {sampleSummary && <DemoNotice onExit={() => setSampleSummary(null)} />}
+      {sampleSummary && (
+        <DemoNotice
+          onExit={() => {
+            updateDemoUrl(false);
+            setSampleSummary(null);
+          }}
+        />
+      )}
       {adminReadOnly && (
         <p className="text-sm text-muted-foreground" role="note">
           Read-only access. Settings, analysis runs, and email matches are unavailable.
@@ -302,7 +322,7 @@ export default function ROICalculatorView({
       ))}
       {!sampleSummary && status.running && (
         <Card>
-          <CardContent className="flex flex-wrap items-center justify-between gap-4 pt-6">
+          <CardContent className="flex flex-wrap items-center justify-between gap-4">
             <div
               aria-label="Sync progress"
               aria-valuemax={100}
