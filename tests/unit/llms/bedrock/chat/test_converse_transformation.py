@@ -5636,7 +5636,8 @@ def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model,
         headers={},
     )
 
-    assert ("cachePoint" in json.dumps(body)) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["system"])) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["messages"])) is expects_cache_points
     assert ("cachePoint" in json.dumps(body["toolConfig"])) is expects_cache_points
     assert body["system"][0]["text"] == "sys"
     assert body["messages"][0]["content"][0]["text"] == "hi"
