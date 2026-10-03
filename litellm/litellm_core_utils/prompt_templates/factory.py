@@ -1741,11 +1741,14 @@ def _find_server_tool_result(
     )
 
 
+_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
-) -> list[AnthropicMessagesToolUseParam | dict[str, Any]]:
+) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
     {
@@ -2565,9 +2568,9 @@ def anthropic_messages_pt(
 
                 # Group tool invoke results into (server_tool_use, result) pairs
                 # and separate regular tool_use blocks
-                server_tool_groups: list[list[Any]] = []
-                regular_tool_uses: list[Any] = []
-                _current_group: list[Any] = []
+                server_tool_groups: list[list[_AnthropicToolInvokeItem]] = []
+                regular_tool_uses: list[_AnthropicToolInvokeItem] = []
+                _current_group: list[_AnthropicToolInvokeItem] = []
                 for item in tool_invoke_results:
                     item_type = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "")
                     if item_type == "server_tool_use":
