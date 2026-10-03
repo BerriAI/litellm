@@ -5,6 +5,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prisma.errors import PrismaError
 
 from litellm._service_logger import ServiceTypes
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
@@ -23,6 +24,16 @@ def success_hook() -> Iterator[AsyncMock]:
     with patch(
         "litellm.proxy.proxy_server.proxy_logging_obj",
         MagicMock(service_logging_obj=MagicMock(async_service_success_hook=hook)),
+    ):
+        yield hook
+
+
+@pytest.fixture
+def failure_hook() -> Iterator[AsyncMock]:
+    hook: Final = AsyncMock()
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        MagicMock(service_logging_obj=MagicMock(async_service_failure_hook=hook)),
     ):
         yield hook
 
@@ -248,3 +259,18 @@ async def test_a_task_spawned_by_a_decorated_call_that_queries_after_it_returned
     await background
 
     assert await _db_call_types(success_hook) == ("read_key_row", "find_unique")
+
+
+@pytest.mark.asyncio
+async def test_a_raising_failure_hook_never_replaces_the_prisma_error(failure_hook: AsyncMock) -> None:
+    failure_hook.side_effect = RuntimeError("exporter down")
+
+    @log_db_metrics
+    async def insert_data(**kwargs: object) -> None:
+        raise PrismaError("connection reset")
+
+    with pytest.raises(PrismaError, match="connection reset"):
+        await insert_data(table_name="key")
+
+    assert failure_hook.await_count == 1
+    assert failure_hook.await_args_list[0].kwargs["call_type"] == "insert_data"
