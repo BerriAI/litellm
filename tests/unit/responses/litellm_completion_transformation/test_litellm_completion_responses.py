@@ -5172,3 +5172,27 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
         )
     assert exc_info.value.status_code == 400
     assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("signature", [None, "c2lnbmVkLXRleHQ="])
+def test_gemini_text_signature_survives_responses_tool_replay(signature: str | None) -> None:
+    from litellm.llms.vertex_ai.gemini.transformation import _gemini_convert_messages_with_history
+
+    text: Final = "  Let me check.\n"
+    fields: Final = {"thought_signatures": [signature]} if signature else None
+    response: Final = ModelResponse(choices=[Choices(message=Message(content=text, provider_specific_fields=fields))])
+    output: Final = LiteLLMCompletionResponsesConfig._extract_message_output_items(response, response.choices)
+    replayed: Final = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+        input=[
+            {"role": "user", "content": "Check the weather"},
+            output[0].model_dump(exclude_none=True),
+            {"type": "function_call", "call_id": "call_weather", "name": "weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_weather", "output": "sunny"},
+        ],
+        replay_reasoning=True,
+    )
+    contents: Final = _gemini_convert_messages_with_history(replayed, model="gemini-2.5-flash")
+    parts: Final = contents[1]["parts"]
+    assert parts[0] == ({"text": text, "thoughtSignature": signature} if signature else {"text": text})
+    assert parts[1]["function_call"] == {"name": "weather", "args": {}}
+    assert contents[2]["parts"][0]["function_response"]["response"] == {"content": "sunny"}
