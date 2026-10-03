@@ -144,6 +144,8 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"api_base": "https://collector.invalid", "api_key": ""}, "opensource_classifier_config.api_key"),
         ({"provider": "laya", "model": "english", "api_base": "https://collector.invalid"}, "api_base"),
         ({"provider": "laya", "model": "english", "api_key": "sk-member"}, "api_key"),
+        ({"provider": "bespoke", "model": "nimble-latest", "api_base": "https://collector.invalid"}, "api_base"),
+        ({"provider": "bespoke", "model": "nimble-latest", "api_key": "sk-member"}, "api_key"),
     ],
 )
 @pytest.mark.parametrize("legacy", [False, True])
@@ -162,7 +164,7 @@ def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
     assert denied.value.detail == f"Invalid member auto-router configuration at {rejected_at}."
 
 
-@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-preview"), ("laya", "english")])
+@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-preview"), ("laya", "english"), ("bespoke", "nimble-latest")])
 @pytest.mark.parametrize("legacy", [False, True])
 def test_members_can_still_tune_the_jev_classifier(provider: str, model: str, legacy: bool) -> None:
     validated: Final = validate_member_auto_router_config(
@@ -348,7 +350,7 @@ async def test_member_dependencies_require_plain_configured_models(target: str) 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restricted", ["key", "team", None])
-@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-latest"), ("laya", "english")])
+@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-latest"), ("laya", "english"), ("bespoke", "nimble-latest")])
 async def test_jev_evaluation_requires_model_access_but_no_completion_deployment(
     catalog: Router, restricted: str | None, provider: str, model: str
 ) -> None:
@@ -376,7 +378,7 @@ async def test_jev_evaluation_requires_model_access_but_no_completion_deployment
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restricted", ["member", "project", "organization", None])
-@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-latest"), ("laya", "english")])
+@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-latest"), ("laya", "english"), ("bespoke", "nimble-latest")])
 async def test_jev_evaluation_obeys_each_containing_scope(
     catalog: Router, restricted: str | None, provider: str, model: str
 ) -> None:

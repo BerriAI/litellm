@@ -6,6 +6,5 @@ WHERE response_id IN {response_ids:Array(String)}
   AND start_time < fromUnixTimestamp64Milli({end_ms:Int64})
   AND ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND user = {user_id:String})
-       OR has({team_ids:Array(String)}, team_id)
-       OR ({api_key_hash:String} != '' AND api_key = {api_key_hash:String}))
+       OR has({team_ids:Array(String)}, team_id))
 ORDER BY start_time DESC

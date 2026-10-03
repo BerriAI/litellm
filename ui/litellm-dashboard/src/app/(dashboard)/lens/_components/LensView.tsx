@@ -51,6 +51,7 @@ import {
   type Finding,
   type Settings,
   type Job,
+  watches,
 } from "./lensData";
 
 const money = (n: number) =>
@@ -581,13 +582,13 @@ export function LensView({
                   </div>
                 )}
                 <div className="pt-2">
-                  <h3 className="text-base font-semibold">What should we look out for?</h3>
+                  <h3 className="text-base font-semibold">Watch for</h3>
                   <p className="mt-1 text-xs text-muted-foreground">Specific problems or patterns to investigate.</p>
                 </div>
                 {batchSettings?.checks.map((c, index) => (
                   <div key={c.id} className="flex items-start gap-3 border-b py-4">
                     <span className="mt-0.5 text-xs tabular-nums text-muted-foreground">{index + 1}.</span>
-                    <p className="text-sm leading-6 flex-1">{c.instruction}</p>
+                    <CheckSummary check={c} />
                     {!c.enabled && <span className="text-xs text-muted-foreground">Disabled</span>}
                   </div>
                 ))}
@@ -769,5 +770,16 @@ export function LensView({
         </SheetContent>
       </Sheet>
     </section>
+  );
+}
+
+function CheckSummary({ check }: { check: Settings["checks"][number] }) {
+  const watch = watches.find((item) => item.id === check.id);
+  if (!watch) return <p className="flex-1 text-sm leading-6">{check.instruction}</p>;
+  return (
+    <p className="grid flex-1 gap-0.5">
+      <span className="text-sm font-medium">{watch.name}</span>
+      <span className="text-xs text-muted-foreground">{watch.summary}</span>
+    </p>
   );
 }

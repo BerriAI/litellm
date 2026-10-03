@@ -315,6 +315,7 @@ include = [
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/client/cli/commands/codex_base_instructions.md",
+    "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [
     "litellm/proxy/enterprise",
