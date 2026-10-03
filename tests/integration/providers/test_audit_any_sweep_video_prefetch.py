@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import time
-import uuid
-from collections.abc import Callable
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
 
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, eventually
+import yaml
+from integration._support.client import Gateway, gateway_from_environment
+from integration._support.process import owned_proxy
 from pydantic import JsonValue
+
+PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 
 _PRIVATE_KEY: Final = """-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDETwmymH0fOIKM
@@ -49,7 +51,6 @@ OPERATION_NAME: Final = (
 
 VERTEX_MODELS_PREFIX: Final = "v1/projects/test-project/locations/global/publishers/google/models"
 
-
 _DONE_PREFETCH: Final = {
     "content_type": "application/json",
     "body": {
@@ -63,8 +64,10 @@ _EDIT_RESULT: Final = {
     "body": {"name": OPERATION_NAME.replace("op-123", "op-edited"), "done": False},
 }
 
+_DEPLOYMENTS: Final = ("audit-veo-raw", "audit-veo-sdk", "audit-veo-async", "audit-veo-nonobj", "audit-veo-err")
 
-def _vertex_credentials(gateway: Gateway) -> str:
+
+def _vertex_credentials(upstream_url: str) -> str:
     return json.dumps(
         {
             "type": "service_account",
@@ -72,10 +75,39 @@ def _vertex_credentials(gateway: Gateway) -> str:
             "private_key_id": "audit-key-id",
             "private_key": _PRIVATE_KEY,
             "client_email": "audit-sa@test-project.iam.gserviceaccount.com",
-            "token_uri": f"{gateway.upstream_url}/_oauth/token",
+            "token_uri": f"{upstream_url}/_oauth/token",
             "universe_domain": "googleapis.com",
         }
     )
+
+
+def _video_config(directory: Path, upstream_url: str) -> Path:
+    config: Final = yaml.safe_load(PROXY_CONFIG.read_text())
+    credentials: Final = _vertex_credentials(upstream_url)
+    config["model_list"] = [
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "vertex_ai/veo-3.0-generate-preview",
+                "api_base": f"{upstream_url}/{name}",
+                "vertex_project": "test-project",
+                "vertex_credentials": credentials,
+            },
+        }
+        for name in _DEPLOYMENTS
+    ]
+    path: Final = directory / "video_proxy_config.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+@pytest.fixture(scope="module")
+def video_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with gateway_from_environment() as upstream_gateway:
+        directory: Final = tmp_path_factory.mktemp("audit_video")
+        config: Final = _video_config(directory, upstream_gateway.upstream_url)
+        with owned_proxy(upstream_gateway, directory, {}, config=config, workers=2) as owned:
+            yield owned
 
 
 def _register_scenario(gateway: Gateway, scenario_id: str, response: dict[str, JsonValue]) -> None:
@@ -96,25 +128,6 @@ def _video_edit_body(model: str) -> dict[str, JsonValue]:
     }
 
 
-def _vertex_model(gateway: Gateway, scenario_id: str) -> str:
-    name: Final = f"integration-{uuid.uuid4().hex}"
-    created: Final = gateway.post(
-        "/model/new",
-        {
-            "model_name": name,
-            "litellm_params": {
-                "model": "vertex_ai/veo-3.0-generate-preview",
-                "api_base": f"{gateway.upstream_url}/{scenario_id}",
-                "vertex_project": "test-project",
-                "vertex_credentials": _vertex_credentials(gateway),
-            },
-        },
-    )
-    model_info: Final = created["model_info"]
-    assert isinstance(model_info, dict) and model_info["id"], created
-    return name
-
-
 def _routed_veo(prefetch_response: dict[str, JsonValue], edit_response: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return {
         "content_type": "application/x-routed",
@@ -125,100 +138,48 @@ def _routed_veo(prefetch_response: dict[str, JsonValue], edit_response: dict[str
     }
 
 
-def _video_edit_when_ready(gateway: Gateway, model: str, key: str) -> httpx.Response:
-    return eventually(
-        lambda: gateway.request("POST", "/v1/videos/edits", _video_edit_body(model), key=key),
-        lambda response: "no healthy deployments" not in response.text,
-        seconds=20,
-    )
-
-
-def _edit_or_unhealthy(post: Callable[[], httpx.Response]) -> httpx.Response | None:
-    try:
-        return post()
-    except openai.BadRequestError as error:
-        if "no healthy deployments" in str(error):
-            return None
-        raise
-
-
-def _key_for(gateway: Gateway, model: str) -> str:
-    created: Final = gateway.post("/key/generate", {"models": [model]})
-    key: Final = created["key"]
-    assert isinstance(key, str) and key, created
-    return key
-
-
-def test_vertex_video_edit_prefetches_source_object_raw_httpx(gateway: Gateway) -> None:
-    scenario_id: Final = f"auditveo{uuid.uuid4().hex[:8]}"
-    _register_scenario(gateway, scenario_id, _routed_veo(_DONE_PREFETCH, _EDIT_RESULT))
-    model: Final = _vertex_model(gateway, scenario_id)
-    key: Final = _key_for(gateway, model)
-    response: Final = _video_edit_when_ready(gateway, model, key)
+def test_vertex_video_edit_prefetches_source_object_raw_httpx(video_gateway: Gateway) -> None:
+    _register_scenario(video_gateway, "audit-veo-raw", _routed_veo(_DONE_PREFETCH, _EDIT_RESULT))
+    response: Final = video_gateway.request("POST", "/v1/videos/edits", _video_edit_body("audit-veo-raw"))
     assert response.status_code == 200, response.text
     payload: Final = response.json()
     assert payload.get("id") or payload.get("name"), payload
 
 
-def test_vertex_video_edit_prefetches_source_object_openai_sdk(gateway: Gateway) -> None:
-    scenario_id: Final = f"auditveo{uuid.uuid4().hex[:8]}"
-    _register_scenario(gateway, scenario_id, _routed_veo(_DONE_PREFETCH, _EDIT_RESULT))
-    model: Final = _vertex_model(gateway, scenario_id)
-    key: Final = _key_for(gateway, model)
+def test_vertex_video_edit_prefetches_source_object_openai_sdk(video_gateway: Gateway) -> None:
+    _register_scenario(video_gateway, "audit-veo-sdk", _routed_veo(_DONE_PREFETCH, _EDIT_RESULT))
     client: Final = openai.OpenAI(
-        base_url=f"{gateway.client.base_url}/v1",
-        api_key=key,
+        base_url=f"{video_gateway.client.base_url}/v1",
+        api_key=video_gateway.key,
         http_client=httpx.Client(trust_env=False),
     )
-    response: Final = eventually(
-        lambda: _edit_or_unhealthy(
-            lambda: client.post("/videos/edits", body=_video_edit_body(model), cast_to=httpx.Response)
-        ),
-        lambda result: result is not None,
-        seconds=30,
-    )
+    response: Final = client.post("/videos/edits", body=_video_edit_body("audit-veo-sdk"), cast_to=httpx.Response)
     payload: Final = response.json()
     assert isinstance(payload, dict) and (payload.get("id") or payload.get("name")), payload
 
 
-async def test_vertex_video_edit_prefetches_source_object_openai_async(gateway: Gateway) -> None:
-    scenario_id: Final = f"auditveo{uuid.uuid4().hex[:8]}"
-    _register_scenario(gateway, scenario_id, _routed_veo(_DONE_PREFETCH, _EDIT_RESULT))
-    model: Final = _vertex_model(gateway, scenario_id)
-    key: Final = _key_for(gateway, model)
+async def test_vertex_video_edit_prefetches_source_object_openai_async(video_gateway: Gateway) -> None:
+    _register_scenario(video_gateway, "audit-veo-async", _routed_veo(_DONE_PREFETCH, _EDIT_RESULT))
     client: Final = openai.AsyncOpenAI(
-        base_url=f"{gateway.client.base_url}/v1",
-        api_key=key,
+        base_url=f"{video_gateway.client.base_url}/v1",
+        api_key=video_gateway.key,
         http_client=httpx.AsyncClient(trust_env=False),
     )
-    deadline: Final = time.monotonic() + 30
-    while True:
-        try:
-            response: Final = await client.post("/videos/edits", body=_video_edit_body(model), cast_to=httpx.Response)
-            break
-        except openai.BadRequestError as error:
-            if "no healthy deployments" not in str(error):
-                raise
-            assert time.monotonic() < deadline, "deployment never became healthy"
-            await asyncio.sleep(0.1)
+    response: Final = await client.post(
+        "/videos/edits", body=_video_edit_body("audit-veo-async"), cast_to=httpx.Response
+    )
     payload: Final = response.json()
     assert isinstance(payload, dict) and (payload.get("id") or payload.get("name")), payload
 
 
 @pytest.mark.parametrize("prefetch_body", ('["a", "b"]', '"just-a-string"', "null"))
-def test_vertex_video_edit_prefetch_non_object_json(gateway: Gateway, prefetch_body: str) -> None:
-    scenario_id: Final = f"auditveo{uuid.uuid4().hex[:8]}"
+def test_vertex_video_edit_prefetch_non_object_json(video_gateway: Gateway, prefetch_body: str) -> None:
     _register_scenario(
-        gateway,
-        scenario_id,
-        _routed_veo(
-            {"content_type": "application/jsonl", "body": prefetch_body},
-            _EDIT_RESULT,
-        ),
+        video_gateway,
+        "audit-veo-nonobj",
+        _routed_veo({"content_type": "application/jsonl", "body": prefetch_body}, _EDIT_RESULT),
     )
-    model: Final = _vertex_model(gateway, scenario_id)
-    key: Final = _key_for(gateway, model)
-    response: Final = _video_edit_when_ready(gateway, model, key)
+    response: Final = video_gateway.request("POST", "/v1/videos/edits", _video_edit_body("audit-veo-nonobj"))
     assert response.status_code != 200, response.text
     assert response.status_code < 600, response.text
     payload: Final = response.json()
@@ -226,19 +187,15 @@ def test_vertex_video_edit_prefetch_non_object_json(gateway: Gateway, prefetch_b
 
 
 @pytest.mark.parametrize("status", (400, 500))
-def test_vertex_video_edit_prefetch_http_error(gateway: Gateway, status: int) -> None:
-    scenario_id: Final = f"auditveo{uuid.uuid4().hex[:8]}"
+def test_vertex_video_edit_prefetch_http_error(video_gateway: Gateway, status: int) -> None:
     _register_scenario(
-        gateway,
-        scenario_id,
+        video_gateway,
+        "audit-veo-err",
         _routed_veo(
-            {"content_type": "application/json", "body": {"error": "upstream said no"}, "status": status},
-            _EDIT_RESULT,
+            {"content_type": "application/json", "body": {"error": "upstream said no"}, "status": status}, _EDIT_RESULT
         ),
     )
-    model: Final = _vertex_model(gateway, scenario_id)
-    key: Final = _key_for(gateway, model)
-    response: Final = _video_edit_when_ready(gateway, model, key)
+    response: Final = video_gateway.request("POST", "/v1/videos/edits", _video_edit_body("audit-veo-err"))
     assert response.status_code != 200, response.text
     payload: Final = response.json()
     assert "error" in payload, payload
