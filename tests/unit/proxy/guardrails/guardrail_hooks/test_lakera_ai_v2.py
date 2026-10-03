@@ -6,6 +6,8 @@ Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
 import logging
+from copy import deepcopy
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,11 +21,29 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIGuardrail,
+    _apply_redacted_messages_back_preserving_fields,
     _build_lakera_inspection_messages,
     humanize_lakera_block_reasons,
 )
 from litellm.types.guardrails import LitellmParams, Mode
 from litellm.types.utils import ModelResponse
+
+
+def test_skip_assistant_filters_inspection_and_preserves_masking_positions() -> None:
+    guardrail: Final = LakeraAIGuardrail(api_key="test_key", skip_assistant_message_in_guardrail=True)
+    messages: Final = [
+        {"role": "assistant", "content": "old reply", "name": "helper"},
+        {"role": "user", "content": "private"},
+    ]
+    original_assistant: Final = deepcopy(messages[0])
+    filtered, was_skipped = guardrail._filter_skipped_messages(messages)
+    assert filtered == (messages[1],)
+    assert was_skipped is True
+    data: Final = {"messages": messages}
+
+    _apply_redacted_messages_back_preserving_fields(guardrail, data, [{"role": "user", "content": "[MASKED]"}])
+
+    assert data["messages"] == [original_assistant, {"role": "user", "content": "[MASKED]"}]
 
 
 @pytest.mark.asyncio
