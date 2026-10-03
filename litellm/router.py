@@ -13809,7 +13809,7 @@ class Router:
         """Declare the binding read `_resolve_claude_code_session_router` will make on the request's Redis
         batch, so it shares a round trip with the routing read instead of being a GET of its own at route time."""
         redis_cache: Final = self._claude_code_session_router_cache.redis_cache
-        if redis_cache is None or request_kwargs is None:
+        if redis_cache is None or request_kwargs is None or is_native_compaction_call():
             return
         if self._request_header(request_kwargs, "x-claude-code-agent-id") is None:
             return

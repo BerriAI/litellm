@@ -1132,3 +1132,30 @@ async def test_the_sensitive_pin_and_the_session_binding_ride_the_routing_read_p
     assert router._claude_code_session_router_cache_key(request_kwargs) in keys
     assert any(key.startswith("{sensitive_route:") for key in keys)
     assert [op for op in redis_cache.alone if op[0] != "SET"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_native_compaction_child_call_does_not_read_the_session_binding_it_never_uses():
+    from litellm.router_strategy.complexity_router.context_compaction import native_compaction_call
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    client = FakeClient(_session_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    router.complexity_routers = {"smart-router": (TaggedPreRoutingStrategy(tags=(), strategy=_BoundRouterStrategy()),)}
+    pins = _PROXY_SensitiveDataRoutingHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    request_kwargs = _claude_code_kwargs()
+
+    with request_redis_batch_scope(), native_compaction_call():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, request_kwargs)
+        await pins._get_routed_model("session-1234", UserAPIKeyAuth(api_key="k"))
+        routed = await router._resolve_claude_code_session_router(_MODEL_GROUP, _MODEL_GROUP, request_kwargs)
+
+    assert routed == _MODEL_GROUP
+    keys = set(chain.from_iterable(command[1:] for pipeline in client.pipelines for command in pipeline.commands))
+    assert router._claude_code_session_router_cache_key(request_kwargs) not in keys, (
+        "a native compaction child armed a session-binding read that binding resolution skips"
+    )
+    assert [op for op in redis_cache.alone if op[0] != "SET"] == []
