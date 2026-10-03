@@ -22,6 +22,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import litellm
+
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.exceptions import MidStreamFallbackError
@@ -140,3 +142,31 @@ def test_error_event_preserves_midstream_fallback_error():
     assert name == "error"
     assert payload["error"]["type"] == "api_error"
     assert "internalServerException" in payload["error"]["message"]
+
+
+def test_error_event_keeps_status_of_mapped_litellm_exception():
+    exc = litellm.ContextWindowExceededError(
+        message="prompt is too long: your prompt exceeds the model's context window",
+        model="openai.gpt-5.6-luna",
+        llm_provider="bedrock_mantle",
+    )
+    name, payload = _parse_sse(_mid_stream_error_sse_event(exc))
+    assert name == "error"
+    assert payload["error"]["type"] == "invalid_request_error"
+    assert "prompt is too long" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        litellm.BadRequestError(
+            message="temperature must be in the range [0.0, 2.0]", model="m", llm_provider="gemini"
+        ),
+        litellm.AuthenticationError(message="API key not valid", llm_provider="gemini", model="m"),
+        litellm.NotFoundError(message="model is not found", model="m", llm_provider="gemini"),
+    ],
+)
+def test_error_event_reports_other_provider_4xx_as_retriable_500(exc):
+    name, payload = _parse_sse(_mid_stream_error_sse_event(exc))
+    assert name == "error"
+    assert payload["error"]["type"] == "api_error"
