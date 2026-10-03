@@ -28,7 +28,7 @@ import { InvestigationList } from "./InvestigationList";
 import { HeaderActions } from "./HeaderActions";
 import { RunNowDialog } from "./detail/RunNowDialog";
 import { FindingsInbox } from "./FindingsInbox";
-import { findingAgents, type InboxRow } from "../model/inbox";
+import { findingAgents, sampledExecutions, type InboxRow } from "../model/inbox";
 import { WatchAllBanner } from "./WatchAllBanner";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
 import { InvestigationsWelcome } from "./InvestigationsWelcome";
@@ -67,6 +67,7 @@ export function InvestigationsView({
   const setSelected = demo ? setDemoSelected : setLiveSelected;
   const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
   const [peek, setPeek] = useState(false);
+  const [peeked, setPeeked] = useState<InboxRow | null>(null);
   const [runNowId, setRunNowId] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
   const [error, setError] = useState("");
@@ -157,13 +158,31 @@ export function InvestigationsView({
   };
   const openFinding = (row: InboxRow) => {
     setPeek(true);
+    setPeeked(row);
     selectLens(row.sources[0].lens.id);
-    setFindingId(row.sources[0].finding.id);
+  };
+  const closeFinding = () => {
+    setFindingId(null);
+    setPeeked(null);
+    if (!peek) return;
+    setPeek(false);
+    selectLens(null);
   };
   const changeFinding = async (status: Finding["status"], reason: string) => {
+    if (peeked) {
+      await update((current) =>
+        Promise.all(peeked.sources.map((s) => current.reviewFinding(s.lens.id, s.finding.id, status, reason))),
+      );
+      closeFinding();
+      return;
+    }
     if (!lens || !finding) return;
     await update((current) => current.reviewFinding(lens.id, finding.id, status, reason));
   };
+  const sheetFinding = peeked ? peeked.sources[0].finding : finding;
+  const sheetRuns = peeked ? peeked.sources.flatMap((s) => sampledExecutions(s.lens)) : sampledRuns;
+  const detailAgents = lens && finding ? findingAgents(lens, finding) : [];
+  const sheetAgents = peeked ? peeked.agents : detailAgents;
 
   return (
     <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
@@ -234,6 +253,7 @@ export function InvestigationsView({
             <InvestigationList
               lenses={lenses}
               connected={connected}
+              readOnly={readOnly}
               onEdit={editFromTable}
               onRunNow={(id) => setRunNowId(id)}
             />
@@ -317,18 +337,12 @@ export function InvestigationsView({
         />
       )}
       <FindingSheet
-        finding={finding}
-        agents={lens && finding ? findingAgents(lens, finding) : []}
-        sampledRuns={sampledRuns}
+        finding={sheetFinding}
+        agents={sheetAgents}
+        sampledRuns={sheetRuns}
         readOnly={readOnly}
         busy={busy}
-        onClose={() => {
-          setFindingId(null);
-          if (peek) {
-            setPeek(false);
-            selectLens(null);
-          }
-        }}
+        onClose={closeFinding}
         changeFinding={changeFinding}
         onEvidence={(value) => {
           setRequestOffset(0);
