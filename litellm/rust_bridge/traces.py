@@ -66,7 +66,7 @@ class NormalizedSpan(BaseModel):
     framework: str
     agent_metadata: AgentMetadata
     litellm_request_id: str
-    call_keys: tuple[str, ...]
+    call_keys: tuple[str, ...] = Field(strict=False)  # the bridge returns a list
     call_evidence: Literal["complete", "partial", "unknown"]
     model: str
     input_tokens: int = Field(ge=0, le=2**32 - 1)
