@@ -59,7 +59,7 @@ describe("observed ROI dashboard", () => {
   it("retries failures, keeps the report during cancellation, and refreshes after completion", async () => {
     let status: ObservedStatus = { ...idle, phase: "error", error: "Provider temporarily unavailable" };
     let completeOnPoll = false;
-    let currentReport = report;
+    let currentReport = { ...report, repos: ["org/service", "org/docs"] };
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string, init: RequestInit) => {
@@ -86,11 +86,21 @@ describe("observed ROI dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await user.click(await screen.findByRole("button", { name: "Cancel sync" }));
     expect(await screen.findByRole("button", { name: "Sync now" })).toBeEnabled();
-    expect(screen.getByText("org/service")).toBeInTheDocument();
+    expect(screen.queryByText("org/service")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "2 repositories" }));
+    const repositories = await screen.findByRole("dialog", { name: "Repositories" });
+    expect(within(repositories).getByText("org/service")).toBeInTheDocument();
+    expect(within(repositories).getByText("org/docs")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Repositories" })).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByRole("button", { name: "Cancel sync" })).toBeEnabled();
     completeOnPoll = true;
-    expect(await screen.findByText("org/updated", {}, { timeout: 4000 })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "1 repository" }, { timeout: 4000 }));
+    expect(
+      await within(screen.getByRole("dialog", { name: "Repositories" })).findByText("org/updated"),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
     expect(screen.getByRole("tab", { name: "Quality", selected: true })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
   });
@@ -198,6 +208,9 @@ describe("observed ROI dashboard", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Provider unavailable");
     await user.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(await screen.findByText("org/changed")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "1 repository" }));
+    expect(
+      await within(screen.getByRole("dialog", { name: "Repositories" })).findByText("org/changed"),
+    ).toBeInTheDocument();
   });
 });

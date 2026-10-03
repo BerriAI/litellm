@@ -5,9 +5,8 @@ import {
   ArrowDown,
   ArrowUp,
   CalendarDays,
+  ChevronDown,
   ChevronRight,
-  Github,
-  Gitlab,
   Link2,
   Search,
   RefreshCw,
@@ -19,6 +18,7 @@ import { Page, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -418,13 +418,20 @@ function Report({
         </div>
       </PageHeader>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-2 text-xs">
-          {snapshot.source_provider !== "gitlab" && <Github className="size-4 shrink-0" />}
-          {snapshot.source_provider !== "github" && <Gitlab className="size-4 shrink-0" />}
-          <span className="truncate font-medium" title={snapshot.repos.join(", ")}>
-            {snapshot.repos.join(", ")}
-          </span>
-        </div>
+        <Popover>
+          <PopoverTrigger render={<Button size="sm" variant="outline" className="self-start" />}>
+            {number(snapshot.repos.length)} {snapshot.repos.length === 1 ? "repository" : "repositories"}
+            <ChevronDown className="size-3.5" />
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] gap-2 p-3">
+            <PopoverTitle>Repositories</PopoverTitle>
+            <ul className="max-h-64 space-y-2 overflow-y-auto text-xs break-words">
+              {snapshot.repos.map((repo) => (
+                <li key={repo}>{repo}</li>
+              ))}
+            </ul>
+          </PopoverContent>
+        </Popover>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Select
             value={String(days)}
