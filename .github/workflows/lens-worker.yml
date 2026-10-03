@@ -35,6 +35,13 @@ jobs:
           persist-credentials: false
       - name: Build Lens worker
         run: docker build --build-arg LITELLM_RELEASE_TAG=sha-${{ github.sha }} -f deploy/lens/Dockerfile -t lens-worker:${{ github.sha }} .
+      - name: Reject custom builds without a matching release tag
+        run: |
+          if docker build --progress plain -f deploy/lens/Dockerfile -t lens-worker:unversioned . > missing-tag.log 2>&1; then
+            echo "::error::An unversioned worker build unexpectedly succeeded"
+            exit 1
+          fi
+          grep -F 'LITELLM_RELEASE_TAG: Pass --build-arg LITELLM_RELEASE_TAG matching the gateway' missing-tag.log
       - name: Verify standalone imports with a read-only filesystem
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,size=1g \

@@ -1,5 +1,6 @@
 FROM python:3.12-slim
 ARG LITELLM_RELEASE_TAG=""
+RUN : "${LITELLM_RELEASE_TAG:?Pass --build-arg LITELLM_RELEASE_TAG matching the gateway}"
 ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 WORKDIR /app
 RUN pip install --no-cache-dir httpx==0.28.1 pydantic==2.11.7
