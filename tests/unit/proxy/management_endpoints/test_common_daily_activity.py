@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     daily_activity_repository,
     daily_activity_scope,
     get_api_key_metadata,
+    get_user_api_key_filter,
     get_daily_activity,
     parse_canonical_date,
     parse_canonical_date_range,
@@ -2542,3 +2543,30 @@ async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(st
     assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
     mock_table.count.assert_not_awaited()
     mock_table.find_many.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_get_user_api_key_filter_scopes_to_active_and_deleted_user_keys():
+    mock_prisma = MagicMock()
+    active_key = SimpleNamespace(token="active-key", user_id="target-user")
+    unrelated_key = SimpleNamespace(token="unrelated-key", user_id="other-user")
+    deleted_key = SimpleNamespace(token="deleted-key", user_id="target-user")
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[active_key, unrelated_key])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[deleted_key])
+
+    assert await get_user_api_key_filter(mock_prisma, "target-user", None) == ["active-key", "deleted-key"]
+    assert await get_user_api_key_filter(mock_prisma, "target-user", "unrelated-key") == []
+
+
+@pytest.mark.asyncio
+async def test_get_user_api_key_filter_fails_closed_when_deleted_lookup_fails():
+    mock_prisma = MagicMock()
+    active_key = SimpleNamespace(token="active-key", user_id="target-user")
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[active_key])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
+        side_effect=RuntimeError("deleted-key table unavailable")
+    )
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="deleted-key table unavailable"):
+        await get_user_api_key_filter(mock_prisma, "target-user", "active-key")
