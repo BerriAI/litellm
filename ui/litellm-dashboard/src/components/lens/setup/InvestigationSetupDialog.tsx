@@ -104,7 +104,8 @@ export function InvestigationSetupDialog({
   const modelReady = modelsReady || preservingSavedModel;
   const modelValid = !!model && supported && modelReady;
   const runReady = canRun && (mode === "edit" || previewReady);
-  const canSave = formState.isValid && !formState.isSubmitting && modelValid && runReady;
+  const formReady = formState.isValid && !formState.isSubmitting;
+  const canSave = formReady && modelValid && runReady;
   const createLabel = repeat ? "Run and monitor" : "Run investigation";
   const saveLabel = mode === "edit" ? "Save changes" : createLabel;
   const headings = [

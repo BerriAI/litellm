@@ -109,7 +109,7 @@ describe("investigation validation", () => {
     };
     const draft = investigationSchema.parse(input);
     const saved = investigationSettings(draft, undefined, "analysis");
-    expect(saved).toMatchObject({
+    const expectedSaved = {
       name: "Find repetitive searches\nInclude retries",
       context: "Expected behavior \n Keep sources",
       model: "analysis",
@@ -119,7 +119,8 @@ describe("investigation validation", () => {
         ...watchChecks(new Set(["watch_invented"])),
         { id: "custom", instruction: "Find repetitive searches\nInclude retries", enabled: false },
       ],
-    });
+    };
+    expect(saved).toMatchObject(expectedSaved);
     expect(input.questions[0].instruction).toBe("  Find repetitive searches\nInclude retries  ");
   });
 

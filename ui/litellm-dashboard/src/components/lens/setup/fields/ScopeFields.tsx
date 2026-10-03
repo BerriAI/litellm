@@ -38,9 +38,9 @@ export function ScopeFields({
   const { control, register, setValue } = useFormContext<InvestigationInput>();
   const selection = useWatch({ control, name: "selection" });
   const filters = selection.filters ?? [];
-  const [advanced, setAdvanced] = useState(
-    !!selection.filters.length || !!selection.team_id || !!selection.service || selection.source !== "traces",
-  );
+  const hasOptionalScope = !!selection.team_id || !!selection.service;
+  const showAdvancedByDefault = !!selection.filters.length || hasOptionalScope || selection.source !== "traces";
+  const [advanced, setAdvanced] = useState(showAdvancedByDefault);
   const nameFieldName = selection.source === "requests" ? "selection.service" : "selection.agent_name";
   const selectedName = selection.source === "requests" ? selection.service : selection.agent_name;
   const nameLabel = selection.source === "requests" ? "Model group (optional)" : "Agent (optional)";

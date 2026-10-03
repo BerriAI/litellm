@@ -25,16 +25,17 @@ describe("Lens findings", () => {
     expect(sortedFindings([base, high]).map((f) => f.id)).toEqual(["high", "low"]);
   });
   it("turns an issue brief into a pasteable markdown document", () => {
+    const briefInput = {
+      problem: "The workspace was not a Git repository.",
+      user_goal: "Open a PR fixing a typo",
+      what_happened: 'Git returned "fatal: not a git repository"',
+      test_cases: [
+        { input: "Fix the typo and open a PR", expected: "A PR URL is returned" },
+        { input: "Rename greet", expected: "The rename is committed" },
+      ],
+    };
     expect(
-      briefMarkdown("PRs were never opened", {
-        problem: "The workspace was not a Git repository.",
-        user_goal: "Open a PR fixing a typo",
-        what_happened: 'Git returned "fatal: not a git repository"',
-        test_cases: [
-          { input: "Fix the typo and open a PR", expected: "A PR URL is returned" },
-          { input: "Rename greet", expected: "The rename is committed" },
-        ],
-      }),
+      briefMarkdown("PRs were never opened", briefInput),
     ).toBe(
       [
         "# PRs were never opened",

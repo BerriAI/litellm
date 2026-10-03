@@ -30,86 +30,110 @@ const draftFields = {
 };
 const draftSchema = z.object(draftFields);
 
+type InvestigationDraft = z.infer<typeof draftSchema>;
+
+function validateFilters(draft: InvestigationDraft, ctx: z.RefinementCtx) {
+  draft.selection.filters.forEach((filter, index) => {
+    if (!filter.key.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a key and value for every condition, or remove it",
+        path: ["selection", "filters", index, "key"],
+      });
+    }
+    if (!filter.value.trim()) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Choose a key and value for every condition, or remove it",
+        path: ["selection", "filters", index, "value"],
+      });
+    }
+  });
+}
+
+function validateManualSelection(draft: InvestigationDraft, ctx: z.RefinementCtx) {
+  if (draft.manualSelection && !draft.selection.execution_ids.length) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Choose at least one run or turn off individual selection",
+      path: ["selection", "execution_ids"],
+    });
+  }
+}
+
+function validateSampleWindow(draft: InvestigationDraft, ctx: z.RefinementCtx) {
+  const selection = draft.selection;
+  const hours = selection.lookback_hours ?? 24;
+  if (!Number.isInteger(hours) || hours < 1 || hours > 8760) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Choose a time range between 1 hour and 365 days",
+      path: ["selection", "lookback_hours"],
+    });
+  }
+  const percent = selection.sample_percent ?? 100;
+  if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Choose a sampling percentage greater than 0 and up to 100",
+      path: ["selection", "sample_percent"],
+    });
+  }
+  if (selection.sample_size != null && (!Number.isInteger(selection.sample_size) || selection.sample_size < 1)) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Choose a positive maximum or leave it blank for no limit",
+      path: ["selection", "sample_size"],
+    });
+  }
+}
+
+function validateBudgetAndSchedule(draft: InvestigationDraft, ctx: z.RefinementCtx) {
+  if (!Number.isFinite(draft.budget) || draft.budget <= 0 || draft.budget > 100000) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Choose a monthly limit greater than zero and up to 100000",
+      path: ["budget"],
+    });
+  }
+  const intervalOutOfRange = draft.interval < 1 || draft.interval > 10080;
+  const intervalInvalid = !Number.isInteger(draft.interval) || intervalOutOfRange;
+  if (draft.repeat && intervalInvalid) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Choose a repeat interval between 1 and 10080 minutes",
+      path: ["interval"],
+    });
+  }
+}
+
+function validateExpectations(draft: InvestigationDraft, ctx: z.RefinementCtx) {
+  const checks = draft.questions.filter((check) => check.instruction.trim());
+  if (!draft.context.trim() && !checks.length && !draft.watching.length) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Describe the expected behavior or pick something to watch for",
+      path: ["context"],
+    });
+  }
+  draft.questions.forEach((check, index) => {
+    if (check.instruction.trim() && check.instruction.trim().length < 3) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Use at least three characters for each check",
+        path: ["questions", index, "instruction"],
+      });
+    }
+  });
+}
+
 export const investigationSchema = draftSchema
   .superRefine((draft, ctx) => {
-    const selection = draft.selection;
-    selection.filters.forEach((filter, index) => {
-      if (!filter.key.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Choose a key and value for every condition, or remove it",
-          path: ["selection", "filters", index, "key"],
-        });
-      }
-      if (!filter.value.trim()) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Choose a key and value for every condition, or remove it",
-          path: ["selection", "filters", index, "value"],
-        });
-      }
-    });
-    if (draft.manualSelection && !selection.execution_ids.length) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose at least one run or turn off individual selection",
-        path: ["selection", "execution_ids"],
-      });
-    }
-    const hours = selection.lookback_hours ?? 24;
-    if (!Number.isInteger(hours) || hours < 1 || hours > 8760) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose a time range between 1 hour and 365 days",
-        path: ["selection", "lookback_hours"],
-      });
-    }
-    const percent = selection.sample_percent ?? 100;
-    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose a sampling percentage greater than 0 and up to 100",
-        path: ["selection", "sample_percent"],
-      });
-    }
-    if (selection.sample_size != null && (!Number.isInteger(selection.sample_size) || selection.sample_size < 1)) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose a positive maximum or leave it blank for no limit",
-        path: ["selection", "sample_size"],
-      });
-    }
-    if (!Number.isFinite(draft.budget) || draft.budget <= 0 || draft.budget > 100000) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose a monthly limit greater than zero and up to 100000",
-        path: ["budget"],
-      });
-    }
-    if (draft.repeat && (!Number.isInteger(draft.interval) || draft.interval < 1 || draft.interval > 10080)) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose a repeat interval between 1 and 10080 minutes",
-        path: ["interval"],
-      });
-    }
-    const checks = draft.questions.filter((check) => check.instruction.trim());
-    if (!draft.context.trim() && !checks.length && !draft.watching.length) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Describe the expected behavior or pick something to watch for",
-        path: ["context"],
-      });
-    }
-    draft.questions.forEach((check, index) => {
-      if (check.instruction.trim() && check.instruction.trim().length < 3) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Use at least three characters for each check",
-          path: ["questions", index, "instruction"],
-        });
-      }
-    });
+    validateFilters(draft, ctx);
+    validateManualSelection(draft, ctx);
+    validateSampleWindow(draft, ctx);
+    validateBudgetAndSchedule(draft, ctx);
+    validateExpectations(draft, ctx);
   })
   .transform((draft) => ({
     ...draft,

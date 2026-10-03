@@ -17,6 +17,12 @@ export function validateWorkerAddress(address: string) {
 }
 
 const analysisAccessFields = { model: z.string().nullable(), budget: z.string() };
+const workerFormFields = {
+  useExisting: z.boolean(),
+  analysisKey: z.string().nullable(),
+  access: z.object(analysisAccessFields),
+  address: z.string(),
+};
 export const analysisAccessSchema = z
   .object(analysisAccessFields)
   .superRefine((access, ctx) => {
@@ -28,12 +34,7 @@ export const analysisAccessSchema = z
 export type AnalysisAccess = z.input<typeof analysisAccessSchema>;
 
 export const workerFormSchema = z
-  .object({
-    useExisting: z.boolean(),
-    analysisKey: z.string().nullable(),
-    access: z.object(analysisAccessFields),
-    address: z.string(),
-  })
+  .object(workerFormFields)
   .superRefine((values, ctx) => {
     if (values.useExisting) {
       if (!values.analysisKey) {
