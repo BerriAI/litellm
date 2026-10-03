@@ -112,7 +112,8 @@ function ShippingTrend({ snapshot, comparison }: { snapshot: ObservedSnapshot; c
         </div>
       </div>
       <div
-        className="mt-5 grid grid-cols-4 gap-6"
+        className="mt-5 grid gap-2"
+        style={{ gridTemplateColumns: `repeat(${current.length}, minmax(0, 1fr))` }}
         role="img"
         aria-label={`Merged ${terms.plural} by week. Current: ${current.join(", ")}. Comparison: ${baseline.join(", ")}`}
       >
@@ -134,7 +135,7 @@ function ShippingTrend({ snapshot, comparison }: { snapshot: ObservedSnapshot; c
                 <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] font-medium">{value}</span>
               </div>
             </div>
-            <p className="mt-2 text-center text-[11px] text-muted-foreground">Week {week + 1}</p>
+            <p className="mt-2 text-center text-[11px] text-muted-foreground">W{week + 1}</p>
           </div>
         ))}
       </div>
@@ -364,6 +365,11 @@ function Quality({ snapshot, comparison }: { snapshot: ObservedSnapshot; compari
   );
 }
 
+function costPerChange(period: ObservedSnapshot["periods"]["current"]) {
+  if (period.spend_observation !== "records_present" || period.matched_internal_prs === 0) return null;
+  return period.matched_users_recorded_spend / period.matched_internal_prs;
+}
+
 function Report({
   snapshot,
   accessToken,
@@ -371,6 +377,8 @@ function Report({
   onRefresh,
   onConnect,
   actions,
+  syncing,
+  onPeriod,
 }: {
   snapshot: ObservedSnapshot;
   accessToken: string;
@@ -378,23 +386,23 @@ function Report({
   onRefresh: () => void;
   onConnect: () => void;
   actions: React.ReactNode;
+  syncing: boolean;
+  onPeriod: (days: number) => void;
 }) {
   const [comparison, setComparison] = useState<Comparison>("previous");
-  const [activeTab, setActiveTab] = useState(snapshot.people.length ? "people" : "pulls");
+  const [activeTab, setActiveTab] = useState(
+    snapshot.people.length && snapshot.periods.current.merged_prs > 0 ? "people" : "pulls",
+  );
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [personEmail, setPersonEmail] = useState<string | null>(null);
   const person = snapshot.people.find((entry) => entry.email === personEmail) ?? null;
   const terms = changeTerms(snapshot.source_provider);
   const current = snapshot.periods.current;
   const baseline = snapshot.periods[comparison];
-  const cost =
-    current.spend_observation === "records_present" && current.matched_internal_prs > 0
-      ? current.matched_users_recorded_spend / current.matched_internal_prs
-      : null;
-  const baselineCost =
-    baseline.spend_observation === "records_present" && baseline.matched_internal_prs > 0
-      ? baseline.matched_users_recorded_spend / baseline.matched_internal_prs
-      : null;
+  const days = Math.round((Date.parse(current.window.end) - Date.parse(current.window.start)) / 86400000) + 1;
+  const rangeOptions = [...new Set([7, 28, 90, days])].sort((a, b) => a - b);
+  const cost = costPerChange(current);
+  const baselineCost = costPerChange(baseline);
   return (
     <Page className="mx-auto max-w-[1500px] gap-5 pb-10">
       <PageHeader>
@@ -418,10 +426,30 @@ function Report({
       {actions}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm">
-          {snapshot.source_provider === "github" ? <Github className="size-4" /> : <Gitlab className="size-4" />}
+          {snapshot.source_provider !== "gitlab" && <Github className="size-4" />}
+          {snapshot.source_provider !== "github" && <Gitlab className="size-4" />}
           <span className="font-medium">{snapshot.repos.join(", ")}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={String(days)}
+            disabled={readOnly || syncing}
+            onValueChange={(value) => {
+              if (value && Number(value) !== days) onPeriod(Number(value));
+            }}
+            items={rangeOptions.map((value) => ({ value: String(value), label: `Last ${value} days` }))}
+          >
+            <SelectTrigger aria-label="Reporting period">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {rangeOptions.map((value) => (
+                <SelectItem key={value} value={String(value)}>
+                  Last {value} days
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <span className="flex items-center gap-2 rounded-md border px-3 py-2 text-xs">
             <CalendarDays className="size-3.5 text-muted-foreground" />
             {dateRange(current.window)}
@@ -432,7 +460,7 @@ function Report({
               if (value) setComparison(value);
             }}
             items={[
-              { value: "previous", label: "vs. previous 28 days" },
+              { value: "previous", label: "vs. previous period" },
               { value: "last_year", label: "vs. same period last year" },
             ]}
           >
@@ -440,7 +468,7 @@ function Report({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="previous">vs. previous 28 days</SelectItem>
+              <SelectItem value="previous">vs. previous period</SelectItem>
               <SelectItem value="last_year">vs. same period last year</SelectItem>
             </SelectContent>
           </Select>
@@ -452,11 +480,11 @@ function Report({
           value={number(current.merged_prs)}
           current={current.merged_prs}
           baseline={baseline.merged_prs}
-          detail={`${number(baseline.merged_prs)} in comparison · whole repository`}
+          detail={`${number(baseline.merged_prs)} in comparison · selected repositories`}
         />
         <Metric
           label="Median time to merge"
-          value={duration(current.median_merge_hours)}
+          value={current.merged_prs === 0 ? "No merges" : duration(current.median_merge_hours)}
           current={current.median_merge_hours ?? undefined}
           baseline={baseline.median_merge_hours ?? undefined}
           detail={`${duration(baseline.median_merge_hours)} in comparison · opened to merged`}
@@ -507,30 +535,39 @@ function Report({
           />
         </TabsContent>
         <TabsContent value="pulls" className="space-y-5">
-          <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-            <ShippingTrend snapshot={snapshot} comparison={comparison} />
-            <div className="flex flex-col justify-between rounded-xl border p-5">
-              <div>
-                <h2 className="text-sm font-medium">Behind the numbers</h2>
-                <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                  {number(current.agent_authored)} of {number(current.merged_prs)} {terms.plural} were authored by
-                  agents or bots.
-                </p>
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                  Human-authored median merge time:{" "}
-                  <span className="font-medium text-foreground">
-                    {duration(current.human_summary.median_merge_hours)}
+          {current.merged_prs > 0 || baseline.merged_prs > 0 ? (
+            <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
+              <ShippingTrend snapshot={snapshot} comparison={comparison} />
+              <div className="flex flex-col justify-between rounded-xl border p-5">
+                <div>
+                  <h2 className="text-sm font-medium">Behind the numbers</h2>
+                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                    {number(current.agent_authored)} of {number(current.merged_prs)} {terms.plural} were authored by
+                    agents or bots.
+                  </p>
+                  <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                    Human-authored median merge time:{" "}
+                    <span className="font-medium text-foreground">
+                      {duration(current.human_summary.median_merge_hours)}
+                    </span>
+                    , compared with {duration(baseline.human_summary.median_merge_hours)}.
+                  </p>
+                </div>
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t pt-4">
+                  <span className="text-xs text-muted-foreground">
+                    {number(current.agents_without_requester)} agent {terms.plural} have no requester
                   </span>
-                  , compared with {duration(baseline.human_summary.median_merge_hours)}.
-                </p>
-              </div>
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t pt-4">
-                <span className="text-xs text-muted-foreground">
-                  {number(current.agents_without_requester)} agent {terms.plural} have no requester
-                </span>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="rounded-xl border p-8 text-center">
+              <h2 className="text-base font-medium">No merged changes yet</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Your repositories are connected. New activity will appear after the next sync
+              </p>
+            </div>
+          )}
 
           <p className="mb-4 text-xs text-muted-foreground">
             All repository {terms.plural}, including agent work without a known requester
@@ -631,11 +668,13 @@ function EmptyReport({
   readOnly: boolean;
   onConnect: () => void;
 }) {
+  function title() {
+    if (data.status.running) return "Reading repository activity";
+    return data.settings.ready ? "Ready for your first report" : "Connect your repositories";
+  }
   return (
     <div className="flex flex-col items-center gap-4 rounded-xl border p-12 text-center">
-      <h2 className="text-lg font-medium">
-        {data.status.running ? "Reading repository activity" : "Connect your repositories"}
-      </h2>
+      <h2 className="text-lg font-medium">{title()}</h2>
       <p className="max-w-md text-sm text-muted-foreground">
         {data.status.running
           ? "Your report will appear here when the first sync finishes"
@@ -670,6 +709,7 @@ export default function ObservedROIView({
     if (returned.has("connection_cancelled")) return "Connection cancelled. Choose an app or token to try again";
     return "";
   });
+  const [afterAuthorization, setAfterAuthorization] = useState(Boolean(returned.get("connected")));
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   useEffect(() => {
@@ -682,14 +722,15 @@ export default function ObservedROIView({
   function closeConnections() {
     setConnections(false);
     setConnectionError("");
+    setAfterAuthorization(false);
     refresh();
   }
-  async function sync(cancel: boolean) {
+  async function sync(cancel: boolean, days?: number) {
     setBusy(true);
     setActionError("");
     try {
       if (cancel) await apiClient.delete("/roi-calculator/observed/sync", { accessToken });
-      else await apiClient.post("/roi-calculator/observed/sync", { accessToken });
+      else await apiClient.post("/roi-calculator/observed/sync", { accessToken, query: { days } });
       refresh();
     } catch (reason) {
       setActionError(extractProxyErrorMessage(reason));
@@ -719,6 +760,8 @@ export default function ObservedROIView({
       onRefresh={refresh}
       onConnect={() => setConnections(true)}
       actions={actions}
+      syncing={busy || data.status.running}
+      onPeriod={(days) => void sync(false, days)}
     />
   ) : (
     <Page>
@@ -745,6 +788,7 @@ export default function ObservedROIView({
           accessToken={accessToken}
           settings={data.settings}
           initialError={connectionError}
+          afterAuthorization={afterAuthorization}
           onClose={closeConnections}
           onSaved={refresh}
         />

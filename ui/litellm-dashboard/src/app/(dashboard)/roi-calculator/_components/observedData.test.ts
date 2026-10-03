@@ -65,6 +65,20 @@ describe("observed ROI metrics", () => {
     expect(duration(3.82)).toBe("3.8h");
   });
 
+  it.each([7, 28, 90])("includes every day of a %s-day range in its weekly chart", (days) => {
+    const start = Date.parse("2026-01-01T00:00:00Z");
+    const atDay = (day: number) => new Date(start + day * 86400000).toISOString();
+    const pulls = Array.from({ length: days + 1 }, (_, day) => ({ merged_at: atDay(day) }));
+    const snapshot = {
+      periods: { current: { window: { start: "2026-01-01", end: atDay(days - 1).slice(0, 10) } } },
+      pulls: { current: pulls },
+    } as ObservedSnapshot;
+    const weeks = weeklyMerges(snapshot, "current");
+    expect(weeks).toHaveLength(Math.ceil(days / 7));
+    expect(weeks.reduce((sum, count) => sum + count, 0)).toBe(days);
+    expect(weeks.at(-1)).toBe(days % 7 || 7);
+  });
+
   it("aligns comparisons to their own UTC windows and counts each boundary once", () => {
     const currentStart = "2026-01-01";
     const previousStart = "2025-12-04";
@@ -84,7 +98,10 @@ describe("observed ROI metrics", () => {
       merge_hours: 1,
     }));
     const snapshot = {
-      periods: { current: { window: { start: currentStart } }, previous: { window: { start: previousStart } } },
+      periods: {
+        current: { window: { start: currentStart, end: "2026-01-28" } },
+        previous: { window: { start: previousStart, end: "2025-12-31" } },
+      },
       pulls: { current: pulls, previous: [{ ...pulls[0], merged_at: `${previousStart}T00:00:00Z` }] },
     } as ObservedSnapshot;
     expect(weeklyMerges(snapshot, "current")).toEqual([2, 1, 0, 1]);

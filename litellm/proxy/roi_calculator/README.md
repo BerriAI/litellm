@@ -1,12 +1,12 @@
 # ROI Calculator
 
-The dashboard compares merged pull or merge requests, elapsed time from opening to merge, new bug and regression issues, and recorded gateway spend over 28 complete UTC days. Compare against the previous 28 days or the same period last year
+The dashboard compares merged pull or merge requests, elapsed time from opening to merge, new bug and regression issues, and recorded gateway spend over 7, 28, or 90 complete UTC days. Compare against the immediately preceding period of the same length or the same-length period last year
 
 No estimator model is required. Spend per person is their recorded gateway spend during the period divided by their matched merged changes. Branch spend remains separate and uses repository and branch tags on spend logs
 
 ## Connect repositories
 
-Open `/ui/roi-calculator/`, choose GitHub or GitLab, then connect with an app or access token. Select repositories and start the sync. Public repositories also accept an empty token, subject to the provider's anonymous API limits
+Open `/ui/roi-calculator/`, choose GitHub or GitLab, then connect with an app or access token. Select several repositories and start the sync. Use **Add connection** to keep both providers connected. Each provider and API host retains its credentials, repositories, and identity mappings, and the report combines their activity while counting each person’s gateway spend once. Public repositories also accept an empty token, subject to the provider's anonymous API limits
 
 For GitHub tokens, grant read access to metadata, pull requests and issues. GitLab tokens require `read_api`. Self-hosted instances use their API URL, for example `https://git.example.com/api/v4`
 
@@ -26,7 +26,7 @@ The gateway encrypts access and refresh tokens using its configured encryption k
 
 ## Link people
 
-Use **Link accounts** to associate several current or historical usernames with one internal email. Saving immediately recalculates the report without fetching repositories again. Public profile emails match automatically when they resolve unambiguously to an internal user
+Use **Link accounts** to associate several current or historical usernames with one internal email. Each connection has a separate username field, so a GitHub username never matches a GitLab user implicitly. Saving immediately recalculates the report without fetching repositories again. Public profile emails match automatically when they resolve unambiguously to an internal user
 
 Agent-authored changes count for a person only when the supported agent metadata explicitly names a requester. Repository issue counts and revert titles are quality signals, not an individual defect score
 
@@ -35,3 +35,12 @@ Agent-authored changes count for a person only when the supported agent metadata
 The default refresh interval is daily. The observed settings API accepts `update_interval_minutes: 0` for manual updates. A cancelled or failed sync preserves the last complete report
 
 GitHub collection splits large searches into smaller date ranges to avoid its search-result limit. Both providers validate pagination and reject incomplete responses instead of publishing partial counts
+
+
+## Branch request tags
+
+Send `repo:github.com/owner/repo` or `repo:gitlab.com/group/project` together with `branch:feature/name` in `metadata.tags`, top-level `tags`, or the comma-separated `x-litellm-tags` header. The tags must identify the source repository and branch, including forks
+
+The report sums recorded requests inside its UTC dates. A branch cost is assigned to a merged change only when that source branch matches one change in the period. Reused branches stay visible in Branch spend without duplicating costs across changes. No retained tagged requests means unknown cost; a recorded zero remains zero
+
+Existing single-provider settings and historical tags remain readable. An empty repository produces a successful report with zero merged changes and no merge duration or spend-per-change ratio

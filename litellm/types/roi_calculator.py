@@ -79,8 +79,13 @@ class ROISettings(BaseModel):
         import re
 
         normalized_values: Final = tuple(repo.strip().rstrip("/").removesuffix(".git") for repo in values)
+        repository_keys: Final = tuple(
+            repo.casefold() if info.data.get("source_provider") != "gitlab" else repo for repo in normalized_values
+        )
         normalized: Final = tuple(
-            repo for index, repo in enumerate(normalized_values) if repo not in normalized_values[:index]
+            repo
+            for index, repo in enumerate(normalized_values)
+            if repository_keys[index] not in repository_keys[:index]
         )
         pattern: Final = (
             r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+"

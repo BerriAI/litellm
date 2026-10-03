@@ -16,7 +16,20 @@ class ObservedWindow(ObservedModel):
     end: date
 
 
+class ObservedSource(ObservedModel):
+    id: str
+    source_provider: Literal["github", "gitlab"]
+    api_url: str
+    repos: tuple[str, ...]
+
+
+class ObservedAccount(ObservedModel):
+    connection_id: str
+    login: str
+
+
 class ObservedPull(ObservedModel):
+    connection_id: str = ""
     repo: str
     number: int
     title: str
@@ -47,7 +60,8 @@ class ObservedPeriodData(ObservedModel):
 
 
 class ObservedData(ObservedModel):
-    source_provider: Literal["github", "gitlab"]
+    source_provider: Literal["github", "gitlab", "mixed"]
+    connections: tuple[ObservedSource, ...] = ()
     source_api_url: str
     repos: tuple[str, ...]
     captured_at: datetime
@@ -79,6 +93,7 @@ class ObservedPerson(ObservedModel):
     name: str
     email: str
     logins: tuple[str, ...]
+    accounts: tuple[ObservedAccount, ...] = ()
     periods: ObservedPersonPeriods
 
 
@@ -121,7 +136,8 @@ class ObservedPullPeriods(ObservedModel):
 
 
 class ObservedReport(ObservedModel):
-    source_provider: Literal["github", "gitlab"]
+    source_provider: Literal["github", "gitlab", "mixed"]
+    connections: tuple[ObservedSource, ...] = ()
     repos: tuple[str, ...]
     captured_at: datetime
     periods: ObservedPeriods
@@ -139,16 +155,24 @@ class ObservedIdentityUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str
-    logins: tuple[str, ...] = Field(max_length=100)
+    logins: tuple[str, ...] = Field(default=(), max_length=100)
+    accounts: tuple[ObservedAccount, ...] | None = Field(default=None, max_length=500)
+
+
+class ObservedConnectionIdentities(ObservedSource):
+    identity_map: Mapping[str, str]
+    unmatched_logins: tuple[str, ...]
 
 
 class ObservedIdentities(ObservedModel):
     gateway_emails: tuple[str, ...]
     identity_map: Mapping[str, str]
     unmatched_logins: tuple[str, ...]
+    connections: tuple[ObservedConnectionIdentities, ...] = ()
 
 
-class ObservedSettings(ObservedModel):
+class ObservedConnection(ObservedModel):
+    id: str = ""
     source_provider: Literal["github", "gitlab"]
     api_url: str
     repos: tuple[str, ...]
@@ -156,6 +180,10 @@ class ObservedSettings(ObservedModel):
     update_interval_minutes: float
     ready: bool
     connection_type: Literal["token", "app"]
+
+
+class ObservedSettings(ObservedConnection):
+    connections: tuple[ObservedConnection, ...] = ()
 
 
 class ObservedSettingsUpdate(BaseModel):

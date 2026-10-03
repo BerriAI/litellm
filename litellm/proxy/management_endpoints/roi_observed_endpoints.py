@@ -1,6 +1,5 @@
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
 from typing import Annotated, Final
 
 import httpx
@@ -22,14 +21,25 @@ from litellm.proxy.roi_calculator.oauth import (
     oauth_config,
     save_grant,
 )
-from litellm.proxy.roi_calculator.observed_analytics import summarize_observed
-from litellm.proxy.roi_calculator.observed_sync import ObservedSyncManager, Progress, collect_observed
+from litellm.proxy.roi_calculator.observed_sync import ObservedSyncManager, Progress
+from litellm.proxy.roi_calculator.observed_workspace import (
+    collect_workspace,
+    scoped_data,
+    source_details,
+    summarize_workspace,
+)
 from litellm.proxy.roi_calculator.settings import (
+    StoredConnection,
+    active_connection,
+    connection_id,
     get_roi_config_repository,
     load_settings,
     load_stored_settings,
     read_admin,
+    save_connection_identities,
     save_settings,
+    select_connection,
+    stored_connections,
     write_admin,
 )
 from litellm.proxy.roi_calculator.source import create_source
@@ -44,9 +54,11 @@ from litellm.types.roi_calculator import (
     normalize_source_login,
 )
 from litellm.types.roi_observed import (
+    ObservedAccount,
     ObservedApp,
     ObservedApps,
     ObservedAuthorization,
+    ObservedConnectionIdentities,
     ObservedData,
     ObservedIdentities,
     ObservedIdentityUpdate,
@@ -70,6 +82,7 @@ def get_observed_transport() -> httpx.AsyncBaseTransport | None:
 
 def public_settings(settings: ROISettings) -> ObservedSettings:
     return ObservedSettings(
+        id=connection_id(settings.source_provider, settings.source_api_url),
         source_provider=settings.source_provider,
         api_url=settings.source_api_url,
         repos=settings.repos,
@@ -84,7 +97,19 @@ def public_settings(settings: ROISettings) -> ObservedSettings:
     )
 
 
-async def _data(repository: ConfigRepository, settings: ROISettings) -> ObservedData | None:
+async def workspace_settings(repository: ConfigRepository) -> ObservedSettings:
+    stored: Final = await load_stored_settings(repository)
+    entries: Final = tuple(
+        [
+            public_settings(await load_settings(repository, select_connection(stored, entry)))
+            for entry in stored_connections(stored)
+        ]
+    )
+    current: Final = public_settings(await load_settings(repository, stored))
+    return current.model_copy(update={"connections": entries, "ready": any(entry.ready for entry in entries)})
+
+
+async def _data(repository: ConfigRepository) -> ObservedData | None:
     saved: Final = await repository.get_param(_REPORT_KEY)
     if saved is None or saved.param_value is None:
         return None
@@ -92,13 +117,16 @@ async def _data(repository: ConfigRepository, settings: ROISettings) -> Observed
         data: Final = ObservedData.model_validate(saved.param_value)
     except ValidationError:
         raise HTTPException(500, "The saved report is invalid. Sync again to rebuild it.") from None
-    if (data.source_provider, data.source_api_url, data.repos) != (
-        settings.source_provider,
-        settings.source_api_url,
-        settings.repos,
-    ):
-        return None
-    return data
+    if data.connections:
+        return data
+    settings: Final = ROISettings.model_validate(
+        {
+            "source_provider": data.source_provider,
+            "repos": data.repos,
+            ("gitlab_api_url" if data.source_provider == "gitlab" else "github_api_url"): data.source_api_url,
+        }
+    )
+    return scoped_data(data, source_details(settings))
 
 
 @router.get("/settings", response_model=ObservedSettings)
@@ -106,7 +134,7 @@ async def get_observed_settings(
     _user: Annotated[UserAPIKeyAuth, Depends(read_admin)],
     repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
 ) -> ObservedSettings:
-    return public_settings(await load_settings(repository))
+    return await workspace_settings(repository)
 
 
 @router.put("/settings", response_model=ObservedSettings)
@@ -118,13 +146,14 @@ async def save_observed_settings(
 ) -> ObservedSettings:
     if (status := await SyncStore(repository.prisma_client, "roi_observed").status()) and status.running:
         raise HTTPException(409, "Cancel the running sync before changing the connection.")
-    initial: Final = await load_settings(repository)
-    if patch.token is None and (patch.source_provider, patch.api_url.rstrip("/")) == (
-        initial.source_provider,
-        initial.source_api_url,
-    ):
-        await connected_settings(repository, transport)
-    stored: Final = await load_stored_settings(repository)
+    original: Final = await load_stored_settings(repository)
+    selected_id: Final = connection_id(patch.source_provider, patch.api_url)
+    selected: Final = next((entry for entry in stored_connections(original) if entry.id == selected_id), None)
+    if patch.token is None and selected:
+        await connected_settings(repository, transport, selected_id)
+    refreshed: Final = await load_stored_settings(repository)
+    saved_connection: Final = next((entry for entry in stored_connections(refreshed) if entry.id == selected_id), None)
+    stored: Final = select_connection(refreshed, saved_connection) if saved_connection else refreshed
     current: Final = await load_settings(repository, stored)
     changed: Final = (patch.source_provider, patch.api_url.rstrip("/")) != (
         current.source_provider,
@@ -167,7 +196,7 @@ async def save_observed_settings(
         encrypted if settings.source_provider == "gitlab" else stored.gitlab_token,
         revision=stored.revision,
     )
-    return public_settings(settings)
+    return await workspace_settings(repository)
 
 
 @router.get("/report", response_model=ObservedReportResponse)
@@ -175,11 +204,9 @@ async def get_observed_report(
     _user: Annotated[UserAPIKeyAuth, Depends(read_admin)],
     repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
 ) -> ObservedReportResponse:
-    settings: Final = await load_settings(repository)
-    data: Final = await _data(repository, settings)
-    return ObservedReportResponse(
-        report=summarize_observed(data, settings.identity_map, settings.ignored_logins) if data else None
-    )
+    stored: Final = await load_stored_settings(repository)
+    data: Final = await _data(repository)
+    return ObservedReportResponse(report=summarize_workspace(data, stored_connections(stored)) if data else None)
 
 
 @router.get("/identities", response_model=ObservedIdentities)
@@ -187,14 +214,28 @@ async def get_observed_identities(
     _user: Annotated[UserAPIKeyAuth, Depends(read_admin)],
     repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
 ) -> ObservedIdentities:
-    settings: Final = await load_settings(repository)
-    data: Final = await _data(repository, settings)
+    stored: Final = await load_stored_settings(repository)
+    data: Final = await _data(repository)
+    report: Final = summarize_workspace(data, stored_connections(stored)) if data else None
     return ObservedIdentities(
         gateway_emails=tuple(sorted(await read_gateway_user_emails(spend_prisma_client(repository.prisma_client)))),
-        identity_map=settings.identity_map,
-        unmatched_logins=summarize_observed(data, settings.identity_map, settings.ignored_logins).unmatched_logins
-        if data
-        else (),
+        identity_map=stored.identity_map,
+        unmatched_logins=report.unmatched_logins if report else (),
+        connections=tuple(
+            ObservedConnectionIdentities(
+                id=entry.id,
+                source_provider=entry.source_provider,
+                api_url=entry.api_url,
+                repos=entry.repos,
+                identity_map=entry.identity_map,
+                unmatched_logins=tuple(
+                    login.split(":", 1)[-1] for login in report.unmatched_logins if login.startswith(entry.id + ":")
+                )
+                if report
+                else (),
+            )
+            for entry in stored_connections(stored)
+        ),
     )
 
 
@@ -209,37 +250,52 @@ async def save_observed_identities(
     if email not in emails:
         raise HTTPException(422, "Choose an existing internal user email.")
     stored: Final = await load_stored_settings(repository)
-    current: Final = await load_settings(repository, stored)
-    try:
-        logins: Final = tuple(normalize_source_login(login, current.source_provider) for login in patch.logins)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from None
-    conflicts: Final = tuple(
-        login for login in logins if login in current.identity_map and current.identity_map[login] != email
+    connections: Final = stored_connections(stored)
+    if not connections:
+        raise HTTPException(409, "Connect a repository before linking accounts.")
+    accounts: Final = (
+        patch.accounts
+        if patch.accounts is not None
+        else tuple(ObservedAccount(connection_id=active_connection(stored).id, login=login) for login in patch.logins)
     )
-    if conflicts:
-        raise HTTPException(409, "An account is already linked to another email. Unlink it first.")
-    identity_map: Final = MappingProxyType(
-        {
-            **{login: address for login, address in current.identity_map.items() if address != email},
-            **dict.fromkeys(logins, email),
-        }
-    )
-    data: Final = await _data(repository, current)
-    previous: Final = summarize_observed(data, current.identity_map, current.ignored_logins) if data else None
-    reported_logins: Final = (
-        next((person.logins for person in previous.people if person.email == email), ()) if previous else ()
-    )
-    manual_logins: Final = tuple(login for login, address in current.identity_map.items() if address == email)
-    old_logins: Final = frozenset((*reported_logins, *manual_logins))
-    ignored: Final = tuple(sorted((frozenset(current.ignored_logins) | old_logins) - frozenset(logins)))
-    settings: Final = ROISettings.model_validate(
-        {**current.model_dump(), "identity_map": identity_map, "ignored_logins": ignored}
-    )
-    await save_settings(
-        repository, settings, stored.github_token, stored.estimator_key, stored.gitlab_token, revision=stored.revision
-    )
-    return ObservedReportResponse(report=summarize_observed(data, identity_map, ignored) if data else None)
+    if any(account.connection_id not in {entry.id for entry in connections} for account in accounts):
+        raise HTTPException(422, "Choose an existing connection.")
+    data: Final = await _data(repository)
+    report: Final = summarize_workspace(data, connections) if data else None
+    existing: Final = next((person.accounts for person in report.people if person.email == email), ()) if report else ()
+
+    def update(entry: StoredConnection) -> StoredConnection:
+        if patch.accounts is None and entry.id != active_connection(stored).id:
+            return entry
+        try:
+            logins: Final = tuple(
+                normalize_source_login(account.login, entry.source_provider)
+                for account in accounts
+                if account.connection_id == entry.id
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        if any(login in entry.identity_map and entry.identity_map[login] != email for login in logins):
+            raise HTTPException(409, "An account is already linked to another email. Unlink it first.")
+        old: Final = frozenset(
+            (
+                *(login for login, address in entry.identity_map.items() if address == email),
+                *(account.login for account in existing if account.connection_id == entry.id),
+            )
+        )
+        return entry.model_copy(
+            update={
+                "identity_map": {
+                    **{login: address for login, address in entry.identity_map.items() if address != email},
+                    **dict.fromkeys(logins, email),
+                },
+                "ignored_logins": tuple(sorted((frozenset(entry.ignored_logins) | old) - frozenset(logins))),
+            }
+        )
+
+    updated: Final = tuple(update(entry) for entry in connections)
+    await save_connection_identities(repository, stored, updated)
+    return ObservedReportResponse(report=summarize_workspace(data, updated) if data else None)
 
 
 @router.get("/sync", response_model=ROISyncStatus)
@@ -251,36 +307,51 @@ async def get_observed_sync(
     return await SyncStore(repository.prisma_client, "roi_observed").status() or manager.status
 
 
+async def _report_days(repository: ConfigRepository, days: int | None) -> int:
+    if days is not None:
+        return days
+    saved: Final = await repository.get_param(_REPORT_KEY)
+    if saved is None:
+        return 28
+    try:
+        data: Final = ObservedData.model_validate(saved.param_value)
+    except ValidationError:
+        return 28
+    return (data.current.window.end - data.current.window.start).days + 1
+
+
 async def _start_sync(
     repository: ConfigRepository,
     manager: ObservedSyncManager,
     transport: httpx.AsyncBaseTransport | None,
     scheduled_interval: float = 0,
+    days: int | None = None,
 ) -> bool:
     from litellm.proxy.management_endpoints.roi_calculator_endpoints import branch_spend_reader
 
-    settings: Final = await connected_settings(repository, transport)
-    if not settings.repos:
+    stored: Final = await load_stored_settings(repository)
+    reporting_days: Final = await _report_days(repository, days)
+    entries: Final = tuple(entry for entry in stored_connections(stored) if entry.repos)
+    if not entries:
         raise HTTPException(409, "Select at least one repository.")
+    settings: Final = tuple([await connected_settings(repository, transport, entry.id) for entry in entries])
 
     async def build(progress: Progress) -> ObservedData:
         from litellm.proxy.management_endpoints.roi_calculator_endpoints import gateway_user_reader, spend_reader
 
-        data: Final = await collect_observed(
-            settings,
+        data: Final = await collect_workspace(
+            tuple((entry, branch_spend_reader(repository, entry)) for entry in settings),
             spend_reader(repository),
             gateway_user_reader(repository),
-            branch_spend_reader(repository, settings),
             datetime.now(timezone.utc),
             progress,
             transport,
+            days=reporting_days,
         )
-        current: Final = await load_settings(repository)
-        if (current.source_provider, current.source_api_url, current.repos) != (
-            settings.source_provider,
-            settings.source_api_url,
-            settings.repos,
-        ):
+        current: Final = tuple(
+            entry for entry in stored_connections(await load_stored_settings(repository)) if entry.repos
+        )
+        if tuple((entry.id, entry.repos) for entry in current) != tuple((entry.id, entry.repos) for entry in entries):
             raise SourceError("The connection changed during sync. Sync again with the current repositories.")
         return data
 
@@ -293,8 +364,9 @@ async def start_observed_sync(
     repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
     manager: Annotated[ObservedSyncManager, Depends(get_observed_manager)],
     transport: Annotated[httpx.AsyncBaseTransport | None, Depends(get_observed_transport)],
+    days: Annotated[int | None, Query(ge=1, le=366)] = None,
 ) -> ROISyncStatus:
-    if not await _start_sync(repository, manager, transport):
+    if not await _start_sync(repository, manager, transport, days=days):
         raise HTTPException(409, "A sync is already running.")
     return manager.status
 
@@ -318,7 +390,10 @@ async def run_observed_schedule() -> None:
         return
     repository: Final = ConfigRepository(prisma_client, use_writer=True)
     settings: Final = await load_settings(repository)
-    if not settings.repos or not settings.update_interval_minutes:
+    if (
+        not any(entry.repos for entry in stored_connections(await load_stored_settings(repository)))
+        or not settings.update_interval_minutes
+    ):
         return
     status: Final = await SyncStore(prisma_client, "roi_observed").status()
     if status and status.running:
@@ -336,10 +411,11 @@ async def observed_repositories(
     _user: Annotated[UserAPIKeyAuth, Depends(read_admin)],
     repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
     transport: Annotated[httpx.AsyncBaseTransport | None, Depends(get_observed_transport)],
+    connection: Annotated[str | None, Query(max_length=100)] = None,
     query: Annotated[str, Query(max_length=200)] = "",
     page: Annotated[int, Query(ge=1, le=1000)] = 1,
 ) -> ROIRepositoriesResponse:
-    source: Final = create_source(await connected_settings(repository, transport), transport)
+    source: Final = create_source(await connected_settings(repository, transport, connection), transport)
     try:
         repositories, more = await source.repositories(query, page)
     except SourceError as exc:

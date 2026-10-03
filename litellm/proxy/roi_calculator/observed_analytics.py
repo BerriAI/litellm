@@ -10,6 +10,7 @@ from typing import Final
 from litellm.proxy.roi_calculator.analytics import normalize_email
 from litellm.proxy.roi_calculator.branch_spend import attribute_branch_keys
 from litellm.types.roi_observed import (
+    ObservedAccount,
     ObservedData,
     ObservedHumanSummary,
     ObservedPeriod,
@@ -59,7 +60,8 @@ def median_hours(pulls: tuple[ObservedPull, ...]) -> float | None:
 
 
 def _owner_login(pull: ObservedPull) -> str:
-    return (pull.requester if pull.agent else pull.author).casefold()
+    login: Final = (pull.requester if pull.agent else pull.author).casefold()
+    return f"{pull.connection_id}:{login}" if pull.connection_id and login else login
 
 
 def identity_matches(data: ObservedData, manual: Mapping[str, str], ignored: tuple[str, ...] = ()) -> Mapping[str, str]:
@@ -98,7 +100,16 @@ def _person(data: ObservedData, email: str, identities: Mapping[str, str]) -> Ob
     return ObservedPerson(
         name=email.split("@", 1)[0],
         email=email,
-        logins=tuple(sorted(login for login, address in identities.items() if address == email)),
+        logins=tuple(
+            sorted(frozenset(login.rsplit(":", 1)[-1] for login, address in identities.items() if address == email))
+        ),
+        accounts=tuple(
+            ObservedAccount(
+                connection_id=login.split(":", 1)[0] if ":" in login else "", login=login.rsplit(":", 1)[-1]
+            )
+            for login, address in identities.items()
+            if address == email
+        ),
         periods=ObservedPersonPeriods(
             current=_person_period(data.current, email, identities),
             previous=_person_period(data.previous, email, identities),
@@ -142,11 +153,11 @@ def _period(data: ObservedPeriodData, identities: Mapping[str, str]) -> Observed
 
 def _pulls(data: ObservedPeriodData) -> tuple[ObservedPullResponse, ...]:
     costs: Final = attribute_branch_keys(
-        tuple((pull.repo, pull.number, pull.source_repo, pull.source_branch) for pull in data.pulls), data.branch_spend
+        tuple((pull.url, pull.number, pull.source_repo, pull.source_branch) for pull in data.pulls), data.branch_spend
     )
     return tuple(
         ObservedPullResponse.model_validate(
-            {**pull.model_dump(), "merge_hours": merge_hours(pull), "branch_cost": costs[(pull.repo, pull.number)]}
+            {**pull.model_dump(), "merge_hours": merge_hours(pull), "branch_cost": costs[(pull.url, pull.number)]}
         )
         for pull in data.pulls
     )
@@ -161,6 +172,7 @@ def summarize_observed(data: ObservedData, manual: Mapping[str, str], ignored: t
     )
     return ObservedReport(
         source_provider=data.source_provider,
+        connections=data.connections,
         repos=data.repos,
         captured_at=data.captured_at,
         periods=ObservedPeriods(

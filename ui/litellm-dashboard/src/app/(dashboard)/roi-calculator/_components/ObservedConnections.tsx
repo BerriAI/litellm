@@ -8,7 +8,12 @@ import { extractProxyErrorMessage } from "@/lib/http/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { observedSettingsSchema, repositoryNames, type ObservedSettings } from "./observedData";
+import {
+  observedSettingsSchema,
+  repositoryNames,
+  type ObservedSettings,
+  type ObservedConnection,
+} from "./observedData";
 
 const appFields = {
   configured: z.boolean(),
@@ -175,7 +180,7 @@ function ConnectionMethod({
   setToken: (value: string) => void;
   apiUrl: string;
   setApiUrl: (value: string) => void;
-  connected: ObservedSettings;
+  connected: ObservedConnection;
   apps: z.infer<typeof appsSchema> | null;
   busy: boolean;
   connect: () => void;
@@ -228,26 +233,101 @@ function ConnectionMethod({
   );
 }
 
+type ConnectionStep = "list" | "connect" | "repos";
+const stepTitles = { list: "Connections", connect: "Connect your code", repos: "Choose repositories" };
+
+function initialStep(settings: ObservedSettings, afterAuthorization: boolean): ConnectionStep {
+  if (afterAuthorization) return "repos";
+  if (settings.connections?.length) return "list";
+  return settings.has_token || settings.ready ? "repos" : "connect";
+}
+
+function stepDescription(step: ConnectionStep, label: string) {
+  if (step === "list") return "All selected repositories appear in one report";
+  if (step === "connect") return "Connect GitHub and GitLab with an app or access token";
+  return `Select ${label} repositories to compare`;
+}
+
+function connectionMethodLabel(entry: ObservedConnection) {
+  if (entry.connection_type === "app") return "App";
+  return entry.has_token ? "Token" : "Public access";
+}
+
+function ConnectionList({
+  connections,
+  onEdit,
+  onAdd,
+}: {
+  connections: ObservedConnection[];
+  onEdit: (entry: ObservedConnection) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <>
+      {connections.map((entry) => (
+        <div key={entry.id} className="flex items-center justify-between gap-3 rounded-lg border p-4">
+          <div className="min-w-0 text-sm">
+            <p className="flex items-center gap-2 font-medium">
+              {entry.source_provider === "github" ? <Github className="size-4" /> : <Gitlab className="size-4" />}
+              {entry.source_provider === "github" ? "GitHub" : "GitLab"}
+            </p>
+            <p className="mt-1 truncate text-xs text-muted-foreground">{new URL(entry.api_url).host}</p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {entry.repos.length} repositories · {connectionMethodLabel(entry)}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onEdit(entry)}
+            aria-label={`Edit ${entry.source_provider === "github" ? "GitHub" : "GitLab"} ${new URL(entry.api_url).host}`}
+          >
+            Edit
+          </Button>
+        </div>
+      ))}
+      <Button className="w-full" variant="outline" onClick={onAdd}>
+        Add connection
+      </Button>
+    </>
+  );
+}
+
+function initialMethod(settings: ObservedSettings) {
+  return settings.has_token ? settings.connection_type : null;
+}
+
+function hasConnections(settings: ObservedSettings) {
+  return Boolean(settings.connections?.length);
+}
+
+function canManageApp(connected: ObservedConnection, apps: z.infer<typeof appsSchema> | null) {
+  return (
+    connected.connection_type === "app" && connected.source_provider === "github" && Boolean(apps?.github.can_install)
+  );
+}
+
 export default function ObservedConnections({
   accessToken,
   settings,
   onClose,
   onSaved,
   initialError = "",
+  afterAuthorization = false,
 }: {
   accessToken: string;
   settings: ObservedSettings;
   onClose: () => void;
   onSaved: () => void;
   initialError?: string;
+  afterAuthorization?: boolean;
 }) {
-  const [connected, setConnected] = useState(settings);
+  const [savedSettings, setSavedSettings] = useState(settings);
+  const [connected, setConnected] = useState<ObservedConnection>(settings);
   const [provider, setProvider] = useState(settings.source_provider);
   const [apiUrl, setApiUrl] = useState(settings.api_url);
-  const [selectedMethod, setMethod] = useState<"app" | "token" | null>(
-    settings.has_token ? settings.connection_type : null,
-  );
-  const [step, setStep] = useState<"connect" | "repos">(settings.has_token || settings.ready ? "repos" : "connect");
+  const [selectedMethod, setMethod] = useState<"app" | "token" | null>(initialMethod(settings));
+  const [step, setStep] = useState<ConnectionStep>(() => initialStep(settings, afterAuthorization));
   const [token, setToken] = useState("");
   const [repos, setRepos] = useState(settings.repos.join(", "));
   const [apps, setApps] = useState<z.infer<typeof appsSchema> | null>(null);
@@ -258,8 +338,9 @@ export default function ObservedConnections({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
   const label = provider === "github" ? "GitHub" : "GitLab";
-  const manageApp =
-    connected.connection_type === "app" && connected.source_provider === "github" && apps?.github.can_install;
+  const saveLabel = repositoryNames(repos).length ? "Save and sync" : "Save repositories";
+  const manageApp = canManageApp(connected, apps);
+  const showConnections = hasConnections(savedSettings);
   useEffect(() => {
     const controller = new AbortController();
     apiClient
@@ -280,7 +361,7 @@ export default function ObservedConnections({
         .get<unknown>("/roi-calculator/observed/repositories", {
           accessToken,
           signal: controller.signal,
-          query: { query, page },
+          query: { query, page, connection: connected.id },
         })
         .then((data) => {
           if (!controller.signal.aborted) setAvailable(repositoriesSchema.parse(data));
@@ -296,7 +377,23 @@ export default function ObservedConnections({
   }, [accessToken, step, connected, query, page]);
   function selectProvider(value: ObservedSettings["source_provider"]) {
     setProvider(value);
-    setApiUrl(value === settings.source_provider ? settings.api_url : defaultUrl[value]);
+    const existing = savedSettings.connections?.find(
+      (entry) => entry.source_provider === value && entry.api_url === defaultUrl[value],
+    );
+    setApiUrl(existing?.api_url ?? defaultUrl[value]);
+    setConnected(
+      existing ?? {
+        ...settings,
+        source_provider: value,
+        api_url: defaultUrl[value],
+        repos: [],
+        has_token: false,
+        ready: false,
+        connection_type: "token",
+        id: undefined,
+      },
+    );
+    setMethod(existing?.connection_type ?? null);
     setToken("");
     setError("");
   }
@@ -341,6 +438,7 @@ export default function ObservedConnections({
           },
         }),
       );
+      setSavedSettings(result);
       setConnected(result);
       setToken("");
       setRepos(result.repos.join(", "));
@@ -356,16 +454,18 @@ export default function ObservedConnections({
     setBusy(true);
     setError("");
     try {
-      await apiClient.put<unknown>("/roi-calculator/observed/settings", {
-        accessToken,
-        body: {
-          source_provider: connected.source_provider,
-          api_url: connected.api_url,
-          repos: repositoryNames(repos),
-          update_interval_minutes: connected.update_interval_minutes,
-        },
-      });
-      await apiClient.post<unknown>("/roi-calculator/observed/sync", { accessToken });
+      const result = observedSettingsSchema.parse(
+        await apiClient.put<unknown>("/roi-calculator/observed/settings", {
+          accessToken,
+          body: {
+            source_provider: connected.source_provider,
+            api_url: connected.api_url,
+            repos: repositoryNames(repos),
+            update_interval_minutes: connected.update_interval_minutes,
+          },
+        }),
+      );
+      if (result.ready) await apiClient.post<unknown>("/roi-calculator/observed/sync", { accessToken });
       onSaved();
       onClose();
     } catch (reason) {
@@ -373,6 +473,19 @@ export default function ObservedConnections({
     } finally {
       setBusy(false);
     }
+  }
+  function edit(entry: ObservedConnection) {
+    setConnected(entry);
+    setProvider(entry.source_provider);
+    setApiUrl(entry.api_url);
+    setMethod(entry.connection_type);
+    setRepos(entry.repos.join(", "));
+    setToken("");
+    setQuery("");
+    setPage(1);
+    setAvailable(null);
+    setError("");
+    setStep("repos");
   }
   return (
     <Dialog
@@ -383,14 +496,30 @@ export default function ObservedConnections({
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{step === "connect" ? "Connect your code" : "Choose repositories"}</DialogTitle>
-          <DialogDescription>
-            {step === "connect" ? "GitHub or GitLab, with an app or access token" : "Select repositories to compare"}
-          </DialogDescription>
+          <DialogTitle>{stepTitles[step]}</DialogTitle>
+          <DialogDescription>{stepDescription(step, label)}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
-          {step === "connect" ? (
+          {step === "list" && (
+            <ConnectionList
+              connections={savedSettings.connections ?? []}
+              onEdit={edit}
+              onAdd={() => {
+                selectProvider(
+                  savedSettings.connections?.some((entry) => entry.source_provider === "github") ? "gitlab" : "github",
+                );
+                setStep("connect");
+              }}
+            />
+          )}
+          {step === "connect" && (
             <>
+              {showConnections && (
+                <Button variant="ghost" size="sm" onClick={() => setStep("list")}>
+                  <ArrowLeft />
+                  All connections
+                </Button>
+              )}
               <div className="grid grid-cols-2 gap-3" role="group" aria-label="Code provider">
                 {(["github", "gitlab"] as const).map((value) => (
                   <Button
@@ -419,8 +548,15 @@ export default function ObservedConnections({
                 connect={() => connect()}
               />
             </>
-          ) : (
+          )}
+          {step === "repos" && (
             <>
+              {showConnections && (
+                <Button variant="ghost" size="sm" onClick={() => setStep("list")}>
+                  <ArrowLeft />
+                  All connections
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={() => setStep("connect")}>
                 <ArrowLeft />
                 Change connection
@@ -454,8 +590,8 @@ export default function ObservedConnections({
                   />
                 </>
               )}
-              <Button className="w-full" disabled={busy || !repositoryNames(repos).length} onClick={save}>
-                {busy ? "Starting sync…" : "Save and sync"}
+              <Button className="w-full" disabled={busy} onClick={save}>
+                {busy ? "Saving…" : saveLabel}
               </Button>
             </>
           )}

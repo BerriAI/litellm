@@ -67,7 +67,15 @@ describe("observed ROI connections", () => {
               has_more: false,
             });
           if (path.endsWith("/settings")) {
-            const connected = { ...settings, source_provider: provider, api_url: apiUrl, has_token: true };
+            const request = JSON.parse(String(init.body)) as { repos: string[] };
+            const connected = {
+              ...settings,
+              source_provider: provider,
+              api_url: apiUrl,
+              has_token: true,
+              repos: request.repos,
+              ready: request.repos.length > 0,
+            };
             return Response.json(connected);
           }
           if (path.endsWith("/sync")) return Response.json({ running: true }, { status: 202 });

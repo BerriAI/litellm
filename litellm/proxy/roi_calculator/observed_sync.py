@@ -71,6 +71,7 @@ async def collect_observed(
     now: datetime,
     progress: Callable[[str, int, int], None],
     transport: httpx.AsyncBaseTransport | None = None,
+    days: int = 28,
 ) -> ObservedData:
     source: Final = GitLab(settings, transport) if settings.source_provider == "gitlab" else GitHub(settings, transport)
     activity: Final = (
@@ -78,7 +79,7 @@ async def collect_observed(
         if settings.source_provider == "github" and settings.github_token.get_secret_value()
         else source
     )
-    windows: Final = reporting_windows(now.astimezone(timezone.utc))
+    windows: Final = reporting_windows(now.astimezone(timezone.utc), days)
     slots: Final = asyncio.Semaphore(4)
     total: Final = len(settings.repos) * 3
 

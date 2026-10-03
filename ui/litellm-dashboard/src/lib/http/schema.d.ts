@@ -39321,6 +39321,13 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** ObservedAccount */
+        ObservedAccount: {
+            /** Connection Id */
+            connection_id: string;
+            /** Login */
+            login: string;
+        };
         /** ObservedApp */
         ObservedApp: {
             /** Api Url */
@@ -39345,6 +39352,54 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** ObservedConnection */
+        ObservedConnection: {
+            /** Api Url */
+            api_url: string;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "token" | "app";
+            /** Has Token */
+            has_token: boolean;
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /** Ready */
+            ready: boolean;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
+        };
+        /** ObservedConnectionIdentities */
+        ObservedConnectionIdentities: {
+            /** Api Url */
+            api_url: string;
+            /** Id */
+            id: string;
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Unmatched Logins */
+            unmatched_logins: string[];
+        };
         /** ObservedHumanSummary */
         ObservedHumanSummary: {
             /** Median Merge Hours */
@@ -39352,6 +39407,11 @@ export interface components {
         };
         /** ObservedIdentities */
         ObservedIdentities: {
+            /**
+             * Connections
+             * @default []
+             */
+            connections: components["schemas"]["ObservedConnectionIdentities"][];
             /** Gateway Emails */
             gateway_emails: string[];
             /** Identity Map */
@@ -39363,9 +39423,14 @@ export interface components {
         };
         /** ObservedIdentityUpdate */
         ObservedIdentityUpdate: {
+            /** Accounts */
+            accounts?: components["schemas"]["ObservedAccount"][] | null;
             /** Email */
             email: string;
-            /** Logins */
+            /**
+             * Logins
+             * @default []
+             */
             logins: string[];
         };
         /** ObservedPeriod */
@@ -39408,6 +39473,11 @@ export interface components {
         };
         /** ObservedPerson */
         ObservedPerson: {
+            /**
+             * Accounts
+             * @default []
+             */
+            accounts: components["schemas"]["ObservedAccount"][];
             /** Email */
             email: string;
             /** Logins */
@@ -39465,6 +39535,11 @@ export interface components {
             /** Author */
             author: string;
             branch_cost: components["schemas"]["ROIBranchAttribution"];
+            /**
+             * Connection Id
+             * @default
+             */
+            connection_id: string;
             /** Created At */
             created_at?: string | null;
             /** Merge Hours */
@@ -39510,6 +39585,11 @@ export interface components {
              * Format: date-time
              */
             captured_at: string;
+            /**
+             * Connections
+             * @default []
+             */
+            connections: components["schemas"]["ObservedSource"][];
             /** People */
             people: components["schemas"]["ObservedPerson"][];
             periods: components["schemas"]["ObservedPeriods"];
@@ -39520,7 +39600,7 @@ export interface components {
              * Source Provider
              * @enum {string}
              */
-            source_provider: "github" | "gitlab";
+            source_provider: "github" | "gitlab" | "mixed";
             /** Unlinked Branches */
             unlinked_branches: components["schemas"]["ROIBranchSpend"][];
             /** Unmatched Logins */
@@ -39539,8 +39619,18 @@ export interface components {
              * @enum {string}
              */
             connection_type: "token" | "app";
+            /**
+             * Connections
+             * @default []
+             */
+            connections: components["schemas"]["ObservedConnection"][];
             /** Has Token */
             has_token: boolean;
+            /**
+             * Id
+             * @default
+             */
+            id: string;
             /** Ready */
             ready: boolean;
             /** Repos */
@@ -39571,6 +39661,20 @@ export interface components {
              * @default 1440
              */
             update_interval_minutes: number;
+        };
+        /** ObservedSource */
+        ObservedSource: {
+            /** Api Url */
+            api_url: string;
+            /** Id */
+            id: string;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
         };
         /** ObservedWindow */
         ObservedWindow: {
@@ -69844,6 +69948,7 @@ export interface operations {
     observed_repositories_roi_calculator_observed_repositories_get: {
         parameters: {
             query?: {
+                connection?: string | null;
                 query?: string;
                 page?: number;
             };
@@ -69948,7 +70053,9 @@ export interface operations {
     };
     start_observed_sync_roi_calculator_observed_sync_post: {
         parameters: {
-            query?: never;
+            query?: {
+                days?: number | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -69962,6 +70069,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

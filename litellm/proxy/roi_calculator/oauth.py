@@ -19,7 +19,15 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.roi_calculator.settings import load_settings, load_stored_settings, save_settings
+from litellm.proxy.roi_calculator.settings import (
+    active_connection,
+    connection_id,
+    load_settings,
+    load_stored_settings,
+    save_settings,
+    select_connection,
+    stored_connections,
+)
 from litellm.proxy.roi_calculator.sync_store import SyncStore
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -267,22 +275,25 @@ async def save_grant(
     attempt: int = 0,
 ) -> ROISettings:
     stored: Final = await load_stored_settings(repository)
-    current: Final = await load_settings(repository, stored)
+    selected: Final = next(
+        (entry for entry in stored_connections(stored) if entry.id == connection_id(config.provider, config.api_url)),
+        None,
+    )
+    scoped: Final = select_connection(stored, selected) if selected else stored
+    current: Final = await load_settings(repository, scoped)
     if revision is not None and stored.revision != revision:
         raise HTTPException(409, "The connection changed during authorization. Start again from Connections.")
     if previous is not None and (
         current.source_provider,
         current.source_api_url,
         current.connection_type,
-        current.github_token,
-        current.gitlab_token,
+        current.gitlab_token if current.source_provider == "gitlab" else current.github_token,
         current.oauth_refresh_token,
     ) != (
         previous.source_provider,
         previous.source_api_url,
         previous.connection_type,
-        previous.github_token,
-        previous.gitlab_token,
+        previous.gitlab_token if previous.source_provider == "gitlab" else previous.github_token,
         previous.oauth_refresh_token,
     ):
         return current
@@ -311,9 +322,9 @@ async def save_grant(
         await save_settings(
             repository,
             settings,
-            encrypted if config.provider == "github" else stored.github_token,
+            encrypted if config.provider == "github" else scoped.github_token,
             stored.estimator_key,
-            encrypted if config.provider == "gitlab" else stored.gitlab_token,
+            encrypted if config.provider == "gitlab" else scoped.gitlab_token,
             revision=stored.revision,
         )
         return settings
@@ -333,12 +344,13 @@ def _expired(settings: ROISettings) -> bool:
 
 
 async def connected_settings(
-    repository: ConfigRepository, transport: httpx.AsyncBaseTransport | None = None
+    repository: ConfigRepository, transport: httpx.AsyncBaseTransport | None = None, selected_id: str | None = None
 ) -> ROISettings:
-    initial: Final = await load_settings(repository)
+    initial: Final = await load_settings(repository, selected_id=selected_id)
     if not _expired(initial):
         return initial
-    store: Final = SyncStore(repository.prisma_client, "roi_oauth_refresh")
+    selected: Final = selected_id or active_connection(await load_stored_settings(repository)).id
+    store: Final = SyncStore(repository.prisma_client, "roi_oauth_refresh_" + selected)
     owner: Final = secrets.token_urlsafe(24)
     status: Final = ROISyncStatus(
         running=True,
@@ -355,14 +367,14 @@ async def connected_settings(
     async def wait_for_connection(attempt: int) -> ROISettings:
         if attempt >= 100:
             raise HTTPException(409, "The connection is refreshing. Try again shortly.")
-        settings: Final = await load_settings(repository)
+        settings: Final = await load_settings(repository, selected_id=selected)
         if not _expired(settings):
             return settings
         if not await store.acquire(owner, status):
             await asyncio.sleep(0.1)
             return await wait_for_connection(attempt + 1)
         try:
-            current: Final = await load_settings(repository)
+            current: Final = await load_settings(repository, selected_id=selected)
             if not _expired(current):
                 return current
             config: Final = oauth_config(current.source_provider)

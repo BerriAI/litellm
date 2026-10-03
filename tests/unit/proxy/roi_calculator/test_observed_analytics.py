@@ -151,9 +151,10 @@ def test_merge_duration_preserves_seconds_and_rejects_invalid_intervals(
 @pytest.mark.parametrize(
     "now", (datetime(2024, 3, 1, tzinfo=timezone.utc), _NOW, _NOW.replace(tzinfo=timezone(timedelta(hours=14))))
 )
-def test_reporting_windows_have_equal_lengths_and_exclude_today(now: datetime) -> None:
-    current, previous, yearly = reporting_windows(now)
-    assert all((window.end - window.start).days == 27 for window in (current, previous, yearly))
+@pytest.mark.parametrize("days", (1, 7, 28, 90, 366))
+def test_reporting_windows_have_equal_lengths_and_exclude_today(now: datetime, days: int) -> None:
+    current, previous, yearly = reporting_windows(now, days)
+    assert all((window.end - window.start).days + 1 == days for window in (current, previous, yearly))
     assert current.end == now.astimezone(timezone.utc).date() - timedelta(days=1)
     assert previous.end == current.start - timedelta(days=1)
     assert yearly.end.year == current.end.year - 1

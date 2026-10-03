@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from pydantic import SecretStr
 
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -431,7 +431,7 @@ async def test_identity_api_combines_accounts_and_removes_automatic_links_withou
             "/roi-calculator/observed/identities", json={"email": "ari@example.test", "logins": []}
         )
         assert removed.json()["report"]["people"] == []
-        assert removed.json()["report"]["unmatched_logins"] == ["ari", "old-ari"]
+        assert [login.split(":", 1)[-1] for login in removed.json()["report"]["unmatched_logins"]] == ["ari", "old-ari"]
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
         )
@@ -441,3 +441,211 @@ async def test_identity_api_combines_accounts_and_removes_automatic_links_withou
             "/roi-calculator/observed/identities", json={"email": "ari@example.test", "logins": []}
         )
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_both_app_connections_keep_repositories_credentials_and_account_links(
+    repository: ConfigRepository,
+) -> None:
+    from litellm.proxy.roi_calculator.settings import connection_id, stored_connections
+
+    await save_grant(
+        repository,
+        _config(),
+        TokenGrant(access_token=SecretStr("github-access"), refresh_token=SecretStr("github-refresh")),
+    )
+    stored: Final = await load_stored_settings(repository)
+    github: Final = (await load_settings(repository)).model_copy(
+        update={"repos": ("org/service", "org/docs"), "identity_map": {"ari": "ari@example.test"}}
+    )
+    await save_settings(repository, github, stored.github_token, stored.estimator_key, revision=stored.revision)
+    await save_grant(
+        repository,
+        _config("gitlab"),
+        TokenGrant(access_token=SecretStr("gitlab-access"), refresh_token=SecretStr("gitlab-refresh")),
+    )
+    gitlab_id: Final = connection_id("gitlab", _config("gitlab").api_url)
+    github_id: Final = connection_id("github", _config().api_url)
+    first: Final = await load_settings(repository, selected_id=github_id)
+    second: Final = await load_settings(repository, selected_id=gitlab_id)
+    assert first.repos == ("org/service", "org/docs")
+    assert first.identity_map == {"ari": "ari@example.test"}
+    assert first.github_token.get_secret_value() == "github-access"
+    assert first.oauth_refresh_token.get_secret_value() == "github-refresh"
+    assert second.gitlab_token.get_secret_value() == "gitlab-access"
+    assert second.oauth_refresh_token.get_secret_value() == "gitlab-refresh"
+    assert second.identity_map == {} and second.repos == ()
+    await save_grant(repository, _config(), TokenGrant(access_token=SecretStr("github-rotated")), previous=first)
+    preserved: Final = await load_settings(repository, selected_id=gitlab_id)
+    assert preserved.model_dump(exclude={"github_token", "github_api_url"}) == second.model_dump(
+        exclude={"github_token", "github_api_url"}
+    )
+    assert (await load_settings(repository, selected_id=github_id)).github_token.get_secret_value() == "github-rotated"
+    persisted: Final = await load_stored_settings(repository)
+    assert len(stored_connections(persisted)) == 2
+    assert all(
+        token not in persisted.model_dump_json()
+        for token in ("github-access", "github-rotated", "gitlab-access", "github-refresh", "gitlab-refresh")
+    )
+
+
+@pytest.mark.asyncio
+async def test_cross_provider_account_form_saves_atomically_without_legacy_logins(repository: ConfigRepository) -> None:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.roi_observed_endpoints import router
+    from litellm.proxy.roi_calculator.settings import get_roi_config_repository, stored_connections, write_admin
+
+    write_rows('CREATE TABLE "LiteLLM_UserTable" (user_id TEXT PRIMARY KEY, user_email TEXT)', ())
+    write_rows(
+        'INSERT INTO "LiteLLM_UserTable" VALUES (%s, %s), (%s, %s)',
+        ("ari", "ari@example.test", "bea", "bea@example.test"),
+    )
+    await save_grant(repository, _config("github"), TokenGrant(access_token=SecretStr("github-token")))
+    await save_grant(repository, _config("gitlab"), TokenGrant(access_token=SecretStr("gitlab-token")))
+    connections: Final = stored_connections(await load_stored_settings(repository))
+    accounts: Final = tuple({"connection_id": entry.id, "login": "ari"} for entry in connections)
+    app: Final = FastAPI()
+    app.include_router(router)
+
+    async def config_repository() -> ConfigRepository:
+        return repository
+
+    async def admin() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    app.dependency_overrides[get_roi_config_repository] = config_repository
+    app.dependency_overrides[write_admin] = admin
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test") as client:
+        saved: Final = await client.put(
+            "/roi-calculator/observed/identities", json={"email": "ari@example.test", "accounts": accounts}
+        )
+        assert saved.status_code == 200, saved.text
+        after: Final = stored_connections(await load_stored_settings(repository))
+        assert all(entry.identity_map == {"ari": "ari@example.test"} for entry in after)
+        conflicting: Final = ({"connection_id": connections[0].id, "login": "bea"}, accounts[1])
+        rejected: Final = await client.put(
+            "/roi-calculator/observed/identities", json={"email": "bea@example.test", "accounts": conflicting}
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert stored_connections(await load_stored_settings(repository)) == after
+
+
+@pytest.mark.asyncio
+async def test_http_sync_combines_providers_retains_period_and_recovers_invalid_reports(
+    repository: ConfigRepository,
+) -> None:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.roi_observed_endpoints import (
+        get_observed_manager,
+        get_observed_transport,
+        router,
+    )
+    from litellm.proxy.roi_calculator.settings import get_roi_config_repository
+    from litellm.types.roi_observed import ObservedReportResponse, ObservedSettings
+
+    write_rows('CREATE TABLE "LiteLLM_UserTable" (user_id TEXT PRIMARY KEY, user_email TEXT)', ())
+    write_rows(
+        'CREATE TABLE "LiteLLM_DailyUserSpend" (user_id TEXT, date TEXT, spend DOUBLE PRECISION, api_requests INTEGER)',
+        (),
+    )
+    write_rows(
+        'CREATE TABLE "LiteLLM_SpendLogs" (spend DOUBLE PRECISION, request_tags JSONB, metadata JSONB, "startTime" TIMESTAMP)',
+        (),
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.headers.get("Authorization") == "Bearer rejected":
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        if request.url.path == "/graphql":
+            return httpx.Response(
+                200, json={"data": {"search": {"issueCount": 0, "nodes": [], "pageInfo": {"hasNextPage": False}}}}
+            )
+        if request.url.path.startswith("/repos/"):
+            return httpx.Response(200, json={"full_name": "org/service", "has_issues": True})
+        if request.url.path in ("/user/repos", "/api/v4/projects"):
+            return httpx.Response(200, json=[])
+        if request.url.path == "/api/v4/projects/org/service":
+            return httpx.Response(200, json={"id": 1, "path_with_namespace": "org/service"})
+        if request.url.path.endswith(("/merge_requests", "/issues")):
+            return httpx.Response(200, json=[])
+        raise AssertionError(str(request.url))
+
+    manager: Final = ObservedSyncManager()
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_roi_config_repository] = lambda: repository
+    app.dependency_overrides[get_observed_manager] = lambda: manager
+    app.dependency_overrides[get_observed_transport] = lambda: httpx.MockTransport(respond)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    async def finish() -> None:
+        for _ in range(200):
+            status: Final = await SyncStore(repository.prisma_client, "roi_observed").status()
+            if status and not status.running:
+                assert status.phase == "complete", status.error
+                return
+            await asyncio.sleep(0.01)
+        pytest.fail("Sync did not finish")
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test") as client:
+        assert (await client.get("/roi-calculator/observed/report")).json() == {"report": None}
+        assert (await client.post("/roi-calculator/observed/sync")).status_code == 409
+        for provider, url in (("github", "https://api.github.com"), ("gitlab", "https://gitlab.com/api/v4")):
+            result: Final = await client.put(
+                "/roi-calculator/observed/settings",
+                json={
+                    "source_provider": provider,
+                    "api_url": url,
+                    "token": "test-token",
+                    "repos": ["org/service"],
+                    "update_interval_minutes": 0,
+                },
+            )
+            assert result.status_code == 200, result.text
+        settings: Final = ObservedSettings.model_validate(
+            (await client.get("/roi-calculator/observed/settings")).json()
+        )
+        assert len(settings.connections) == 2 and all(entry.has_token for entry in settings.connections)
+        for entry in settings.connections:
+            repositories: Final = await client.get(
+                "/roi-calculator/observed/repositories", params={"connection": entry.id}
+            )
+            assert repositories.status_code == 200, repositories.text
+        rejected: Final = await client.put(
+            "/roi-calculator/observed/settings",
+            json={
+                "source_provider": "github",
+                "api_url": "https://api.github.com",
+                "token": "rejected",
+                "repos": ["org/service"],
+            },
+        )
+        assert rejected.status_code == 502, rejected.text
+        assert (
+            ObservedSettings.model_validate((await client.get("/roi-calculator/observed/settings")).json()) == settings
+        )
+        for params in ({"days": 7}, {}):
+            started: Final = await client.post("/roi-calculator/observed/sync", params=params)
+            assert started.status_code == 202, started.text
+            await asyncio.wait_for(finish(), 5)
+            response: Final = await client.get("/roi-calculator/observed/report")
+            report: Final = ObservedReportResponse.model_validate(response.json()).report
+            assert report is not None and report.source_provider == "mixed"
+            assert len(report.connections) == 2 and report.periods.current.merged_prs == 0
+            assert all(
+                (period.window.end - period.window.start).days == 6
+                for period in (report.periods.current, report.periods.previous, report.periods.last_year)
+            )
+        await repository.set_param("roi_observed_report", {"invalid": True})
+        assert (await client.get("/roi-calculator/observed/report")).status_code == 500
+        recovered: Final = await client.post("/roi-calculator/observed/sync")
+        assert recovered.status_code == 202, recovered.text
+        await asyncio.wait_for(finish(), 5)
+        rebuilt: Final = ObservedReportResponse.model_validate(
+            (await client.get("/roi-calculator/observed/report")).json()
+        ).report
+        assert (
+            rebuilt is not None
+            and (rebuilt.periods.current.window.end - rebuilt.periods.current.window.start).days == 27
+        )

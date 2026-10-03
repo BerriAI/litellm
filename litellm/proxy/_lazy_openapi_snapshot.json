@@ -49014,6 +49014,24 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "ObservedAccount": {
+          "properties": {
+            "connection_id": {
+              "title": "Connection Id",
+              "type": "string"
+            },
+            "login": {
+              "title": "Login",
+              "type": "string"
+            }
+          },
+          "required": [
+            "connection_id",
+            "login"
+          ],
+          "title": "ObservedAccount",
+          "type": "object"
+        },
         "ObservedApp": {
           "properties": {
             "api_url": {
@@ -49083,6 +49101,116 @@
           "title": "ObservedAuthorization",
           "type": "object"
         },
+        "ObservedConnection": {
+          "properties": {
+            "api_url": {
+              "title": "Api Url",
+              "type": "string"
+            },
+            "connection_type": {
+              "enum": [
+                "token",
+                "app"
+              ],
+              "title": "Connection Type",
+              "type": "string"
+            },
+            "has_token": {
+              "title": "Has Token",
+              "type": "boolean"
+            },
+            "id": {
+              "default": "",
+              "title": "Id",
+              "type": "string"
+            },
+            "ready": {
+              "title": "Ready",
+              "type": "boolean"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "source_provider": {
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
+            },
+            "update_interval_minutes": {
+              "title": "Update Interval Minutes",
+              "type": "number"
+            }
+          },
+          "required": [
+            "source_provider",
+            "api_url",
+            "repos",
+            "has_token",
+            "update_interval_minutes",
+            "ready",
+            "connection_type"
+          ],
+          "title": "ObservedConnection",
+          "type": "object"
+        },
+        "ObservedConnectionIdentities": {
+          "properties": {
+            "api_url": {
+              "title": "Api Url",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "identity_map": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Identity Map",
+              "type": "object"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "source_provider": {
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
+            },
+            "unmatched_logins": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Unmatched Logins",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "source_provider",
+            "api_url",
+            "repos",
+            "identity_map",
+            "unmatched_logins"
+          ],
+          "title": "ObservedConnectionIdentities",
+          "type": "object"
+        },
         "ObservedHumanSummary": {
           "properties": {
             "median_merge_hours": {
@@ -49105,6 +49233,14 @@
         },
         "ObservedIdentities": {
           "properties": {
+            "connections": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ObservedConnectionIdentities"
+              },
+              "title": "Connections",
+              "type": "array"
+            },
             "gateway_emails": {
               "items": {
                 "type": "string"
@@ -49138,11 +49274,27 @@
         "ObservedIdentityUpdate": {
           "additionalProperties": false,
           "properties": {
+            "accounts": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/ObservedAccount"
+                  },
+                  "maxItems": 500,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Accounts"
+            },
             "email": {
               "title": "Email",
               "type": "string"
             },
             "logins": {
+              "default": [],
               "items": {
                 "type": "string"
               },
@@ -49152,8 +49304,7 @@
             }
           },
           "required": [
-            "email",
-            "logins"
+            "email"
           ],
           "title": "ObservedIdentityUpdate",
           "type": "object"
@@ -49281,6 +49432,14 @@
         },
         "ObservedPerson": {
           "properties": {
+            "accounts": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ObservedAccount"
+              },
+              "title": "Accounts",
+              "type": "array"
+            },
             "email": {
               "title": "Email",
               "type": "string"
@@ -49449,6 +49608,11 @@
             "branch_cost": {
               "$ref": "#/components/schemas/ROIBranchAttribution"
             },
+            "connection_id": {
+              "default": "",
+              "title": "Connection Id",
+              "type": "string"
+            },
             "created_at": {
               "anyOf": [
                 {
@@ -49534,6 +49698,14 @@
               "title": "Captured At",
               "type": "string"
             },
+            "connections": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ObservedSource"
+              },
+              "title": "Connections",
+              "type": "array"
+            },
             "people": {
               "items": {
                 "$ref": "#/components/schemas/ObservedPerson"
@@ -49557,7 +49729,8 @@
             "source_provider": {
               "enum": [
                 "github",
-                "gitlab"
+                "gitlab",
+                "mixed"
               ],
               "title": "Source Provider",
               "type": "string"
@@ -49623,9 +49796,22 @@
               "title": "Connection Type",
               "type": "string"
             },
+            "connections": {
+              "default": [],
+              "items": {
+                "$ref": "#/components/schemas/ObservedConnection"
+              },
+              "title": "Connections",
+              "type": "array"
+            },
             "has_token": {
               "title": "Has Token",
               "type": "boolean"
+            },
+            "id": {
+              "default": "",
+              "title": "Id",
+              "type": "string"
             },
             "ready": {
               "title": "Ready",
@@ -49710,6 +49896,41 @@
             "repos"
           ],
           "title": "ObservedSettingsUpdate",
+          "type": "object"
+        },
+        "ObservedSource": {
+          "properties": {
+            "api_url": {
+              "title": "Api Url",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "source_provider": {
+              "enum": [
+                "github",
+                "gitlab"
+              ],
+              "title": "Source Provider",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "source_provider",
+            "api_url",
+            "repos"
+          ],
+          "title": "ObservedSource",
           "type": "object"
         },
         "ObservedWindow": {
@@ -51174,6 +51395,23 @@
           "parameters": [
             {
               "in": "query",
+              "name": "connection",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Connection"
+              }
+            },
+            {
+              "in": "query",
               "name": "query",
               "required": false,
               "schema": {
@@ -51350,6 +51588,26 @@
         },
         "post": {
           "operationId": "start_observed_sync_roi_calculator_observed_sync_post",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "days",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "maximum": 366,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Days"
+              }
+            }
+          ],
           "responses": {
             "202": {
               "content": {
@@ -51360,6 +51618,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "security": [

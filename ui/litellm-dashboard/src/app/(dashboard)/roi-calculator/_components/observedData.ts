@@ -37,6 +37,7 @@ const personFields = {
   email: z.string(),
   logins: z.array(z.string()),
   periods: periods(personPeriodSchema),
+  accounts: z.array(z.object({ connection_id: z.string(), login: z.string() })).optional(),
 };
 const branchCostFields = {
   repo: z.string(),
@@ -47,6 +48,7 @@ const branchCostFields = {
 };
 const branchSpendFields = { repo: z.string(), branch: z.string(), spend: z.number(), requests: z.number() };
 const pullFields = {
+  connection_id: z.string().optional(),
   number: z.number(),
   title: z.string(),
   url: z
@@ -63,7 +65,7 @@ const pullFields = {
   branch_cost: z.object(branchCostFields),
 };
 const snapshotFields = {
-  source_provider: z.enum(["github", "gitlab"]),
+  source_provider: z.enum(["github", "gitlab", "mixed"]),
   repos: z.array(z.string()),
   unmatched_logins: z.array(z.string()),
   unlinked_branches: z.array(z.object(branchSpendFields)),
@@ -74,6 +76,7 @@ const snapshotFields = {
 };
 export const observedSnapshotSchema = z.object(snapshotFields);
 const settingsFields = {
+  id: z.string().optional(),
   source_provider: z.enum(["github", "gitlab"]),
   api_url: z.string(),
   repos: z.array(z.string()),
@@ -82,7 +85,12 @@ const settingsFields = {
   update_interval_minutes: z.number(),
   ready: z.boolean(),
 };
-export const observedSettingsSchema = z.object(settingsFields);
+export const observedConnectionSchema = z.object(settingsFields);
+export const observedSettingsSchema = z.object({
+  ...settingsFields,
+  connections: z.array(observedConnectionSchema).optional(),
+});
+export type ObservedConnection = z.infer<typeof observedConnectionSchema>;
 const statusFields = {
   running: z.boolean(),
   phase: z.string(),
@@ -167,12 +175,14 @@ export function visiblePeople(people: ObservedPerson[], query: string, sort: Peo
 
 export function weeklyMerges(snapshot: ObservedSnapshot, period: Period) {
   const start = Date.parse(`${snapshot.periods[period].window.start}T00:00:00Z`);
+  const end = Date.parse(`${snapshot.periods[period].window.end}T00:00:00Z`) + 86_400_000;
+  const days = (end - start) / 86_400_000;
   return Array.from(
-    { length: 4 },
+    { length: Math.ceil(days / 7) },
     (_, week) =>
       snapshot.pulls[period].filter((pull) => {
         const day = (Date.parse(pull.merged_at) - start) / 86_400_000;
-        return day >= week * 7 && day < (week + 1) * 7;
+        return day >= week * 7 && day < Math.min((week + 1) * 7, days);
       }).length,
   );
 }
@@ -194,6 +204,8 @@ export function recordedBranches(snapshot: ObservedSnapshot) {
 }
 
 export function changeTerms(provider: ObservedSnapshot["source_provider"]) {
+  if (provider === "mixed")
+    return { singular: "change", plural: "changes", requests: "Merged changes", lower: "merged changes" };
   return provider === "gitlab"
     ? { singular: "MR", plural: "MRs", requests: "Merge requests", lower: "merge requests" }
     : { singular: "PR", plural: "PRs", requests: "Pull requests", lower: "pull requests" };

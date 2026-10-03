@@ -95,6 +95,70 @@ describe("observed ROI dashboard", () => {
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
   });
 
+  it("syncs the selected range and labels its equal-length comparison", async () => {
+    let currentReport = report;
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const url = new URL(input, "http://localhost");
+        if (url.pathname.endsWith("/settings")) return Response.json(settings);
+        if (url.pathname.endsWith("/report")) return Response.json({ report: currentReport });
+        if (url.pathname.endsWith("/sync")) {
+          if (init.method === "POST") {
+            requested.push(url.searchParams.get("days") ?? "");
+            currentReport = {
+              ...report,
+              periods: {
+                ...report.periods,
+                current: { ...period, window: { start: "2026-09-22", end: "2026-09-28" } },
+                previous: { ...period, window: { start: "2026-09-15", end: "2026-09-21" } },
+              },
+            };
+          }
+          return Response.json(idle);
+        }
+        throw new Error(url.pathname);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    await user.click(await screen.findByRole("combobox", { name: "Reporting period" }));
+    await user.click(screen.getByRole("option", { name: "Last 7 days" }));
+    await waitFor(() => expect(requested).toEqual(["7"]));
+    expect(await screen.findByText(/Comparing with Sep 15.*Sep 21/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Reporting period" })).toHaveTextContent("Last 7 days");
+    expect(screen.getByRole("combobox", { name: "Comparison period" })).toHaveTextContent("vs. previous period");
+  });
+
+  it("shows a successful empty repository without a setup prompt or invented durations", async () => {
+    const emptyPeriod = {
+      ...period,
+      merged_prs: 0,
+      human_authored: 0,
+      median_merge_hours: null,
+      human_summary: { median_merge_hours: null },
+    };
+    const empty = { ...report, periods: { current: emptyPeriod, previous: emptyPeriod, last_year: emptyPeriod } };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const path = new URL(input, "http://localhost").pathname;
+        if (path.endsWith("/settings")) return Response.json(settings);
+        if (path.endsWith("/report")) return Response.json({ report: empty });
+        if (path.endsWith("/sync")) return Response.json(idle);
+        throw new Error(path);
+      }),
+    );
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    expect(await screen.findByRole("heading", { name: "No merged changes yet" })).toBeInTheDocument();
+    expect(screen.getByText("No merges")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
+    expect(screen.queryByText("0h")).not.toBeInTheDocument();
+  });
+
   it.each([
     { query: "connected=gitlab", alerts: [] },
     { query: "connection_failed=1", alerts: ["Connection failed or expired. Try again or use a token"] },

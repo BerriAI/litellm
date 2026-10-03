@@ -32,7 +32,9 @@ export function PullList({
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(20);
   const filtered = pulls.filter((pull) =>
-    `${pull.number} ${pull.title} ${pull.author}`.toLowerCase().includes(query.toLowerCase()),
+    `${pull.number} ${pull.title} ${pull.author} ${pull.repo} ${pull.source_repo} ${pull.source_branch}`
+      .toLowerCase()
+      .includes(query.toLowerCase()),
   );
   return (
     <div className="space-y-3">
@@ -101,7 +103,9 @@ export function PullList({
         Elapsed time from opening to merge, not engineering effort or time saved
       </p>
       {filtered.length === 0 && (
-        <p className="py-8 text-center text-sm text-muted-foreground">No {terms.lower} match this search</p>
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          {query ? `No ${terms.lower} match this search` : `No ${terms.lower} in this period`}
+        </p>
       )}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>

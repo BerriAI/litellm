@@ -21,8 +21,10 @@ class _Query(BaseModel):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ("github", "gitlab"))
+@pytest.mark.parametrize("days", (7, 28, 90))
 async def test_live_provider_metadata_reaches_people_quality_durations_and_branch_spend_without_an_estimator(
     provider: Literal["github", "gitlab"],
+    days: int,
 ) -> None:
     settings: Final = ROISettings(
         source_provider=provider,
@@ -100,6 +102,11 @@ async def test_live_provider_metadata_reaches_people_quality_durations_and_branc
         datetime(2026, 10, 3, tzinfo=timezone.utc),
         lambda stage, done, total: None,
         httpx.MockTransport(respond),
+        days=days,
+    )
+    assert all(
+        (period.window.end - period.window.start).days + 1 == days
+        for period in (data.current, data.previous, data.last_year)
     )
     report: Final = summarize_observed(data, settings.identity_map)
     person: Final = report.people[0].periods.current

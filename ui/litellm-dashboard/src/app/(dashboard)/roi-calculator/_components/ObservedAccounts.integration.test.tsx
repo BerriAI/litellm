@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import ObservedAccounts from "./ObservedAccounts";
 
 afterEach(() => vi.unstubAllGlobals());
-it("links several usernames to one internal email in a single save", async () => {
+it("links several usernames on both providers to one email in a single save", async () => {
   const writes: unknown[] = [];
   const saved = vi.fn();
   vi.stubGlobal(
@@ -14,22 +14,49 @@ it("links several usernames to one internal email in a single save", async () =>
         writes.push(JSON.parse(String(init.body)));
         return Response.json({ report: null });
       }
-      return Response.json({
+      const identities = {
         gateway_emails: ["ari@example.test"],
         identity_map: { old: "ari@example.test" },
         unmatched_logins: ["new"],
-      });
+        connections: [
+          {
+            id: "github-id",
+            source_provider: "github",
+            api_url: "https://api.github.com",
+            identity_map: { old: "ari@example.test" },
+            unmatched_logins: ["new"],
+          },
+          {
+            id: "gitlab-id",
+            source_provider: "gitlab",
+            api_url: "https://gitlab.com/api/v4",
+            identity_map: {},
+            unmatched_logins: ["new"],
+          },
+        ],
+      };
+      return Response.json(identities);
     }),
   );
   const user = userEvent.setup();
   render(<ObservedAccounts accessToken="gateway-test-token" people={[]} onClose={vi.fn()} onSaved={saved} />);
-  await screen.findByText("1 unmatched accounts");
+  await screen.findByLabelText(/GitHub usernames/);
   fireEvent.change(screen.getByLabelText("Internal email"), { target: { value: "ari@example.test" } });
-  expect(screen.getByLabelText("Source usernames")).toHaveValue("old");
-  fireEvent.change(screen.getByLabelText("Source usernames"), { target: { value: "@Old, new, NEW" } });
+  expect(screen.getByLabelText(/GitHub usernames/)).toHaveValue("old");
+  fireEvent.change(screen.getByLabelText(/GitHub usernames/), { target: { value: "@Old, new, NEW" } });
+  fireEvent.change(screen.getByLabelText(/GitLab usernames/), { target: { value: "new" } });
   await user.click(screen.getByRole("button", { name: "Save accounts" }));
   await waitFor(() => expect(saved).toHaveBeenCalledOnce());
-  expect(writes).toEqual([{ email: "ari@example.test", logins: ["old", "new"] }]);
+  expect(writes).toEqual([
+    {
+      email: "ari@example.test",
+      accounts: [
+        { connection_id: "github-id", login: "old" },
+        { connection_id: "github-id", login: "new" },
+        { connection_id: "gitlab-id", login: "new" },
+      ],
+    },
+  ]);
 });
 it("keeps a conflicting link editable", async () => {
   const saved = vi.fn();
