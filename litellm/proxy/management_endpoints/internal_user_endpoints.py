@@ -3049,6 +3049,8 @@ async def get_user_daily_activity_aggregated(
             detail={"error": "Please provide start_date and end_date"},
         )
 
+    typed_prisma_client: Final["PrismaClient"] = prisma_client
+
     try:
         resolved_entity_ids: Final = resolve_user_daily_activity_entity_ids(
             user_id=user_id,
@@ -3060,9 +3062,9 @@ async def get_user_daily_activity_aggregated(
         api_key_filter: Final = (
             api_key
             if requested_user_id is None
-            else await get_user_api_key_filter(prisma_client, requested_user_id, api_key)
+            else await get_user_api_key_filter(typed_prisma_client, requested_user_id, api_key)
         )
-        repository = daily_activity_repository(prisma_client)
+        repository = daily_activity_repository(typed_prisma_client)
         scope = daily_activity_scope(
             table="litellm_dailyuserspend",
             entity_id_field="user_id",
