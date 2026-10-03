@@ -18,7 +18,6 @@ import {
 } from "./lensData";
 
 const steps = ["review runs", "find patterns", "check evidence"];
-const units = ["runs", "batches", "patterns"];
 const markers = { done: "✓", active: "▸", todo: "·" };
 const rowText = { done: "text-foreground", active: "font-medium text-foreground", todo: "text-muted-foreground" };
 const blocks = 32;
