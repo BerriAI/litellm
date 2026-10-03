@@ -1650,30 +1650,36 @@ jobs:
             IMAGE_TAG=${CIRCLE_SHA1:-ci}
             kind load docker-image litellm-ci:${IMAGE_TAG} --name litellm-test
 
-      # Run helm lint
       - run:
           name: Run helm lint
           command: |
-            helm lint ./helm/litellm-helm
+            helm lint ./helm/litellm -f ./helm/litellm/ci/test-values.yaml
 
-      # Run helm tests
+      - run:
+          name: Start PostgreSQL for the chart
+          command: |
+            kubectl apply -f ./helm/litellm/ci/postgres.yaml
+            kubectl rollout status deployment/litellm-ci-postgres --timeout=3m
+
       - run:
           name: Run helm tests
           command: |
             IMAGE_TAG=${CIRCLE_SHA1:-ci}
-            helm install litellm ./helm/litellm-helm -f ./helm/litellm-helm/ci/test-values.yaml \
+            helm install litellm ./helm/litellm -f ./helm/litellm/ci/test-values.yaml \
               --set image.repository=litellm-ci \
               --set image.tag=${IMAGE_TAG} \
-              --set image.pullPolicy=Never
-            # Wait for pod to be ready
-            echo "Waiting 30 seconds for pod to be ready..."
-            sleep 30
+              --set image.pullPolicy=Never \
+              --wait --wait-for-jobs --timeout 10m || {
+                kubectl get pods -o wide
+                kubectl describe pods -l app.kubernetes.io/instance=litellm
+                kubectl logs -l app.kubernetes.io/component=proxy --tail=200 || true
+                kubectl logs -l app.kubernetes.io/component=migrations --tail=200 || true
+                exit 1
+              }
 
-            # Print pod logs before running tests
-            echo "Printing pod logs..."
-            kubectl logs $(kubectl get pods -l app.kubernetes.io/name=litellm -o jsonpath="{.items[0].metadata.name}")
+            echo "Printing proxy pod logs..."
+            kubectl logs -l app.kubernetes.io/component=proxy --tail=200
 
-            # Run the helm tests
             helm test litellm --logs
 
       # Cleanup

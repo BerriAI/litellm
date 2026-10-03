@@ -1,4 +1,4 @@
-{{- if .Values.ui.enabled }}
+{{- if include "litellm.ui.render" . }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,8 +6,15 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: ui
+  {{- with .Values.ui.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.ui.service.type }}
+  {{- with include "litellm.service.extras" .Values.ui.service }}
+  {{- . | nindent 2 }}
+  {{- end }}
   ports:
     - port: {{ .Values.ui.service.port }}
       targetPort: http

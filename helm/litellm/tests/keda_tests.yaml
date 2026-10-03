@@ -1,0 +1,201 @@
+suite: test KEDA ScaledObject
+templates:
+  - gateway/keda.yaml
+  - gateway/hpa.yaml
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+values:
+  - ./values/required.yaml
+release:
+  name: rel
+  namespace: llm
+tests:
+  - it: renders no ScaledObject by default
+    template: gateway/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: passes user triggers through and adds no prometheus triggers by default
+    set:
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.keda.triggers:
+        - type: cpu
+          metricType: Utilization
+          metadata:
+            value: "60"
+    templates:
+      - gateway/keda.yaml
+      - gateway/hpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: gateway/hpa.yaml
+      - isKind:
+          of: ScaledObject
+        template: gateway/keda.yaml
+      - equal:
+          path: metadata.name
+          value: rel-litellm-gateway
+        template: gateway/keda.yaml
+      - equal:
+          path: spec.scaleTargetRef
+          value:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: rel-litellm-gateway
+        template: gateway/keda.yaml
+      - equal:
+          path: spec.minReplicaCount
+          value: 1
+        template: gateway/keda.yaml
+      - equal:
+          path: spec.maxReplicaCount
+          value: 10
+        template: gateway/keda.yaml
+      - equal:
+          path: spec.triggers
+          value:
+            - type: cpu
+              metricType: Utilization
+              metadata:
+                value: "60"
+        template: gateway/keda.yaml
+
+  - it: leaves spec.replicas off the Deployment so KEDA owns the replica count
+    set:
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.replicaCount: 3
+    template: gateway/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: scales on requests per second against the metrics Service job
+    set:
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.keda.prometheus.serverAddress: http://prometheus-operated.monitoring.svc:9090
+      gateway.keda.prometheus.targetRequestsPerSecond: 90
+    template: gateway/keda.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.triggers
+          count: 1
+      - equal:
+          path: spec.triggers[0]
+          value:
+            type: prometheus
+            metricType: AverageValue
+            metadata:
+              serverAddress: http://prometheus-operated.monitoring.svc:9090
+              threshold: "90"
+              query: sum(rate(litellm_proxy_total_requests_metric_total{namespace="llm",job="rel-litellm-gateway-metrics"}[1m]))
+
+  - it: scales on tokens per second on its own
+    set:
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.keda.prometheus.serverAddress: http://prom:9090
+      gateway.keda.prometheus.targetTokensPerSecond: 6000000
+    template: gateway/keda.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.triggers
+          count: 1
+      - equal:
+          path: spec.triggers[0].type
+          value: prometheus
+      - equal:
+          path: spec.triggers[0].metadata.threshold
+          value: "6000000"
+      - equal:
+          path: spec.triggers[0].metadata.query
+          value: sum(rate(litellm_total_tokens_metric_total{namespace="llm",job="rel-litellm-gateway-metrics"}[1m]))
+
+  - it: appends the requests and tokens triggers after user triggers
+    set:
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.metricsServer.enabled: true
+      gateway.keda.triggers:
+        - type: cpu
+          metricType: Utilization
+          metadata:
+            value: "60"
+      gateway.keda.prometheus.serverAddress: http://prom:9090
+      gateway.keda.prometheus.targetRequestsPerSecond: 90
+      gateway.keda.prometheus.targetTokensPerSecond: 6000000
+    template: gateway/keda.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.triggers
+          count: 3
+      - equal:
+          path: spec.triggers[0].type
+          value: cpu
+      - equal:
+          path: spec.triggers[1].metadata.threshold
+          value: "90"
+      - equal:
+          path: spec.triggers[2].metadata.threshold
+          value: "6000000"
+      - notMatchRegexRaw:
+          pattern: "\\* *60|per_minute|PerMinute"
+
+  - it: renders advanced, fallback, polling and cooldown settings
+    set:
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.keda.minReplicaCount: 2
+      gateway.keda.maxReplicaCount: 20
+      gateway.keda.pollingInterval: 15
+      gateway.keda.cooldownPeriod: 120
+      gateway.keda.fallback:
+        failureThreshold: 3
+        replicas: 4
+      gateway.keda.advanced:
+        restoreToOriginalReplicaCount: true
+    template: gateway/keda.yaml
+    asserts:
+      - equal:
+          path: spec.minReplicaCount
+          value: 2
+      - equal:
+          path: spec.maxReplicaCount
+          value: 20
+      - equal:
+          path: spec.pollingInterval
+          value: 15
+      - equal:
+          path: spec.cooldownPeriod
+          value: 120
+      - equal:
+          path: spec.fallback
+          value:
+            failureThreshold: 3
+            replicas: 4
+      - equal:
+          path: spec.advanced.restoreToOriginalReplicaCount
+          value: true
+
+  - it: refuses a workload target without a prometheus server address
+    set:
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.keda.prometheus.targetRequestsPerSecond: 90
+    template: gateway/keda.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: gateway.keda.prometheus.serverAddress is required when gateway.keda.prometheus.targetRequestsPerSecond or targetTokensPerSecond is set
+
+  - it: refuses to run the HPA and KEDA against the same Deployment
+    set:
+      gateway.hpa.enabled: true
+      gateway.keda.enabled: true
+    template: gateway/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: gateway.hpa.enabled and gateway.keda.enabled are mutually exclusive

@@ -1,5 +1,6 @@
 {{- include "litellm.pdb" (dict
   "root" $
+  "enabled" (include "litellm.gateway.render" .)
   "component" .Values.gateway
   "componentName" "gateway"
   "fullname" (include "litellm.gateway.fullname" .)

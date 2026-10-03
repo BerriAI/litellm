@@ -1,0 +1,526 @@
+suite: test monolith mode
+templates:
+  - monolith/deployment.yaml
+  - monolith/service.yaml
+  - monolith/hpa.yaml
+  - monolith/keda.yaml
+  - monolith/poddisruptionbudget.yaml
+  - monolith/service-metrics.yaml
+  - monolith/servicemonitor.yaml
+  - gateway/deployment.yaml
+  - gateway/service.yaml
+  - gateway/hpa.yaml
+  - gateway/keda.yaml
+  - gateway/poddisruptionbudget.yaml
+  - gateway/service-metrics.yaml
+  - gateway/servicemonitor.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - backend/service.yaml
+  - backend/hpa.yaml
+  - backend/poddisruptionbudget.yaml
+  - ui/deployment.yaml
+  - ui/service.yaml
+  - ui/hpa.yaml
+  - ui/poddisruptionbudget.yaml
+  - serviceaccount.yaml
+  - migrations-job.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders no monolith resources by default
+    templates:
+      - monolith/deployment.yaml
+      - monolith/service.yaml
+      - monolith/hpa.yaml
+      - monolith/poddisruptionbudget.yaml
+      - monolith/service-metrics.yaml
+      - monolith/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: componentized mode renders one Deployment per component
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+
+  - it: monolith mode renders exactly one Deployment, running the proxy dispatcher
+    set:
+      monolith.enabled: true
+    templates:
+      - monolith/deployment.yaml
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: monolith/deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: gateway/deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: backend/deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: ui/deployment.yaml
+      - isKind:
+          of: Deployment
+        template: monolith/deployment.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+        template: monolith/deployment.yaml
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: proxy
+        template: monolith/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: proxy
+        template: monolith/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args[0]
+          value: proxy
+        template: monolith/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - proxy
+            - --port
+            - "4000"
+            - --config
+            - /app/config/config.yaml
+        template: monolith/deployment.yaml
+      - notExists:
+          path: spec.template.spec.containers[0].command
+        template: monolith/deployment.yaml
+
+  - it: monolith appends monolith.extraArgs after the chart's own proxy arguments
+    set:
+      monolith.enabled: true
+      monolith.extraArgs:
+        - --detailed_debug
+        - --run_granian
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - proxy
+            - --port
+            - "4000"
+            - --config
+            - /app/config/config.yaml
+            - --detailed_debug
+            - --run_granian
+
+  - it: monolith drops the --config pair when the chart does not create the ConfigMap
+    set:
+      monolith.enabled: true
+      gateway.config.create: false
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - proxy
+            - --port
+            - "4000"
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: monolith mounts the proxy config ConfigMap the chart renders under the monolith name
+    set:
+      monolith.enabled: true
+      gateway.config.proxy_config:
+        model_list:
+          - model_name: gpt-4o
+            litellm_params:
+              model: openai/gpt-4o
+    templates:
+      - monolith/deployment.yaml
+      - gateway/configmap.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-config
+        template: gateway/configmap.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: gateway-config
+            configMap:
+              name: RELEASE-NAME-litellm-config
+        template: monolith/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /app/config/config.yaml
+        template: monolith/deployment.yaml
+
+  - it: monolith mode renders exactly one Service and no component Services
+    set:
+      monolith.enabled: true
+    templates:
+      - monolith/service.yaml
+      - gateway/service.yaml
+      - backend/service.yaml
+      - ui/service.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: monolith/service.yaml
+      - hasDocuments:
+          count: 0
+        template: gateway/service.yaml
+      - hasDocuments:
+          count: 0
+        template: backend/service.yaml
+      - hasDocuments:
+          count: 0
+        template: ui/service.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+        template: monolith/service.yaml
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: proxy
+        template: monolith/service.yaml
+      - equal:
+          path: spec.ports[0].port
+          value: 4000
+        template: monolith/service.yaml
+
+  - it: monolith Service selector matches the monolith pod labels
+    set:
+      monolith.enabled: true
+    templates:
+      - monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: proxy
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: proxy
+
+  - it: monolith reuses gateway resources, replicas, numWorkers and probes
+    set:
+      monolith.enabled: true
+      gateway.replicaCount: 3
+      gateway.hpa.enabled: false
+      gateway.numWorkers: 6
+      gateway.resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: "2"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NUM_WORKERS
+            value: "6"
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health/readiness
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health/liveliness
+
+  - it: monolith takes the rollout settings a litellm-helm install carried from gateway.minReadySeconds and gateway.strategy
+    set:
+      monolith.enabled: true
+      gateway.minReadySeconds: 60
+      gateway.strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxUnavailable: 0
+          maxSurge: 1
+      backend.minReadySeconds: 5
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.minReadySeconds
+          value: 60
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+
+  - it: monolith ignores backend and ui replica overrides
+    set:
+      monolith.enabled: true
+      gateway.hpa.enabled: false
+      gateway.replicaCount: 2
+      backend.replicaCount: 9
+      ui.replicaCount: 9
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: monolith HPA targets the monolith Deployment and the gateway HPA is not rendered
+    set:
+      monolith.enabled: true
+      gateway.hpa.enabled: true
+    templates:
+      - monolith/hpa.yaml
+      - gateway/hpa.yaml
+      - backend/hpa.yaml
+      - ui/hpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: monolith/hpa.yaml
+      - hasDocuments:
+          count: 0
+        template: gateway/hpa.yaml
+      - hasDocuments:
+          count: 0
+        template: backend/hpa.yaml
+      - hasDocuments:
+          count: 0
+        template: ui/hpa.yaml
+      - equal:
+          path: spec.scaleTargetRef
+          value:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: RELEASE-NAME-litellm
+        template: monolith/hpa.yaml
+
+  - it: monolith KEDA ScaledObject targets the monolith Deployment
+    set:
+      monolith.enabled: true
+      gateway.hpa.enabled: false
+      gateway.keda.enabled: true
+      gateway.keda.prometheus.serverAddress: http://prometheus:9090
+      gateway.keda.prometheus.targetRequestsPerSecond: 50
+    templates:
+      - monolith/keda.yaml
+      - gateway/keda.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: monolith/keda.yaml
+      - hasDocuments:
+          count: 0
+        template: gateway/keda.yaml
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: RELEASE-NAME-litellm
+        template: monolith/keda.yaml
+      - equal:
+          path: spec.triggers[0].metadata.query
+          value: sum(rate(litellm_proxy_total_requests_metric_total{namespace="NAMESPACE",job="RELEASE-NAME-litellm-metrics"}[1m]))
+        template: monolith/keda.yaml
+
+  - it: monolith PDB selects the monolith pods
+    set:
+      monolith.enabled: true
+      gateway.pdb.enabled: true
+      gateway.pdb.maxUnavailable: 1
+    templates:
+      - monolith/poddisruptionbudget.yaml
+      - gateway/poddisruptionbudget.yaml
+      - backend/poddisruptionbudget.yaml
+      - ui/poddisruptionbudget.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: monolith/poddisruptionbudget.yaml
+      - hasDocuments:
+          count: 0
+        template: gateway/poddisruptionbudget.yaml
+      - hasDocuments:
+          count: 0
+        template: backend/poddisruptionbudget.yaml
+      - hasDocuments:
+          count: 0
+        template: ui/poddisruptionbudget.yaml
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+        template: monolith/poddisruptionbudget.yaml
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: proxy
+        template: monolith/poddisruptionbudget.yaml
+
+  - it: monolith metrics sidecar, metrics Service and ServiceMonitor follow the monolith name
+    set:
+      monolith.enabled: true
+      gateway.metricsServer.enabled: true
+      gateway.serviceMonitor.enabled: true
+    templates:
+      - monolith/deployment.yaml
+      - monolith/service-metrics.yaml
+      - monolith/servicemonitor.yaml
+      - gateway/service-metrics.yaml
+      - gateway/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: gateway/service-metrics.yaml
+      - hasDocuments:
+          count: 0
+        template: gateway/servicemonitor.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-metrics
+        template: monolith/service-metrics.yaml
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: proxy
+        template: monolith/service-metrics.yaml
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: proxy
+        template: monolith/servicemonitor.yaml
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: metrics
+        template: monolith/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].args[0]
+          value: metrics
+        template: monolith/deployment.yaml
+
+  - it: monolith collector sidecar runs the collector dispatcher from the same image
+    set:
+      monolith.enabled: true
+      gateway.collector.enabled: true
+    template: monolith/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: collector
+      - equal:
+          path: spec.template.spec.containers[1].args
+          value:
+            - collector
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: ghcr.io/berriai/litellm:1.104.0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ENABLED
+            value: "true"
+
+  - it: monolith renders only the gateway ServiceAccount and runs the pod with it
+    set:
+      monolith.enabled: true
+      serviceAccounts.gateway.create: true
+      serviceAccounts.backend.create: true
+      serviceAccounts.ui.create: true
+    templates:
+      - serviceaccount.yaml
+      - monolith/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: serviceaccount.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway
+        template: serviceaccount.yaml
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: RELEASE-NAME-litellm-gateway
+        template: monolith/deployment.yaml
+
+  - it: the migrations Job renders the same way in monolith mode
+    set:
+      monolith.enabled: true
+    template: migrations-job.yaml
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - migrations
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm:1.104.0
+
+  - it: monolith gets the writer user under both names the proxy CLI and the componentized entrypoints read
+    set:
+      monolith.enabled: true
+    template: monolith/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USER
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: username
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: litellm-writer-secret
+                key: username
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME
+            value: litellm
+
+  - it: disabling every component without monolith renders no application workload
+    set:
+      gateway.enabled: false
+      backend.enabled: false
+      ui.enabled: false
+    templates:
+      - monolith/deployment.yaml
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: monolith renders even when gateway.enabled is false
+    set:
+      monolith.enabled: true
+      gateway.enabled: false
+    templates:
+      - monolith/deployment.yaml
+      - monolith/service.yaml
+    asserts:
+      - hasDocuments:
+          count: 1

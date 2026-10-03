@@ -1,4 +1,4 @@
-{{- if .Values.backend.enabled }}
+{{- if include "litellm.backend.render" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,9 +6,20 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: backend
+    {{- with .Values.backend.deploymentLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.backend.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if and (not .Values.backend.hpa.enabled) (not (kindIs "invalid" .Values.backend.replicaCount)) }}
   replicas: {{ .Values.backend.replicaCount }}
+  {{- end }}
+  {{- $minReady := .Values.backend.minReadySeconds }}
+  {{- if not (or (kindIs "invalid" $minReady) (eq (printf "%v" $minReady) "")) }}
+  minReadySeconds: {{ $minReady }}
   {{- end }}
   {{- with .Values.backend.strategy }}
   strategy:
@@ -44,19 +55,30 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.backend.extraInitContainers }}
+      initContainers:
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
       containers:
         - name: backend
-          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          image: {{ include "litellm.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.backend.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          args:
+            - backend
+            - --host
+            - 0.0.0.0
+            - --port
+            - "4001"
           ports:
             - name: http
               containerPort: 4001
               protocol: TCP
           env:
+            {{- include "litellm.masterKeyEnv" $ | nindent 12 }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.backend) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH
@@ -106,7 +128,7 @@ spec:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
-            name: {{ include "litellm.gateway.fullname" . }}-config
+            name: {{ include "litellm.workload.fullname" . }}-config
         {{- end }}
         {{- if .Values.billingMetrics.enabled }}
         {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
