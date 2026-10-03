@@ -10270,7 +10270,6 @@ def add_openai_metadata(
     OpenAI 'metadata' only supports string values.
 
     Args:
-        params (dict): Dictionary of API parameters
         metadata (dict, optional): Metadata to include in the request
 
     Returns:
