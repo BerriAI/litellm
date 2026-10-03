@@ -32,8 +32,10 @@ from litellm.proxy.roi_calculator.github import SourceError
 from litellm.proxy.roi_calculator.source import create_source
 from litellm.proxy.roi_calculator.sync import (
     BranchSpendReader,
+    GatewayUserReader,
     SpendReader,
     SyncManager,
+    read_gateway_user_emails,
     read_spend,
     spend_prisma_client,
 )
@@ -43,6 +45,7 @@ from litellm.types.roi_calculator import (
     DEFAULT_PROMPT,
     ROIBranchSpend,
     ROICompletionRequest,
+    ROIEstimatorModel,
     ROIIdentityMapResponse,
     ROIIdentityMapUpdate,
     ROIReport,
@@ -94,11 +97,13 @@ class _RouterEstimatorModelInfo(BaseModel):
     model_config = ConfigDict(extra="ignore", from_attributes=True)
 
     base_model: str | None = None
+    mode: str | None = None
 
 
 class _RouterEstimatorDeployment(BaseModel):
     model_config = ConfigDict(extra="ignore", from_attributes=True)
 
+    model_name: str = ""
     litellm_params: _RouterEstimatorParams
     model_info: _RouterEstimatorModelInfo | None = None
 
@@ -144,7 +149,6 @@ def get_github_transport() -> httpx.AsyncBaseTransport | None:
 
 
 _ROUTER_ESTIMATOR_DEPLOYMENTS: Final = TypeAdapter(tuple[_RouterEstimatorDeployment, ...])
-_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
 
 
 def _estimator_models_from_deployments(deployments: Sequence[object]) -> tuple[EstimatorModel, ...]:
@@ -177,12 +181,45 @@ def _router_estimator_models(model_group: str) -> tuple[EstimatorModel, ...]:
     return _estimator_models_from_deployments(deployments)
 
 
-def _router_models() -> tuple[str, ...]:
+def _is_estimator_deployment(deployment: _RouterEstimatorDeployment) -> bool:
+    from litellm import model_cost
+
+    underlying: Final = _estimator_model(deployment)
+    if underlying is None:
+        return False
+    model, provider = underlying
+    candidates: Final = (f"{provider}/{model}", model, model.split("/", 1)[-1])
+    known_modes: Final = tuple(
+        _RouterEstimatorModelInfo.model_validate(model_cost[name]).mode for name in candidates if name in model_cost
+    )
+    mode: Final = (deployment.model_info.mode if deployment.model_info else None) or next(iter(known_modes), None)
+    return mode in (None, "chat")
+
+
+def _estimator_choices_from_deployments(deployments: Sequence[object]) -> tuple[ROIEstimatorModel, ...]:
+    parsed: Final = _ROUTER_ESTIMATOR_DEPLOYMENTS.validate_python(deployments)
+    names: Final = sorted(
+        frozenset(item.model_name for item in parsed if item.model_name and "*" not in item.model_name)
+    )
+    groups: Final = tuple(tuple(item for item in parsed if item.model_name == name) for name in names)
+    return tuple(
+        ROIEstimatorModel(
+            model_name=group[0].model_name,
+            provider_models=tuple(sorted(frozenset(model[0] for item in group if (model := _estimator_model(item))))),
+        )
+        for group in groups
+        if all(_is_estimator_deployment(item) for item in group)
+    )
+
+
+def _router_estimator_choices() -> tuple[ROIEstimatorModel, ...]:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
         return ()
-    return tuple(sorted(frozenset(_MODEL_NAMES.validate_python(llm_router.get_model_names()))))
+    names: Final = frozenset(llm_router.get_model_names())
+    choices: Final = _estimator_choices_from_deployments(llm_router.get_model_list() or ())
+    return tuple(choice for choice in choices if choice.model_name in names)
 
 
 async def _load_stored_settings(repository: ConfigRepository) -> _StoredSettings:
@@ -262,7 +299,8 @@ async def _load_report(repository: ConfigRepository, settings: ROISettings) -> R
 
 
 def _public_settings(settings: ROISettings) -> ROISettingsResponse:
-    models: Final = _router_models()
+    choices: Final = _router_estimator_choices()
+    models: Final = tuple(choice.model_name for choice in choices)
     return ROISettingsResponse(
         source_provider=settings.source_provider,
         gitlab_api_url=settings.gitlab_api_url,
@@ -278,6 +316,7 @@ def _public_settings(settings: ROISettings) -> ROISettingsResponse:
         update_interval_minutes=settings.update_interval_minutes,
         default_prompt=DEFAULT_PROMPT,
         available_models=models,
+        estimator_models=choices,
         ready=bool(settings.repos and settings.estimator_model and settings.estimator_model in models),
     )
 
@@ -351,6 +390,13 @@ async def _test_estimator_access(settings: ROISettings) -> None:
             raise HTTPException(status_code=409, detail="The estimator key cannot access the selected model.")
     except (httpx.HTTPError, ValidationError):
         raise HTTPException(status_code=409, detail="The estimator key could not connect to the gateway.") from None
+
+
+def _gateway_user_reader(repository: ConfigRepository) -> GatewayUserReader:
+    async def get_emails() -> frozenset[str]:
+        return await read_gateway_user_emails(spend_prisma_client(repository.prisma_client))
+
+    return get_emails
 
 
 def _spend_reader(repository: ConfigRepository) -> SpendReader:
@@ -540,6 +586,7 @@ async def start_roi_calculator_sync(
         _router_estimator_models(settings.estimator_model),
         SyncStore(repository.prisma_client),
         branch_spend_reader=_branch_spend_reader(repository, settings),
+        gateway_user_reader=_gateway_user_reader(repository),
     ):
         raise HTTPException(status_code=409, detail="A sync is already running.")
     return manager.status
@@ -686,6 +733,7 @@ async def run_scheduled_sync() -> None:
         coordinator=store,
         scheduled_interval=settings.update_interval_minutes,
         branch_spend_reader=_branch_spend_reader(repository, settings),
+        gateway_user_reader=_gateway_user_reader(repository),
     )
 
 

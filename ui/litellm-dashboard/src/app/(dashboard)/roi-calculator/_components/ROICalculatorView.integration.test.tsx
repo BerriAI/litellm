@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -281,6 +282,39 @@ describe("ROICalculatorView", () => {
     if (provider === "github") expect(load).toBeDisabled();
     else expect(load).toBeEnabled();
     expect(screen.getByRole("textbox", { name: "Repository name" })).toBeEnabled();
+  });
+
+  it("searches by the real model name and saves the selected gateway alias", async () => {
+    const user = userEvent.setup();
+    const modelSettings = {
+      ...settings,
+      available_models: ["estimator", "fast-estimator"],
+      estimator_models: [
+        { model_name: "estimator", provider_models: ["custom-model"] },
+        { model_name: "fast-estimator", provider_models: ["openai/gpt-6-luna"] },
+      ],
+    };
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(modelSettings);
+      if (path === "/roi-calculator/report") return Promise.resolve({ report: summary });
+      return Promise.resolve(idleStatus);
+    });
+    vi.mocked(apiClient.put).mockResolvedValue({ ...modelSettings, estimator_model: "fast-estimator" });
+    render(<ROICalculatorView accessToken="token" />);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    const search = screen.getByRole("combobox", { name: "Estimator model" });
+    await user.clear(search);
+    await user.type(search, "Luna");
+    expect(screen.queryByRole("option", { name: /custom-model/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: /GPT-6 Luna.*Recommended/ }));
+    expect(search).toHaveValue("GPT-6 Luna");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(apiClient.put).toHaveBeenCalledWith(
+      "/roi-calculator/settings",
+      expect.objectContaining({
+        body: expect.objectContaining({ estimator_model: "fast-estimator" }),
+      }),
+    );
   });
 
   it("closes the old settings dialog when saving a different source", async () => {

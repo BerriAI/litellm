@@ -38,6 +38,21 @@ describe("Lens demo data", () => {
     }
   });
 
+  it("includes a long release review with unique steps, complete details and three failed checks", () => {
+    const run = createLensDemoData().runs[6];
+    const ids = new Set(run.trace.spans.map((span) => span.span_id));
+    expect(run.trace.spans).toHaveLength(362);
+    expect(ids.size).toBe(362);
+    expect(run.trace.summary.error_count).toBe(3);
+    expect(run.trace.summary.status).toBe("ok");
+    for (const span of run.trace.spans) {
+      if (span.parent_span_id) expect(ids.has(span.parent_span_id)).toBe(true);
+      expect(run.details.find((detail) => detail.span_id === span.span_id)).toBeDefined();
+    }
+    expect(JSON.parse(run.details.at(-1)!.input)).toHaveLength(120);
+    expect(run.details.at(-1)!.output).toContain("Hold the release");
+  });
+
   it("filters time windows locally and rejects writes or unknown reads without network access", async () => {
     const network = vi.spyOn(globalThis, "fetch");
     const now = Date.now();

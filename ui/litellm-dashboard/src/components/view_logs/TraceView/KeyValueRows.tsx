@@ -24,29 +24,26 @@ export const objectEntries = (value: unknown): KeyValue[] | null => {
   return Object.entries(value).map(([key, v]): KeyValue => [key, displayValue(v)]);
 };
 
-const ROW = "flex min-w-0 items-baseline gap-2.5 py-0.5";
-const KEY = "shrink-0 text-[13px] leading-[1.2] font-medium tracking-[-0.26px] whitespace-nowrap";
+const ROW = "flex min-w-0 items-baseline gap-3 border-b border-border/60 py-2 last:border-0";
+const KEY = "w-24 shrink-0 break-words text-xs leading-5 font-normal";
 
 function Lead({ children }: { children: React.ReactNode }) {
-  return <span className="flex size-4 shrink-0 items-center justify-center self-center">{children}</span>;
+  return <span className="flex size-3 shrink-0 items-center justify-center self-center">{children}</span>;
 }
 
 function KeyValueRow({ entry, mono }: { entry: KeyValue; mono: boolean }) {
   const [key, value] = entry;
   const [open, setOpen] = useState(false);
   const valueClass = cn(
-    "min-w-0 flex-1 text-left text-[13px] leading-[1.2] tracking-[-0.26px] text-trace-text",
+    "min-w-0 flex-1 break-words text-left text-[13px] leading-5 text-foreground",
     mono || ID_KEY.test(key) ? "font-mono" : "font-sans",
   );
 
   if (!isLongValue(value)) {
     return (
       <li className={ROW}>
-        <Lead>
-          <span className="size-2 rounded-full bg-trace-dot" />
-        </Lead>
-        <span className={cn(KEY, "text-trace-key")}>{key}</span>
-        <span className={cn(valueClass, "truncate")} title={value}>
+        <span className={cn(KEY, "text-muted-foreground")}>{key}</span>
+        <span className={cn(valueClass, "whitespace-pre-wrap")} title={value}>
           {value}
         </span>
       </li>
@@ -56,9 +53,9 @@ function KeyValueRow({ entry, mono }: { entry: KeyValue; mono: boolean }) {
   const head = (
     <>
       <Lead>
-        <FoldChevron open={open} className="size-3 text-trace-text" />
+        <FoldChevron open={open} className="size-3 text-foreground" />
       </Lead>
-      <span className={cn(KEY, "text-trace-duration")}>{key}</span>
+      <span className={cn(KEY, "text-muted-foreground")}>{key}</span>
     </>
   );
   const toggle = {
@@ -87,7 +84,6 @@ function KeyValueRow({ entry, mono }: { entry: KeyValue; mono: boolean }) {
   );
 }
 
-/** Dot-bulleted key / value list; long values show a chevron and expand in place on click. */
 export function KeyValueRows({
   entries,
   mono = false,
@@ -98,7 +94,7 @@ export function KeyValueRows({
   className?: string;
 }) {
   return (
-    <ul className={cn("flex flex-col gap-3", className)}>
+    <ul className={cn("flex flex-col", className)}>
       {entries.map((entry) => (
         <KeyValueRow key={entry[0]} entry={entry} mono={mono} />
       ))}
