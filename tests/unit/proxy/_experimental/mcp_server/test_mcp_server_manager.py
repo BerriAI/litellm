@@ -6950,6 +6950,34 @@ class TestMCPServerManager:
                 "eyJ.x.y",
                 id="key-admission-plus-idp-bearer-subject",
             ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "bearer eyJ.x.y"},
+                "sk-1234",
+                "eyJ.x.y",
+                "eyJ.x.y",
+                id="lowercase-bearer-scheme-is-the-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Basic a.b.c"},
+                "sk-1234",
+                None,
+                None,
+                id="non-bearer-scheme-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Digest x.y.z"},
+                "sk-1234",
+                None,
+                None,
+                id="digest-scheme-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "eyJ.x.y"},
+                "sk-1234",
+                None,
+                None,
+                id="scheme-less-value-is-not-a-subject",
+            ),
         ],
     )
     async def test_pre_call_tool_check_separates_raw_bearer_from_subject(
@@ -6976,6 +7004,52 @@ class TestMCPServerManager:
 
         kwargs: Final = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
         assert kwargs["incoming_bearer_token"] == expected_bearer
+        assert kwargs["incoming_subject_token"] == expected_subject
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raw_headers", "expected_subject"),
+        [
+            pytest.param({"authorization": "Bearer gw.master.key"}, None, id="master-key-alone-is-not-a-subject"),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Bearer gw.master.key"},
+                None,
+                id="master-key-next-to-a-virtual-key-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Bearer gw.other.jws"},
+                "gw.other.jws",
+                id="a-dotted-bearer-that-is-not-the-master-key-is-the-subject",
+            ),
+        ],
+    )
+    async def test_pre_call_tool_check_withholds_a_dotted_master_key_from_the_subject(
+        self, raw_headers, expected_subject
+    ):
+        """A master key is a LiteLLM credential whatever its shape, so even one with the two dots of a
+        compact JWS never becomes the sign-in subject a provider would send to its IdP."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", allowed_tools=None
+        )
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        with patch("litellm.proxy.proxy_server.master_key", "gw.master.key"):
+            await manager.pre_call_tool_check(
+                server_name="srv",
+                name="turn",
+                arguments={},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-1234", user_id="u"),
+                proxy_logging_obj=proxy_logging,
+                server=server,
+                raw_headers=raw_headers,
+            )
+
+        kwargs: Final = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert kwargs["incoming_bearer_token"] == raw_headers["authorization"].removeprefix("Bearer ")
         assert kwargs["incoming_subject_token"] == expected_subject
 
     @pytest.mark.asyncio

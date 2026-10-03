@@ -175,11 +175,12 @@ async def preflight_caller_sign_in(
         raise_token_exchange_challenge,
     )
 
-    if not await connecting():
+    gating: Final = tuple(
+        provider for provider in _providers() if provider.caller_sign_in(server, user_api_key_auth) is not None
+    )
+    if not gating or not await connecting():
         return
-    for provider in _providers():
-        if provider.caller_sign_in(server, user_api_key_auth) is None:
-            continue
+    for provider in gating:
         match await provider.preflight_caller_sign_in(server, user_api_key_auth, subject_token):
             case SignedIn():
                 continue

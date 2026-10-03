@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Iterator, Mapping
 from typing import Final
 
@@ -11,6 +12,7 @@ from litellm.proxy._experimental.mcp_server.caller_sign_in import (
     CallerSignInProvider,
     SignedIn,
     caller_sign_in_for,
+    preflight_caller_sign_in,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -137,3 +139,41 @@ def test_oauth_utils_strips_the_route_relative_root_path():
         "app_root_path": "",
     }
     assert get_route_relative_request_path(scope) == "/catalog"  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.asyncio
+async def test_preflight_with_no_gating_provider_never_reads_the_request_body(monkeypatch):
+    """A plain OBO connect has nothing to pre-flight, so the exchange answers before the body arrives, as it
+    did before the sign-in seam; reading the body first would stall a client that sends its headers early."""
+    monkeypatch.setenv("JWT_ISSUER", "https://jwt-idp.test")
+    body_read: Final = asyncio.Event()
+
+    async def connecting() -> bool:
+        body_read.set()
+        return True
+
+    await preflight_caller_sign_in(
+        _server(auth_type=MCPAuth.oauth2_token_exchange),
+        None,
+        "sub.ject.jws",
+        root_path="",
+        resource_metadata=None,
+        connecting=connecting,
+    )
+
+    assert not body_read.is_set()
+
+
+@pytest.mark.asyncio
+async def test_preflight_with_a_gating_provider_reads_the_body_to_tell_a_connect_apart(registered):
+    body_read: Final = asyncio.Event()
+
+    async def connecting() -> bool:
+        body_read.set()
+        return True
+
+    await preflight_caller_sign_in(
+        _server(), None, "sub.ject.jws", root_path="", resource_metadata=None, connecting=connecting
+    )
+
+    assert body_read.is_set()

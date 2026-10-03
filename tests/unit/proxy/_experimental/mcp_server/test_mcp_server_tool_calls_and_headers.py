@@ -12585,6 +12585,65 @@ class TestConnectSignInPreflight:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authorization",
+        ["Basic a.b.c", "Digest x.y.z", "eyJ.pay.sig"],
+        ids=["basic_scheme", "digest_scheme", "scheme_less"],
+    )
+    async def test_authorization_without_a_bearer_scheme_is_challenged_not_pre_flighted(self, authorization):
+        """Only a ``Bearer`` credential is a sign-in subject; a Basic or Digest value, or a bare string that
+        merely has two dots, is challenged locally and never handed to a provider's IdP."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(
+                    ["catalog"],
+                    guardrail,
+                    [server],
+                    raw_headers={"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": authorization},
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert 'error="invalid_token"' in ((exc.value.headers or {}).get("WWW-Authenticate") or "")
+        assert guardrail.preflight_calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_headers",
+        [
+            {"authorization": "Bearer gw.master.key"},
+            {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer gw.master.key"},
+        ],
+        ids=["master_key_alone", "master_key_next_to_a_virtual_key"],
+    )
+    async def test_dotted_master_key_bearer_is_challenged_never_pre_flighted(self, raw_headers):
+        """The master key is a LiteLLM credential even when it has the two dots of a compact JWS, so the
+        connect answers the local challenge instead of sending the key to a provider's IdP."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.master_key", "gw.master.key"),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await self._connect(["catalog"], guardrail, [server], raw_headers=raw_headers)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert 'error="invalid_token"' in ((exc.value.headers or {}).get("WWW-Authenticate") or "")
+        assert guardrail.preflight_calls == []
+
+    @pytest.mark.asyncio
     async def test_custom_auth_admitted_bearer_is_pre_flighted_not_challenged(self):
         """Custom auth admits the caller on its own IdP token in ``Authorization`` with no
         ``x-litellm-api-key``; that token is the sign-in subject, so connect pre-flights it as a tool

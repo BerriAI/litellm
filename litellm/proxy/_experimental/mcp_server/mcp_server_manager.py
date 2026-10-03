@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import secrets
 import time
 from collections.abc import (
     AsyncIterator,
@@ -1163,6 +1164,10 @@ LITELLM_VIRTUAL_KEY_PREFIX: Final = "sk-"
 
 def _raw_header_value(raw_headers: Mapping[str, str] | None, name: str) -> str | None:
     return next((v for k, v in (raw_headers or {}).items() if isinstance(k, str) and k.lower() == name), None)
+
+
+def _is_master_key(bearer: str, master_key: str | None) -> bool:
+    return bool(master_key) and secrets.compare_digest(bearer.encode(), (master_key or "").encode())
 
 
 def _has_explicit_litellm_admission_header(raw_headers: Mapping[str, str] | None) -> bool:
@@ -3950,11 +3955,20 @@ class MCPServerManager:
         oauth2_headers: Mapping[str, str] | None,
         raw_headers: Mapping[str, str] | None,
     ) -> str | None:
-        """The bearer a caller sign-in provider validates. An admission that consumed ``Authorization`` (custom
-        auth, built-in OAuth2, JWT) did so on the caller's own IdP token, so that token is the subject; only a
-        virtual key, or a bearer repeating ``x-litellm-api-key``, is withheld."""
-        bearer: Final = MCPServerManager._extract_bearer_token(oauth2_headers, raw_headers)
-        if bearer is None or bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX):
+        """The ``Bearer`` credential a caller sign-in provider validates. An admission that consumed
+        ``Authorization`` (custom auth, built-in OAuth2, JWT) did so on the caller's own IdP token, so that token
+        is the subject; any other scheme, a LiteLLM key (virtual or master) and a bearer repeating
+        ``x-litellm-api-key`` are withheld."""
+        from litellm.proxy.proxy_server import master_key  # noqa: PLC0415  # circular import
+
+        authorization: Final = (oauth2_headers or {}).get("Authorization") or _raw_header_value(
+            raw_headers, "authorization"
+        )
+        scheme_and_credential: Final = (authorization or "").split(None, 1)
+        if len(scheme_and_credential) != 2 or scheme_and_credential[0].lower() != "bearer":
+            return None
+        bearer: Final = scheme_and_credential[1]
+        if bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX) or _is_master_key(bearer, master_key):
             return None
         admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
         if admission_header and strip_auth_scheme(admission_header, "Bearer") == bearer:
