@@ -616,12 +616,16 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
+        transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
     ):
+        if transport is not None and transport_factory is not None:
+            raise ValueError("transport and transport_factory are mutually exclusive")
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.ssl_verify = ssl_verify
         self.shared_session = shared_session
         self.transport = transport
+        self.transport_factory = transport_factory
         self.follow_redirects = follow_redirects
         self._owns_client = True
         self._client = self.create_client(
@@ -655,9 +659,10 @@ class AsyncHTTPHandler:
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
-        if self.transport is not None:
+        explicit_transport: Final = self.transport_factory() if self.transport_factory is not None else self.transport
+        if explicit_transport is not None:
             return httpx.AsyncClient(
-                transport=self.transport,
+                transport=explicit_transport,
                 event_hooks=event_hooks,
                 timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT,
                 headers=get_default_headers(),
@@ -1748,7 +1753,9 @@ def get_async_httpx_client(
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
         handler_params: Final = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
         handler_params["shared_session"] = shared_session
-        _new_client = AsyncHTTPHandler(**handler_params)
+        _new_client = AsyncHTTPHandler(
+            **handler_params,  # pyright: ignore[reportUnknownArgumentType]  # native cache forwards an untyped constructor-parameter dictionary
+        )
     else:
         _new_client = AsyncHTTPHandler(
             timeout=_default_cached_client_timeout(),

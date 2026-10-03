@@ -18,7 +18,7 @@ guardrails:
       api_key: os.environ/ISMALICIOUS_ENCODED_API_KEY
 ```
 
-Requests only send credentials to `https://api.ismalicious.com`, with TLS verification, no redirects, a 15-second timeout and no retries. A custom API base is refused. Incoming request headers, provider credentials, user metadata and model prompts are not added to the inspection body by this provider
+Requests only send credentials to `https://api.ismalicious.com`, with TLS verification, no redirects, a 15-second timeout and no retries. A custom API base is refused. Clients reuse LiteLLM’s native cache, which retains ownership of closure. Each client generation gets its own transport, so closing a retired client does not close the replacement. API credentials are passed per request and are excluded from the cache key. Incoming request headers, provider credentials, user metadata and model prompts are not added to the inspection body by this provider
 
 ## Decisions
 

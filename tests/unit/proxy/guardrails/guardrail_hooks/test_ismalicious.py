@@ -5,10 +5,12 @@ import httpx
 import pytest
 from mcp.types import CallToolResult, TextContent
 
+import litellm
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import MCPGuardrailTranslationHandler
+from litellm.proxy.guardrails.guardrail_hooks.ismalicious import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.ismalicious.ismalicious import IsMaliciousGuardrail
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, Mode
 
 URL = "https://example.com/path?q=a,b&x=1#part"
 KEY = base64.b64encode(b"test-key:test-secret").decode()
@@ -53,12 +55,19 @@ async def test_native_pre_handler_preserves_original_url_and_arguments():
         requests.append(request)
         return service_response(request)
 
-    data = {"mcp_tool_name": "fetch", "mcp_arguments": {"url": URL, "other": "unchanged"}}
+    data = {
+        "mcp_tool_name": "fetch",
+        "mcp_arguments": {"url": URL, "other": "unchanged"},
+        "headers": {"Authorization": "Incoming private token"},
+    }
     result = await MCPGuardrailTranslationHandler().process_input_messages(data, guardrail(handler))
     assert result is data
     assert requests[0].url.params["u"] == URL
     assert json.loads(json.loads(requests[1].content)["content"]) == [URL, "unchanged"]
     assert data["mcp_arguments"]["url"] == URL
+    assert all(request.headers["X-API-KEY"] == KEY for request in requests)
+    assert all("Authorization" not in request.headers for request in requests)
+    assert all(request.extensions["timeout"]["read"] == 15 for request in requests)
 
 
 @pytest.mark.asyncio
@@ -174,7 +183,9 @@ def test_unsupported_modes_fail_at_startup(mode):
         IsMaliciousGuardrail(api_key=KEY, event_hook=mode)
 
 
-@pytest.mark.parametrize("api_key", ["not-base64", "dXNlcg==", "OnNlY3JldA=="])
+@pytest.mark.parametrize(
+    "api_key", ["not-base64", "dXNlcg==", "OnNlY3JldA==", base64.b64encode(b"\xff:secret").decode()]
+)
 def test_invalid_credentials_are_not_echoed(api_key):
     with pytest.raises(ValueError, match="requires a Base64") as exc:
         IsMaliciousGuardrail(api_key=api_key, event_hook=GuardrailEventHooks.pre_mcp_call)
@@ -238,3 +249,121 @@ async def test_malformed_response_semantics_fail_closed(invalid):
     with pytest.raises(GuardrailRaisedException) as exc:
         await guardrail(handler).apply_guardrail({"texts": ["Untrusted"]}, {}, "response")
     assert not exc.value.blocked_content
+
+
+@pytest.mark.parametrize("mode", ["pre_mcp_call", ["pre_mcp_call", "post_mcp_call"]])
+@pytest.mark.parametrize("default_on", [False, True])
+def test_native_config_roundtrip_registers_requested_policy(mode, default_on):
+    config_model = IsMaliciousGuardrail.get_config_model()
+    config = config_model.model_validate({"api_key": KEY})
+    params = LitellmParams(
+        guardrail="ismalicious", mode=mode, default_on=default_on, **config.model_dump(exclude_none=True)
+    )
+    callback = initialize_guardrail(params, {"guardrail_name": "selected-gate", "litellm_params": params})
+    assert any(item is callback for item in litellm.callbacks)
+    assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_mcp_call) is default_on
+    assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_mcp_call) is (
+        default_on and isinstance(mode, list)
+    )
+
+
+def test_native_initializer_refuses_conditional_mcp_modes():
+    params = LitellmParams(guardrail="ismalicious", api_key=KEY, mode=Mode(tags={}, default="pre_mcp_call"))
+    with pytest.raises(ValueError, match="explicit MCP modes"):
+        initialize_guardrail(params, {"guardrail_name": "selected-gate", "litellm_params": params})
+
+
+@pytest.mark.asyncio
+async def test_valid_ordered_span_allows_original_content():
+    def handler(request):
+        body = service_response(request).json()
+        body["injection"]["spans"] = [{"start": 0, "end": 1, "family": "fixture"}]
+        return httpx.Response(200, json=body)
+
+    payload = CallToolResult(content=[TextContent(type="text", text="Allowed result")])
+    assert await MCPGuardrailTranslationHandler().process_output_response(payload, guardrail(handler)) is payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["https://[invalid", "https://user:password@example.com/", "https://example.com/\n"])
+async def test_native_pre_handler_refuses_malformed_urls_before_network(url):
+    def handler(request):
+        pytest.fail("A malformed URL must not be sent")
+
+    with pytest.raises(GuardrailRaisedException) as exc:
+        await MCPGuardrailTranslationHandler().process_input_messages(
+            {"mcp_tool_name": "fetch", "mcp_arguments": {"url": url}}, guardrail(handler)
+        )
+    assert url not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_native_pre_handler_refuses_a_service_response_for_a_different_url():
+    def handler(request):
+        body = service_response(request).json()
+        body["url"] = "https://example.com/path"
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(GuardrailRaisedException):
+        await MCPGuardrailTranslationHandler().process_input_messages(
+            {"mcp_tool_name": "fetch", "mcp_arguments": {"url": URL}}, guardrail(handler)
+        )
+
+
+@pytest.mark.asyncio
+async def test_non_utf8_content_is_refused_before_network():
+    def handler(request):
+        pytest.fail("Invalid UTF-8 must not be sent")
+
+    with pytest.raises(GuardrailRaisedException):
+        await guardrail(handler).apply_guardrail({"texts": ["\ud800"]}, {}, "response")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [httpx.ConnectError, httpx.RemoteProtocolError])
+async def test_native_transport_connection_errors_are_not_retried(error):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        raise error("Private upstream details", request=request)
+
+    with pytest.raises(GuardrailRaisedException) as exc:
+        await MCPGuardrailTranslationHandler().process_output_response(
+            CallToolResult(content=[TextContent(type="text", text="Untrusted result")]), guardrail(handler)
+        )
+    assert len(calls) == 1
+    assert "Private upstream details" not in str(exc.value)
+
+
+class ClosureAwareTransport(httpx.MockTransport):
+    def __init__(self, handler):
+        super().__init__(handler)
+        self.closed = False
+
+    async def handle_async_request(self, request):
+        if self.closed:
+            raise httpx.ConnectError("Transport already closed", request=request)
+        return await super().handle_async_request(request)
+
+    async def aclose(self):
+        self.closed = True
+        await super().aclose()
+
+
+@pytest.mark.asyncio
+async def test_native_pool_survives_calls_without_sharing_credentials():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return service_response(request)
+
+    transport = ClosureAwareTransport(handler)
+    other_key = base64.b64encode(b"other-key:other-secret").decode()
+    for key in (KEY, other_key):
+        callback = IsMaliciousGuardrail(api_key=key, event_hook=GuardrailEventHooks.post_mcp_call, transport=transport)
+        payload = CallToolResult(content=[TextContent(type="text", text="Allowed result")])
+        assert await MCPGuardrailTranslationHandler().process_output_response(payload, callback) is payload
+    assert [request.headers["X-API-KEY"] for request in requests] == [KEY, other_key]
+    assert not transport.closed

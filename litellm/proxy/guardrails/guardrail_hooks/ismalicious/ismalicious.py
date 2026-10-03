@@ -14,6 +14,9 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # native logging decorator has an untyped signature
 )
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # native factory uses an untyped parameter dictionary
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -116,6 +119,10 @@ def _url_argument(text: str) -> str | None | _Failure:
     return text
 
 
+def _verified_transport() -> httpx.AsyncBaseTransport:
+    return httpx.AsyncHTTPTransport(verify=True, retries=0, trust_env=False)
+
+
 class IsMaliciousGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -171,9 +178,21 @@ class IsMaliciousGuardrail(CustomGuardrail):
     ) -> _Failure | None:
         try:
             response: Final = (
-                await client.get("/gate/url", params={"u": url})
+                await client.get(
+                    f"{_API_BASE}/gate/url",
+                    params={"u": url},
+                    headers=self._headers,
+                    timeout=15,
+                    follow_redirects=False,
+                )
                 if url is not None
-                else await client.post("/gate/scan", content=body)
+                else await client.post(
+                    f"{_API_BASE}/gate/scan",
+                    content=body,
+                    headers=self._headers,
+                    timeout=15,
+                    follow_redirects=False,
+                )
             )
         except httpx.HTTPError:
             return _Failure()
@@ -202,19 +221,20 @@ class IsMaliciousGuardrail(CustomGuardrail):
         body: Final = _encoded_body(texts)
         if isinstance(body, _Failure):
             self._raise_failure(body)
-        async with httpx.AsyncClient(
-            base_url=_API_BASE,
-            headers=self._headers,
-            transport=self._transport,
-            timeout=15,
-            follow_redirects=False,
-            verify=True,
-            trust_env=False,
-        ) as client:
-            if input_type == "request":
-                for text in texts:
-                    await self._inspect_url_argument(client, text)
-            scan_failure: Final = await self._inspect(client, body=body)
-            if scan_failure is not None:
-                self._raise_failure(scan_failure)
+        params: Final = {
+            "timeout": 15,
+            "follow_redirects": False,
+            **(
+                {"transport": self._transport}
+                if self._transport is not None
+                else {"transport_factory": _verified_transport}
+            ),
+        }
+        client: Final = get_async_httpx_client("ismalicious", params=params).client
+        if input_type == "request":
+            for text in texts:
+                await self._inspect_url_argument(client, text)
+        scan_failure: Final = await self._inspect(client, body=body)
+        if scan_failure is not None:
+            self._raise_failure(scan_failure)
         return inputs
