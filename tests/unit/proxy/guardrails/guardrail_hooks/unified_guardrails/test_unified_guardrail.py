@@ -1,5 +1,6 @@
 """Tests for unified guardrail."""
 
+import io
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
@@ -373,6 +374,37 @@ class TestUnifiedLLMGuardrails:
             assert result["prompt"] == "a paper boat on a stream [GUARDRAILED]"
             assert result["seconds"] == "4"
 
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize("call_type", ["aimage_edit", "image_edit"])
+        async def test_image_edit_routes_scan_prompt_and_keep_rewrite(self, monkeypatch, call_type: str) -> None:
+            """/v1/images/edits dispatches call_type="aimage_edit", which had no translation mapping,
+            so the hook returned the request unscanned. Runs against the discovered handler map."""
+            _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+            handler = UnifiedLLMGuardrails()
+            guardrail = RewritingGuardrail()
+            image = io.BytesIO(b"\x89PNG\r\n\x1a\n")
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "gemini-3-pro-image",
+                "prompt": "a watercolor painting of a lighthouse",
+                "image": [image],
+            }
+
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+
+            assert guardrail.event_history == [GuardrailEventHooks.pre_call]
+            assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == [
+                ["a watercolor painting of a lighthouse"]
+            ]
+            assert guardrail.apply_calls[0]["inputs"]["model"] == "gemini-3-pro-image"
+            assert result["prompt"] == "a watercolor painting of a lighthouse [GUARDRAILED]"
+            assert result["image"] == [image]
+
     class TestAsyncModerationHook:
         @pytest.mark.asyncio
         async def test_uses_mcp_event_type(self):
@@ -418,6 +450,29 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert guardrail.event_history == [GuardrailEventHooks.during_call]
+
+        @pytest.mark.asyncio
+        async def test_runs_for_image_edits(self, monkeypatch) -> None:
+            _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "gemini-3-pro-image",
+                "prompt": "a watercolor painting of a lighthouse",
+                "image": [io.BytesIO(b"\x89PNG\r\n\x1a\n")],
+            }
+
+            await handler.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                call_type=CallTypes.aimage_edit.value,
+            )
+
+            assert guardrail.event_history == [GuardrailEventHooks.during_call]
+            assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == [
+                ["a watercolor painting of a lighthouse"]
+            ]
 
     class TestAsyncPostCallStreamingIteratorHook:
         @pytest.mark.asyncio
