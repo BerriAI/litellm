@@ -29,13 +29,16 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
-from litellm.caching.caching import Cache
+from litellm.caching.caching import Cache, DualCache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.internal_call_metadata import EvaluationBillingOwner, evaluation_billing_context
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
@@ -6558,3 +6561,312 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.fixture
+def evaluation_model(monkeypatch: pytest.MonkeyPatch) -> str:
+    model: Final = "hosted_vllm/evaluation-test"
+    for deployment in (model, model + "-fallback", "anthropic/evaluation-native"):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment,
+            {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "max_input_tokens": 1000,
+                "max_output_tokens": 1000,
+                "litellm_provider": deployment.split("/", 1)[0],
+                "mode": "chat",
+            },
+        )
+    return model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ("chat", "messages", "messages_responses", "embedding"))
+@pytest.mark.parametrize("scope", ("total", "model"))
+async def test_evaluation_budget_blocks_paid_leaf_calls_before_transport(
+    evaluation_spend_cache: DualCache, evaluation_model: str, api: str, scope: str
+) -> None:
+    model: Final = "openai/gpt-5.6-luna" if api == "messages_responses" else evaluation_model
+    owner: Final = EvaluationBillingOwner(
+        "creator",
+        {model: {"max_budget": 0, "budget_duration": "1d"}} if scope == "model" else None,
+        max_budget=0 if scope == "total" else None,
+    )
+    create: Final = {
+        "chat": litellm.acompletion,
+        "messages": litellm.anthropic.messages.acreate,
+        "messages_responses": litellm.anthropic.messages.acreate,
+        "embedding": litellm.aembedding,
+    }[api]
+    body: Final = (
+        {"input": ["hello"]}
+        if api == "embedding"
+        else {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+    )
+    with respx.mock(assert_all_called=False) as transport, evaluation_billing_context(owner):
+        upstream: Final = transport.post(url__startswith="https://evaluation.invalid/").respond(500)
+        with pytest.raises(litellm.BudgetExceededError):
+            await create(
+                model=model,
+                api_base="https://evaluation.invalid/v1",
+                api_key="test",
+                metadata={"internal_call_origin": "autorouter_classifier"},
+                fallbacks=[],
+                num_retries=0,
+                **body,
+            )
+        assert upstream.call_count == 0
+    assert (await evaluation_spend_cache.async_get_cache("spend:user:creator") or 0) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("global_fallbacks", (False, True))
+async def test_messages_fallback_checks_its_own_budget_before_a_second_provider_call(
+    evaluation_spend_cache: DualCache,
+    evaluation_model: str,
+    monkeypatch: pytest.MonkeyPatch,
+    global_fallbacks: bool,
+) -> None:
+    fallback: Final = evaluation_model + "-fallback"
+    monkeypatch.setattr(litellm, "model_fallbacks", [fallback] if global_fallbacks else None)
+    owner: Final = EvaluationBillingOwner("creator", {fallback: {"max_budget": 0, "budget_duration": "1d"}}, 1)
+    with respx.mock(assert_all_called=True) as transport, evaluation_billing_context(owner):
+        upstream: Final = transport.post("https://evaluation.invalid/v1/chat/completions").respond(
+            500, json={"error": {"message": "unavailable", "type": "server_error"}}
+        )
+        with pytest.raises(Exception, match="Max budget: 0"):
+            await litellm.anthropic.messages.acreate(
+                model=evaluation_model,
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10,
+                fallbacks=None if global_fallbacks else [fallback],
+                api_base="https://evaluation.invalid/v1",
+                api_key="test",
+                num_retries=0,
+                max_retries=0,
+            )
+        assert upstream.call_count == 1
+    assert (await evaluation_spend_cache.async_get_cache("spend:user:creator") or 0) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("global_fallbacks", (False, True))
+async def test_native_messages_keep_creator_admission_when_chat_fallbacks_are_configured(
+    evaluation_spend_cache: DualCache,
+    evaluation_model: str,
+    monkeypatch: pytest.MonkeyPatch,
+    global_fallbacks: bool,
+) -> None:
+    model: Final = "anthropic/evaluation-native"
+    monkeypatch.setattr(litellm, "model_fallbacks", [evaluation_model] if global_fallbacks else None)
+    owner: Final = EvaluationBillingOwner("creator", {model: {"max_budget": 0, "budget_duration": "1d"}}, 1)
+    with respx.mock(assert_all_called=False) as transport, evaluation_billing_context(owner):
+        upstream: Final = transport.post(url__startswith="https://evaluation.invalid/").respond(500)
+        with pytest.raises(litellm.BudgetExceededError):
+            await litellm.anthropic.messages.acreate(
+                model=model,
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                api_base="https://evaluation.invalid/v1",
+                api_key="test",
+                num_retries=0,
+                fallbacks=None if global_fallbacks else [evaluation_model],
+            )
+        assert upstream.call_count == 0
+    assert (await evaluation_spend_cache.async_get_cache("spend:user:creator") or 0) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ("chat", "messages"))
+async def test_delayed_evaluation_receipts_survive_logger_reuse_and_a_cache_hit(
+    evaluation_spend_cache: DualCache, evaluation_model: str, monkeypatch: pytest.MonkeyPatch, api: str
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    owner: Final = EvaluationBillingOwner("creator", max_budget=1)
+    receipts: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    async def capture(kwargs: Mapping[str, object], response: object, start: datetime, end: datetime) -> None:
+        receipts.put_nowait(kwargs)
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(
+            200,
+            json=ModelResponse(
+                model="evaluation-test",
+                choices=[{"message": {"role": "assistant", "content": "ok"}}],
+                usage=Usage(prompt_tokens=10, completion_tokens=requests.qsize(), total_tokens=10 + requests.qsize()),
+            ).model_dump(),
+        )
+
+    with respx.mock(assert_all_called=True) as transport, evaluation_billing_context(owner):
+        transport.post("https://evaluation.invalid/v1/chat/completions").mock(side_effect=upstream)
+        logger: Final = Logging(
+            model=evaluation_model,
+            messages=[],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="evaluation",
+            function_id="test",
+            dynamic_async_success_callbacks=[capture],
+        )
+        logger._defer_async_logging = True
+        create: Final = litellm.acompletion if api == "chat" else litellm.anthropic.messages.acreate
+        request: Final = {
+            "model": evaluation_model,
+            "messages": [{"role": "user", "content": "one"}],
+            "max_tokens": 10,
+            "api_base": "https://evaluation.invalid/v1",
+            "api_key": "test",
+            "num_retries": 0,
+            "litellm_logging_obj": logger,
+            "fallbacks": [],
+        }
+        await create(**request)
+        first: Final = logger._enqueue_deferred_logging
+        assert first is not None
+        logger._enqueue_deferred_logging = None
+        await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+        await create(**request)
+        cached: Final = await asyncio.wait_for(receipts.get(), 10)
+        assert cached["response_cost"] == 0 and requests.qsize() == 1
+        assert await evaluation_spend_cache.async_get_cache("spend:user:creator") > 0
+        await create(**{**request, "messages": [{"role": "user", "content": "two"}]})
+        second: Final = logger._enqueue_deferred_logging
+        assert second is not None
+        first()
+        second()
+        received: Final = (await asyncio.wait_for(receipts.get(), 10), await asyncio.wait_for(receipts.get(), 10))
+        await GLOBAL_LOGGING_WORKER.flush()
+    assert requests.qsize() == 2 and receipts.empty()
+    assert {receipt["response_cost"] for receipt in received} == {10 * 0.001 + 0.002, 10 * 0.001 + 2 * 0.002}
+    assert tuple(receipt["user"] for receipt in received) == ("creator", "creator")
+    assert await evaluation_spend_cache.async_get_cache("spend:user:creator") == pytest.approx(20 * 0.001 + 3 * 0.002)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ("chat", "messages"))
+async def test_cancelled_evaluation_releases_output_hold_and_keeps_input_cost(
+    evaluation_spend_cache: DualCache, evaluation_model: str, api: str
+) -> None:
+    entered: Final = asyncio.Event()
+    owner: Final = EvaluationBillingOwner("creator", {evaluation_model: {"max_budget": 1, "budget_duration": "1d"}}, 1)
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        entered.set()
+        return await asyncio.Future[httpx.Response]()
+
+    with respx.mock(assert_all_called=False) as transport, evaluation_billing_context(owner):
+        transport.post("https://evaluation.invalid/v1/chat/completions").mock(side_effect=upstream)
+        create: Final = litellm.acompletion if api == "chat" else litellm.anthropic.messages.acreate
+        pending: Final = asyncio.create_task(
+            create(
+                model=evaluation_model,
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                api_base="https://evaluation.invalid/v1",
+                api_key="test",
+                fallbacks=[],
+                num_retries=0,
+            )
+        )
+        await asyncio.wait_for(entered.wait(), 5)
+        held: Final = await evaluation_spend_cache.async_get_cache("spend:user:creator")
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    settled: Final = await evaluation_spend_cache.async_get_cache("spend:user:creator")
+    assert 0 < settled < held
+    assert await evaluation_spend_cache.async_get_cache(f"user_model_spend:creator:{evaluation_model}:1d") == settled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ("chat", "messages"))
+async def test_evaluation_streams_are_rejected_before_paid_transport(
+    evaluation_spend_cache: DualCache, evaluation_model: str, api: str
+) -> None:
+    create: Final = litellm.acompletion if api == "chat" else litellm.anthropic.messages.acreate
+    with (
+        respx.mock(assert_all_called=False) as transport,
+        evaluation_billing_context(EvaluationBillingOwner("creator", max_budget=1)),
+    ):
+        upstream: Final = transport.post("https://evaluation.invalid/v1/chat/completions").respond(500)
+        with pytest.raises(litellm.BadRequestError, match="Shadow evaluation requires a non-streaming response"):
+            await create(
+                model=evaluation_model,
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                api_base="https://evaluation.invalid/v1",
+                api_key="test",
+                fallbacks=[],
+                stream=True,
+            )
+    assert upstream.call_count == 0
+    assert await evaluation_spend_cache.async_get_cache("spend:user:creator") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", (0, 1))
+@pytest.mark.parametrize("api", ("chat", "messages"))
+async def test_global_fallback_leaves_enforce_creator_budget_and_emit_one_paid_receipt(
+    evaluation_spend_cache: DualCache, evaluation_model: str, monkeypatch: pytest.MonkeyPatch, budget: int, api: str
+) -> None:
+    fallback: Final = evaluation_model + "-fallback"
+    monkeypatch.setattr(litellm, "model_fallbacks", [fallback])
+    receipts: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+    owner: Final = EvaluationBillingOwner(
+        "creator",
+        {model: {"max_budget": 1, "budget_duration": "1d"} for model in (evaluation_model, fallback)},
+        max_budget=budget,
+    )
+
+    async def capture(kwargs: Mapping[str, object], response: object, start: datetime, end: datetime) -> None:
+        receipts.put_nowait(kwargs)
+
+    with (
+        respx.mock(assert_all_called=False) as transport,
+        evaluation_billing_context(owner),
+    ):
+        upstream: Final = transport.post("https://evaluation.invalid/v1/chat/completions").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "unavailable", "type": "server_error"}}),
+                httpx.Response(
+                    200,
+                    json=ModelResponse(
+                        model="evaluation-test-fallback",
+                        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+                        usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+                    ).model_dump(),
+                ),
+            ],
+        )
+        create: Final = litellm.acompletion if api == "chat" else litellm.anthropic.messages.acreate
+        request: Final = create(
+            model=evaluation_model,
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=10,
+            api_base="https://evaluation.invalid/v1",
+            api_key="test",
+            num_retries=0,
+            max_retries=0,
+            success_callback=[capture],
+        )
+        if budget == 0:
+            with pytest.raises(Exception, match="Max budget: 0"):
+                await request
+        else:
+            await request
+            receipt: Final = await asyncio.wait_for(receipts.get(), 10)
+            assert (receipt["user"], receipt["response_cost"]) == ("creator", 10 * 0.001 + 2 * 0.002)
+        await GLOBAL_LOGGING_WORKER.flush()
+    assert upstream.call_count == budget * 2
+    assert receipts.empty()
+    assert (await evaluation_spend_cache.async_get_cache("spend:user:creator") or 0) == pytest.approx(budget * 0.014)
+    assert (await evaluation_spend_cache.async_get_cache(f"user_model_spend:creator:{evaluation_model}:1d") or 0) == 0
+    assert (
+        await evaluation_spend_cache.async_get_cache(f"user_model_spend:creator:{fallback}:1d") or 0
+    ) == pytest.approx(budget * 0.014)

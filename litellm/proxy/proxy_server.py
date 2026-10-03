@@ -3374,14 +3374,20 @@ async def _reconcile_budget_reservation_for_counter_update(
     budget_reservation: dict | None,
     response_cost: float | None,
 ) -> _ReservationCounterUpdate:
-    if budget_reservation is None or budget_reservation.get("finalized") is True:
-        return _ReservationCounterUpdate()
-
     from litellm.proxy.spend_tracking.budget_reservation import (
         get_reserved_counter_keys,
         invalidate_budget_reservation_counters,
         reconcile_budget_reservation,
     )
+
+    if budget_reservation is not None and budget_reservation.get("externally_settled") is True:
+        return _ReservationCounterUpdate(
+            reserved_counter_keys=TypeAdapter(frozenset[str]).validate_python(
+                get_reserved_counter_keys(budget_reservation)
+            )
+        )
+    if budget_reservation is None or budget_reservation.get("finalized") is True:
+        return _ReservationCounterUpdate()
 
     reserved_counter_keys: Final = get_reserved_counter_keys(budget_reservation=budget_reservation)
     try:
