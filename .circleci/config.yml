@@ -3555,7 +3555,7 @@ workflows:
               mode: [replica]
       - postgres_suite:
           name: proxy-behavior
-          test_path: tests/proxy_behavior/lens
+          test_path: tests/proxy_behavior
           seed: true
           coverage_flag: lens-postgres
           timeout_minutes: 25
