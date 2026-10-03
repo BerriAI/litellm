@@ -12,6 +12,7 @@ vi.mock("@/components/networking", () => ({
 
 const created = {
   token: "lens-test-token",
+  image: "ghcr.io/berriai/litellm-lens-worker:v1.2.3",
   worker: {
     id: "worker",
     name: "Lens worker",
@@ -57,7 +58,11 @@ describe("Worker setup", () => {
     expect(command).toContain("LITELLM_URL=https://gateway.example/proxy");
     expect(command).toContain("LENS_WORKER_TOKEN=lens-test-token");
     expect(command).toContain("--add-host host.docker.internal:host-gateway");
-    expect(command).toContain("ghcr.io/berriai/litellm-lens-worker@sha256:");
+    expect(command).toContain(created.image);
+    await user.click(screen.getByText("Using Docker Compose or Helm?"));
+    await user.click(screen.getByRole("button", { name: "Copy worker token" }));
+    expect(await navigator.clipboard.readText()).toBe(created.token);
+    expect(screen.getByRole("button", { name: "Token copied" })).toBeVisible();
   });
   it("assigns billing to an existing worker without replacing its access token", async () => {
     const user = userEvent.setup();
