@@ -73,7 +73,7 @@ describe("useMcpOAuthFlow reset", () => {
 
     await waitFor(() => expect(result.current.status).toBe("success"));
     expect(result.current.tokenResponse).toEqual(token);
-    expect(onTokenReceived).toHaveBeenCalledWith(token, expect.objectContaining({ clientId: "client-1" }));
+    expect(onTokenReceived).toHaveBeenCalledWith(token, expect.objectContaining({ client_id: "client-1" }));
 
     act(() => {
       result.current.reset();
@@ -82,6 +82,26 @@ describe("useMcpOAuthFlow reset", () => {
     expect(result.current.status).toBe("idle");
     expect(result.current.tokenResponse).toBeNull();
     expect(result.current.error).toBeNull();
+  });
+
+  it("resumes a legacy server-managed flow without exposing a registered client", async () => {
+    seedCompletedRedirect();
+    const state = JSON.parse(getSecureItem(FLOW_STATE_KEY)!);
+    delete state.clientId;
+    setSecureItem(FLOW_STATE_KEY, JSON.stringify(state));
+    const token = { access_token: "server-managed-token" };
+    vi.mocked(networking.exchangeMcpOAuthToken).mockResolvedValue(token);
+    const onTokenReceived = vi.fn();
+    const { result } = renderFlow(onTokenReceived);
+    await waitFor(() => expect(result.current.status).toBe("success"));
+    expect(onTokenReceived).toHaveBeenCalledWith(token, undefined);
+    expect(networking.exchangeMcpOAuthToken).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverId: "server-1",
+        clientId: undefined,
+        clientSecret: undefined,
+      }),
+    );
   });
 
   it("ignores an in-flight exchange result after reset", async () => {
@@ -137,7 +157,7 @@ describe("useMcpOAuthFlow reset", () => {
     rerender({ onTokenReceived: onTokenReceived2 });
 
     await waitFor(() =>
-      expect(onTokenReceived2).toHaveBeenCalledWith(token, expect.objectContaining({ clientId: "client-1" })),
+      expect(onTokenReceived2).toHaveBeenCalledWith(token, expect.objectContaining({ client_id: "client-1" })),
     );
   });
 
@@ -163,8 +183,8 @@ describe("useMcpOAuthFlow reset", () => {
 
     await waitFor(() => expect(result.current.status).toBe("success"));
     expect(onTokenReceived).toHaveBeenCalledWith(token, {
-      clientId: "dcr-client-xyz",
-      clientSecret: "dcr-secret-abc",
+      client_id: "dcr-client-xyz",
+      client_secret: "dcr-secret-abc",
     });
   });
 
@@ -235,22 +255,32 @@ describe("useMcpOAuthFlow reset", () => {
 
       expect(JSON.parse(getSecureItem(FLOW_STATE_KEY)!)).toEqual(
         expect.objectContaining({
-          clientId: "fresh-client",
-          ...(bound
-            ? {
-                dcrCredentials: {
-                  client_id: "fresh-client",
-                  client_secret: secret ?? null,
+          client: {
+            client_id: "fresh-client",
+            client_secret: secret ?? null,
+            ...(bound
+              ? {
                   token_endpoint_auth_method: method === "client_secret_basic" ? method : null,
                   dcr_issuer: issuer ?? null,
                   dcr_server_url: "https://server-2.example.com/mcp",
                   redirect_uris: ["https://gateway.example.com/callback"],
-                },
-              }
-            : {}),
+                }
+              : {}),
+          },
         }),
       );
-      if (!bound) expect(JSON.parse(getSecureItem(FLOW_STATE_KEY)!)).not.toHaveProperty("dcrCredentials");
+      const stored = JSON.parse(getSecureItem(FLOW_STATE_KEY)!);
+      vi.mocked(networking.exchangeMcpOAuthToken).mockResolvedValue({ access_token: "new-token" });
+      setSecureItem(RESULT_KEY, JSON.stringify({ state: stored.state, code: "new-code" }));
+      const resumed = renderHook(() => useMcpOAuthFlow(options));
+      await waitFor(() => expect(resumed.result.current.status).toBe("success"));
+      expect(options.onTokenReceived).toHaveBeenCalledWith({ access_token: "new-token" }, stored.client);
+      expect(networking.exchangeMcpOAuthToken).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientId: "fresh-client",
+          clientSecret: secret,
+        }),
+      );
       expect(networking.registerMcpOAuthClient).toHaveBeenCalledTimes(1);
       expect(networking.buildMcpOAuthAuthorizeUrl).toHaveBeenCalledWith(
         expect.objectContaining({ clientId: "fresh-client" }),

@@ -264,14 +264,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // The DCR-minted client is held in a ref, NOT written into form.credentials, so it can never be
       // collected as a client-forwarded server's declared app; it is injected into the payload only on
       // an oauth2 submit. An admin-typed client already lives in form.credentials and is left untouched.
-      dcrClientRef.current =
-        registeredClient?.dcrCredentials ??
-        (registeredClient?.clientId
-          ? {
-              client_id: registeredClient.clientId,
-              ...(registeredClient.clientSecret && { client_secret: registeredClient.clientSecret }),
-            }
-          : null);
+      dcrClientRef.current = registeredClient ?? null;
 
       const current = (allFieldsValue(form).credentials as Record<string, unknown> | undefined) ?? {};
       const nextCredentials = {

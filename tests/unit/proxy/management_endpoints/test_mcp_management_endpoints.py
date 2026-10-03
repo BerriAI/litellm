@@ -11198,7 +11198,7 @@ def test_staged_url_edit_clears_resubmitted_issuer_and_endpoints(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_issuer_formatting_edit_reuses_saved_session_client(monkeypatch):
+async def test_distinct_issuer_identifier_edit_isolates_session_client(monkeypatch):
     from litellm.proxy.management_endpoints import mcp_management_endpoints as management
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -11213,9 +11213,9 @@ async def test_issuer_formatting_edit_reuses_saved_session_client(monkeypatch):
         url=saved.url, issuer="https://IDP.example:443/",
     )
     staged = management._inherit_credentials_from_existing_server(payload)
-    assert staged.credentials["client_id"] == "saved-client"
-    assert staged.credentials["client_secret"] == "saved-secret"
-    assert await management._resolve_session_server_id(staged) == saved.server_id
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert await management._resolve_session_server_id(staged) != saved.server_id
 
 
 @pytest.mark.asyncio
@@ -11275,3 +11275,24 @@ def test_new_oauth_session_does_not_look_up_saved_credentials(monkeypatch):
     assert management._inherit_credentials_from_existing_server(payload) is payload
     assert not payload.credentials
     lookup.assert_not_called()
+
+
+def test_edit_does_not_rebind_resubmitted_saved_client_to_new_issuer(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="saved-client", client_secret="saved-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, transport="http", auth_type="oauth2",
+        url="https://new.example/mcp", issuer="https://new.example",
+        credentials={"client_id": saved.client_id, "client_secret": saved.client_secret},
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert saved.client_id == "saved-client"

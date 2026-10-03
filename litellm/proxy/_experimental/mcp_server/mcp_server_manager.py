@@ -95,7 +95,6 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     canonicalize_url_identity,
     get_byok_www_authenticate,
-    issuer_identities_match,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
@@ -706,13 +705,12 @@ def _normalized_authorize_endpoint(url: str) -> str:
 
 def _issuer_matches(claimed_issuer: object, configured_issuer: str) -> bool:
     """RFC 8414 §3.3 issuer equality between the metadata document's self-attested ``issuer`` and the
-    admin-configured issuer, tolerant only of URL-insignificant differences (scheme/host case, the
-    default port, a trailing slash). A non-string or empty claimed issuer never matches, so a
+    admin-configured issuer. A non-string or empty claimed issuer never matches, so a
     document that omits ``issuer`` fails closed under issuer-anchored discovery.
     """
     if not isinstance(claimed_issuer, str) or not claimed_issuer:
         return False
-    return issuer_identities_match(claimed_issuer, configured_issuer)
+    return claimed_issuer == configured_issuer
 
 
 def _flow_endpoints_missing(
@@ -845,7 +843,6 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     )
     if may_carry and new_server.issuer is None:
         new_server.issuer = previous_server.issuer
-        new_server.authorization_response_issuer = previous_server.authorization_response_issuer
         new_server.authorization_response_iss_parameter_supported = (
             previous_server.authorization_response_iss_parameter_supported
         )
@@ -2043,7 +2040,6 @@ class MCPServerManager:
         resolved: Final = server.model_copy()
         resolved.scopes = server.scopes or metadata.scopes
         resolved.issuer = server.issuer or discovered_issuer
-        resolved.authorization_response_issuer = discovered_issuer or server.authorization_response_issuer
         resolved.authorization_response_iss_parameter_supported = (
             metadata.authorization_response_iss_parameter_supported
             if discovered_issuer is not None
@@ -2577,7 +2573,6 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
-                authorization_response_issuer=discovered_issuer,
                 authorization_response_iss_parameter_supported=(
                     gated_oauth_metadata.authorization_response_iss_parameter_supported
                     if gated_oauth_metadata
@@ -3152,7 +3147,6 @@ class MCPServerManager:
             scopes=resolved_scopes,
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
-            authorization_response_issuer=discovered_issuer,
             authorization_response_iss_parameter_supported=(
                 gated_oauth_metadata.authorization_response_iss_parameter_supported if gated_oauth_metadata else False
             ),

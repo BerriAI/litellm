@@ -4603,35 +4603,33 @@ async def test_callback_rejects_authorization_response_from_a_different_issuer(m
 
 
 @pytest.mark.asyncio
-async def test_callback_forwards_when_issuer_is_unknown_or_iss_absent(monkeypatch):
-    """Neither an authorization server that omits ``iss`` nor a server row with no issuer configured
-    can be validated, so both keep the pre-RFC-9207 behavior instead of failing closed."""
-    no_iss_response, _ = await _authorize_then_callback(
-        _issuer_anchored_oauth_server(),
-        iss=None,
-        monkeypatch=monkeypatch,
-    )
-    assert no_iss_response.status_code == 302
-
-    unanchored_response, state_data = await _authorize_then_callback(
+@pytest.mark.parametrize("error", [None, "access_denied"])
+async def test_callback_rejects_supplied_issuer_without_expected_identity(monkeypatch, error):
+    response, state_data = await _authorize_then_callback(
         _issuer_anchored_oauth_server(issuer=None),
-        iss="https://whatever-idp.example.com",
+        iss="https://unknown-idp.example.com",
         monkeypatch=monkeypatch,
+        error=error,
     )
     assert state_data["expected_issuer"] is None
-    assert unanchored_response.status_code == 302
+    assert response.status_code == 400
+    assert "location" not in response.headers
+    assert b"upstream-auth-code" not in response.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("issuer", [None, "https://idp.example.com"])
+async def test_callback_accepts_missing_unadvertised_issuer(monkeypatch, issuer):
+    response, _ = await _authorize_then_callback(
+        _issuer_anchored_oauth_server(issuer), iss=None, monkeypatch=monkeypatch,
+    )
+    assert response.status_code == 302
 
 
 @pytest.mark.asyncio
 async def test_callback_rejects_an_issuer_differing_only_outside_the_path(monkeypatch):
     """A tenant a deployment encoded in a query string is part of that issuer's identity, so the
     comparison must not canonicalize it away and let another tenant's response through."""
-    from litellm.proxy._experimental.mcp_server.oauth_utils import issuer_identities_match
-
-    assert not issuer_identities_match("https://idp.example.com/?tenant=b", "https://idp.example.com/?tenant=a")
-    assert not issuer_identities_match("https://idp.example.com/#b", "https://idp.example.com/#a")
-    assert issuer_identities_match("https://IDP.example.com:443/?tenant=a", "https://idp.example.com/?tenant=a")
-
     response, state_data = await _authorize_then_callback(
         _issuer_anchored_oauth_server(issuer="https://idp.example.com/?tenant=a"),
         iss="https://idp.example.com/?tenant=b",
@@ -4645,15 +4643,15 @@ async def test_callback_rejects_an_issuer_differing_only_outside_the_path(monkey
 
 
 @pytest.mark.asyncio
-async def test_callback_accepts_states_minted_before_the_issuer_was_sealed(monkeypatch):
-    """An authorization in flight across the upgrade carries no sealed issuer and must still land."""
+@pytest.mark.parametrize("iss,expected_status", [(None, 302), ("https://some-idp.example.com", 400)])
+async def test_callback_legacy_state_requires_absent_issuer(monkeypatch, iss, expected_status):
     response, _ = await _authorize_then_callback(
         _issuer_anchored_oauth_server(),
-        iss="https://some-idp.example.com",
+        iss=iss,
         monkeypatch=monkeypatch,
         expected_issuer_override=None,
     )
-    assert response.status_code == 302
+    assert response.status_code == expected_status
 
 
 @pytest.mark.asyncio
@@ -12968,27 +12966,6 @@ async def test_callback_rejects_missing_advertised_issuer(monkeypatch):
     assert b"upstream-auth-code" not in response.body
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("configured,discovered", [
-    ("https://idp.example.com/", "https://idp.example.com"),
-    ("https://idp.example.com", "https://idp.example.com/"),
-])
-async def test_callback_compares_discovered_issuer_without_changing_configured_issuer(monkeypatch, configured, discovered):
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata
-
-    resolved = MCPServerManager._merge_discovered_oauth_metadata(
-        _issuer_anchored_oauth_server(configured),
-        MCPOAuthMetadata(discovered_issuer=discovered, authorization_response_iss_parameter_supported=True),
-    )
-    response, state = await _authorize_then_callback(resolved, iss=discovered, monkeypatch=monkeypatch)
-    assert response.status_code == 302
-    assert state["expected_issuer"] == discovered
-    assert resolved.issuer == configured
-    rejected, _ = await _authorize_then_callback(resolved, iss=configured, monkeypatch=monkeypatch)
-    assert rejected.status_code == 400
-
-
 @pytest.mark.parametrize("issuer,url", [
     ("https://other.example", "https://resource.example/mcp"),
     (None, "https://other.example/mcp"),
@@ -13160,27 +13137,6 @@ async def test_registration_without_database_keeps_client_in_temporary_server(mo
 
 
 @pytest.mark.asyncio
-async def test_registration_reuses_one_row_read_for_identity_and_revision(monkeypatch):
-    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints, db
-    from litellm.proxy._types import LiteLLM_MCPServerTable
-    from litellm.proxy import utils
-
-    server = _dcr_redirect_test_server(None).model_copy(update={"url": "https://upstream.example/mcp"})
-    row = LiteLLM_MCPServerTable.model_validate(server.model_dump(exclude_none=True))
-    read = AsyncMock(return_value=row)
-    update = AsyncMock(return_value=row)
-    monkeypatch.setattr(utils, "get_prisma_client_or_throw", lambda _: MagicMock())
-    monkeypatch.setattr(db, "get_mcp_server", read)
-    monkeypatch.setattr(db, "update_mcp_server", update)
-    monkeypatch.setattr(endpoints, "_refresh_persisted_dcr_server", AsyncMock())
-    result = await endpoints._persist_dcr_client_registration(server, {"client_id": "new-client"}, "https://gateway.example/callback")
-    assert result == "persisted"
-    assert server.client_id == "new-client"
-    assert update.await_args.kwargs["expected_updated_at"] == row.updated_at
-    read.assert_awaited_once()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("config_store", [False, True])
 async def test_registration_does_not_overwrite_credentials_after_failed_identity_read(monkeypatch, config_store):
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints, db
@@ -13225,5 +13181,4 @@ async def test_registration_losing_conditional_write_reuses_only_a_matching_winn
     result = await endpoints._persist_dcr_client_registration(server, {"client_id": "losing-client"}, "https://gateway.example/callback")
     assert result == ("reused" if winner_available else "failed")
     assert update.await_args.kwargs["expected_updated_at"] == row.updated_at
-    assert read.await_count == 2
     assert server.client_id == ("winner-client" if winner_available else None)

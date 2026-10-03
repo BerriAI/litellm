@@ -85,12 +85,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.types.mcp import (
-    MCP_LATEST_HANDSHAKE_SPEC_VERSION,
     MCPAuth,
     MCPGatewaySession,
     MCPGatewaySessionGroupCount,
     MCPGatewaySessionsResponse,
     MCPGatewaySessionsTerminateResponse,
+    MCPSpecVersion,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -1876,7 +1876,7 @@ if MCP_AVAILABLE:
             "id": "litellm-mcp-auth-probe",
             "method": "initialize",
             "params": {
-                "protocolVersion": MCP_LATEST_HANDSHAKE_SPEC_VERSION.value,
+                "protocolVersion": MCPSpecVersion.jun_2025.value,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "litellm-mcp-auth-probe",

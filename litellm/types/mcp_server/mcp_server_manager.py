@@ -119,8 +119,6 @@ class MCPServer(BaseModel):
     client_secret: str | None = None
     issuer: str | None = None
     issuer_is_anchored: bool = False
-    # Exact metadata identifier for RFC 9207 callbacks; keep the configured issuer's spelling.
-    authorization_response_issuer: str | None = None
     authorization_response_iss_parameter_supported: bool = False
     dcr_issuer: str | None = None
     dcr_server_url: str | None = None

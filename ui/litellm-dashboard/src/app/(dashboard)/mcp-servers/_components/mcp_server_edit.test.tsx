@@ -23,9 +23,10 @@ const mockOauth: {
     | ((
         token: Record<string, unknown> | null,
         registeredClient?: {
-          clientId: string;
-          clientSecret?: string;
-          dcrCredentials?: { client_id: string; client_secret?: string; dcr_issuer?: string; dcr_server_url?: string };
+          client_id: string;
+          client_secret?: string;
+          dcr_issuer?: string;
+          dcr_server_url?: string;
         },
       ) => void)
     | null;
@@ -37,9 +38,10 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
     onTokenReceived?: (
       token: Record<string, unknown> | null,
       registeredClient?: {
-        clientId: string;
-        clientSecret?: string;
-        dcrCredentials?: { client_id: string; client_secret?: string; dcr_issuer?: string; dcr_server_url?: string };
+        client_id: string;
+        client_secret?: string;
+        dcr_issuer?: string;
+        dcr_server_url?: string;
       },
     ) => void;
   }) => {
@@ -592,12 +594,9 @@ describe("MCPServerEdit OAuth token invalidation", () => {
       mockOauth.onTokenReceived?.(
         { access_token: "new-token" },
         {
-          clientId: "new-client",
-          dcrCredentials: {
-            client_id: "new-client",
-            dcr_issuer: "https://new.example",
-            dcr_server_url: "https://new.example/mcp",
-          },
+          client_id: "new-client",
+          dcr_issuer: "https://new.example",
+          dcr_server_url: "https://new.example/mcp",
         },
       );
     });
@@ -629,14 +628,10 @@ describe("MCPServerEdit OAuth token invalidation", () => {
       mockOauth.onTokenReceived?.(
         { access_token: "new-token" },
         {
-          clientId: "new-client",
-          clientSecret: "new-secret",
-          dcrCredentials: {
-            client_id: "new-client",
-            client_secret: "new-secret",
-            dcr_issuer: "https://new.example",
-            dcr_server_url: "https://new.example/mcp",
-          },
+          client_id: "new-client",
+          client_secret: "new-secret",
+          dcr_issuer: "https://new.example",
+          dcr_server_url: "https://new.example/mcp",
         },
       );
     });

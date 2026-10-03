@@ -22,7 +22,6 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
-    issuer_identities_match,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -162,6 +161,14 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 
 # Minted token material that must never survive a client rotation on a persisted row.
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
+
+
+def _bind_submitted_oauth_client(
+    credentials: Mapping[str, object], issuer: str | None, url: str | None
+) -> dict[str, object]:
+    if not credentials.get("client_id") or credentials.get("dcr_issuer") or credentials.get("dcr_server_url"):
+        return dict(credentials)
+    return {**credentials, "dcr_issuer": issuer, "dcr_server_url": url}
 
 
 def oauth_credentials_for_upstream_edit(
@@ -442,7 +449,11 @@ def _prepare_mcp_server_data(
             if blob_value is not None and te_field not in data_dict:
                 data_dict[te_field] = blob_value
         data_dict["credentials"] = encrypt_credentials(credentials=credentials, encryption_key=_get_salt_key())
-        data_dict["credentials"] = safe_dumps(data_dict["credentials"])
+        data_dict["credentials"] = safe_dumps(
+            _bind_submitted_oauth_client(data_dict["credentials"], data.issuer, data.url)
+            if not exclude_unset and data.auth_type == "oauth2"
+            else data_dict["credentials"]
+        )
 
     # Serialize JSON fields from ``data_dict`` (not ``data``) so the
     # exclude_unset filter is respected. Reading back from ``data`` would
@@ -1279,9 +1290,7 @@ async def update_mcp_server(
     url_changed: Final = bool(url_provided and existing and existing.url != prepared_data["url"])
     old_issuer: Final = _blank_to_none(getattr(existing, "issuer", None)) if existing else None
     issuer_changed: Final = bool(
-        issuer_provided
-        and existing is not None
-        and not issuer_identities_match(_blank_to_none(prepared_data.get("issuer")) or "", old_issuer or "")
+        issuer_provided and existing is not None and _blank_to_none(prepared_data.get("issuer")) != old_issuer
     )
 
     oauth_upstream_edited: Final = bool(existing and existing.auth_type == "oauth2" and (url_changed or issuer_changed))
@@ -1302,7 +1311,33 @@ async def update_mcp_server(
         if auth_type_changed or url_changed or issuer_changed
         else {}
     )
-    data_dict: Final = {**edited_credentials, **prepared_data, **cleared_auth_fields}
+    supplied: Final = _credentials_blob_to_mutable_dict(prepared_data.get("credentials") or {})
+    safe_submitted: Final = (
+        oauth_credentials_for_upstream_edit(
+            supplied,
+            old_issuer,
+            existing.url if existing else None,
+            issuer_changed=issuer_changed or auth_type_changed,
+        )
+        if oauth_upstream_edited
+        and _decrypted_credential_field(supplied, "client_id")
+        == _decrypted_credential_field(existing_credentials, "client_id")
+        else supplied
+    )
+    submitted_credentials: Final = (
+        {
+            "credentials": safe_dumps(
+                _bind_submitted_oauth_client(
+                    safe_submitted,
+                    _blank_to_none(cleared_auth_fields.get("issuer", prepared_data.get("issuer", old_issuer))),
+                    _blank_to_none(prepared_data.get("url", existing.url if existing else None)),
+                )
+            )
+        }
+        if has_credentials and (data.auth_type or (existing.auth_type if existing else None)) == "oauth2"
+        else {}
+    )
+    data_dict: Final = {**edited_credentials, **prepared_data, **submitted_credentials, **cleared_auth_fields}
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:

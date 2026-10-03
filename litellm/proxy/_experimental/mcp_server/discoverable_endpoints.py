@@ -75,7 +75,6 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
     get_request_base_url,
-    issuer_identities_match,
     oauth_client_registration_matches,
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
@@ -1015,7 +1014,7 @@ async def authorize_with_server(
         dcr_token_endpoint_auth_method=ephemeral_dcr_client.token_endpoint_auth_method
         if ephemeral_dcr_client
         else None,
-        expected_issuer=resolved_server.authorization_response_issuer or resolved_server.issuer,
+        expected_issuer=resolved_server.issuer,
         authorization_response_iss_parameter_supported=resolved_server.authorization_response_iss_parameter_supported,
     )
     relay_state: Final = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
@@ -1526,9 +1525,7 @@ async def _resolve_persisted_dcr_client(
         return None, None
 
     if row is not None:
-        if row.url != mcp_server.url or (
-            row.issuer and mcp_server.issuer and not issuer_identities_match(row.issuer, mcp_server.issuer)
-        ):
+        if row.url != mcp_server.url or (row.issuer and mcp_server.issuer and row.issuer != mcp_server.issuer):
             return row, None
         credentials: Final = _get_persisted_dcr_credentials(row.credentials)
         if credentials is not None and credentials.client_id:
@@ -1685,7 +1682,7 @@ async def _persist_dcr_client_registration(
         if stored is not None and (
             stored.url != mcp_server.url
             or stored.auth_type != mcp_server.auth_type
-            or (stored.issuer and mcp_server.issuer and not issuer_identities_match(stored.issuer, mcp_server.issuer))
+            or (stored.issuer and mcp_server.issuer and stored.issuer != mcp_server.issuer)
         ):
             return "failed"
         if (
@@ -2326,9 +2323,7 @@ def _authorization_response_issuer_is_trusted(response_issuer: str | None, state
     expected_issuer: Final = state_data.get("expected_issuer")
     if response_issuer is None:
         return state_data.get("authorization_response_iss_parameter_supported") is not True
-    if not isinstance(expected_issuer, str) or not expected_issuer:
-        return True
-    return response_issuer == expected_issuer
+    return isinstance(expected_issuer, str) and bool(expected_issuer) and response_issuer == expected_issuer
 
 
 @router.get("/callback")

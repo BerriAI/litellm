@@ -320,7 +320,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         return;
       }
 
-      dcrClientRef.current = registeredClient?.dcrCredentials ?? null;
+      dcrClientRef.current = registeredClient?.dcr_server_url ? registeredClient : null;
       const current = (allFieldsValue(form).credentials as Record<string, unknown> | undefined) ?? {};
       const nextCredentials = {
         ...(preservedAdminCredentials(current) ?? {}),

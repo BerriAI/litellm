@@ -38,9 +38,6 @@ class MCPSpecVersion(str, enum.Enum):
     jul_2026 = "2026-07-28"
 
 
-MCP_LATEST_HANDSHAKE_SPEC_VERSION: Final = MCPSpecVersion.nov_2025
-
-
 class MCPAuth(str, enum.Enum):
     none = "none"
     api_key = "api_key"
