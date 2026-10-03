@@ -17,6 +17,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
     apply_bedrock_invoke_structured_output,
     bedrock_supports_tool_search,
     get_anthropic_beta_from_headers,
@@ -378,7 +379,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        return AnthropicConfig.transform_response(
+        model_response = AnthropicConfig.transform_response(
             self,
             model=model,
             raw_response=raw_response,
@@ -392,3 +393,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        # AnthropicConfig sets model from the Anthropic body (e.g. "claude-opus-5"),
+        # which breaks Bedrock region pricing keys like
+        # bedrock/us-gov-west-1/anthropic.claude-opus-5. Match Converse/base_invoke
+        # and keep the Bedrock model id. See #44002.
+        model_response.model = BedrockModelInfo.get_base_model(model)
+        return model_response

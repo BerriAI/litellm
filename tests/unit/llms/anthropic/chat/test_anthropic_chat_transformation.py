@@ -6798,3 +6798,42 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+def test_transform_parsed_response_preserves_preexisting_hidden_params():
+    """Bedrock Invoke sets region_name / custom_llm_provider on _hidden_params in
+    main.py before AmazonAnthropicClaudeConfig.transform_parsed_response runs.
+    Replacing the dict wiped those keys and broke GovCloud region pricing (#44002).
+    """
+    config = AnthropicConfig()
+    raw_response = MagicMock()
+    raw_response.headers = {"x-request-id": "req_1"}
+    raw_response.status_code = 200
+
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5",
+        "content": [{"type": "text", "text": "hello there"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    from litellm.types.utils import ModelResponse
+
+    model_response = ModelResponse()
+    model_response._hidden_params["region_name"] = "us-gov-west-1"
+    model_response._hidden_params["custom_llm_provider"] = "bedrock"
+
+    out = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=raw_response,
+        model_response=model_response,
+    )
+
+    assert out._hidden_params.get("region_name") == "us-gov-west-1"
+    assert out._hidden_params.get("custom_llm_provider") == "bedrock"
+    assert "additional_headers" in out._hidden_params
+    assert "provider_specific_fields" in out._hidden_params
+    assert out._hidden_params.get("original_response") == completion_response["content"]
+
