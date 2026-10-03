@@ -6,6 +6,7 @@ from litellm.types.roi_calculator import (
     ROIBranchAttribution,
     ROIBranchMetrics,
     ROIPersonSummary,
+    ROIPullEvidence,
     ROIPullRecord,
     ROIPullSummary,
     ROIReport,
@@ -27,7 +28,7 @@ def normalize_email(value: str | None) -> str:
 
 
 def match_identity(
-    pull: ROIPullRecord,
+    pull: ROIPullRecord | ROIPullEvidence,
     observed_emails: frozenset[str],
     mappings: Mapping[str, str],
 ) -> tuple[str, str]:

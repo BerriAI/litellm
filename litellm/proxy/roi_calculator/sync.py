@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from itertools import chain
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.roi_calculator.analytics import match_identity, normalize_email
 from litellm.proxy.roi_calculator.estimator import CompletionCaller, Estimator, EstimatorModel, cache_context
 from litellm.proxy.roi_calculator.github import GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.pull_cache import cache_key, settings_fingerprint
@@ -29,6 +30,7 @@ from litellm.types.roi_calculator import (
 )
 
 PR_CONCURRENCY: Final = 3
+_GATEWAY_USER_PAGE_SIZE: Final = 1000
 _ESTIMATE_ADAPTER: Final = TypeAdapter(ROIEstimate)
 _REPORT_ADAPTER: Final = TypeAdapter(ROIReport)
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -76,6 +78,8 @@ class _UserTable(Protocol):
 
 
 class _PrismaDatabase(Protocol):
+    async def query_raw(self, query: str, *args: object) -> object: ...
+
     @property
     def litellm_dailyuserspend(self) -> _DailySpendTable: ...
 
@@ -124,8 +128,6 @@ async def read_spend(
     start: date,
     end: date,
 ) -> tuple[ROISpendRecord, ...]:
-    from litellm.proxy.roi_calculator.analytics import normalize_email
-
     database: Final = prisma_client.db
     daily_table: Final = database.litellm_dailyuserspend
     group_by: Final = TypeAdapter(list[Literal["user_id", "date"]]).validate_python(("user_id", "date"))
@@ -166,6 +168,35 @@ async def read_spend(
     )
 
 
+async def _gateway_users(database: _PrismaDatabase) -> AsyncIterator[_UserEmail]:
+    cursor: str | None = None  # rebind-ok: keyset pagination advances after each bounded page
+    while True:
+        users: tuple[_UserEmail, ...] = _USER_EMAILS.validate_python(
+            await database.query_raw(
+                'SELECT "user_id", "user_email" FROM "LiteLLM_UserTable" '
+                'WHERE "user_email" IS NOT NULL AND ($1::text IS NULL OR "user_id" > $1) '
+                'ORDER BY "user_id" LIMIT $2',
+                cursor,
+                _GATEWAY_USER_PAGE_SIZE,
+            )
+        )
+        for user in users:
+            yield user
+        if len(users) < _GATEWAY_USER_PAGE_SIZE:
+            return
+        cursor = users[-1].user_id
+
+
+async def read_gateway_user_emails(prisma_client: _SpendPrismaClient) -> frozenset[str]:
+    return frozenset(
+        [email async for user in _gateway_users(prisma_client.db) if (email := normalize_email(user.user_email))]
+    )
+
+
+class GatewayUserReader(Protocol):
+    def __call__(self) -> Awaitable[frozenset[str]]: ...
+
+
 class GitHubFactory(Protocol):
     def __call__(
         self,
@@ -204,6 +235,26 @@ class _StatusUpdate(TypedDict, total=False):
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _unlinked_estimate(
+    pull: ROIPullEvidence | ROIPullRecord,
+    gateway_emails: frozenset[str],
+    mappings: Mapping[str, str],
+) -> ROIEstimate | None:
+    email, method = match_identity(pull, gateway_emails, mappings)
+    if email and email in gateway_emails:
+        return None
+    reason: Final = (
+        "Multiple gateway users match this author."
+        if method == "ambiguous emails"
+        else "This author is not linked to a registered gateway user."
+    )
+    return {
+        "status": "needs_review",
+        "hours": None,
+        "reasoning": f"Not estimated: {reason} Link the author to a gateway user and run analysis again.",
+    }
 
 
 async def _estimate_with_fallback(
@@ -322,8 +373,8 @@ def _processed_records(processed: tuple[_ProcessedPull, ...]) -> Mapping[int, RO
         raise SourceError(
             "The repository source could not provide PR metadata. No new report was published; try analysis again later."
         )
-    if any(item.record["estimate"]["status"] == "error" for item in processed) and not any(
-        item.record["estimate"]["status"] == "estimated" for item in processed
+    if any(item.record["estimate"]["status"] == "error" for item in processed) and all(
+        item.record["estimate"]["status"] == "error" or item.metadata_unavailable for item in processed
     ):
         raise SourceError(
             "The estimator could not score any merged changes. No new report was published; "
@@ -399,6 +450,8 @@ class SyncManager:
         coordinator: SyncCoordinator | None = None,
         scheduled_interval: float = 0,
         branch_spend_reader: BranchSpendReader | None = None,
+        *,
+        gateway_user_reader: GatewayUserReader,
     ) -> bool:
         async with self._start_lock:
             if not settings.repos or not settings.estimator_model:
@@ -439,6 +492,7 @@ class SyncManager:
                     coordinator,
                     owner,
                     branch_spend_reader,
+                    gateway_user_reader,
                 )
             )
             return True
@@ -481,12 +535,14 @@ class SyncManager:
         coordinator: SyncCoordinator | None,
         owner: str,
         branch_spend_reader: BranchSpendReader | None,
+        gateway_user_reader: GatewayUserReader,
     ) -> None:
         monitor: Final = asyncio.create_task(self._heartbeat(asyncio.current_task(), coordinator, owner))
         github: Final = self._github_factory(settings, github_transport)
         try:
             end: Final = self._clock().date()
             start: Final = end - timedelta(days=settings.backfill_days - 1)
+            gateway_emails: Final = await gateway_user_reader()
             spend: Final = await spend_reader(start, end)
             self._update_status(phase="repositories", stage="Reading configured repositories")
             repositories: Final = await _read_repositories(github, settings.repos, start, end)
@@ -545,15 +601,21 @@ class SyncManager:
                     await _cache_estimated_pull(
                         repository, key, cached_record, cached_pull if saved is not None else None
                     )
-                    self._update_estimate_progress(cached_record["estimate"])
-                    return _ProcessedPull(index, cached_record)
+                    cached_estimate: Final = (
+                        _unlinked_estimate(cached_record, gateway_emails, settings.identity_map)
+                        or cached_record["estimate"]
+                    )
+                    self._update_estimate_progress(cached_estimate)
+                    return _ProcessedPull(index, {**cached_record, "estimate": cached_estimate})
                 try:
                     evidence: Final = await github.evidence(repo, pull)
                 except SourceError as exc:
                     unavailable: Final = await _unavailable_record(github, settings, repo, pull, exc)
                     self._update_estimate_progress(unavailable["estimate"])
                     return _ProcessedPull(index, unavailable, metadata_unavailable=True)
-                estimate: Final = await _estimate_with_fallback(estimator, evidence)
+                estimate: Final = _unlinked_estimate(
+                    evidence, gateway_emails, settings.identity_map
+                ) or await _estimate_with_fallback(estimator, evidence)
                 evidence_item: Final = GitHubPullListItem.model_validate(
                     MappingProxyType(
                         {

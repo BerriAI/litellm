@@ -41334,6 +41334,13 @@ export interface components {
              */
             status: "estimated" | "needs_review" | "error";
         };
+        /** ROIEstimatorModel */
+        ROIEstimatorModel: {
+            /** Model Name */
+            model_name: string;
+            /** Provider Models */
+            provider_models: string[];
+        };
         /** ROIIdentityMapResponse */
         ROIIdentityMapResponse: {
             /** Identity Map */
@@ -41486,6 +41493,11 @@ export interface components {
             default_prompt: string;
             /** Estimator Model */
             estimator_model: string;
+            /**
+             * Estimator Models
+             * @default []
+             */
+            estimator_models: components["schemas"]["ROIEstimatorModel"][];
             /** Estimator Prompt */
             estimator_prompt: string;
             /** Github Api Url */

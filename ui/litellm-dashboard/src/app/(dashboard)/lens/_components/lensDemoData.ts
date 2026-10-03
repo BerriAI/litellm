@@ -2,6 +2,7 @@ import { createApiClient } from "@/lib/http/client";
 import type { LensDemo } from "@/components/lens/LensDemoContext";
 import type { Trace, Span, SpanDetail } from "@/components/view_logs/TraceView/traceTypes";
 import type { Lens, Finding, Job, Settings } from "./lensData";
+import { withReleaseCases } from "./lensDemoLongTrace";
 
 type Scenario = {
   agent: string;
@@ -61,8 +62,8 @@ const scenarios: Scenario[] = [
     agent: "release_agent",
     question: "Review the search release",
     tool: "read_test_results",
-    result: "Search: 86 passed, 1 failed. Unicode query regression remains open.",
-    answer: "Hold the release. The Unicode query regression is still failing.",
+    result: "Search: 117 passed, 3 failed. Cases 17, 63 and 104 returned empty results.",
+    answer: "Hold the release. Three of 120 cases returned empty results. Review cases 17, 63 and 104 before shipping.",
   },
   {
     agent: "support_agent",
@@ -206,7 +207,10 @@ function makeTrace(scene: Scenario, index: number, now: number) {
 }
 
 export function createLensDemoData(now = Date.now()) {
-  const runs = scenarios.map((scene, index) => makeTrace(scene, index, now));
+  const runs = scenarios.map((scene, index) => {
+    const run = makeTrace(scene, index, now);
+    return index === 6 ? withReleaseCases(run) : run;
+  });
   const finding = ({
     id,
     check,

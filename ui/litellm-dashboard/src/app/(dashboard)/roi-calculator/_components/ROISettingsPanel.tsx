@@ -2,6 +2,9 @@
 
 import React from "react";
 
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { estimatorModelOptions } from "./roiCalculatorData";
+
 import { apiClient } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { Button } from "@/components/ui/button";
@@ -408,23 +411,19 @@ export default function ROISettingsPanel({
                 {!onboarding && <h3 className="font-semibold">Estimation and updates</h3>}
                 <div className="grid gap-2">
                   <Label htmlFor="roi-estimator-model">Estimator model</Label>
-                  <select
-                    id="roi-estimator-model"
-                    className="h-9 min-w-0 rounded-md border bg-background pl-3 pr-9 text-sm"
-                    disabled={readOnly}
+                  <SearchSelect
+                    inputId="roi-estimator-model"
+                    options={estimatorModelOptions(initialSettings)}
                     value={model}
-                    onChange={(event) => setModel(event.target.value)}
-                  >
-                    <option value="">Select a router model</option>
-                    {model && !initialSettings.available_models.includes(model) && (
-                      <option value={model}>{model}</option>
-                    )}
-                    {initialSettings.available_models.map((availableModel) => (
-                      <option key={availableModel} value={availableModel}>
-                        {availableModel}
-                      </option>
-                    ))}
-                  </select>
+                    onValueChange={(value) => setModel(value ?? "")}
+                    placeholder="Search estimator models"
+                    emptyText="No matching models configured on this gateway"
+                    disabled={readOnly}
+                    className="h-9"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    We recommend GPT-6 Luna for estimating PR effort. Choose a model configured on your gateway.
+                  </p>
                 </div>
                 <details>
                   <summary className="cursor-pointer text-sm text-muted-foreground">Advanced estimator options</summary>

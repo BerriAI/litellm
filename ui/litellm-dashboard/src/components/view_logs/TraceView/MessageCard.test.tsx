@@ -37,7 +37,7 @@ describe("MessageCard", () => {
     expect(screen.getByText("Why was I billed twice?")).toBeVisible();
   });
 
-  it("lists tool call args as dot rows and expands only the long value in place", async () => {
+  it("lists tool call arguments once and expands only the long value in place", async () => {
     const user = userEvent.setup();
     render(
       <MessageCard

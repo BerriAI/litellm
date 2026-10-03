@@ -12,7 +12,7 @@ export function IdChip({ value, label, showValue = false }: { value: string; lab
       aria-label={label}
       title={value}
       onClick={() => void copyToClipboard(value, "ID copied")}
-      className="inline-flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[3px] border border-transparent bg-trace-chip px-1 font-mono text-[13px] leading-none font-medium text-trace-key transition-colors duration-100 hover:text-trace-text-2 focus-visible:outline-2 focus-visible:outline-trace-brand motion-reduce:transition-none"
+      className="inline-flex h-6 min-w-0 shrink-0 items-center gap-1 rounded px-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
     >
       <span className="truncate">{showValue ? value : "ID"}</span>
       <Copy className="size-3 shrink-0" />

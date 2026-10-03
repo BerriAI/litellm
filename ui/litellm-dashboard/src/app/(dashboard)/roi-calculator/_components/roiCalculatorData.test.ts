@@ -4,6 +4,7 @@ import {
   coverageLabel,
   effortNote,
   estimateLabel,
+  estimatorModelOptions,
   filterPulls,
   formatMoney,
   formatNumber,
@@ -44,9 +45,17 @@ const summary = {
 describe("ROI calculator display helpers", () => {
   it("ranks only attributed PR costs, limits the overview to five and preserves report order", () => {
     const pulls = [2, 6, 1, 4, 3, 5].map((spend) =>
-      pull({ number: spend, branch_cost: { status: "matched", spend, requests: 1, cost_per_hour: spend } }),
+      pull({
+        number: spend,
+        branch_cost: { status: "matched", spend, requests: 1, repo: "github.com/org/repo", branch: "feature" },
+      }),
     );
-    pulls.push(pull({ number: 99, branch_cost: { status: "ambiguous", spend: 99, requests: 1, cost_per_hour: null } }));
+    pulls.push(
+      pull({
+        number: 99,
+        branch_cost: { status: "ambiguous", spend: 99, requests: 1, repo: "github.com/org/repo", branch: "feature" },
+      }),
+    );
     pulls.push(pull({ number: 100 }));
     expect(highestCostPulls(pulls).map((item) => item.number)).toEqual([6, 5, 4, 3, 2]);
     expect(pulls.map((item) => item.number)).toEqual([2, 6, 1, 4, 3, 5, 99, 100]);
@@ -108,4 +117,34 @@ it("exports precise spend, cohort eligibility and safely quoted CSV values", () 
   expect(csv.split("\r\n")).toHaveLength(2);
   expect(csv).toContain('"\'=HYPERLINK(""bad"")","alice;bob","0.0001","4","1","0","true","0.000025"');
   expect(csv).toContain('"2026-09-01","2026-09-30","without_ai"');
+});
+
+it("recommends the real Luna model and preserves its gateway name for requests", () => {
+  expect(
+    estimatorModelOptions({
+      available_models: ["general", "fast-estimator"],
+      estimator_models: [
+        { model_name: "general", provider_models: ["anthropic/claude-haiku"] },
+        { model_name: "fast-estimator", provider_models: ["openai/gpt-6-luna"] },
+      ],
+    }),
+  ).toEqual([
+    {
+      value: "fast-estimator",
+      label: "GPT-6 Luna",
+      sublabel: "Recommended · Gateway name: fast-estimator",
+      recommended: true,
+    },
+    { value: "general", label: "anthropic/claude-haiku", sublabel: "Gateway name: general", recommended: false },
+  ]);
+});
+
+it("does not invent available models or recommend an alias pointing to a different model", () => {
+  expect(
+    estimatorModelOptions({
+      available_models: ["gpt-6-luna"],
+      estimator_models: [{ model_name: "gpt-6-luna", provider_models: ["custom-model"] }],
+    }),
+  ).toEqual([{ value: "gpt-6-luna", label: "custom-model", sublabel: "Gateway name: gpt-6-luna", recommended: false }]);
+  expect(estimatorModelOptions({ available_models: [], estimator_models: [] })).toEqual([]);
 });
