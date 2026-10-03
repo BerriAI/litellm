@@ -21,6 +21,7 @@ litellm-http.workspace = true
 litellm-migrate.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-traces.workspace = true
+litellm-traces-cache.workspace = true
 moka.workspace = true
 serde.workspace = true
 serde_json.workspace = true
