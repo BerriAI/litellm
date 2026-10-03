@@ -3086,7 +3086,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: Literal["complexity", "adaptive", "quality"]
+    router_type: Literal["complexity", "adaptive", "quality", "oracle"]
     routed_model: str
     cause: RoutingDecisionCause
     tier: str

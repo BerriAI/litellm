@@ -24,7 +24,7 @@ from litellm.router_strategy.complexity_router.config import (
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
-StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality", "oracle"]
 
 StrategyRouterDependencyRole: TypeAlias = Literal[
     "tier", "default", "classifier", "embedding", "evaluation", "compactor"
@@ -51,6 +51,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
         "adaptive_router_config",
         "quality_router_config",
         "quality_router_default_model",
+        "oracle_router_config",
     }
 )
 
@@ -63,6 +64,7 @@ _REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...],
     "complexity": (("complexity_router_config", "complexity_router_default_model"),),
     "adaptive": (("adaptive_router_config",),),
     "quality": (("quality_router_config", "quality_router_default_model"),),
+    "oracle": (("oracle_router_config",),),
 }
 
 
@@ -82,6 +84,8 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
         return "adaptive"
     if remainder.startswith("quality_router"):
         return "quality"
+    if remainder.startswith("oracle_router"):
+        return "oracle"
     return "semantic"
 
 
@@ -141,6 +145,8 @@ def strategy_router_dependencies(
         )
     if kind == "adaptive":
         return _pool(_mapping(litellm_params.get("adaptive_router_config")).get("available_models"), "tier")
+    if kind == "oracle":
+        return _pool(_mapping(litellm_params.get("oracle_router_config")).get("available_models"), "tier")
     if kind == "quality":
         quality: Final = _mapping(litellm_params.get("quality_router_config"))
         return tuple(

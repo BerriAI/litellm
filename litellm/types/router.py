@@ -6,7 +6,7 @@ import datetime
 import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeAlias, TypeVar, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -451,6 +451,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # adaptive-router params
     adaptive_router_default_model: str | None = None
     adaptive_router_config: dict | None = None
+    # oracle-router params
+    oracle_router_config: Mapping[str, object] | None = None
     # quality-router params
     quality_router_config: dict | None = None
     quality_router_default_model: str | None = None
@@ -1243,3 +1245,77 @@ class AdaptiveRouterPreferences(BaseModel):
 
     quality_tier: int = Field(ge=1, le=3)
     strengths: list[RequestType] = Field(default_factory=list)
+
+
+OracleDecisionMakerType: TypeAlias = Literal["thompson", "fixed", "pre_routing", "custom"]
+OracleVerifierType: TypeAlias = Literal["reported", "guardrail", "custom"]
+
+
+class OracleDecisionMakerConfig(BaseModel):
+    """Which policy binds a program to a model, and its knobs.
+
+    ``thompson`` (default) is the adaptive router's bandit trained on verified program outcomes; ``weights``
+    are that bandit's quality/cost weights. ``fixed`` always picks ``model``. ``pre_routing`` lets the strategy
+    router named by ``router`` (a complexity, quality, adaptive or semantic router in the same model_list)
+    propose the model once per program. ``custom`` imports ``path`` (``package.module:Factory``) and calls it
+    with the model tuple; it is honoured only for deployments in the proxy config file, never for models
+    written through the API.
+    """
+
+    type: OracleDecisionMakerType = "thompson"
+    weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
+    seed: int = 0
+    model: str | None = None
+    router: str | None = None
+    path: str | None = None
+
+    @model_validator(mode="after")
+    def _required_fields(self) -> "OracleDecisionMakerConfig":
+        required: Final = {"fixed": self.model, "pre_routing": self.router, "custom": self.path}
+        if self.type in required and not required[self.type]:
+            names: Final = {"fixed": "model", "pre_routing": "router", "custom": "path"}
+            raise ValueError(f"decision_maker.type={self.type!r} requires decision_maker.{names[self.type]}")
+        return self
+
+
+class OracleVerifierConfig(BaseModel):
+    """How a finished program is scored.
+
+    ``guardrail`` applies the configured LiteLLM guardrail ``guardrail`` (for example an ``llm_as_a_judge``
+    guardrail) to the program's final turn with the transcript as context. ``reported`` trusts
+    ``metadata.program_score`` or the feedback endpoint. ``custom`` imports ``path`` and calls it with no
+    arguments; it is honoured only for deployments in the proxy config file, never for models written
+    through the API.
+    """
+
+    type: OracleVerifierType = "reported"
+    default_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    guardrail: str | None = None
+    path: str | None = None
+
+    @model_validator(mode="after")
+    def _required_fields(self) -> "OracleVerifierConfig":
+        required: Final = {"guardrail": self.guardrail, "custom": self.path}
+        if self.type in required and not required[self.type]:
+            names: Final = {"guardrail": "guardrail", "custom": "path"}
+            raise ValueError(f"verifier.type={self.type!r} requires verifier.{names[self.type]}")
+        return self
+
+
+class OracleRouterConfig(BaseModel):
+    """``litellm_params.oracle_router_config`` of an ``auto_router/oracle_router`` deployment."""
+
+    available_models: tuple[str, ...] = Field(min_length=1)
+    decision_maker: OracleDecisionMakerConfig = Field(default_factory=OracleDecisionMakerConfig)
+    verifier: OracleVerifierConfig = Field(default_factory=OracleVerifierConfig)
+    program_id_key: str = "program_id"
+    program_ttl_seconds: int = Field(default=24 * 3600, ge=1)
+    max_programs: int = Field(default=10_000, ge=1)
+
+    @model_validator(mode="after")
+    def _fixed_model_is_available(self) -> "OracleRouterConfig":
+        if len(self.available_models) != len(frozenset(self.available_models)):
+            raise ValueError("available_models must be distinct")
+        if self.decision_maker.type == "fixed" and self.decision_maker.model not in self.available_models:
+            raise ValueError("decision_maker.model must be one of available_models")
+        return self

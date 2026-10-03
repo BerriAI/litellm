@@ -3264,7 +3264,7 @@ async def clear_cache() -> ReconcileOutcome:
             config_models: Final = []
             db_model_ids: Final = []
 
-            db_router_names: Final = set()
+            db_router_names: Final[set[str]] = set()  # mutable-ok: filled in the classification pass below
 
             for model in current_models:
                 model_info = model.get("model_info", {})
@@ -3273,7 +3273,7 @@ async def clear_cache() -> ReconcileOutcome:
                     # Auto-router deployments (and only those) are wiped here, in the
                     # same pass, so the reload rebuilds them -- see the comment below.
                     model_name = model.get("model_name")
-                    if model_name is not None and str(model.get("litellm_params", {}).get("model", "")).startswith(
+                    if isinstance(model_name, str) and str(model.get("litellm_params", {}).get("model", "")).startswith(
                         "auto_router/"
                     ):
                         db_router_names.add(model_name)
@@ -3322,6 +3322,7 @@ async def clear_cache() -> ReconcileOutcome:
                 llm_router.complexity_routers.pop(model_name, None)
                 llm_router.adaptive_routers.pop(model_name, None)
                 llm_router.quality_routers.pop(model_name, None)
+                llm_router.oracle_routers.pop(model_name, None)
 
             # Reload only DB models. _add_deployment_locked, not add_deployment: this
             # coroutine already holds MODEL_RECONCILE_LOCK and asyncio.Lock is not

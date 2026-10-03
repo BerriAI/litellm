@@ -239,7 +239,6 @@ class TestRouterIndexManagement:
         # Methods that are allowed to iterate through self.model_list
         ALLOWED_METHODS = {
             "_get_deployment_by_litellm_model": "lookup by litellm_params.model, which is not indexed",
-            "_finalize_adaptive_router_if_configured": 'init-time prefix scan for "auto_router/adaptive_router"; no index for prefix match',
             "config_deployments": "filters the whole list on model_info.db_model; admin path only (model add/upsert)",
             "auto_router_capability_violation": "counts gated auto-routers across the whole list; admin path only (auto-router init/upsert)",
         }

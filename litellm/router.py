@@ -275,6 +275,7 @@ from litellm.types.llms.openai import (
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     VALID_LITELLM_ENVIRONMENTS,
+    AdaptiveRouterPreferences,
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
@@ -359,6 +360,7 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
     )
+    from litellm.router_strategy.oracle_router.oracle_router import OracleRouter
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
@@ -379,6 +381,7 @@ else:
     ComplexityRouter = Any
     AdaptiveRouter = Any
     QualityRouter = Any
+    OracleRouter = Any  # rebind-ok: runtime stand-in for the TYPE_CHECKING-only import above
     PreRoutingHookResponse = Any
 
 RouterStrategySelector: TypeAlias = (
@@ -1025,6 +1028,7 @@ class Router:
         self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
+        self.oracle_routers: dict[str, list[TaggedPreRoutingStrategy[OracleRouter]]] = {}  # mutable-ok: registry
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -9346,26 +9350,21 @@ class Router:
             self._unregister_pre_routing_strategy(registry, model_name, tags)
         if self._unregister_pre_routing_strategy(self.adaptive_routers, model_name, tags):
             self._sync_adaptive_router_hooks()
+        if self._unregister_pre_routing_strategy(self.oracle_routers, model_name, tags):
+            self._sync_oracle_router_hooks()
 
     def _finalize_adaptive_router_if_configured(self) -> None:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
         Idempotent: skips any deployment whose (model_name, tags) pair is already
         initialized, so hot-reloads don't rebuild routers that would lose state."""
-        for entry in self.model_list or []:
-            lp = entry.get("litellm_params") if isinstance(entry, dict) else entry.litellm_params
-            lp_model = (lp.get("model") if isinstance(lp, dict) else lp.model) if lp else None
-            if not (lp_model and lp_model.startswith("auto_router/adaptive_router")):
+        for model_id in self.get_model_ids():
+            deployment = self.get_deployment(model_id=model_id)
+            if deployment is None or not self._is_adaptive_router_deployment(litellm_params=deployment.litellm_params):
                 continue
-            model_name = entry.get("model_name") if isinstance(entry, dict) else entry.model_name
-            if not model_name or not lp:
-                continue
-            deployment = Deployment(
-                model_name=model_name,
-                litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
-                model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
-            )
-            if self._has_registered_strategy(self.adaptive_routers, model_name, self._deployment_tags(deployment)):
+            if self._has_registered_strategy(
+                self.adaptive_routers, deployment.model_name, self._deployment_tags(deployment)
+            ):
                 continue
             self.init_adaptive_router_deployment(deployment=deployment)
 
@@ -9401,6 +9400,34 @@ class Router:
                     AdaptiveRouterPostCallHook(adaptive_router=tagged.strategy)
                 )
 
+    def _deployment_input_costs(
+        self, model_names: Sequence[str]
+    ) -> dict[str, float]:  # mutable-ok: pick_best takes a dict
+        """``input_cost_per_token`` of the first deployment of each model name; litellm_params wins over model_info.
+
+        Bandit priors for the adaptive and oracle routers, keyed by ``available_models`` entry."""
+        costs: Final[dict[str, float]] = {}  # mutable-ok: built per model name in the loop below
+        for name in model_names:
+            deployment = self.get_deployment_by_model_group_name(model_group_name=name)
+            # Deployment.__init__ mirrors a litellm_params rate onto model_info, so one field reads both.
+            cost = deployment.model_info.input_cost_per_token if deployment is not None else None
+            if cost is not None:
+                costs[name] = cost
+        return costs
+
+    def _deployment_adaptive_prefs(
+        self, model_names: Sequence[str]
+    ) -> dict[str, AdaptiveRouterPreferences]:  # mutable-ok: consumed as a mapping by the bandit
+        """``model_info.adaptive_router_preferences`` of the first deployment of each model name, where declared."""
+        prefs: Final[dict[str, AdaptiveRouterPreferences]] = {}  # mutable-ok: built per model name in the loop below
+        for name in model_names:
+            deployment = self.get_deployment_by_model_group_name(model_group_name=name)
+            declared = deployment.model_info.model_extra if deployment is not None else None
+            raw = declared.get("adaptive_router_preferences") if declared else None
+            if raw is not None:
+                prefs[name] = AdaptiveRouterPreferences.model_validate(raw)
+        return prefs
+
     def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
         """
         Build an AdaptiveRouter instance for this deployment and register its
@@ -9419,46 +9446,18 @@ class Router:
         from litellm.router_strategy.adaptive_router.hooks import (
             AdaptiveRouterPostCallHook,
         )
-        from litellm.types.router import (
-            AdaptiveRouterConfig,
-            AdaptiveRouterPreferences,
-        )
+        from litellm.types.router import AdaptiveRouterConfig
 
         raw_config: Final = deployment.litellm_params.adaptive_router_config
         if raw_config is None:
             raise ValueError("adaptive_router_config is required for adaptive-router deployments.")
 
         config: Final = AdaptiveRouterConfig(**raw_config)
-
-        model_to_prefs: Final[dict[str, AdaptiveRouterPreferences]] = {}
-        model_to_cost: Final[dict[str, float]] = {}
-        # O(k) via the name→indices map: only touch deployments whose name
-        # is listed in `available_models`, instead of scanning model_list.
-        for name in config.available_models:
-            indices = self.model_name_to_deployment_indices.get(name, [])
-            if not indices:
-                continue
-            d = (self.model_list or [])[indices[0]]
-            mi = d.get("model_info") if isinstance(d, dict) else d.model_info
-            mi_dict: dict[str, Any] = mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
-            prefs_raw = mi_dict.get("adaptive_router_preferences")
-            if prefs_raw is not None:
-                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
-
-            # model_info is the conventional pricing location elsewhere in LiteLLM; litellm_params wins if set.
-            lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
-            lp_dict: dict[str, Any] = lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
-            cost = lp_dict.get("input_cost_per_token")
-            if cost is None:
-                cost = mi_dict.get("input_cost_per_token")
-            if cost is not None:
-                model_to_cost[name] = float(cost)
-
         adaptive_router: Final = AdaptiveRouter(
             router_name=deployment.model_name,
             config=config,
-            model_to_prefs=model_to_prefs,
-            model_to_cost=model_to_cost,
+            model_to_prefs=self._deployment_adaptive_prefs(config.available_models),
+            model_to_cost=self._deployment_input_costs(config.available_models),
         )
         self._register_pre_routing_strategy(
             registry=self.adaptive_routers,
@@ -9473,6 +9472,84 @@ class Router:
             "AdaptiveRouter[%s] initialized with %d models",
             deployment.model_name,
             len(config.available_models),
+        )
+
+    def _is_oracle_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """True when this deployment opts in via the `auto_router/oracle_router` model prefix."""
+        return classify_strategy_router_model(litellm_params.model) == "oracle"
+
+    def _finalize_oracle_router_if_configured(self) -> None:
+        """Build an OracleRouter for every oracle-router deployment in the finalized model_list.
+
+        Deferred like the adaptive router: a `pre_routing` decision maker wraps another strategy
+        router that may appear later in the list. Idempotent across hot reloads, so a router that
+        already holds program bindings and learned state is never rebuilt."""
+        for model_id in self.get_model_ids():
+            deployment = self.get_deployment(model_id=model_id)
+            if deployment is None or not self._is_oracle_router_deployment(litellm_params=deployment.litellm_params):
+                continue
+            if self._has_registered_strategy(
+                self.oracle_routers, deployment.model_name, self._deployment_tags(deployment)
+            ):
+                continue
+            self.init_oracle_router_deployment(deployment=deployment)
+        self._sync_oracle_router_hooks()
+
+    def _sync_oracle_router_hooks(self) -> None:
+        """Exactly one post-call hook per registered oracle router."""
+        from litellm.router_strategy.oracle_router.hooks import OracleRouterPostCallHook
+
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(OracleRouterPostCallHook):
+            litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
+        for tagged_oracle_routers in self.oracle_routers.values():
+            for tagged in tagged_oracle_routers:
+                litellm.logging_callback_manager.add_litellm_callback(
+                    OracleRouterPostCallHook(oracle_router=tagged.strategy)
+                )
+
+    def _resolve_strategy_router(self, model_name: str) -> "PreRoutingStrategy | None":
+        """The first strategy router registered under `model_name`, for ORACLE's `pre_routing` decision maker."""
+        for registry in (self.complexity_routers, self.quality_routers, self.adaptive_routers, self.auto_routers):
+            tagged_routers = registry.get(model_name)
+            if tagged_routers:
+                return tagged_routers[0].strategy
+        return None
+
+    def init_oracle_router_deployment(self, deployment: Deployment) -> None:
+        """Build an OracleRouter from `oracle_router_config` and register it under `deployment.model_name`."""
+        from litellm.router_strategy.oracle_router.decision import build_decision_maker
+        from litellm.router_strategy.oracle_router.oracle_router import OracleRouter
+        from litellm.router_strategy.oracle_router.verifier import build_verifier
+        from litellm.types.router import OracleRouterConfig
+
+        raw_config: Final = deployment.litellm_params.oracle_router_config
+        if raw_config is None:
+            raise ValueError("oracle_router_config is required for oracle-router deployments.")
+        config: Final = OracleRouterConfig.model_validate(raw_config)
+        if deployment.model_info.db_model and "custom" in (config.decision_maker.type, config.verifier.type):
+            # A custom decision maker or verifier imports and runs Python named by the deployment. Only the
+            # operator's config file may name it; a model written through the API (any role) must not.
+            raise ValueError(
+                f"oracle_router deployment {deployment.model_name!r}: custom decision makers and verifiers "
+                "can only be configured in the proxy config file, not through the model API."
+            )
+        oracle_router: Final = OracleRouter(
+            router_name=deployment.model_name,
+            config=config,
+            decision_maker=build_decision_maker(
+                config.decision_maker,
+                tuple(config.available_models),
+                self._deployment_input_costs(config.available_models),
+                self._resolve_strategy_router,
+                self._deployment_adaptive_prefs(config.available_models),
+            ),
+            verifier=build_verifier(config.verifier),
+        )
+        self._register_pre_routing_strategy(
+            registry=self.oracle_routers,
+            deployment=deployment,
+            strategy=oracle_router,
+            strategy_label="Oracle-router",
         )
 
     def _is_quality_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
@@ -9628,6 +9705,7 @@ class Router:
         # Deferred: build the AdaptiveRouter strategy now that all underlying
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
+        self._finalize_oracle_router_if_configured()
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -9997,6 +10075,8 @@ class Router:
                 )
             ):
                 self._finalize_adaptive_router_if_configured()
+            if self._is_oracle_router_deployment(litellm_params=deployment.litellm_params):
+                self._finalize_oracle_router_if_configured()
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
@@ -13787,7 +13867,13 @@ class Router:
         deployments: returning None hands the request to ordinary tag-aware
         deployment selection.
         """
-        registries: Final = (self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)
+        registries: Final = (
+            self.auto_routers,
+            self.complexity_routers,
+            self.adaptive_routers,
+            self.quality_routers,
+            self.oracle_routers,
+        )
         if not any(registries):
             return None
         deployments: Final = self.deployments_for_request(model, request_kwargs)
@@ -13882,7 +13968,15 @@ class Router:
     ) -> str:
         if is_native_compaction_call():
             return registered_model_name
-        if not any((self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)):
+        if not any(
+            (
+                self.auto_routers,
+                self.complexity_routers,
+                self.adaptive_routers,
+                self.quality_routers,
+                self.oracle_routers,
+            )
+        ):
             return registered_model_name
         cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
         if cache_key is None or not isinstance(request_kwargs, dict):
