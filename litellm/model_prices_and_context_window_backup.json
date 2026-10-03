@@ -59672,6 +59672,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
         ]
     },
     "aiand/deepseek-ai/deepseek-v4-pro": {
@@ -59697,6 +59702,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
         ]
     },
     "aiand/deepseek-ai/deepseek-v4.1-flash": {
@@ -59722,6 +59732,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
         ]
     },
     "aiand/google/gemma-4-31b-it": {
@@ -59747,6 +59762,10 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "high"
         ]
     },
     "aiand/moonshotai/kimi-k2.7-code": {
@@ -59772,6 +59791,9 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "high"
         ]
     },
     "aiand/moonshotai/kimi-k3": {
@@ -59797,6 +59819,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
         ]
     },
     "aiand/motif-technologies/motif-3": {
@@ -59822,6 +59849,10 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "high"
         ]
     },
     "aiand/openai/gpt-oss-120b": {
@@ -59847,6 +59878,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high"
         ]
     },
     "aiand/qwen/qwen3.6-27b": {
@@ -59872,6 +59908,10 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "high"
         ]
     },
     "aiand/qwen/qwen3.8-27b": {
@@ -59897,6 +59937,12 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "xhigh"
         ]
     },
     "aiand/zai-org/glm-5.2": {
@@ -59922,6 +59968,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
         ]
     },
     "aiand/zai-org/glm-5.3": {
@@ -59947,6 +59998,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
         ]
     },
     "aiand/zai-org/glm-5.3-flash": {
@@ -59972,6 +60028,11 @@
             "/v1/chat/completions",
             "/v1/responses",
             "/v1/messages"
+        ],
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
         ]
     },
     "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8": {

@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import openai
 import pytest
@@ -9,6 +11,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
     _get_response_headers,
+    _map_aiand_exception,
     exception_type,
     extract_and_raise_litellm_exception,
 )
@@ -1037,6 +1040,239 @@ def test_an_unmapped_exception_with_no_model_or_provider_message_keeps_traceback
         )
 
     assert "Traceback (most recent call last)" in raised.value.message
+
+
+AIAND_INSUFFICIENT_CREDITS_MESSAGE = (
+    "Insufficient credits. Review billing at https://console.aiand.com/settings/billing to continue."
+)
+
+
+@pytest.mark.parametrize(
+    "error_body",
+    [
+        {
+            "message": AIAND_INSUFFICIENT_CREDITS_MESSAGE,
+            "type": "billing_error",
+            "param": None,
+            "code": "insufficient_credits",
+        },
+        {
+            "message": "Balance too low to process the request.",
+            "type": "billing_error",
+            "param": None,
+            "code": None,
+        },
+    ],
+)
+def test_an_aiand_402_billing_error_is_a_rate_limit_error(error_body, quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=402,
+        message=json.dumps({"error": error_body}),
+    )
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert raised.value.status_code == 429
+    assert raised.value.llm_provider == "aiand"
+    assert raised.value.model == "test-model"
+    assert raised.value.message == f"litellm.RateLimitError: AiandException - {error_body['message']}"
+
+
+def test_an_aiand_402_from_the_response_body_is_a_rate_limit_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=402,
+        message=AIAND_INSUFFICIENT_CREDITS_MESSAGE,
+        body={
+            "error": {
+                "message": AIAND_INSUFFICIENT_CREDITS_MESSAGE,
+                "type": "billing_error",
+                "param": None,
+                "code": "insufficient_credits",
+            }
+        },
+    )
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert raised.value.llm_provider == "aiand"
+    assert raised.value.message == f"litellm.RateLimitError: AiandException - {AIAND_INSUFFICIENT_CREDITS_MESSAGE}"
+
+
+def test_an_aiand_402_from_an_unwrapped_body_is_a_rate_limit_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=402,
+        message=(
+            "Error code: 402 - {'error': {'message': "
+            f"'{AIAND_INSUFFICIENT_CREDITS_MESSAGE}', "
+            "'type': 'billing_error', 'param': None, 'code': 'insufficient_credits'}}"
+        ),
+        body={
+            "message": AIAND_INSUFFICIENT_CREDITS_MESSAGE,
+            "type": "billing_error",
+            "param": None,
+            "code": "insufficient_credits",
+        },
+    )
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert raised.value.status_code == 429
+    assert raised.value.llm_provider == "aiand"
+    assert raised.value.message == f"litellm.RateLimitError: AiandException - {AIAND_INSUFFICIENT_CREDITS_MESSAGE}"
+
+
+def test_an_aiand_402_from_a_non_json_error_str_is_a_rate_limit_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    error_str = (
+        "Error code: 402 - {'error': {'message': "
+        f"'{AIAND_INSUFFICIENT_CREDITS_MESSAGE}', "
+        "'type': 'billing_error', 'param': None, 'code': 'insufficient_credits'}}"
+    )
+    original_exception = BaseLLMException(status_code=402, message=error_str)
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert raised.value.status_code == 429
+    assert raised.value.llm_provider == "aiand"
+    assert raised.value.message == f"litellm.RateLimitError: AiandException - {error_str}"
+
+
+def test_an_aiand_401_invalid_api_key_is_an_authentication_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=401,
+        message=json.dumps(
+            {
+                "error": {
+                    "message": "Missing or invalid API key",
+                    "type": "authentication_error",
+                    "param": None,
+                    "code": "invalid_api_key",
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert raised.value.status_code == 401
+    assert raised.value.llm_provider == "aiand"
+    assert raised.value.model == "test-model"
+    assert raised.value.message == "litellm.AuthenticationError: AiandException - Missing or invalid API key"
+
+
+def test_an_aiand_404_model_not_found_is_a_not_found_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=404,
+        message=json.dumps(
+            {
+                "error": {
+                    "message": "Model not found",
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "code": "model_not_found",
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(litellm.NotFoundError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert raised.value.status_code == 404
+    assert raised.value.llm_provider == "aiand"
+    assert raised.value.model == "test-model"
+    assert raised.value.message == "litellm.NotFoundError: AiandException - Model not found"
+
+
+def test_an_unknown_aiand_error_falls_through_without_raising():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    class _AiandUpstreamError(BaseLLMException):
+        code = ""
+        llm_provider = "aiand"
+
+    original_exception = _AiandUpstreamError(status_code=418, message="I am a teapot")
+
+    assert (
+        _map_aiand_exception(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+            error_str="I am a teapot",
+            exception_type="HTTPException",
+            exception_provider="AiandException",
+            extra_information="",
+        )
+        is None
+    )
+
+
+def test_an_unknown_aiand_error_still_maps_by_the_upstream_status(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=json.dumps(
+            {
+                "error": {
+                    "message": "Something else went wrong",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "invalid_value",
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="aiand",
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.llm_provider == "aiand"
 
 
 CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."

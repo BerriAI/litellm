@@ -1070,6 +1070,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "lambda_ai",
     "hyperbolic",
     "wandb",
+    "aiand",
 ]
 _openai_like_providers: Final[list] = [
     "predibase",

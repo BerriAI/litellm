@@ -13,6 +13,7 @@ Policy highlights:
   the spec.
 - The spec cannot express endpoint support or caching behavior, so ``supported_endpoints`` and
   ``supports_prompt_caching`` stay fixed for the whole provider.
+- Reasoning effort levels map from the spec's ``effort`` reasoning option, when one is declared.
 """
 
 import argparse
@@ -57,11 +58,17 @@ class SpecModalities(BaseModel):
     input: list[str]
 
 
+class SpecReasoningOption(BaseModel):
+    type: str
+    values: list[str]
+
+
 class SpecModel(BaseModel):
     id: str
     name: str
     family: str
     reasoning: bool
+    reasoning_options: list[SpecReasoningOption] = []
     tool_call: bool
     structured_output: bool
     temperature: bool
@@ -99,8 +106,16 @@ def _today() -> str:
     return datetime.now(tz=timezone.utc).date().isoformat()
 
 
+def _effort_levels(model: SpecModel) -> tuple[str, ...]:
+    for option in model.reasoning_options:
+        if option.type == "effort":
+            return tuple(option.values)
+    return ()
+
+
 def _spec_fields(model: SpecModel) -> RegistryEntry:
-    return {
+    effort_levels: Final = _effort_levels(model)
+    fields: RegistryEntry = {
         "litellm_provider": PROVIDER,
         "mode": "chat",
         "input_cost_per_token": per_token(model.cost.input),
@@ -121,6 +136,9 @@ def _spec_fields(model: SpecModel) -> RegistryEntry:
         "source": SOURCE_URL,
         "supported_endpoints": list(SUPPORTED_ENDPOINTS),
     }
+    if effort_levels:
+        fields["reasoning_effort_levels"] = list(effort_levels)
+    return fields
 
 
 def _new_entry(model: SpecModel) -> RegistryEntry:

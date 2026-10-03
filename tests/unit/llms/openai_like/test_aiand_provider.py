@@ -4,13 +4,14 @@ Tests for aiand provider configuration and integration.
 
 import json
 from pathlib import Path
-from typing import Final
+from typing import Final, get_args
 
 import pytest
 import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.types.llms.openai import REASONING_EFFORT
 
 
 def test_aiand_provider_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,6 +96,16 @@ def test_aiand_model_cost_and_capabilities(model: str) -> None:
     assert litellm.supports_vision(model) is model_info["supports_vision"]
 
 
+def test_aiand_entries_declare_reasoning_effort_levels() -> None:
+    known_efforts: Final = frozenset(get_args(REASONING_EFFORT))
+    for model in AIAND_MODELS:
+        levels = litellm.get_model_info(model)["reasoning_effort_levels"]
+        assert levels, f"{model} declares no reasoning_effort_levels"
+        assert set(levels) <= known_efforts, f"{model} declares unknown reasoning efforts"
+    flash = litellm.get_model_info("aiand/deepseek-ai/deepseek-v4.1-flash")
+    assert set(flash["reasoning_effort_levels"]) == {"none", "high", "max"}
+
+
 def test_aiand_backup_registry_mirrors_cost_map() -> None:
     package_root = Path(litellm.__file__).parent
     cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
@@ -105,6 +116,22 @@ def test_aiand_backup_registry_mirrors_cost_map() -> None:
     assert aiand_entries
     assert all("supports_vision" in entry for entry in aiand_entries.values())
     assert aiand_entries == {name: backup[name] for name in aiand_entries}
+
+
+def test_aiand_models_listed_by_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    package_root = Path(litellm.__file__).parent
+    backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+    aiand_keys = {name for name in backup if name.startswith("aiand/")}
+    assert len(aiand_keys) == 13
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+    litellm.add_known_models()
+
+    assert "aiand" in litellm.models_by_provider
+    assert set(litellm.models_by_provider["aiand"]) == aiand_keys
+    assert set(litellm.get_valid_models(custom_llm_provider="aiand")) == aiand_keys
 
 
 def test_aiand_is_available_in_add_model_form() -> None:
@@ -139,6 +166,19 @@ def test_aiand_supported_endpoints() -> None:
         "a2a": False,
         "interactions": False,
     }
+
+
+def test_aiand_registered_for_text_completion() -> None:
+    assert "aiand" in litellm.openai_text_completion_compatible_providers
+
+
+def test_aiand_provider_declares_completions_endpoint() -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    provider_config: Final = JSONProviderRegistry.get("aiand")
+
+    assert provider_config is not None
+    assert "/v1/completions" in provider_config.supported_endpoints
 
 
 def test_aiand_chat_completion_request() -> None:
@@ -212,6 +252,44 @@ def test_aiand_responses_request() -> None:
     assert body["model"] == "deepseek-ai/deepseek-v4.1-flash"
     assert body["input"] == "Say hello"
     assert response.output[0].content[0].text == "Hello from aiand"
+
+
+def test_aiand_text_completion_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AIAND_API_KEY", "aiand-test-key")
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.aiand.com/v1/completions").respond(
+            200,
+            json={
+                "id": "cmpl_aiand",
+                "object": "text_completion",
+                "created": 1_789_550_000,
+                "model": "deepseek-ai/deepseek-v4.1-flash",
+                "choices": [
+                    {
+                        "text": "Hello from aiand",
+                        "index": 0,
+                        "logprobs": None,
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+            },
+        )
+        response: Final = litellm.text_completion(
+            model="aiand/deepseek-ai/deepseek-v4.1-flash",
+            prompt="Say hello",
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert str(request.url) == "https://api.aiand.com/v1/completions"
+    assert request.headers["authorization"] == "Bearer aiand-test-key"
+    assert body["model"] == "deepseek-ai/deepseek-v4.1-flash"
+    assert body["prompt"] == "Say hello"
+    assert response.object == "text_completion"
+    assert response.choices[0].text == "Hello from aiand"
 
 
 @pytest.mark.asyncio

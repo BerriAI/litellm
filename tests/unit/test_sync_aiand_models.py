@@ -70,7 +70,7 @@ def test_load_spec_raises_when_id_mismatches_key() -> None:
 
 
 def test_added_model_lands_in_cost_map_with_expected_fields() -> None:
-    spec = sync.load_spec(_spec_json(_model()))
+    spec = sync.load_spec(_spec_json(_model(reasoning_options=[{"type": "effort", "values": ["low", "high", "max"]}])))
     outcome = sync.compute_sync({}, spec)
     entry = outcome.cost_map["aiand/acme/chat-1"]
     assert entry["litellm_provider"] == "aiand"
@@ -86,6 +86,7 @@ def test_added_model_lands_in_cost_map_with_expected_fields() -> None:
     assert entry["supports_tool_choice"] is True
     assert entry["supports_response_schema"] is True
     assert entry["supports_reasoning"] is False
+    assert entry["reasoning_effort_levels"] == ["low", "high", "max"]
     assert entry["supports_vision"] is False
     assert entry["source"] == "https://api.aiand.com/v1/api.json"
     assert entry["supported_endpoints"] == ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
