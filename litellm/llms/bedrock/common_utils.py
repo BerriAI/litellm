@@ -938,32 +938,26 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
         return True
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
-    deployment_entry: Final = next(
-        (
-            entry
-            for route in ("", "converse/", "converse_like/")
-            if (entry := litellm.model_cost.get(f"bedrock/{route}{model}")) is not None
-        ),
-        None,
-    )
-    map_entries: Final = tuple(
-        entry
-        for candidate in (model, get_bedrock_base_model(model))
-        if (entry := litellm.model_cost.get(candidate)) is not None
-    )
+    map_keys: Final = (model, get_bedrock_base_model(model))
+    registered_keys: Final = tuple(f"bedrock/{route}{model}" for route in ("", "converse/", "converse_like/"))
     explicit_marker_support: Final = next(
         (
             entry.get("supports_prompt_cache_breakpoint") is True
-            for entry in (deployment_entry, *map_entries)
-            if entry is not None and entry.get("supports_prompt_cache_breakpoint") is not None
+            for key in (*registered_keys, *map_keys)
+            if (entry := litellm.model_cost.get(key)) is not None
+            and entry.get("supports_prompt_cache_breakpoint") is not None
         ),
         None,
     )
     if explicit_marker_support is not None:
         return explicit_marker_support
-    if not map_entries:
+    if not any(key in litellm.model_cost for key in map_keys):
         return True
-    return any(entry.get("supports_prompt_caching") is True for entry in map_entries)
+    return any(
+        entry.get("supports_prompt_caching") is True
+        for key in map_keys
+        if (entry := litellm.model_cost.get(key)) is not None
+    )
 
 
 def bedrock_supports_tool_search(model: str) -> bool:
