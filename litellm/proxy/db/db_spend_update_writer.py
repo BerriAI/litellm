@@ -759,6 +759,10 @@ class DBSpendUpdateWriter:
             transaction: Final = build_model_usage_transaction(payload)
             if transaction is None:
                 return
+            from litellm.proxy.db.model_insights_task_classifier import get_task_classifier_batcher
+
+            if await get_task_classifier_batcher(prisma_client).enqueue(transaction, payload):
+                return
             async with prisma_client._model_usage_transactions_lock:
                 prisma_client.model_usage_transactions.append(transaction)
         except Exception as e:

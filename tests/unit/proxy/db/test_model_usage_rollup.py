@@ -182,7 +182,10 @@ async def test_flush_does_not_retry_ambiguous_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_request_time_path_queues_usage_instead_of_writing_to_the_db() -> None:
+async def test_request_time_path_queues_usage_instead_of_writing_to_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.db import model_insights_task_classifier as classifier
+
+    monkeypatch.setattr(classifier._HOLDER, "batcher", None)
     prisma = MagicMock()
     prisma.model_usage_transactions = []
     prisma._model_usage_transactions_lock = asyncio.Lock()
@@ -201,3 +204,81 @@ async def test_request_time_path_queues_usage_instead_of_writing_to_the_db() -> 
 
     assert [transaction.key.model for transaction in prisma.model_usage_transactions] == ["openai/gpt-5.4-mini"]
     prisma.db.litellm_dailymodelusage.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_untagged_usage_is_classified_in_the_background_flush(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.db import model_insights_task_classifier as classifier
+    from litellm.router_strategy.complexity_router.jev_classifier import JevChoiceAnswer, JevSystemOneResponse
+
+    class Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def evaluate(self, request: object, timeout_s: float, request_kwargs: object = None) -> object:
+            self.calls += 1
+            return JevSystemOneResponse(
+                answers={"task": JevChoiceAnswer(type="choice", choice="debugging", probabilities={}, confidence=1)}
+            )
+
+    class Router:
+        def get_model_list(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "model_name": "tasks",
+                    "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-test"},
+                    "model_info": {"id": "jev"},
+                }
+            ]
+
+    client = Client()
+    prisma = MagicMock()
+    prisma.model_usage_transactions = []
+    prisma._model_usage_transactions_lock = asyncio.Lock()
+    prisma.db.litellm_config.find_unique = AsyncMock(
+        return_value=MagicMock(param_value='{"enabled": true, "model_id": "jev"}')
+    )
+    batcher = classifier.TaskClassifierBatcher(
+        classifier.TaskClassifierStore(prisma, Router, lambda deployment: client, lambda: 0.0)
+    )
+    monkeypatch.setattr(classifier._HOLDER, "batcher", batcher)
+    flushed: list[ModelUsageTransaction] = []
+
+    async def capture(prisma_client: object, transactions: list[ModelUsageTransaction]) -> None:
+        flushed.extend(transactions)
+
+    monkeypatch.setattr("litellm.proxy.db.model_usage_rollup.flush_model_usage_transactions", capture)
+    payload = _payload(request_id="req-1")
+    payload["proxy_server_request"] = '{"messages": [{"role": "user", "content": "Fix this traceback"}]}'
+
+    await DBSpendUpdateWriter()._enqueue_model_usage_transaction(payload=payload, prisma_client=prisma)
+
+    assert prisma.model_usage_transactions == []
+    assert client.calls == 0
+    assert await batcher.pending_count() == 1
+
+    from litellm.proxy import utils
+
+    async def no_op(*args: object, **kwargs: object) -> None:
+        return None
+
+    async def no_logs(*args: object, **kwargs: object) -> list[dict[str, object]]:
+        return []
+
+    monkeypatch.setattr(utils, "dequeue_spend_logs", no_logs)
+    monkeypatch.setattr(utils.ProxyUpdateSpend, "update_spend_logs", no_op)
+    monkeypatch.setattr("litellm.proxy.guardrails.usage_tracking.process_spend_logs_guardrail_usage", no_op)
+    monkeypatch.setattr("litellm.proxy.db.spend_log_tool_index.flush_tool_usage_transactions", no_op)
+    monkeypatch.setattr("litellm.proxy.db.baseline_accounting.flush_baseline_accounting", no_op)
+    prisma.tool_usage_transactions = []
+    prisma._tool_usage_transactions_lock = asyncio.Lock()
+    prisma.autorouter_turn_transactions = []
+    prisma._autorouter_turn_transactions_lock = asyncio.Lock()
+
+    await utils._run_spend_logs_job(prisma, None, MagicMock())
+
+    assert [(item.key.model, item.key.task_type) for item in flushed] == [("openai/gpt-5.4-mini", "debugging")]
+    assert client.calls == 1
+    assert await batcher.pending_count() == 0

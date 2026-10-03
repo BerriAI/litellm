@@ -7541,10 +7541,13 @@ async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
 
     async with prisma_client.baseline_accounting_lock:
         baseline_queue_size: Final = len(prisma_client.baseline_accounting_transactions)
+    from litellm.proxy.db.model_insights_task_classifier import pending_task_classifications
+
     return (
         spend_queue_size
         + tool_queue_size
         + model_usage_queue_size
+        + await pending_task_classifications()
         + autorouter_queue_size
         + baseline_queue_size
         + pending_shadow_eval_funnel_events()
@@ -7680,8 +7683,11 @@ async def _run_spend_logs_job(
             tool_tracking_err,
         )
 
+    from litellm.proxy.db.model_insights_task_classifier import get_task_classifier_batcher
+
+    classified: Final = await get_task_classifier_batcher(prisma_client).drain()
     async with prisma_client._model_usage_transactions_lock:
-        model_usage_to_process: Final = prisma_client.model_usage_transactions
+        model_usage_to_process: Final = [*prisma_client.model_usage_transactions, *classified]
         prisma_client.model_usage_transactions = []
     try:
         from litellm.proxy.db.model_usage_rollup import flush_model_usage_transactions

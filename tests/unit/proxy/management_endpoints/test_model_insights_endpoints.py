@@ -195,6 +195,84 @@ def test_model_insights_rejects_unknown_metric() -> None:
     assert _call(MagicMock(group_by=AsyncMock()), "metric=bogus").status_code == 422
 
 
+class _ClassifierRouter:
+    def get_model_list(self) -> list[dict[str, object]]:
+        return [
+            {
+                "model_name": "jev-tasks",
+                "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-secret"},
+                "model_info": {"id": "jev-id"},
+            },
+            {"model_name": "chat", "litellm_params": {"model": "openai/gpt-5"}, "model_info": {"id": "chat-id"}},
+        ]
+
+
+def _classifier_client(role: LitellmUserRoles) -> tuple[TestClient, MagicMock]:
+    from litellm.proxy.db import model_insights_task_classifier
+
+    prisma = MagicMock()
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_config.upsert = AsyncMock()
+    model_insights_task_classifier._HOLDER.batcher = model_insights_task_classifier.TaskClassifierBatcher(
+        model_insights_task_classifier.TaskClassifierStore(
+            prisma, _ClassifierRouter, lambda deployment: MagicMock(), lambda: 0.0
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=role)
+    return TestClient(app), prisma
+
+
+def test_task_classifier_reports_not_set_up_and_lists_only_system_one_models() -> None:
+    client, prisma = _classifier_client(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response = client.get("/model-insights/task-classifier")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is False
+    assert body["model_id"] is None
+    assert body["models"] == [{"id": "jev-id", "name": "jev-tasks", "provider": "typesafe", "model": "jev-latest"}]
+    assert "sk-secret" not in response.text
+
+
+def test_task_classifier_saves_a_configured_system_one_model() -> None:
+    client, prisma = _classifier_client(LitellmUserRoles.PROXY_ADMIN)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response = client.put("/model-insights/task-classifier", json={"enabled": True, "model_id": "jev-id"})
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert response.json()["model_id"] == "jev-id"
+    assert prisma.db.litellm_config.upsert.await_args.kwargs["data"]["update"] == {
+        "param_value": '{"enabled":true,"model_id":"jev-id"}'
+    }
+
+
+@pytest.mark.parametrize("model_id", ["chat-id", "missing", None])
+def test_task_classifier_rejects_non_system_one_models(model_id: str | None) -> None:
+    client, prisma = _classifier_client(LitellmUserRoles.PROXY_ADMIN)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response = client.put("/model-insights/task-classifier", json={"enabled": True, "model_id": model_id})
+
+    assert response.status_code == 400
+    prisma.db.litellm_config.upsert.assert_not_awaited()
+
+
+def test_task_classifier_write_requires_full_proxy_admin() -> None:
+    client, prisma = _classifier_client(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response = client.put("/model-insights/task-classifier", json={"enabled": False, "model_id": None})
+
+    assert response.status_code == 403
+    prisma.db.litellm_config.upsert.assert_not_awaited()
+
+
 class _InMemoryUsageTable:
     def __init__(self) -> None:
         self.rows: dict[tuple[str, ...], dict[str, float]] = {}

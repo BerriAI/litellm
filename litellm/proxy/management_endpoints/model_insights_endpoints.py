@@ -7,9 +7,19 @@ from typing import Annotated, Final
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, TypeAdapter
 
-from litellm.constants import MODEL_INSIGHTS_DEFAULT_TASK, MODEL_INSIGHTS_MAX_RANGE_DAYS, MODEL_INSIGHTS_TOP_MODELS
+from litellm.constants import (
+    MODEL_INSIGHTS_CLASSIFIER_BATCH_SIZE,
+    MODEL_INSIGHTS_DEFAULT_TASK,
+    MODEL_INSIGHTS_MAX_RANGE_DAYS,
+    MODEL_INSIGHTS_TOP_MODELS,
+)
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.model_insights_task_classifier import (
+    TaskClassifierBatcher,
+    TaskClassifierSettings,
+    get_task_classifier_batcher,
+)
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.repositories.table_repositories import DailyModelUsageRepository
 from litellm.types.model_insights import (
@@ -21,6 +31,9 @@ from litellm.types.model_insights import (
     ModelInsightTask,
     ModelInsightTasksResponse,
     ModelInsightTaskSummary,
+    TaskClassifierModel,
+    TaskClassifierResponse,
+    TaskClassifierUpdateRequest,
 )
 
 router: Final = APIRouter()
@@ -252,3 +265,76 @@ async def get_model_insight_tasks(
         end_date=end_day.isoformat(),
         tasks=_summarize_tasks(task_rows, metric),
     )
+
+
+def _classifier_batcher(
+    user_api_key_dict: UserAPIKeyAuth, roles: tuple[LitellmUserRoles, ...]
+) -> TaskClassifierBatcher:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role not in roles:
+        raise HTTPException(status_code=403, detail="Only proxy admins can configure task classification")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    return get_task_classifier_batcher(prisma_client)
+
+
+def _classifier_response(
+    settings: TaskClassifierSettings, models: tuple[TaskClassifierModel, ...]
+) -> TaskClassifierResponse:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import should_store_prompts_and_responses_in_spend_logs
+
+    return TaskClassifierResponse(
+        enabled=settings.enabled,
+        model_id=settings.model_id,
+        models=list(models),
+        batch_size=MODEL_INSIGHTS_CLASSIFIER_BATCH_SIZE,
+        message_logging_enabled=should_store_prompts_and_responses_in_spend_logs(),
+    )
+
+
+def _classifier_models(batcher: TaskClassifierBatcher) -> tuple[TaskClassifierModel, ...]:
+    return tuple(
+        TaskClassifierModel(
+            id=deployment.model.id,
+            name=deployment.model.name,
+            provider=deployment.model.provider,
+            model=deployment.model.model,
+        )
+        for deployment in batcher.store.deployments()
+    )
+
+
+@router.get(
+    "/model-insights/task-classifier",
+    tags=["model insights"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TaskClassifierResponse,
+)
+async def get_model_insights_task_classifier(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> TaskClassifierResponse:
+    batcher: Final = _classifier_batcher(
+        user_api_key_dict, (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    )
+    return _classifier_response(await batcher.store.settings(), _classifier_models(batcher))
+
+
+@router.put(
+    "/model-insights/task-classifier",
+    tags=["model insights"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TaskClassifierResponse,
+)
+async def update_model_insights_task_classifier(
+    request: TaskClassifierUpdateRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> TaskClassifierResponse:
+    batcher: Final = _classifier_batcher(user_api_key_dict, (LitellmUserRoles.PROXY_ADMIN,))
+    models: Final = _classifier_models(batcher)
+    if request.enabled and not any(model.id == request.model_id for model in models):
+        raise HTTPException(status_code=400, detail="Select a configured System One model")
+    saved: Final = await batcher.store.save(
+        TaskClassifierSettings(enabled=request.enabled, model_id=request.model_id if request.enabled else None)
+    )
+    return _classifier_response(saved, models)
