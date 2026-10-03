@@ -1,0 +1,370 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "1ef6adf8-3d78-4abc-813a-5119d13735a5"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "6fa29b767adea3578ede96a7585df799",
+              "spanId": "f934206b68bf484f",
+              "parentSpanId": "6b32ce62797fa806",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791058584636064000",
+              "endTimeUnixNano": "1791058586787893000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "503"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "ec4884ab-9515-4ba7-b53e-606609adb50b"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "strands.telemetry.tracer"
+          },
+          "spans": [
+            {
+              "traceId": "6fa29b767adea3578ede96a7585df799",
+              "spanId": "6b32ce62797fa806",
+              "parentSpanId": "d331f930d2b84971",
+              "name": "chat",
+              "kind": 1,
+              "startTimeUnixNano": "1791058584435277000",
+              "endTimeUnixNano": "1791058586792213000",
+              "attributes": [
+                {
+                  "key": "gen_ai.event.start_time",
+                  "value": {
+                    "stringValue": "2026-10-03T20:16:24.435278+00:00"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "strands-agents"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is an agent trace?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.event.end_time",
+                  "value": {
+                    "stringValue": "2026-10-03T20:16:26.788302+00:00"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791058586792204000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "openai.InternalServerError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 740, in terminal\n    async for event in stream_messages(\n    ...<12 lines>...\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 572, in stream_messages\n    async for event in process_stream(chunks, start_time, cancel_signal):\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 460, in process_stream\n    async for chunk in chunks:\n    ...<36 lines>...\n            handle_redact_content(chunk[\"redactContent\"], state)\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/models/openai.py\", line 735, in stream\n    response = await client.chat.completions.create(**request)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py\", line 2907, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n    ...<55 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1992, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1777, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.InternalServerError: Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "6fa29b767adea3578ede96a7585df799",
+              "spanId": "d331f930d2b84971",
+              "parentSpanId": "2051cbdfbfa66379",
+              "name": "execute_event_loop_cycle",
+              "kind": 1,
+              "startTimeUnixNano": "1791058584435196000",
+              "endTimeUnixNano": "1791058586793560000",
+              "attributes": [
+                {
+                  "key": "gen_ai.event.start_time",
+                  "value": {
+                    "stringValue": "2026-10-03T20:16:24.435198+00:00"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_event_loop_cycle"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "strands-agents"
+                  }
+                },
+                {
+                  "key": "event_loop.cycle_id",
+                  "value": {
+                    "stringValue": "c6b57f49-c8c5-401b-9292-6c90fca58222"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is an agent trace?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.event.end_time",
+                  "value": {
+                    "stringValue": "2026-10-03T20:16:26.792331+00:00"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791058586793556000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "openai.InternalServerError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 302, in event_loop_cycle\n    async for model_event in model_events:\n        if not isinstance(model_event, ModelStopReason):\n            yield model_event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 691, in _handle_model_execution\n    raise e\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 609, in _handle_model_execution\n    async for event in agent._middleware_registry.invoke(\n    ...<5 lines>...\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/_middleware/registry.py\", line 167, in invoke\n    async for event in gen:\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 740, in terminal\n    async for event in stream_messages(\n    ...<12 lines>...\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 572, in stream_messages\n    async for event in process_stream(chunks, start_time, cancel_signal):\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 460, in process_stream\n    async for chunk in chunks:\n    ...<36 lines>...\n            handle_redact_content(chunk[\"redactContent\"], state)\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/models/openai.py\", line 735, in stream\n    response = await client.chat.completions.create(**request)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py\", line 2907, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n    ...<55 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1992, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1777, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.InternalServerError: Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "6fa29b767adea3578ede96a7585df799",
+              "spanId": "2051cbdfbfa66379",
+              "name": "invoke_agent research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791058584434855000",
+              "endTimeUnixNano": "1791058586795499000",
+              "attributes": [
+                {
+                  "key": "gen_ai.event.start_time",
+                  "value": {
+                    "stringValue": "2026-10-03T20:16:24.434861+00:00"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "strands-agents"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is an agent trace?\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.event.end_time",
+                  "value": {
+                    "stringValue": "2026-10-03T20:16:26.793636+00:00"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791058586795493000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "openai.InternalServerError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1398, in stream_async\n    async for event in events:\n    ...<8 lines>...\n            yield as_dict\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1542, in _run_loop\n    async for event in self._middleware_registry.invoke(\n    ...<11 lines>...\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/_middleware/registry.py\", line 167, in invoke\n    async for event in gen:\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1697, in terminal\n    async for event in events:\n    ...<17 lines>...\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1752, in _execute_event_loop_cycle\n    async for event in events:\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 302, in event_loop_cycle\n    async for model_event in model_events:\n        if not isinstance(model_event, ModelStopReason):\n            yield model_event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 691, in _handle_model_execution\n    raise e\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 609, in _handle_model_execution\n    async for event in agent._middleware_registry.invoke(\n    ...<5 lines>...\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/_middleware/registry.py\", line 167, in invoke\n    async for event in gen:\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 740, in terminal\n    async for event in stream_messages(\n    ...<12 lines>...\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 572, in stream_messages\n    async for event in process_stream(chunks, start_time, cancel_signal):\n        yield event\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 460, in process_stream\n    async for chunk in chunks:\n    ...<36 lines>...\n            handle_redact_content(chunk[\"redactContent\"], state)\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/models/openai.py\", line 735, in stream\n    response = await client.chat.completions.create(**request)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py\", line 2907, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n    ...<55 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1992, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1777, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.InternalServerError: Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Error code: 503 - {'error': {'message': 'controlled loss after real billed stream'}}",
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -181,9 +181,12 @@ def test_captured_spend_replay_preserves_real_cost_and_call_identity(
         assert after["request_id"] != before["request_id"]
         assert after["start_time"] == before["start_time"] + offset_ms
         assert after["end_time"] == before["end_time"] + offset_ms
-        assert bool(frozenset(f"provider_response:{identity}" for identity in response_ids((after,))) & keys) is (
-            capture.spend_linked
-        )
+        if before["litellm_call_id"]:
+            assert after["litellm_call_id"] != before["litellm_call_id"]
+        identities: Final = frozenset(f"provider_response:{identity}" for identity in response_ids((after,))) | {
+            f"litellm_request:{after["litellm_call_id"]}"
+        }
+        assert bool(identities & keys) is capture.spend_linked
 
 
 @pytest.mark.parametrize("call_id", (None, "gateway"))

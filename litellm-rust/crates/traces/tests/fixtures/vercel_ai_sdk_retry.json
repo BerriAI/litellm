@@ -24,7 +24,7 @@
           {
             "key": "process.pid",
             "value": {
-              "intValue": "51692"
+              "intValue": "41632"
             }
           },
           {
@@ -48,7 +48,10 @@
                     "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
                   },
                   {
-                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/simple/main.ts"
+                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+                  },
+                  {
+                    "stringValue": "retry"
                   }
                 ]
               }
@@ -75,7 +78,7 @@
           {
             "key": "process.command",
             "value": {
-              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/simple/main.ts"
+              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
             }
           },
           {
@@ -117,13 +120,58 @@
           },
           "spans": [
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "e8bd96c83b41afef",
-              "parentSpanId": "a8ab477c24670b2e",
+              "traceId": "6be78653fa58241d2f4b477da5917ee1",
+              "spanId": "503b939199f33606",
+              "parentSpanId": "527095f2ca954c8a",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791057942146000000",
-              "endTimeUnixNano": "1791057945189522416",
+              "startTimeUnixNano": "1791057911211000000",
+              "endTimeUnixNano": "1791057912705603250",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "503"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "d17500d4-114c-490d-b0b9-8858b1df1dd3"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 257
+            },
+            {
+              "traceId": "6be78653fa58241d2f4b477da5917ee1",
+              "spanId": "dbaed0240576e68e",
+              "parentSpanId": "527095f2ca954c8a",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057914709000000",
+              "endTimeUnixNano": "1791057916072918792",
               "attributes": [
                 {
                   "key": "http.request.method",
@@ -152,7 +200,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "dc6b247b-49a4-4a87-8029-5491c289c04f"
+                    "stringValue": "9ad77dfc-8442-401f-966e-71eeed7189d8"
                   }
                 }
               ],
@@ -167,13 +215,13 @@
           },
           "spans": [
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "a8ab477c24670b2e",
-              "parentSpanId": "0d536b331ba7c3d5",
+              "traceId": "6be78653fa58241d2f4b477da5917ee1",
+              "spanId": "527095f2ca954c8a",
+              "parentSpanId": "76c37ff8dd9e581d",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791057942144000000",
-              "endTimeUnixNano": "1791057945190692458",
+              "startTimeUnixNano": "1791057911210000000",
+              "endTimeUnixNano": "1791057916075035542",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -196,13 +244,13 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.client.operation.duration",
                   "value": {
-                    "doubleValue": 3.0464865839999997
+                    "doubleValue": 4.8648602919999995
                   }
                 },
                 {
@@ -220,7 +268,7 @@
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EV0HGL5xwhEcFFw7NQzJZcHaFpMVd"
+                    "stringValue": "chatcmpl-EV0GorGuSXrP5EwzyNFc2yvJmDJAG"
                   }
                 },
                 {
@@ -232,13 +280,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "12"
+                    "intValue": "15"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "183"
+                    "intValue": "40"
                   }
                 },
                 {
@@ -250,7 +298,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s steps while it works toward a goal. It may include the user\u2019s request, the agent\u2019s actions (such as tool calls), the results it receives, and its final response.\\n\\nFor example:\\n\\n1. User asks for tomorrow\u2019s weather.\\n2. Agent calls a weather tool for the user\u2019s location.\\n3. Tool returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces are useful for debugging, evaluating, and auditing agent behavior. A trace can record observable actions and results without including the model\u2019s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces show the steps an AI agent takes to complete a task.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],
@@ -258,13 +306,13 @@
               "flags": 257
             },
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "0d536b331ba7c3d5",
-              "parentSpanId": "1afb3bf5d8b84ac7",
+              "traceId": "6be78653fa58241d2f4b477da5917ee1",
+              "spanId": "76c37ff8dd9e581d",
+              "parentSpanId": "dd27fdf69f7ad2a9",
               "name": "step 1",
               "kind": 1,
-              "startTimeUnixNano": "1791057942144000000",
-              "endTimeUnixNano": "1791057945191266958",
+              "startTimeUnixNano": "1791057911209000000",
+              "endTimeUnixNano": "1791057916074725417",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -277,12 +325,12 @@
               "flags": 257
             },
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "1afb3bf5d8b84ac7",
-              "name": "invoke_agent research_agent",
+              "traceId": "6be78653fa58241d2f4b477da5917ee1",
+              "spanId": "dd27fdf69f7ad2a9",
+              "name": "invoke_agent openai/gpt-6-luna",
               "kind": 1,
-              "startTimeUnixNano": "1791057942141000000",
-              "endTimeUnixNano": "1791057945191524666",
+              "startTimeUnixNano": "1791057911205000000",
+              "endTimeUnixNano": "1791057916075648791",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -305,13 +353,13 @@
                 {
                   "key": "gen_ai.agent.name",
                   "value": {
-                    "stringValue": "research_agent"
+                    "stringValue": "vercel_retry"
                   }
                 },
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]}]"
                   }
                 },
                 {
@@ -329,13 +377,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "12"
+                    "intValue": "15"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "183"
+                    "intValue": "40"
                   }
                 },
                 {
@@ -347,7 +395,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s steps while it works toward a goal. It may include the user\u2019s request, the agent\u2019s actions (such as tool calls), the results it receives, and its final response.\\n\\nFor example:\\n\\n1. User asks for tomorrow\u2019s weather.\\n2. Agent calls a weather tool for the user\u2019s location.\\n3. Tool returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces are useful for debugging, evaluating, and auditing agent behavior. A trace can record observable actions and results without including the model\u2019s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"Agent traces show the steps an AI agent takes to complete a task.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],

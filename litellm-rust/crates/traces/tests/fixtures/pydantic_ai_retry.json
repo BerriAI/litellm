@@ -24,7 +24,7 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "077f1194-865a-416c-8a60-547583d9276f"
+              "stringValue": "9432cc9d-4181-46c4-9afe-81f1fd34ab32"
             }
           },
           {
@@ -48,13 +48,64 @@
           },
           "spans": [
             {
-              "traceId": "f764c8c8d83b692c89549267ccce619c",
-              "spanId": "d07a46b825149857",
-              "parentSpanId": "7a91645415d79b6f",
+              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
+              "spanId": "d0a64037f2202474",
+              "parentSpanId": "c00506c043013866",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791057952041794000",
-              "endTimeUnixNano": "1791057956149197000",
+              "startTimeUnixNano": "1791058179646366000",
+              "endTimeUnixNano": "1791058180266825000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "503"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "2177b1e3-8647-4144-87a3-fd0fe4905f79"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
+              "spanId": "e54b1fbb23a786dc",
+              "parentSpanId": "c00506c043013866",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791058180268754000",
+              "endTimeUnixNano": "1791058180812133000",
               "attributes": [
                 {
                   "key": "litellm.gateway.attempt",
@@ -89,7 +140,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "7b322c6b-3ed8-4c8d-b07d-d29a36457c21"
+                    "stringValue": "687662f4-644a-434d-9b1c-fc6314a2f7e1"
                   }
                 }
               ],
@@ -105,13 +156,13 @@
           },
           "spans": [
             {
-              "traceId": "f764c8c8d83b692c89549267ccce619c",
-              "spanId": "7a91645415d79b6f",
-              "parentSpanId": "d4504bf6c7717b84",
+              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
+              "spanId": "c00506c043013866",
+              "parentSpanId": "22671f262756bf7c",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791057952017622000",
-              "endTimeUnixNano": "1791057956161382000",
+              "startTimeUnixNano": "1791058179633997000",
+              "endTimeUnixNano": "1791058180819707000",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -158,13 +209,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a1035f-7ce5-7082-953e-a3d2cfa7dbaf"
+                    "stringValue": "01a10362-f625-75b5-bdf2-efbc01d53658"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "01a1035f-7ce5-7082-953e-a3d373defe69"
+                    "stringValue": "01a10362-f625-75b5-bdf2-efbdc6d0ce05"
                   }
                 },
                 {
@@ -174,15 +225,21 @@
                   }
                 },
                 {
+                  "key": "gen_ai.request.max_tokens",
+                  "value": {
+                    "intValue": "1024"
+                  }
+                },
+                {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with OK\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of what an AI agent did while handling a task. It may include the steps it took, tool calls it made, results it received, and its final response.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather service for the user\u2019s city.\\n3. Service returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help people debug, evaluate, and audit an agent\u2019s behavior. A trace is not necessarily the agent\u2019s private reasoning: it can show actions and results without exposing hidden internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"OK\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {
@@ -194,13 +251,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "12"
+                    "intValue": "9"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "180"
+                    "intValue": "4"
                   }
                 },
                 {
@@ -218,7 +275,7 @@
                 {
                   "key": "gen_ai.usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "52"
+                    "intValue": "0"
                   }
                 },
                 {
@@ -236,13 +293,13 @@
                 {
                   "key": "operation.cost",
                   "value": {
-                    "doubleValue": 9.12e-05
+                    "doubleValue": 2.9e-06
                   }
                 },
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EV0HQ2Gc8Y5jqDK42EUrtEV4JNPiE"
+                    "stringValue": "chatcmpl-EV0L60bU2h7venn7fMuHQwxkO8wrZ"
                   }
                 },
                 {
@@ -262,12 +319,12 @@
               "flags": 256
             },
             {
-              "traceId": "f764c8c8d83b692c89549267ccce619c",
-              "spanId": "d4504bf6c7717b84",
+              "traceId": "dc04730338d23d32157e2f1bf3cce55e",
+              "spanId": "22671f262756bf7c",
               "name": "invoke_agent research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791057952004975000",
-              "endTimeUnixNano": "1791057956163290000",
+              "startTimeUnixNano": "1791058179626835000",
+              "endTimeUnixNano": "1791058180820865000",
               "attributes": [
                 {
                   "key": "model_name",
@@ -290,13 +347,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a1035f-7ce5-7082-953e-a3d2cfa7dbaf"
+                    "stringValue": "01a10362-f625-75b5-bdf2-efbc01d53658"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "01a1035f-7ce5-7082-953e-a3d373defe69"
+                    "stringValue": "01a10362-f625-75b5-bdf2-efbdc6d0ce05"
                   }
                 },
                 {
@@ -314,19 +371,19 @@
                 {
                   "key": "final_result",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of what an AI agent did while handling a task. It may include the steps it took, tool calls it made, results it received, and its final response.\n\nFor example:\n\n1. User asks for the weather.\n2. Agent calls a weather service for the user\u2019s city.\n3. Service returns the forecast.\n4. Agent summarizes it for the user.\n\nTraces help people debug, evaluate, and audit an agent\u2019s behavior. A trace is not necessarily the agent\u2019s private reasoning: it can show actions and results without exposing hidden internal reasoning."
+                    "stringValue": "OK"
                   }
                 },
                 {
                   "key": "gen_ai.aggregated_usage.input_tokens",
                   "value": {
-                    "intValue": "12"
+                    "intValue": "9"
                   }
                 },
                 {
                   "key": "gen_ai.aggregated_usage.output_tokens",
                   "value": {
-                    "intValue": "180"
+                    "intValue": "4"
                   }
                 },
                 {
@@ -344,7 +401,7 @@
                 {
                   "key": "gen_ai.aggregated_usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "52"
+                    "intValue": "0"
                   }
                 },
                 {
@@ -356,7 +413,7 @@
                 {
                   "key": "pydantic_ai.all_messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of what an AI agent did while handling a task. It may include the steps it took, tool calls it made, results it received, and its final response.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather service for the user\u2019s city.\\n3. Service returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces help people debug, evaluate, and audit an agent\u2019s behavior. A trace is not necessarily the agent\u2019s private reasoning: it can show actions and results without exposing hidden internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with OK\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"OK\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {

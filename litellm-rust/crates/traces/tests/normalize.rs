@@ -146,6 +146,18 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 #[case::strands_swarm(include_bytes!("fixtures/strands_swarm.json"))]
 #[case::vercel_ai_sdk_simple(include_bytes!("fixtures/vercel_ai_sdk_simple.json"))]
 #[case::vercel_ai_sdk_swarm(include_bytes!("fixtures/vercel_ai_sdk_swarm.json"))]
+#[case::google_adk_stream(include_bytes!("fixtures/google_adk_stream.json"))]
+#[case::google_adk_retry(include_bytes!("fixtures/google_adk_retry.json"))]
+#[case::google_adk_billed_failure(include_bytes!("fixtures/google_adk_billed_failure.json"))]
+#[case::pydantic_ai_stream(include_bytes!("fixtures/pydantic_ai_stream.json"))]
+#[case::pydantic_ai_swarm_stream(include_bytes!("fixtures/pydantic_ai_swarm_stream.json"))]
+#[case::pydantic_ai_retry(include_bytes!("fixtures/pydantic_ai_retry.json"))]
+#[case::pydantic_ai_billed_failure(include_bytes!("fixtures/pydantic_ai_billed_failure.json"))]
+#[case::strands_retry(include_bytes!("fixtures/strands_retry.json"))]
+#[case::vercel_ai_sdk_stream(include_bytes!("fixtures/vercel_ai_sdk_stream.json"))]
+#[case::vercel_ai_sdk_retry(include_bytes!("fixtures/vercel_ai_sdk_retry.json"))]
+#[case::vercel_ai_sdk_billed_failure(include_bytes!("fixtures/vercel_ai_sdk_billed_failure.json"))]
+#[case::strands_billed_failure(include_bytes!("fixtures/strands_billed_failure.json"))]
 fn fixture_normalization(#[case] body: &[u8]) {
     let spans = decode_otlp(body, Some("application/json")).expect("captured OTLP export");
     assert!(!spans.is_empty());

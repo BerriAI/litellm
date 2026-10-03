@@ -102,7 +102,11 @@ def response_ids(rows: tuple[SpendLogRecord, ...]) -> Iterator[str]:
 
 
 def response_pattern(rows: tuple[SpendLogRecord, ...]) -> re.Pattern[str]:
-    identities: Final = sorted(frozenset(filter(None, response_ids(rows))), key=len, reverse=True)
+    identities: Final = sorted(
+        frozenset(filter(None, chain(response_ids(rows), (row["litellm_call_id"] for row in rows)))),
+        key=len,
+        reverse=True,
+    )
     return re.compile("|".join(re.escape(identity) for identity in identities) or r"(?!)")
 
 

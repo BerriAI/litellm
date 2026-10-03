@@ -1,0 +1,437 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.44.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "2974f46e-e5bf-45d1-936c-5dd2bd1b2372"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.65b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "35bce2975decc6eafb89278e3e0ee5ee",
+              "spanId": "ed387e4c0cf379b9",
+              "parentSpanId": "e58900b060a202bb",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791058224897439000",
+              "endTimeUnixNano": "1791058225503879000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "503"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "b3b6bffc-c59c-4fc6-ba40-3fec374f730d"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "35bce2975decc6eafb89278e3e0ee5ee",
+              "spanId": "937c0a486d721635",
+              "parentSpanId": "e58900b060a202bb",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791058225505347000",
+              "endTimeUnixNano": "1791058226257335000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "503"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "111ceb48-9be7-4de4-8dcf-c8b3265b3765"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "35bce2975decc6eafb89278e3e0ee5ee",
+              "spanId": "d097ac23dabfc692",
+              "parentSpanId": "e58900b060a202bb",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791058226258824000",
+              "endTimeUnixNano": "1791058226775879000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "503"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "aa4cca9b-3b14-42fc-be17-9144f6c4301e"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "pydantic-ai",
+            "version": "2.53.0"
+          },
+          "spans": [
+            {
+              "traceId": "35bce2975decc6eafb89278e3e0ee5ee",
+              "spanId": "e58900b060a202bb",
+              "parentSpanId": "913bdd577ef49f77",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791058224886518000",
+              "endTimeUnixNano": "1791058226783150000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "litellm"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "4002"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.call.id",
+                  "value": {
+                    "stringValue": "01a10363-a6ea-75b1-9143-616cc3c2605d"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "01a10363-a6ea-75b1-9143-616dc3ee104b"
+                  }
+                },
+                {
+                  "key": "model_request_parameters",
+                  "value": {
+                    "stringValue": "{\"function_tools\":[],\"native_tools\":[],\"tool_visibility\":{},\"revealed_tool_names\":[],\"deferred_capability_ids\":[],\"output_mode\":\"text\",\"output_object\":null,\"output_tools\":[],\"prompted_output_template\":null,\"allow_text_output\":true,\"allow_image_output\":false,\"instruction_parts\":null,\"thinking\":null}"
+                  }
+                },
+                {
+                  "key": "logfire.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"object\",\"properties\":{\"model_request_parameters\":{\"type\":\"object\"}}}"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.max_tokens",
+                  "value": {
+                    "intValue": "1024"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791058226783128000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "pydantic_ai.exceptions.ModelHTTPError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "status_code: 503, model_name: openai/gpt-6-luna, body: {'message': 'controlled response loss'}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 228, in _map_api_errors\n    yield\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 1215, in _completions_create\n    return await self.client.chat.completions.create(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<32 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py\", line 2952, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n    ...<55 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 2053, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1838, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.InternalServerError: Error code: 503 - {'error': {'message': 'controlled response loss'}}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_instrumentation.py\", line 672, in record_uncaught_errors\n    yield\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_instrumentation.py\", line 792, in open_model_request_span\n    yield finish, prepared_request_context\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 376, in wrap_model_request\n    response = await handler(request_context)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 1612, in model_handler\n    response = await model_request(\n               ^^^^^^^^^^^^^^^^^^^^\n        req_ctx.model, request_context=req_ctx, run_context=run_context, on_progress=on_progress\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 1168, in model_request\n    new_response = await model.request(\n                   ^^^^^^^^^^^^^^^^^^^^\n        messages, request_context.model_settings, request_context.model_request_parameters\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 1115, in request\n    response = await self._completions_create(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        messages, False, cast(OpenAIChatModelSettings, model_settings or {}), model_request_parameters\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 1206, in _completions_create\n    with _map_api_errors(self.model_name, self._provider.model_id_namespace), _map_decode_errors(self.model_name):\n         ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/.local/share/uv/python/cpython-3.13.13-macos-aarch64-none/lib/python3.13/contextlib.py\", line 162, in __exit__\n    self.gen.throw(value)\n    ~~~~~~~~~~~~~~^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 235, in _map_api_errors\n    raise ModelHTTPError(\n    ...<5 lines>...\n    ) from e\npydantic_ai.exceptions.ModelHTTPError: status_code: 503, model_name: openai/gpt-6-luna, body: {'message': 'controlled response loss'}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "ModelHTTPError: status_code: 503, model_name: openai/gpt-6-luna, body: {'message': 'controlled response loss'}",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "35bce2975decc6eafb89278e3e0ee5ee",
+              "spanId": "913bdd577ef49f77",
+              "name": "invoke_agent research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791058224880068000",
+              "endTimeUnixNano": "1791058226788825000",
+              "attributes": [
+                {
+                  "key": "model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "agent_name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.call.id",
+                  "value": {
+                    "stringValue": "01a10363-a6ea-75b1-9143-616cc3c2605d"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "01a10363-a6ea-75b1-9143-616dc3ee104b"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "logfire.msg",
+                  "value": {
+                    "stringValue": "research_agent run"
+                  }
+                },
+                {
+                  "key": "pydantic_ai.all_messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with OK\"}]}]"
+                  }
+                },
+                {
+                  "key": "logfire.json_schema",
+                  "value": {
+                    "stringValue": "{\"type\":\"object\",\"properties\":{\"pydantic_ai.all_messages\":{\"type\":\"array\"},\"final_result\":{\"type\":\"object\"}}}"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791058226788800000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "pydantic_ai.exceptions.ModelHTTPError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "status_code: 503, model_name: openai/gpt-6-luna, body: {'message': 'controlled response loss'}"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 228, in _map_api_errors\n    yield\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 1215, in _completions_create\n    return await self.client.chat.completions.create(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<32 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py\", line 2952, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n    ...<55 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 2053, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1838, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.InternalServerError: Error code: 503 - {'error': {'message': 'controlled response loss'}}\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_instrumentation.py\", line 672, in record_uncaught_errors\n    yield\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 246, in wrap_run\n    result = await handler()\n             ^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 998, in wrapped\n    return await cap.wrap_run(_ctx_for_cap(cap, ctx), handler=inner)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 730, in wrap_run\n    return await handler()\n           ^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 998, in wrapped\n    return await cap.wrap_run(_ctx_for_cap(cap, ctx), handler=inner)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/abstract.py\", line 730, in wrap_run\n    return await handler()\n           ^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 265, in _do_run\n    raise extract_error(_run_error) if extract_error is not None else _run_error\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 343, in _run_lifecycle_hooks\n    yield _RunLifecycle(short_circuited=short_circuited)\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 4465, in open\n    yield agent_run\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py\", line 1439, in iter\n    yield agent_run\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/agent/abstract.py\", line 671, in run\n    node = await agent_run.next(node)  # pyright: ignore[reportArgumentType]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 564, in next\n    return await self._run_node_with_hooks(node, self._stream_and_advance)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 485, in _run_node_with_hooks\n    return await self._wrap_and_advance(run_context, node, step_fn)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 431, in _wrap_and_advance\n    result = await step_fn(node)\n             ^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 578, in _stream_and_advance\n    return await self._advance_graph(node)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/run.py\", line 405, in _advance_graph\n    task = await self._graph_run.next(task)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 584, in next\n    return await anext(self)\n           ^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 561, in __anext__\n    raise self._next.error\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 862, in _run_tracked_task\n    result = await self._run_task(t_)\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/graph_builder.py\", line 920, in _run_task\n    output = await node.call(step_context)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_graph/step.py\", line 253, in _call_node\n    return await node.run(GraphRunContext(state=ctx.state, deps=ctx.deps))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 1332, in run\n    return await self._make_request(ctx)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 1629, in _make_request\n    model_response = await root_capability.wrap_model_request(\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<3 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 685, in wrap_model_request\n    return await chain(request_context)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/combined.py\", line 1009, in wrapped\n    return await cap.wrap_model_request(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<3 lines>...\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/capabilities/instrumentation.py\", line 376, in wrap_model_request\n    response = await handler(request_context)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 1612, in model_handler\n    response = await model_request(\n               ^^^^^^^^^^^^^^^^^^^^\n        req_ctx.model, request_context=req_ctx, run_context=run_context, on_progress=on_progress\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py\", line 1168, in model_request\n    new_response = await model.request(\n                   ^^^^^^^^^^^^^^^^^^^^\n        messages, request_context.model_settings, request_context.model_request_parameters\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 1115, in request\n    response = await self._completions_create(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        messages, False, cast(OpenAIChatModelSettings, model_settings or {}), model_request_parameters\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 1206, in _completions_create\n    with _map_api_errors(self.model_name, self._provider.model_id_namespace), _map_decode_errors(self.model_name):\n         ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/yujonglee/.local/share/uv/python/cpython-3.13.13-macos-aarch64-none/lib/python3.13/contextlib.py\", line 162, in __exit__\n    self.gen.throw(value)\n    ~~~~~~~~~~~~~~^^^^^^^\n  File \"/Users/yujonglee/dev/litellm-lens-example/pydantic-ai/.venv/lib/python3.13/site-packages/pydantic_ai/models/openai.py\", line 235, in _map_api_errors\n    raise ModelHTTPError(\n    ...<5 lines>...\n    ) from e\npydantic_ai.exceptions.ModelHTTPError: status_code: 503, model_name: openai/gpt-6-luna, body: {'message': 'controlled response loss'}\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "ModelHTTPError: status_code: 503, model_name: openai/gpt-6-luna, body: {'message': 'controlled response loss'}",
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

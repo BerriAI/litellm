@@ -712,6 +712,54 @@ fn transport_contract_keeps_independent_call_ids(span: Span) {
 }
 
 #[rstest]
+#[case::request("litellm.gateway.client", "gateway.request", "true", "POST", true)]
+#[case::unrelated_scope("custom", "gateway.request", "true", "POST", false)]
+#[case::unrelated_span("litellm.gateway.client", "step", "true", "POST", false)]
+#[case::missing_contract("litellm.gateway.client", "gateway.request", "", "POST", false)]
+#[case::unrelated_method("litellm.gateway.client", "gateway.request", "true", "GET", false)]
+fn gateway_attempt_contract_requires_recorded_request_boundary(
+    span: Span,
+    #[case] scope: &str,
+    #[case] name: &str,
+    #[case] attempt: &str,
+    #[case] method: &str,
+    #[case] complete: bool,
+) {
+    let decoded = decode(
+        Span {
+            name: name.into(),
+            ..span
+        },
+        scope,
+        &[
+            ("litellm.gateway.attempt", attempt),
+            ("http.request.method", method),
+            ("litellm.call_id", "gateway"),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let gateway = CallKey::LiteLlmRequest("gateway".into());
+    assert_eq!(
+        decoded.normalized.calls,
+        if complete {
+            CallEvidence::Complete(std::collections::BTreeSet::from([
+                CallKey::Transport,
+                gateway,
+            ]))
+        } else {
+            CallEvidence::Partial(std::collections::BTreeSet::from([gateway]))
+        }
+    );
+    if complete {
+        assert_eq!(
+            decoded.normalized.observation_type,
+            ObservationType::Framework
+        );
+    }
+}
+
+#[rstest]
 #[case::both(true, true)]
 #[case::input_only(true, false)]
 #[case::output_only(false, true)]

@@ -42,13 +42,13 @@
           },
           "spans": [
             {
-              "traceId": "4455612ac34f2241f2b82922e3e000b2",
-              "spanId": "8437fdfbdf567c83",
-              "parentSpanId": "3c9f6e8689f29983",
+              "traceId": "1df213c0bc76b7959acbf04891ec5bbc",
+              "spanId": "c7ef837c1ee6b9ae",
+              "parentSpanId": "8a3d6100e89505ba",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791057887797283000",
-              "endTimeUnixNano": "1791057891347096000",
+              "startTimeUnixNano": "1791057969134521000",
+              "endTimeUnixNano": "1791057973190094000",
               "attributes": [
                 {
                   "key": "litellm.gateway.attempt",
@@ -83,7 +83,7 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "689a49cf-7071-49c4-82f2-abf4999efad4"
+                    "stringValue": "7cb5bb5c-d556-4791-8529-f1a9e9cb6e46"
                   }
                 }
               ],
@@ -99,13 +99,13 @@
           },
           "spans": [
             {
-              "traceId": "4455612ac34f2241f2b82922e3e000b2",
-              "spanId": "3c9f6e8689f29983",
-              "parentSpanId": "1ac49a9e48f69325",
+              "traceId": "1df213c0bc76b7959acbf04891ec5bbc",
+              "spanId": "8a3d6100e89505ba",
+              "parentSpanId": "be2ff1d2b56cc94a",
               "name": "call_llm",
               "kind": 1,
-              "startTimeUnixNano": "1791057885109789000",
-              "endTimeUnixNano": "1791057891368465000",
+              "startTimeUnixNano": "1791057966708447000",
+              "endTimeUnixNano": "1791057973212448000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -152,7 +152,7 @@
                 {
                   "key": "gcp.vertex.agent.invocation_id",
                   "value": {
-                    "stringValue": "e-3206d273-1981-42fb-b64a-5d1eb16ed7d7"
+                    "stringValue": "e-f9ee3d0b-1198-43fa-8025-050f0057d9aa"
                   }
                 },
                 {
@@ -164,7 +164,7 @@
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "ccd66d1c-9fbf-423e-b264-25c6fce030fc"
+                    "stringValue": "6a00614d-bc51-4e60-87c5-cb6297ddf995"
                   }
                 },
                 {
@@ -176,7 +176,7 @@
                 {
                   "key": "gcp.vertex.agent.llm_response",
                   "value": {
-                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s activity while completing a task. It may include the agent\u2019s inputs, reasoning or intermediate decisions, tool calls and their results, and final response.\\n\\nTraces help developers understand and debug an agent\u2019s behavior\u2014for example, where it got stuck, which tool it used, or why a step failed. In some systems, a trace is organized as a timeline of linked events or \u201cspans,\u201d such as a model call followed by a search call and then another model call.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":158,\"prompt_token_count\":29,\"thoughts_token_count\":42,\"total_token_count\":187}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s run: what it received, what actions it took, what tools it called, what results came back, and how it reached its final response.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather tool.\\n3. The tool returns a forecast.\\n4. Agent replies with the forecast.\\n\\nTraces are useful for debugging, auditing, and understanding an agent\u2019s behavior. They may include inputs, tool calls, outputs, and timing information; they don\u2019t necessarily expose the agent\u2019s private internal reasoning.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":202,\"prompt_token_count\":29,\"thoughts_token_count\":74,\"total_token_count\":231}}"
                   }
                 },
                 {
@@ -188,7 +188,7 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "200"
+                    "intValue": "276"
                   }
                 },
                 {
@@ -200,7 +200,7 @@
                 {
                   "key": "gen_ai.usage.reasoning.output_tokens",
                   "value": {
-                    "intValue": "42"
+                    "intValue": "74"
                   }
                 },
                 {
@@ -278,7 +278,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s activity while completing a task. It may include the agent\u2019s inputs, reasoning or intermediate decisions, tool calls and their results, and final response.\\n\\nTraces help developers understand and debug an agent\u2019s behavior\u2014for example, where it got stuck, which tool it used, or why a step failed. In some systems, a trace is organized as a timeline of linked events or \u201cspans,\u201d such as a model call followed by a search call and then another model call.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":158,\"prompt_token_count\":29,\"thoughts_token_count\":42,\"total_token_count\":187}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s run: what it received, what actions it took, what tools it called, what results came back, and how it reached its final response.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather tool.\\n3. The tool returns a forecast.\\n4. Agent replies with the forecast.\\n\\nTraces are useful for debugging, auditing, and understanding an agent\u2019s behavior. They may include inputs, tool calls, outputs, and timing information; they don\u2019t necessarily expose the agent\u2019s private internal reasoning.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":202,\"prompt_token_count\":29,\"thoughts_token_count\":74,\"total_token_count\":231}}"
                   }
                 },
                 {
@@ -290,7 +290,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "187"
+                    "intValue": "231"
                   }
                 },
                 {
@@ -302,13 +302,13 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "42"
+                    "intValue": "74"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "158"
+                    "intValue": "202"
                   }
                 },
                 {
@@ -320,7 +320,7 @@
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s activity while completing a task. It may include the agent\u2019s inputs, reasoning or intermediate decisions, tool calls and their results, and final response.\n\nTraces help developers understand and debug an agent\u2019s behavior\u2014for example, where it got stuck, which tool it used, or why a step failed. In some systems, a trace is organized as a timeline of linked events or \u201cspans,\u201d such as a model call followed by a search call and then another model call."
+                    "stringValue": "An **agent trace** is a record of an AI agent\u2019s run: what it received, what actions it took, what tools it called, what results came back, and how it reached its final response.\n\nFor example:\n\n1. User asks for the weather.\n2. Agent calls a weather tool.\n3. The tool returns a forecast.\n4. Agent replies with the forecast.\n\nTraces are useful for debugging, auditing, and understanding an agent\u2019s behavior. They may include inputs, tool calls, outputs, and timing information; they don\u2019t necessarily expose the agent\u2019s private internal reasoning."
                   }
                 },
                 {
@@ -342,13 +342,13 @@
               "flags": 256
             },
             {
-              "traceId": "4455612ac34f2241f2b82922e3e000b2",
-              "spanId": "1ac49a9e48f69325",
-              "parentSpanId": "40f273be88239a92",
+              "traceId": "1df213c0bc76b7959acbf04891ec5bbc",
+              "spanId": "be2ff1d2b56cc94a",
+              "parentSpanId": "fdd9afe2ed68e503",
               "name": "agent_run [research_agent]",
               "kind": 1,
-              "startTimeUnixNano": "1791057885091675000",
-              "endTimeUnixNano": "1791057891368796000",
+              "startTimeUnixNano": "1791057966685906000",
+              "endTimeUnixNano": "1791057973212642000",
               "attributes": [
                 {
                   "key": "agent.name",
@@ -395,7 +395,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s activity while completing a task. It may include the agent\u2019s inputs, reasoning or intermediate decisions, tool calls and their results, and final response.\\n\\nTraces help developers understand and debug an agent\u2019s behavior\u2014for example, where it got stuck, which tool it used, or why a step failed. In some systems, a trace is organized as a timeline of linked events or \u201cspans,\u201d such as a model call followed by a search call and then another model call.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":158,\"prompt_token_count\":29,\"thoughts_token_count\":42,\"total_token_count\":187},\"invocation_id\":\"e-3206d273-1981-42fb-b64a-5d1eb16ed7d7\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"\"},\"id\":\"ccd66d1c-9fbf-423e-b264-25c6fce030fc\",\"timestamp\":1791057885.1097238}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s run: what it received, what actions it took, what tools it called, what results came back, and how it reached its final response.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather tool.\\n3. The tool returns a forecast.\\n4. Agent replies with the forecast.\\n\\nTraces are useful for debugging, auditing, and understanding an agent\u2019s behavior. They may include inputs, tool calls, outputs, and timing information; they don\u2019t necessarily expose the agent\u2019s private internal reasoning.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":202,\"prompt_token_count\":29,\"thoughts_token_count\":74,\"total_token_count\":231},\"invocation_id\":\"e-f9ee3d0b-1198-43fa-8025-050f0057d9aa\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"research_agent@1\"},\"id\":\"6a00614d-bc51-4e60-87c5-cb6297ddf995\",\"timestamp\":1791057973.173505}"
                   }
                 },
                 {
@@ -417,17 +417,17 @@
               "flags": 256
             },
             {
-              "traceId": "4455612ac34f2241f2b82922e3e000b2",
-              "spanId": "40f273be88239a92",
+              "traceId": "1df213c0bc76b7959acbf04891ec5bbc",
+              "spanId": "fdd9afe2ed68e503",
               "name": "invocation [research_app]",
               "kind": 1,
-              "startTimeUnixNano": "1791057884891637000",
-              "endTimeUnixNano": "1791057891369256000",
+              "startTimeUnixNano": "1791057966558335000",
+              "endTimeUnixNano": "1791057973212964000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"user_id\": \"debug_user_id\", \"session_id\": \"debug_session_id\", \"invocation_id\": null, \"new_message\": {\"parts\": [{\"text\": \"What is an agent trace?\"}], \"role\": \"user\"}, \"state_delta\": null, \"run_config\": {\"save_input_blobs_as_artifacts\": false, \"support_cfc\": false, \"streaming_mode\": \"StreamingMode.NONE\", \"output_audio_transcription\": {}, \"input_audio_transcription\": {}, \"save_live_blob\": false, \"save_live_audio\": false, \"max_llm_calls\": 500, \"include_thoughts_from_other_agents\": false}, \"yield_user_message\": false, \"abort_signal\": null}"
+                    "stringValue": "{\"user_id\": \"debug_user_id\", \"session_id\": \"debug_session_id\", \"invocation_id\": null, \"new_message\": {\"parts\": [{\"text\": \"What is an agent trace?\"}], \"role\": \"user\"}, \"state_delta\": null, \"run_config\": {\"save_input_blobs_as_artifacts\": false, \"support_cfc\": false, \"streaming_mode\": \"StreamingMode.SSE\", \"output_audio_transcription\": {}, \"input_audio_transcription\": {}, \"save_live_blob\": false, \"save_live_audio\": false, \"max_llm_calls\": 500, \"include_thoughts_from_other_agents\": false}, \"yield_user_message\": false, \"abort_signal\": null}"
                   }
                 },
                 {
@@ -451,7 +451,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s activity while completing a task. It may include the agent\u2019s inputs, reasoning or intermediate decisions, tool calls and their results, and final response.\\n\\nTraces help developers understand and debug an agent\u2019s behavior\u2014for example, where it got stuck, which tool it used, or why a step failed. In some systems, a trace is organized as a timeline of linked events or \u201cspans,\u201d such as a model call followed by a search call and then another model call.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":158,\"prompt_token_count\":29,\"thoughts_token_count\":42,\"total_token_count\":187},\"invocation_id\":\"e-3206d273-1981-42fb-b64a-5d1eb16ed7d7\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"research_agent@1\"},\"id\":\"ccd66d1c-9fbf-423e-b264-25c6fce030fc\",\"timestamp\":1791057885.1097238}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of an AI agent\u2019s run: what it received, what actions it took, what tools it called, what results came back, and how it reached its final response.\\n\\nFor example:\\n\\n1. User asks for the weather.\\n2. Agent calls a weather tool.\\n3. The tool returns a forecast.\\n4. Agent replies with the forecast.\\n\\nTraces are useful for debugging, auditing, and understanding an agent\u2019s behavior. They may include inputs, tool calls, outputs, and timing information; they don\u2019t necessarily expose the agent\u2019s private internal reasoning.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":202,\"prompt_token_count\":29,\"thoughts_token_count\":74,\"total_token_count\":231},\"invocation_id\":\"e-f9ee3d0b-1198-43fa-8025-050f0057d9aa\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"research_agent@1\"},\"id\":\"6a00614d-bc51-4e60-87c5-cb6297ddf995\",\"timestamp\":1791057973.173505}"
                   }
                 },
                 {

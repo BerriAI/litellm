@@ -24,7 +24,7 @@
           {
             "key": "process.pid",
             "value": {
-              "intValue": "51692"
+              "intValue": "46532"
             }
           },
           {
@@ -48,7 +48,10 @@
                     "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
                   },
                   {
-                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/simple/main.ts"
+                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+                  },
+                  {
+                    "stringValue": "response-loss"
                   }
                 ]
               }
@@ -75,7 +78,7 @@
           {
             "key": "process.command",
             "value": {
-              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/simple/main.ts"
+              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
             }
           },
           {
@@ -117,13 +120,13 @@
           },
           "spans": [
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "e8bd96c83b41afef",
-              "parentSpanId": "a8ab477c24670b2e",
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "cd2a0f2cf44ca1af",
+              "parentSpanId": "b5f6c50aeeeb3aa8",
               "name": "gateway.request",
               "kind": 3,
-              "startTimeUnixNano": "1791057942146000000",
-              "endTimeUnixNano": "1791057945189522416",
+              "startTimeUnixNano": "1791057930934000000",
+              "endTimeUnixNano": "1791057932198693208",
               "attributes": [
                 {
                   "key": "http.request.method",
@@ -152,11 +155,13 @@
                 {
                   "key": "litellm.call_id",
                   "value": {
-                    "stringValue": "dc6b247b-49a4-4a87-8029-5491c289c04f"
+                    "stringValue": "1f0e8328-d49e-4f4d-8d1e-ac1c2a24d872"
                   }
                 }
               ],
-              "status": {},
+              "status": {
+                "code": 2
+              },
               "flags": 257
             }
           ]
@@ -167,13 +172,13 @@
           },
           "spans": [
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "a8ab477c24670b2e",
-              "parentSpanId": "0d536b331ba7c3d5",
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "b5f6c50aeeeb3aa8",
+              "parentSpanId": "3fb380320f4f6e31",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791057942144000000",
-              "endTimeUnixNano": "1791057945190692458",
+              "startTimeUnixNano": "1791057930924000000",
+              "endTimeUnixNano": "1791057932203362917",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -196,93 +201,109 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]}]"
                   }
                 },
                 {
-                  "key": "gen_ai.client.operation.duration",
+                  "key": "http.response.status_code",
                   "value": {
-                    "doubleValue": 3.0464865839999997
-                  }
-                },
-                {
-                  "key": "gen_ai.response.finish_reasons",
-                  "value": {
-                    "arrayValue": {
-                      "values": [
-                        {
-                          "stringValue": "stop"
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "key": "gen_ai.response.id",
-                  "value": {
-                    "stringValue": "chatcmpl-EV0HGL5xwhEcFFw7NQzJZcHaFpMVd"
-                  }
-                },
-                {
-                  "key": "gen_ai.response.model",
-                  "value": {
-                    "stringValue": "openai/gpt-6-luna"
-                  }
-                },
-                {
-                  "key": "gen_ai.usage.input_tokens",
-                  "value": {
-                    "intValue": "12"
-                  }
-                },
-                {
-                  "key": "gen_ai.usage.output_tokens",
-                  "value": {
-                    "intValue": "183"
-                  }
-                },
-                {
-                  "key": "gen_ai.usage.cache_read.input_tokens",
-                  "value": {
-                    "intValue": "0"
-                  }
-                },
-                {
-                  "key": "gen_ai.output.messages",
-                  "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s steps while it works toward a goal. It may include the user\u2019s request, the agent\u2019s actions (such as tool calls), the results it receives, and its final response.\\n\\nFor example:\\n\\n1. User asks for tomorrow\u2019s weather.\\n2. Agent calls a weather tool for the user\u2019s location.\\n3. Tool returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces are useful for debugging, evaluating, and auditing agent behavior. A trace can record observable actions and results without including the model\u2019s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "intValue": "200"
                   }
                 }
               ],
-              "status": {},
+              "events": [
+                {
+                  "timeUnixNano": "1791057932203337834",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "AI_APICallError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Failed to process successful response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Failed to process successful response",
+                "code": 2
+              },
               "flags": 257
             },
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "0d536b331ba7c3d5",
-              "parentSpanId": "1afb3bf5d8b84ac7",
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "3fb380320f4f6e31",
+              "parentSpanId": "9cde23100b204eb5",
               "name": "step 1",
               "kind": 1,
-              "startTimeUnixNano": "1791057942144000000",
-              "endTimeUnixNano": "1791057945191266958",
+              "startTimeUnixNano": "1791057930923000000",
+              "endTimeUnixNano": "1791057932202662875",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
                   "value": {
                     "stringValue": "agent_step"
                   }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
                 }
               ],
-              "status": {},
+              "events": [
+                {
+                  "timeUnixNano": "1791057932202650750",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "AI_APICallError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Failed to process successful response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Failed to process successful response",
+                "code": 2
+              },
               "flags": 257
             },
             {
-              "traceId": "f9fdb87701be064168bd0b21fc4a4b2a",
-              "spanId": "1afb3bf5d8b84ac7",
-              "name": "invoke_agent research_agent",
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "9cde23100b204eb5",
+              "name": "invoke_agent openai/gpt-6-luna",
               "kind": 1,
-              "startTimeUnixNano": "1791057942141000000",
-              "endTimeUnixNano": "1791057945191524666",
+              "startTimeUnixNano": "1791057930917000000",
+              "endTimeUnixNano": "1791057932202577917",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -305,53 +326,52 @@
                 {
                   "key": "gen_ai.agent.name",
                   "value": {
-                    "stringValue": "research_agent"
+                    "stringValue": "vercel_response-loss"
                   }
                 },
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]}]"
                   }
                 },
                 {
-                  "key": "gen_ai.response.finish_reasons",
+                  "key": "http.response.status_code",
                   "value": {
-                    "arrayValue": {
-                      "values": [
-                        {
-                          "stringValue": "stop"
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "key": "gen_ai.usage.input_tokens",
-                  "value": {
-                    "intValue": "12"
-                  }
-                },
-                {
-                  "key": "gen_ai.usage.output_tokens",
-                  "value": {
-                    "intValue": "183"
-                  }
-                },
-                {
-                  "key": "gen_ai.usage.cache_read.input_tokens",
-                  "value": {
-                    "intValue": "0"
-                  }
-                },
-                {
-                  "key": "gen_ai.output.messages",
-                  "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s steps while it works toward a goal. It may include the user\u2019s request, the agent\u2019s actions (such as tool calls), the results it receives, and its final response.\\n\\nFor example:\\n\\n1. User asks for tomorrow\u2019s weather.\\n2. Agent calls a weather tool for the user\u2019s location.\\n3. Tool returns the forecast.\\n4. Agent summarizes it for the user.\\n\\nTraces are useful for debugging, evaluating, and auditing agent behavior. A trace can record observable actions and results without including the model\u2019s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "intValue": "200"
                   }
                 }
               ],
-              "status": {},
+              "events": [
+                {
+                  "timeUnixNano": "1791057932202568875",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "AI_APICallError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Failed to process successful response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Failed to process successful response",
+                "code": 2
+              },
               "flags": 257
             }
           ]
