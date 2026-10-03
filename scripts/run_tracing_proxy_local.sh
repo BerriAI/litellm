@@ -35,10 +35,10 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 cat > "$config_file" <<'EOF'
 model_list:
-  - model_name: claude-sonnet
+  - model_name: openai/gpt-6-luna
     litellm_params:
-      model: anthropic/claude-sonnet-5-5
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/gpt-6-luna
+      api_key: os.environ/OPENAI_API_KEY
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_prompts_in_spend_logs: true
