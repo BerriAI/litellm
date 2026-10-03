@@ -156,6 +156,11 @@ def test_init_defaults():
     assert g.akto_vxlan_id == "0"
 
 
+def test_positional_args_keep_their_original_meaning():
+    g = AktoGuardrail("http://localhost:9090", "test-token", "7", "8", "fail_open", 9, async_handler=_handler())
+    assert (g.unreachable_fallback, g.guardrail_timeout) == ("fail_open", 9)
+
+
 def test_build_akto_payload_format(akto_pre_call, sample_inputs, sample_request_data):
     payload = akto_pre_call.build_akto_payload(sample_inputs, sample_request_data, include_response=False)
 
