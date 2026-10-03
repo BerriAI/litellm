@@ -510,7 +510,7 @@ mod tests {
     #[case::changed_snapshot(ReadError::TraceChanged, "TraceChanged")]
     #[case::read_budget(ReadError::TooLarge, "OverflowError")]
     #[case::encode(
-        ReadError::Encode(serde_json::from_str::<u32>("invalid").unwrap_err()),
+        ReadError::Encode(serde_json::Error::io(std::io::Error::other("invalid"))),
         "RuntimeError"
     )]
     #[case::store(ReadError::Store(Error::InvalidScope), "ValueError")]
