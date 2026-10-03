@@ -73,20 +73,18 @@ class _SessionsReport(BaseModel):
 
 @pytest.fixture(scope="module")
 def echo_config(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["guardrails"] = [
-        {
-            "guardrail_name": "catalog-echo-" + uuid.uuid4().hex[:8],
-            "litellm_params": {
-                "guardrail": "custom_code",
-                "mode": "pre_mcp_call",
-                "default_on": True,
-                "custom_code": _GUARDRAIL_CODE,
-            },
-        }
-    ]
+    base: Final = _OBJECTS.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    guardrail: Final = {
+        "guardrail_name": "catalog-echo-" + uuid.uuid4().hex[:8],
+        "litellm_params": {
+            "guardrail": "custom_code",
+            "mode": "pre_mcp_call",
+            "default_on": True,
+            "custom_code": _GUARDRAIL_CODE,
+        },
+    }
     path: Final = tmp_path_factory.mktemp("failure-recovery") / "config.yaml"
-    path.write_text(yaml.safe_dump(config))
+    path.write_text(yaml.safe_dump({**base, "guardrails": [guardrail]}))
     return path
 
 
