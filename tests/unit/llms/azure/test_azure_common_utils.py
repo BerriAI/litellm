@@ -1,7 +1,7 @@
 import json
 import os
 import traceback
-from typing import Callable, Optional
+from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -438,6 +438,66 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
     )
 
     assert completed.stdout.strip() == "0"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+@pytest.mark.parametrize(
+    "retry_params, expected_retries, reuse_first",
+    [
+        pytest.param(
+            ({"max_retries": 3}, {"max_retries": 0}, {"max_retries": 3}),
+            (3, 0, 3),
+            False,
+            id="disable-retries",
+        ),
+        pytest.param(
+            ({"max_retries": 0}, {"max_retries": 3}, {"max_retries": 0}),
+            (0, 3, 0),
+            False,
+            id="enable-retries",
+        ),
+        pytest.param(
+            ({}, {"max_retries": None}, {"max_retries": litellm.constants.DEFAULT_MAX_RETRIES}),
+            (litellm.constants.DEFAULT_MAX_RETRIES,) * 3,
+            True,
+            id="equivalent-defaults",
+        ),
+    ],
+)
+async def test_azure_client_cache_respects_effective_max_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    is_async: bool,
+    api_version: str,
+    retry_params: tuple[dict[str, int | None], ...],
+    expected_retries: tuple[int, ...],
+    reuse_first: bool,
+) -> None:
+    import httpx
+
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    async with httpx.AsyncClient() as async_session:
+        with httpx.Client() as sync_session:
+            monkeypatch.setattr(litellm, "aclient_session", async_session)
+            monkeypatch.setattr(litellm, "client_session", sync_session)
+            clients: Final = tuple(
+                BaseAzureLLM().get_azure_openai_client(
+                    api_key="test-api-key",
+                    api_base="https://test.openai.azure.com",
+                    api_version=api_version,
+                    litellm_params=params,
+                    _is_async=is_async,
+                )
+                for params in retry_params
+            )
+
+            assert all(client is not None for client in clients)
+            assert tuple(client.max_retries for client in clients if client is not None) == expected_retries
+            assert clients[0] is clients[2]
+            assert (clients[0] is clients[1]) is reuse_first
 
 
 @pytest.mark.parametrize(
