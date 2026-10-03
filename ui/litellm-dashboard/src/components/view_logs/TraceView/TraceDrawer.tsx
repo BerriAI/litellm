@@ -23,6 +23,8 @@ import {
   buildTreeRows,
   firstErrorSpan,
   fmtMs,
+  fmtTok,
+  findTraceSteps,
   GROUP_PAGE_SIZE,
   isFrameworkSpan,
   nearestVisibleSpanId,
@@ -55,16 +57,22 @@ export function initialRunSelection(
     const state = revealSpanInState(trace.spans, { ...INITIAL_STATE, hideFramework: false }, selectedId);
     return { selectedId, state };
   }
+  const initialState = {
+    ...INITIAL_STATE,
+    collapsedSpanIds: new Set(
+      trace.spans.filter((span) => span.type === "agent" && span.parent_span_id !== null).map((span) => span.span_id),
+    ),
+  };
   const failed = firstErrorSpan(trace.spans);
   if (!failed || failed.parent_span_id === null) {
     const root = trace.spans.find((s) => s.parent_span_id === null);
-    return { selectedId: root?.span_id ?? "", state: INITIAL_STATE };
+    return { selectedId: root?.span_id ?? "", state: initialState };
   }
   const visibleFailure = trace.spans
     .filter((s) => s.status === "error" && s.parent_span_id !== null && !isFrameworkSpan(s))
     .sort((a, b) => a.start_offset_ms - b.start_offset_ms)[0];
   const selectedId = visibleFailure?.span_id ?? nearestVisibleSpanId(trace.spans, failed.span_id, true);
-  return { selectedId, state: revealSpanInState(trace.spans, INITIAL_STATE, selectedId) };
+  return { selectedId, state: revealSpanInState(trace.spans, initialState, selectedId) };
 }
 
 const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
@@ -106,12 +114,11 @@ function Stat({ label, value, error = false }: { label: string; value: string; e
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border bg-card px-1.5 py-px text-[12px] tabular-nums",
-        error && "border-destructive/40 bg-destructive/10 text-destructive",
+        "inline-flex items-center gap-1.5 text-xs tabular-nums",
+        error ? "text-destructive" : "text-muted-foreground",
       )}
     >
-      <span className={cn("text-muted-foreground", error && "text-destructive/80")}>{label} </span>
-      {value}
+      <span>{label}</span> <span className={cn("font-medium", !error && "text-foreground")}>{value}</span>
     </span>
   );
 }
@@ -121,7 +128,7 @@ function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boole
   if (!framework) return <SpanIcon type="agent" error={failed} size="lg" />;
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border bg-card px-1.5 py-px text-[12px] text-foreground"
+      className="inline-flex shrink-0 items-center gap-1.5 text-sm text-foreground"
       data-testid="run-framework"
       title={framework.label}
     >
@@ -133,33 +140,31 @@ function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boole
 
 function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => void; embedded: boolean }) {
   const { summary } = trace;
-  const failed = summary.error_count > 0;
+  const failed = summary.status === "error";
   return (
-    <header className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-card px-3 py-1.5">
-      {!embedded && (
-        <>
-          <button
-            type="button"
-            onClick={onBack}
-            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            aria-label="Back to runs"
-          >
+    <header className="shrink-0 border-b bg-background px-4 py-3">
+      <div className="flex min-w-0 items-center gap-2">
+        {!embedded && (
+          <Button variant="ghost" size="icon-xs" onClick={onBack} aria-label="Back to runs">
             <ArrowLeft className="size-4" />
-          </button>
-          <span className="mx-1 h-[18px] w-px bg-border" />
-        </>
-      )}
-      <RunIcon summary={summary} failed={failed} />
-      <h1 className="min-w-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
-      <IdChip value={summary.trace_id} label="Copy trace ID" showValue />
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <Stat label="duration" value={fmtMs(summary.duration_ms)} />
-        <Stat label="steps" value={summary.span_count.toLocaleString()} />
-        <Stat label="cost" value={summary.spend == null ? "—" : formatCost(summary.spend)} />
-        {failed && <Stat label="failed" value={summary.error_count.toLocaleString()} error />}
+          </Button>
+        )}
+        <RunIcon summary={summary} failed={failed} />
+        <h1 className="min-w-0 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
+        <IdChip value={summary.trace_id} label="Copy trace ID" />
+        <div className="ml-auto shrink-0">
+          <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
+        </div>
       </div>
-      <div className="ml-auto">
-        <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
+        <span className={cn("text-xs font-medium", failed ? "text-destructive" : "text-muted-foreground")}>
+          {failed ? "Failed" : "Completed"}
+        </span>
+        <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
+        <Stat label="Steps" value={summary.span_count.toLocaleString()} />
+        <Stat label="Tokens" value={fmtTok(summary.input_tokens + summary.output_tokens)} />
+        <Stat label="Cost" value={summary.spend == null ? "Not reported" : formatCost(summary.spend)} />
+        {summary.error_count > 0 && <Stat label="Step errors" value={summary.error_count.toLocaleString()} error />}
       </div>
     </header>
   );
@@ -168,6 +173,14 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
 /** Tree + detail pane for one loaded run, with J/K/arrow keyboard navigation. */
 const SPAN_KEYS = { down: ["j", "J", "ArrowDown"], up: ["k", "K", "ArrowUp"] } as const;
 const EMBEDDED_SPAN_KEYS = { down: ["ArrowDown"], up: ["ArrowUp"] } as const;
+
+function ignoreStepKey(event: KeyboardEvent): boolean {
+  const modified = event.metaKey || event.ctrlKey || event.altKey;
+  const control = (event.target as HTMLElement | null)?.closest(
+    "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='tablist'], [role='menu'], [role='separator']",
+  );
+  return event.defaultPrevented || modified || Boolean(control);
+}
 
 interface RunBodyProps {
   trace: Trace;
@@ -182,14 +195,36 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
   const [state, setState] = useState<SpanTreeState>(initial.state);
   const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
   const [detailOpen, setDetailOpen] = useState(true);
+  const [query, setQuery] = useState("");
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const filtering = Boolean(query.trim()) || errorsOnly;
 
-  const rows = useMemo(() => buildTreeRows(trace.spans, state), [trace, state]);
-  const selectedRow: TreeRow | undefined = rows.find((row) => row.id === selectedId) ?? rows[0];
+  const treeRows = useMemo(() => buildTreeRows(trace.spans, state), [trace, state]);
+  const rows = useMemo<TreeRow[]>(
+    () =>
+      filtering
+        ? findTraceSteps(trace.spans, query, errorsOnly, state.hideFramework).map((span) => ({
+            kind: "span",
+            id: span.span_id,
+            span,
+            depth: 0,
+            hasChildren: false,
+            collapsed: false,
+          }))
+        : treeRows,
+    [trace, state.hideFramework, query, errorsOnly, filtering, treeRows],
+  );
+  const selectedRow: TreeRow | undefined =
+    rows.find((row) => row.id === selectedId) ?? treeRows.find((row) => row.id === selectedId) ?? rows[0];
 
-  const select = useCallback((id: string) => {
-    setSelectedId(id);
-    setDetailOpen(true);
-  }, []);
+  const select = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setDetailOpen(true);
+      setState((prev) => revealSpanInState(trace.spans, prev, id));
+    },
+    [trace.spans],
+  );
   const toggleSpan = useCallback(
     (id: string) => setState((prev) => ({ ...prev, collapsedSpanIds: toggle(prev.collapsedSpanIds, id) })),
     [],
@@ -211,8 +246,12 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
   );
 
   useEffect(() => {
+    const setRowExpanded = (row: TreeRow, expand: boolean) => {
+      if (row.kind === "span" && row.hasChildren && row.collapsed === expand) toggleSpan(row.id);
+      if (row.kind === "group" && row.expanded !== expand) toggleGroup(row.id);
+    };
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement | null)?.matches("input, textarea, [role='combobox']")) return;
+      if (ignoreStepKey(event)) return;
       const index = rows.findIndex((row) => row.id === selectedRow?.id);
       const row = rows[index];
       if (event.key === "Escape" && detailOpen) {
@@ -230,11 +269,9 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
         const next = rows[Math.max(0, index - 1)];
         if (next) select(next.id);
       } else if (event.key === "ArrowLeft" && row) {
-        if (row.kind === "span" && row.hasChildren && !row.collapsed) toggleSpan(row.id);
-        if (row.kind === "group" && row.expanded) toggleGroup(row.id);
+        setRowExpanded(row, false);
       } else if (event.key === "ArrowRight" && row) {
-        if (row.kind === "span" && row.hasChildren && row.collapsed) toggleSpan(row.id);
-        if (row.kind === "group" && !row.expanded) toggleGroup(row.id);
+        setRowExpanded(row, true);
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -246,7 +283,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
       className={cn(
         "grid min-h-0 flex-1",
         detailOpen
-          ? "grid-cols-1 grid-rows-2 lg:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] lg:grid-rows-1"
+          ? "grid-cols-1 grid-rows-2 @[640px]/trace:grid-cols-[clamp(280px,38%,340px)_minmax(0,1fr)] @[640px]/trace:grid-rows-1"
           : "grid-cols-1",
       )}
     >
@@ -262,6 +299,24 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
         onLoadMore={loadMore}
         onOpenDetails={detailOpen ? undefined : () => setDetailOpen(true)}
         embedded={embedded}
+        query={query}
+        onQueryChange={setQuery}
+        errorsOnly={errorsOnly}
+        onErrorsOnlyChange={setErrorsOnly}
+        filtering={filtering}
+        onClearFilters={() => {
+          setQuery("");
+          setErrorsOnly(false);
+        }}
+        onCollapseAll={() =>
+          setState((prev) => ({
+            ...prev,
+            collapsedSpanIds: new Set(
+              trace.spans.filter((span) => span.parent_span_id !== null).map((span) => span.span_id),
+            ),
+            expandedGroupIds: new Set(),
+          }))
+        }
       />
       {detailOpen && (
         <div className="min-h-0 min-w-0 animate-slide-left motion-reduce:animate-none">
@@ -330,7 +385,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
   return (
     <div
       className={cn(
-        "flex flex-1 flex-col overflow-hidden bg-background",
+        "@container/trace flex flex-1 flex-col overflow-hidden bg-background",
         embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
       )}
       data-testid="run-view"

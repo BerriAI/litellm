@@ -100,7 +100,7 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (width: nu
     >
       <span
         className={cn(
-          "h-full w-[0.67px] bg-trace-line transition-[width,background-color] duration-150 group-hover/handle:w-0.5 group-focus-visible/handle:w-0.5 group-focus-visible/handle:bg-trace-brand motion-reduce:transition-none",
+          "h-full w-[0.67px] bg-border transition-[width,background-color] duration-150 group-hover/handle:w-0.5 group-focus-visible/handle:w-0.5 group-focus-visible/handle:bg-trace-brand motion-reduce:transition-none",
           dragging && "w-0.5 bg-trace-brand",
         )}
       />
@@ -126,7 +126,7 @@ function HeaderButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className="grid size-7 place-items-center rounded-[4px] text-trace-key transition-colors duration-150 hover:bg-trace-row-hover hover:text-trace-text disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none"
+      className="grid size-7 place-items-center rounded-[4px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none"
     >
       {children}
     </button>
@@ -192,16 +192,16 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
         if (closing && event.target === event.currentTarget) setExitedKey(runKey(shown));
       }}
       className={cn(
-        "fixed inset-y-0 right-0 z-overlay flex origin-right flex-col bg-trace-surface shadow-[0_10px_15px_-3px_rgba(16,24,40,0.1),0_4px_6px_-4px_rgba(16,24,40,0.1)] motion-reduce:animate-none",
+        "fixed inset-y-0 right-0 z-overlay flex origin-right flex-col bg-background shadow-[0_10px_15px_-3px_rgba(16,24,40,0.1),0_4px_6px_-4px_rgba(16,24,40,0.1)] motion-reduce:animate-none",
         closing ? "animate-trace-drawer-out" : "animate-trace-drawer-in",
       )}
     >
       <ResizeHandle width={width} onResize={setWidth} />
-      <div className="flex h-[37px] shrink-0 items-center gap-1 border-b border-trace-line px-2">
+      <div className="flex h-[37px] shrink-0 items-center gap-1 border-b border-border px-2">
         <HeaderButton label="Close (Esc)" onClick={() => onSelect(null)}>
           <ChevronsRight className="size-4" />
         </HeaderButton>
-        <span className="mx-1 h-4 w-px bg-trace-line" />
+        <span className="mx-1 h-4 w-px bg-border" />
         <HeaderButton label="Next trace (J)" disabled={index < 0 || index >= runs.length - 1} onClick={() => step(1)}>
           <ChevronDown className="size-4" />
         </HeaderButton>
@@ -209,7 +209,7 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
           <ChevronUp className="size-4" />
         </HeaderButton>
         {index >= 0 && (
-          <span className="ml-1 font-mono text-[11px] text-trace-key tabular-nums">
+          <span className="ml-1 font-mono text-[11px] text-muted-foreground tabular-nums">
             {index + 1} / {runs.length}
           </span>
         )}
