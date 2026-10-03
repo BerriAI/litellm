@@ -257,14 +257,14 @@ async def analyze(
 
 class Usage(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 class UsageEnvelope(BaseModel):
     model_config = ConfigDict(extra="ignore")
     model: str | None = None
-    usage: Usage = Usage()
+    usage: Usage | None = None
 
 
 _PURPOSE_LABELS: Final = MappingProxyType(
@@ -280,8 +280,8 @@ def model_step(response: ModelResponse, body: ModelRequest, requested: str, cost
         label=_PURPOSE_LABELS[body.purpose],
         model=envelope.model or requested,
         purpose=body.purpose,
-        prompt_tokens=envelope.usage.prompt_tokens,
-        completion_tokens=envelope.usage.completion_tokens,
+        prompt_tokens=(envelope.usage.prompt_tokens if envelope.usage else None) or 0,
+        completion_tokens=(envelope.usage.completion_tokens if envelope.usage else None) or 0,
         cost=cost,
     )
 
