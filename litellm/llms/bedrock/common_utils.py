@@ -37,7 +37,9 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.router import LiteLLM_Params
 
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
@@ -1324,6 +1326,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
 
+    def __init__(self, client: HTTPHandler | None = None) -> None:
+        self._client: Final = client
+
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
         """
@@ -1351,7 +1356,17 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return headers
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        return []
+        from litellm.types.router import LiteLLM_Params
+
+        return self.get_models_for_deployment(LiteLLM_Params(model="bedrock/*", api_key=api_key))
+
+    def get_models_for_deployment(self, litellm_params: LiteLLM_Params | None) -> list[str]:
+        from litellm.llms.bedrock.model_listing import BedrockModelLister
+
+        if litellm_params is None:
+            return self.get_models()
+        client: Final = self._client if self._client is not None else litellm.module_level_client
+        return sorted(BedrockModelLister(deployment=litellm_params, client=client).invocable_model_ids())
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
     #     """
