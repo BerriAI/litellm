@@ -10,6 +10,12 @@ import { cn } from "@/lib/cva.config";
 
 import { type KeyValue, KeyValueRows, objectEntries } from "./KeyValueRows";
 import { Card, MessageCard, Section, ToolResultCard } from "./MessageCard";
+import {
+  classifyTraceReadFailure,
+  isRetryableTraceRead,
+  traceReadRetry,
+  traceReadRetryDelay,
+} from "./traceReadFailure";
 import type { ErrorSource } from "./traceTree";
 import type { Span, SpanDetail, SpanErrorPage, TraceMessage, UIContent, UIMessage } from "./traceTypes";
 import { errorSource, parseJson, parseMessages, prettyPayload } from "./traceUtils";
@@ -156,9 +162,11 @@ function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailConte
     enabled: opened,
     staleTime: Infinity,
     gcTime: 0,
-    retry: false,
+    retry: traceReadRetry,
+    retryDelay: traceReadRetryDelay,
   };
   const query = useQuery(queryOptions);
+  const failure = query.error ? classifyTraceReadFailure(query.error) : null;
   return (
     <section aria-label="Stored diagnostic" className="mx-3 mb-3 space-y-2">
       {span.error_truncated && <p className="text-xs text-muted-foreground">Error preview truncated</p>}
@@ -168,12 +176,18 @@ function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailConte
         </Button>
       )}
       {opened && query.isPending && <p role="status">Loading diagnostic…</p>}
-      {opened && query.isError && (
+      {failure && (
         <div role="alert">
-          Could not load diagnostic: {query.error.message}
-          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
-            Retry
-          </Button>
+          Could not load diagnostic: {failure.message}
+          {isRetryableTraceRead(failure) ? (
+            <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+              Retry
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => setCursor(null)}>
+              Back to beginning
+            </Button>
+          )}
         </div>
       )}
       {opened && query.data && (

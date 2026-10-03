@@ -12,6 +12,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from litellm.constants import TRACE_READ_RETRY_AFTER_SECONDS
 from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, ProxyLifespanState, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, ReadScope
@@ -19,6 +20,7 @@ from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge import loader
+from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
 from litellm.rust_bridge.trace.queries import TraceSQLResponse
@@ -297,19 +299,45 @@ def test_trace_detail_passes_scoped_reference(client, receiver, suffix, cursor, 
     ),
 )
 @pytest.mark.parametrize(
-    "error,status,message",
+    "error,status,code,message",
     (
-        (RuntimeError("private database details"), 503, "Traces are temporarily unavailable. Please try again."),
-        (OverflowError("private query details"), 413, "Trace is too large for this view. Use a filtered trace query."),
+        (
+            RuntimeError("private database details"),
+            503,
+            "unavailable",
+            "Traces are temporarily unavailable. Please try again.",
+        ),
+        (
+            OverflowError("private query details"),
+            413,
+            "too_large",
+            "Trace is too large for this view. Use a filtered trace query.",
+        ),
+        (
+            TraceChanged("Trace changed while paging; refresh the trace to continue"),
+            409,
+            "trace_changed",
+            "Trace changed while paging; refresh the trace to continue",
+        ),
+        (ValueError("Invalid span cursor"), 400, "invalid_request", "Invalid span cursor"),
     ),
 )
-def test_read_failures_are_actionable_without_exposing_database_details(
-    client: TestClient, receiver: MagicMock, path: str, method: str, error: Exception, status: int, message: str
+def test_read_failures_carry_a_code_per_kind_without_exposing_database_details(
+    client: TestClient,
+    receiver: MagicMock,
+    path: str,
+    method: str,
+    error: Exception,
+    status: int,
+    code: str,
+    message: str,
 ) -> None:
     getattr(receiver, method).side_effect = error
     response: Final = client.get(path)
     assert response.status_code == status
-    assert response.json() == {"detail": message}
+    assert response.json() == {"detail": {"code": code, "message": message}}
+    retry_after: Final = response.headers.get("Retry-After")
+    assert (retry_after == str(TRACE_READ_RETRY_AFTER_SECONDS)) == (status == 503), retry_after
 
 
 @pytest.mark.parametrize("query", ("page_size=0", "page_size=501", "cursor=" + "x" * 513))
