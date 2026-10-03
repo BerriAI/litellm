@@ -9207,23 +9207,13 @@ class Router:
             if limit_violation is not None:
                 raise ValueError(limit_violation)
 
-        default_model: str | None = deployment.litellm_params.complexity_router_default_model
-
-        # If no default model specified, try to get from config tiers. Derived from the
-        # validated model, not the raw dict, so normalization (e.g. fallback_tier
-        # whitespace) is applied by its one owner before the tiers lookup.
-        if default_model is None and complexity_router_config:
-            validated: Final = ComplexityRouterConfig.model_validate(complexity_router_config)
-            # Custom tier sets name their fallback tier; built-in sets default to MEDIUM or SIMPLE
-            derived: Final = (
-                (validated.tiers.get(validated.fallback_tier) if validated.fallback_tier is not None else None)
-                or validated.tiers.get("MEDIUM")
-                or validated.tiers.get("SIMPLE")
+        default_model: Final = (
+            ComplexityRouterConfig.model_validate(complexity_router_config).resolve_default_model(
+                deployment.litellm_params.complexity_router_default_model
             )
-            if isinstance(derived, list):
-                default_model = derived[0] if derived else None
-            else:
-                default_model = derived
+            if complexity_router_config
+            else deployment.litellm_params.complexity_router_default_model
+        )
 
         if default_model is None:
             raise ValueError(
