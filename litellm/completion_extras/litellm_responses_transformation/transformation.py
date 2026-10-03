@@ -187,7 +187,7 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
 
 
 def _as_chat_reasoning_items(
-    reasoning_items: Sequence[_BuiltReasoningItem | ChatCompletionReasoningItem],
+    reasoning_items: Sequence[_BuiltReasoningItem],
 ) -> list[ChatCompletionReasoningItem] | None:
     if not reasoning_items:
         return None
@@ -788,32 +788,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
-        if accumulated_tool_calls and choices:
-            last_choice: Final = choices[-1]
-            last_reasoning_content: Final = getattr(last_choice.message, "reasoning_content", None)
-            last_reasoning_items: Final = getattr(last_choice.message, "reasoning_items", None)
-            merged_reasoning_content: Final = (
-                " ".join(value for value in (last_reasoning_content, reasoning_content) if value) or None
-            )
-            merged_reasoning_items: Final = _as_chat_reasoning_items(
-                (
-                    *(last_reasoning_items or ()),
-                    *(() if pending_reasoning_item is None else (pending_reasoning_item,)),
-                )
-            )
-            merged_message: Final = Message(
-                role=last_choice.message.role,
-                content=last_choice.message.content,
-                annotations=getattr(last_choice.message, "annotations", None),
-                tool_calls=accumulated_tool_calls,
-                reasoning_content=merged_reasoning_content,
-                reasoning_items=merged_reasoning_items,
-            )
-            return [
-                *choices[:-1],
-                Choices(message=merged_message, finish_reason="tool_calls", index=last_choice.index),
-            ]
-
+        # If we accumulated tool calls, create a single choice with all of them
         if accumulated_tool_calls:
             msg = Message(
                 content=None,

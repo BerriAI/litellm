@@ -1124,11 +1124,14 @@ def responses_api_bridge_check(
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
     # those keys.
     #
-    # - gpt-5.4+: FUNCTION tools with active explicit reasoning_effort still bridge from
-    #   gpt-5.4. gpt-5.4 and gpt-5.5 default to "none" and serve tools on Chat Completions;
-    #   unset effort bridges only from gpt-5.6 on (measured live 2026-10-02).
-    # - Custom (grammar) tools are served natively by Chat Completions with reasoning on,
-    #   so custom-only requests stay on chat and keep their native custom tool_call response shape.
+    # - gpt-5.4+: FUNCTION tools with reasoning active must be bridged. OpenAI enables
+    #   reasoning by default for these models (unset reasoning_effort means medium
+    #   server-side), and Chat Completions rejects function tools whenever reasoning is
+    #   on ("Function tools with reasoning_effort are not supported ... use
+    #   /v1/responses or set reasoning_effort to 'none'"), so only an explicit
+    #   ``"none"`` keeps the request chat-servable. Custom (grammar) tools are served
+    #   natively by Chat Completions with reasoning on, so custom-only requests stay on
+    #   chat and keep their native custom tool_call response shape.
     # - The UNSET-effort arm only fires against endpoints known to enforce that
     #   constraint (any api.openai.com host, or Azure OpenAI where api_base is
     #   always set): chat-only OpenAI-compatible backends registered under the openai
@@ -1174,10 +1177,7 @@ def responses_api_bridge_check(
             if on_foundry_openai_endpoint
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-                and (
-                    reasoning_effort is not None
-                    or (on_constraint_enforcing_endpoint and OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model))
-                )
+                and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
             )
         )
     )
