@@ -19,6 +19,7 @@ export function InvestigationActions({
   setEditing,
   setMonitoring,
   update,
+  onRunNow,
 }: {
   lens: Lens;
   ready: boolean;
@@ -27,6 +28,7 @@ export function InvestigationActions({
   setEditing: (mode: "new" | "edit" | "duplicate") => void;
   setMonitoring: (open: boolean) => void;
   update: (write: LensWrite) => Promise<void>;
+  onRunNow: () => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -59,7 +61,7 @@ export function InvestigationActions({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button disabled={busy || !!active || !ready} onClick={() => update((api) => api.startRun(lens.id))}>
+      <Button disabled={busy || !!active || !ready} onClick={onRunNow}>
         <Play className="size-3" />
         Run now
       </Button>
