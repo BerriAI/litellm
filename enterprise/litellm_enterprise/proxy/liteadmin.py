@@ -6,7 +6,7 @@ import html
 import os
 import re
 import secrets
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final
@@ -17,8 +17,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.oauth_utils import get_request_base_url
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 router: Final = APIRouter()
 _PREFIX: Final = "/liteadmin/slack/connect/"
@@ -127,13 +129,21 @@ async def _session_user(request: Request) -> str | None:
 
 
 async def _load_user(user_id: str) -> LiteLLM_UserTable | None:
-    from litellm.proxy.proxy_server import prisma_client
-    from litellm.repositories.user_repository import UserRepository
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(503, "LiteAdmin requires a database")
     try:
-        return await UserRepository(prisma_client, use_writer=True).find_by_id(user_id)
+        return await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            check_db_only=True,
+        )
+    except UserNotFoundError:
+        return None
     except Exception:
         raise HTTPException(503, "LiteAdmin could not verify your current permissions") from None
 
@@ -191,19 +201,21 @@ def validate_native_configuration(
         raise HTTPException(503, "LiteAdmin worker configuration is invalid")
 
 
-async def native_admin_context() -> AsyncIterator[NativeAdminContext]:
+async def native_admin_context() -> NativeAdminContext:
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     worker_url: Final = os.getenv("LITELLM_ADMIN_AGENT_URL", "").rstrip("/")
     service_token: Final = os.getenv("ADMIN_AGENT_SERVICE_TOKEN", "")
     validate_native_configuration(worker_url, service_token, premium_user is True, prisma_client is not None)
-    async with httpx.AsyncClient() as client:
-        yield NativeAdminContext(
-            worker_url, SecretStr(service_token), client, _session_user, _load_user, mint_admin_session
-        )
+    client: Final = get_async_httpx_client(
+        llm_provider="liteadmin_native", params={"timeout": 15.0, "follow_redirects": False}
+    ).client
+    return NativeAdminContext(
+        worker_url, SecretStr(service_token), client, _session_user, _load_user, mint_admin_session
+    )
 
 
-@router.get(_PREFIX + "{token}", include_in_schema=False)
+@router.get(_PREFIX + "{token}", include_in_schema=False, response_class=HTMLResponse)
 async def connect_page(
     request: Request,
     token: str,
@@ -235,7 +247,7 @@ async def connect_page(
     return page
 
 
-@router.post(_PREFIX + "{token}", include_in_schema=False)
+@router.post(_PREFIX + "{token}", include_in_schema=False, response_class=HTMLResponse)
 async def connect_account(
     request: Request,
     token: str,
