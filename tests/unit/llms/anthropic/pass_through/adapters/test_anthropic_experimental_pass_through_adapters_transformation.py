@@ -5167,3 +5167,49 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+def test_translate_anthropic_to_openai_rejects_all_unrecognized_content_blocks():
+    request = {
+        "model": "openai/gpt-4o",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": [{"type": "not_a_real_block", "text": "hello"}]}],
+    }
+
+    with pytest.raises(litellm.BadRequestError, match="not_a_real_block"):
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    control_chars = {
+        **request,
+        "messages": [{"role": "user", "content": [{"type": "forged\nERROR: injected"}]}],
+    }
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(control_chars)
+    assert "forged\\nERROR: injected" in str(exc_info.value)
+    assert "forged\nERROR: injected" not in str(exc_info.value)
+
+    with_system = {
+        **request,
+        "messages": [
+            {"role": "system", "content": "keep this"},
+            *request["messages"],
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError):
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(with_system)
+
+    mixed = {
+        "model": "openai/gpt-4o",
+        "max_tokens": 1024,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "not_a_real_block", "text": "ignored"},
+                    {"type": "text", "text": "hello"},
+                ],
+            }
+        ],
+    }
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(mixed)
+    assert openai_request["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
