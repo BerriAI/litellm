@@ -303,7 +303,9 @@ async def cancel_lens(lens_id: str, auth: Auth) -> Lens:
 
 @router.patch("/{lens_id}/findings/{finding_id}", response_model=Lens)
 async def update_finding(lens_id: str, finding_id: str, body: FindingUpdate, auth: Auth) -> Lens:
-    await get_lens(lens_id, user_scope(auth, write=True))
+    lens: Final = await get_lens(lens_id, user_scope(auth, write=True))
+    if all(f.id != finding_id for f in lens.findings):
+        raise HTTPException(404, "Finding not found")
     return required(
         await repository().update(
             lens_id,
