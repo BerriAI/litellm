@@ -72,8 +72,17 @@ def test_null_and_empty_provider_merge_into_one_row(order):
     assert folded["api_requests"] == 4
 
 
-def test_unknown_timed_tokens_remain_unknown_when_rows_merge():
+def test_untimed_legacy_rows_do_not_hide_known_timed_tokens_when_rows_merge():
     legacy = tag_txn()
+    del legacy["timed_completion_tokens"]
+
+    merged = merge_by_conflict_key(TAG_TABLE, (legacy, tag_txn(timed_completion_tokens=7)))
+
+    assert merged[0][1]["timed_completion_tokens"] == 7
+
+
+def test_legacy_timed_requests_keep_timed_tokens_unknown_when_rows_merge():
+    legacy = tag_txn(timed_requests=1)
     del legacy["timed_completion_tokens"]
 
     merged = merge_by_conflict_key(TAG_TABLE, (legacy, tag_txn(timed_completion_tokens=7)))
@@ -125,7 +134,6 @@ def test_conflict_target_is_the_full_unique_constraint():
         "failed_requests",
         "total_response_time_ms",
         "timed_requests",
-        "timed_completion_tokens",
     ],
 )
 def test_counters_increment_rather_than_overwrite(column):
@@ -133,6 +141,15 @@ def test_counters_increment_rather_than_overwrite(column):
     sql, _ = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(),)))
 
     assert f'"{column}" = "LiteLLM_DailyTagSpend"."{column}" + EXCLUDED."{column}"' in sql
+
+
+def test_timed_token_upsert_preserves_unknown_legacy_measurements():
+    sql, _ = build_bulk_upsert(TAG_TABLE, merge_by_conflict_key(TAG_TABLE, (tag_txn(),)))
+
+    assert '"timed_requests" > 0 AND "LiteLLM_DailyTagSpend"."timed_completion_tokens" IS NULL' in sql
+    assert 'EXCLUDED."timed_requests" > 0 AND EXCLUDED."timed_completion_tokens" IS NULL' in sql
+    assert 'COALESCE("LiteLLM_DailyTagSpend"."timed_completion_tokens", 0)' in sql
+    assert '+ COALESCE(EXCLUDED."timed_completion_tokens", 0)' in sql
 
 
 def test_request_id_is_preserved_when_a_later_batch_carries_none():

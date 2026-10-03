@@ -131,8 +131,10 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(total_response_time_ms)::bigint AS total_response_time_ms,
             SUM(timed_requests)::bigint AS timed_requests,
             CASE
-                WHEN COUNT(timed_completion_tokens) = COUNT(*) THEN SUM(timed_completion_tokens)::bigint
-                ELSE NULL::bigint
+                WHEN COUNT(*) FILTER (
+                    WHERE timed_requests > 0 AND timed_completion_tokens IS NULL
+                ) > 0 THEN NULL::bigint
+                ELSE COALESCE(SUM(timed_completion_tokens), 0)::bigint
             END AS timed_completion_tokens"""
 
 

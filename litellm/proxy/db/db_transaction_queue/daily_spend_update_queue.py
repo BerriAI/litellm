@@ -22,8 +22,15 @@ def _daily_spend_updates(
         yield from update.items()
 
 
-def _sum_timed_completion_tokens(left: int | None, right: int | None) -> int | None:
-    return left + right if left is not None and right is not None else None
+def _sum_timed_completion_tokens(
+    left_tokens: int | None,
+    left_requests: int,
+    right_tokens: int | None,
+    right_requests: int,
+) -> int | None:
+    if (left_tokens is None and left_requests > 0) or (right_tokens is None and right_requests > 0):
+        return None
+    return (left_tokens or 0) + (right_tokens or 0)
 
 
 def _merge_daily_spend_transactions(
@@ -57,7 +64,9 @@ def _merge_daily_spend_transactions(
         "timed_requests": (existing.get("timed_requests", 0) or 0) + (payload.get("timed_requests", 0) or 0),
         "timed_completion_tokens": _sum_timed_completion_tokens(
             existing.get("timed_completion_tokens"),
+            existing.get("timed_requests", 0) or 0,
             payload.get("timed_completion_tokens"),
+            payload.get("timed_requests", 0) or 0,
         ),
     }
 

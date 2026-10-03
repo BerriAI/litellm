@@ -591,4 +591,22 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
     assert updates[0][test_key]["autorouter_savings_spend"] == pytest.approx(0.25)
     assert updates[0][test_key]["total_response_time_ms"] == 900
     assert updates[0][test_key]["timed_requests"] == 1
-    assert updates[0][test_key]["timed_completion_tokens"] is None
+    assert updates[0][test_key]["timed_completion_tokens"] == 5
+
+
+def test_legacy_timed_request_keeps_timed_tokens_unknown():
+    key = "user1_2023-01-01_key123_gpt-4o_openai"
+    base = {
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "timed_requests": 1,
+    }
+    updates = [{key: base}, {key: {**base, "timed_completion_tokens": 5}}]
+
+    aggregated = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
+
+    assert aggregated[key]["timed_completion_tokens"] is None
