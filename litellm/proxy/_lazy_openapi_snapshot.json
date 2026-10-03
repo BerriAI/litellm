@@ -4016,6 +4016,13 @@
             },
             "metrics": {
               "$ref": "#/components/schemas/SpendMetrics"
+            },
+            "provider_breakdown": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ProviderThroughputMetrics"
+              },
+              "title": "Provider Breakdown",
+              "type": "object"
             }
           },
           "required": [
@@ -4341,6 +4348,38 @@
             }
           },
           "title": "PatchAgentRequest",
+          "type": "object"
+        },
+        "ProviderThroughputMetrics": {
+          "properties": {
+            "completion_tokens": {
+              "default": 0,
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "output_tokens_per_second": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Output Tokens Per Second"
+            },
+            "timed_requests": {
+              "default": 0,
+              "title": "Timed Requests",
+              "type": "integer"
+            },
+            "total_response_time_ms": {
+              "default": 0,
+              "title": "Total Response Time Ms",
+              "type": "integer"
+            }
+          },
+          "title": "ProviderThroughputMetrics",
           "type": "object"
         },
         "SpendAnalyticsPaginatedResponse": {

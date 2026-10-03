@@ -56,6 +56,14 @@ const aggregatedResponse: DailyActivityAggregatedResponse = {
             metrics: completeMetrics,
             metadata: {},
             api_key_breakdown: { "key-hash": apiKeyActivity },
+            provider_breakdown: {
+              openai: {
+                completion_tokens: 900,
+                output_tokens_per_second: 300,
+                timed_requests: 3,
+                total_response_time_ms: 3000,
+              },
+            },
           },
         },
       },
@@ -105,6 +113,14 @@ describe("key activity data", () => {
         },
       },
     ]);
+    expect(toDailyData(aggregatedResponse)[0].breakdown.models["gpt-4o-mini"].provider_breakdown).toEqual({
+      openai: {
+        completion_tokens: 900,
+        output_tokens_per_second: 300,
+        timed_requests: 3,
+        total_response_time_ms: 3000,
+      },
+    });
   });
 
   it("appends pages without duplicate keys and compares the server offset to the total", () => {

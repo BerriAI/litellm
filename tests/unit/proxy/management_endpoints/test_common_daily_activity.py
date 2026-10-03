@@ -1675,6 +1675,9 @@ def _grouping_row(
     endpoint=None,
     spend=0.0,
     ptu_flat_cost=0.0,
+    completion_tokens=0,
+    total_response_time_ms=0,
+    timed_requests=0,
 ):
     return GroupingSetsRow(
         date="2024-01-01",
@@ -1689,7 +1692,7 @@ def _grouping_row(
         spend=spend,
         ptu_flat_cost=ptu_flat_cost,
         prompt_tokens=0,
-        completion_tokens=0,
+        completion_tokens=completion_tokens,
         cache_read_input_tokens=0,
         cache_creation_input_tokens=0,
         compression_saved_tokens=0,
@@ -1697,8 +1700,8 @@ def _grouping_row(
         prompt_caching_savings_spend=0.0,
         gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
-        total_response_time_ms=0,
-        timed_requests=0,
+        total_response_time_ms=total_response_time_ms,
+        timed_requests=timed_requests,
         api_requests=0,
         successful_requests=0,
         failed_requests=0,
@@ -1794,6 +1797,73 @@ def test_grouping_sets_dispatcher_populates_every_breakdown_level(ptu_cost_attri
     assert "real-key" in day.breakdown.endpoints["/v1/chat/completions"].api_key_breakdown
 
 
+def test_grouping_sets_dispatcher_returns_provider_throughput_for_models_and_model_groups():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_MODEL_GROUP_PROVIDER,
+        _GROUP_DATE_MODEL_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(
+            _GROUP_DATE_MODEL_PROVIDER,
+            model="gpt-4o",
+            custom_llm_provider="openai",
+            completion_tokens=900,
+            total_response_time_ms=3000,
+            timed_requests=3,
+        ),
+        _grouping_row(
+            _GROUP_DATE_MODEL_PROVIDER,
+            model="gpt-4o",
+            custom_llm_provider="azure",
+            completion_tokens=400,
+            total_response_time_ms=2000,
+            timed_requests=2,
+        ),
+        _grouping_row(
+            _GROUP_DATE_MODEL_GROUP_PROVIDER,
+            model_group="public-gpt-4o",
+            custom_llm_provider="openai",
+            completion_tokens=900,
+            total_response_time_ms=3000,
+            timed_requests=3,
+        ),
+    ]
+
+    day = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][0]
+
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].model_dump() == {
+        "completion_tokens": 900,
+        "total_response_time_ms": 3000,
+        "timed_requests": 3,
+        "output_tokens_per_second": 300.0,
+    }
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["azure"].output_tokens_per_second == 200.0
+    assert day.breakdown.model_groups["public-gpt-4o"].provider_breakdown["openai"].output_tokens_per_second == 300.0
+
+
+def test_grouping_sets_dispatcher_returns_no_throughput_without_positive_duration():
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_MODEL_PROVIDER,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    records = [
+        _grouping_row(
+            _GROUP_DATE_MODEL_PROVIDER,
+            model="gpt-4o",
+            completion_tokens=900,
+            total_response_time_ms=0,
+            timed_requests=1,
+        )
+    ]
+
+    day = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})["results"][0]
+
+    assert day.breakdown.models["gpt-4o"].provider_breakdown["openai"].output_tokens_per_second is None
+
+
 def test_grouping_sets_dispatcher_keeps_ptu_flat_cost_out_of_the_provider_breakdown():
     """Sentinel rows carry no provider, so their flat cost must not surface under the
     "unknown" provider - the per-row path skips them for exactly the same reason."""
@@ -1851,7 +1921,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         endpoint="/v1/chat/completions",
         spend=5.0,
         prompt_tokens=0,
-        completion_tokens=0,
+        completion_tokens=600,
         cache_read_input_tokens=0,
         cache_creation_input_tokens=0,
         compression_saved_tokens=0,
@@ -1859,8 +1929,8 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         prompt_caching_savings_spend=0,
         gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
-        total_response_time_ms=0,
-        timed_requests=0,
+        total_response_time_ms=2000,
+        timed_requests=2,
         total_tokens=0,
         api_requests=0,
         successful_requests=0,
@@ -1874,6 +1944,8 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
     assert "real-key" in breakdown.mcp_servers["srv/tool"].api_key_breakdown
     assert "/v1/chat/completions" in breakdown.endpoints
     assert "azure" in breakdown.providers
+    assert breakdown.models["gpt-4o-mini-ptu"].provider_breakdown["azure"].output_tokens_per_second == 300.0
+    assert breakdown.model_groups["grp"].provider_breakdown["azure"].output_tokens_per_second == 300.0
     assert "team-1" in breakdown.entities
     assert "real-key" in breakdown.entities["team-1"].api_key_breakdown
 

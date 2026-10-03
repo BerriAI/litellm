@@ -38,6 +38,14 @@ export interface MetricWithMetadata {
   metrics: SpendMetrics;
   metadata: object;
   api_key_breakdown: { [key: string]: KeyMetricWithMetadata };
+  provider_breakdown?: { [key: string]: ProviderThroughputMetrics };
+}
+
+export interface ProviderThroughputMetrics {
+  completion_tokens: number;
+  total_response_time_ms: number;
+  timed_requests: number;
+  output_tokens_per_second?: number | null;
 }
 
 export interface KeyMetricWithMetadata {
@@ -92,6 +100,7 @@ export interface ModelActivityData {
       cache_creation_input_tokens: number;
       avg_response_time_ms?: number | null;
     };
+    provider_throughput?: Record<string, number | null>;
   }[];
 }
 

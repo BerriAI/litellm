@@ -177,7 +177,9 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         GROUP BY GROUPING SETS (
             (date),
             (date, model),
+            (date, model, custom_llm_provider),
             (date, {_MODEL_GROUP_EXPR}),
+            (date, {_MODEL_GROUP_EXPR}, custom_llm_provider),
             (date, custom_llm_provider),
             (date, mcp_namespaced_tool_name),
             (date, endpoint),

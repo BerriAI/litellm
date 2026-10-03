@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { ActivityMetrics, formatKeyLabel, processActivityData, ResponseTimeTooltip } from "./activity_metrics";
+import {
+  ActivityMetrics,
+  formatKeyLabel,
+  processActivityData,
+  providerThroughputChartData,
+  ResponseTimeTooltip,
+} from "./activity_metrics";
 import type { ChartTooltipProps } from "@/components/shared/charts";
 import { Team } from "./key_team_helpers/key_list";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData } from "./UsagePage/types";
@@ -1402,6 +1408,38 @@ describe("processActivityData", () => {
     expect(result["gpt-5.5"].total_timed_requests).toBe(0);
     expect(result["gpt-5.5"].daily_data[0].metrics.avg_response_time_ms).toBeNull();
   });
+
+  it("preserves daily provider throughput for model and model-group views", () => {
+    const metric = {
+      metrics: EMPTY_SPEND_METRICS,
+      metadata: {},
+      api_key_breakdown: {},
+      provider_breakdown: {
+        openai: {
+          completion_tokens: 900,
+          total_response_time_ms: 3000,
+          timed_requests: 3,
+          output_tokens_per_second: 300,
+        },
+      },
+    };
+    const activity: { results: DailyData[] } = {
+      results: [
+        createMockDailyData("2025-01-01", EMPTY_SPEND_METRICS, {
+          ...EMPTY_BREAKDOWN,
+          models: { "gpt-4o": metric },
+          model_groups: { "public-gpt-4o": metric },
+        }),
+      ],
+    };
+
+    expect(processActivityData(activity, "models")["gpt-4o"].daily_data[0].provider_throughput).toEqual({
+      openai: 300,
+    });
+    expect(processActivityData(activity, "model_groups")["public-gpt-4o"].daily_data[0].provider_throughput).toEqual({
+      openai: 300,
+    });
+  });
 });
 
 describe("ActivityMetrics response time", () => {
@@ -1479,6 +1517,58 @@ describe("ActivityMetrics response time", () => {
     expect(screen.queryByText(/avg response$/)).not.toBeInTheDocument();
     expect(screen.queryByText("Avg Response Time per day")).not.toBeInTheDocument();
     expect(screen.queryByText("Avg Response Time Ms")).not.toBeInTheDocument();
+  });
+});
+
+describe("ActivityMetrics provider throughput", () => {
+  const model = createMockModelActivityData("GPT-4o", {
+    daily_data: [
+      {
+        ...createMockModelActivityData("GPT-4o").daily_data[0],
+        date: "2025-01-01",
+        provider_throughput: { openai: 300, azure: 200 },
+      },
+      {
+        ...createMockModelActivityData("GPT-4o").daily_data[0],
+        date: "2025-01-02",
+        provider_throughput: { openai: 250 },
+      },
+    ],
+  });
+
+  it("renders one daily line per provider", () => {
+    render(<ActivityMetrics modelMetrics={{ "gpt-4o": model }} />);
+
+    expect(screen.getByText("Output tokens per second of response time")).toBeInTheDocument();
+    expect(screen.getByText("Openai")).toBeInTheDocument();
+    expect(screen.getByText("Azure")).toBeInTheDocument();
+    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2025-01-02").length).toBeGreaterThan(0);
+  });
+
+  it("keeps missing provider dates as gaps", () => {
+    expect(providerThroughputChartData(model.daily_data)).toEqual({
+      providers: ["azure", "openai"],
+      data: [
+        { date: "2025-01-01", azure: 200, openai: 300 },
+        { date: "2025-01-02", azure: null, openai: 250 },
+      ],
+    });
+  });
+
+  it("hides the chart when every throughput value is unavailable", () => {
+    const unavailable = createMockModelActivityData("GPT-4o", {
+      daily_data: [
+        {
+          ...createMockModelActivityData("GPT-4o").daily_data[0],
+          provider_throughput: { openai: null },
+        },
+      ],
+    });
+
+    render(<ActivityMetrics modelMetrics={{ "gpt-4o": unavailable }} />);
+
+    expect(screen.queryByText("Output tokens per second of response time")).not.toBeInTheDocument();
   });
 });
 
