@@ -1305,6 +1305,80 @@ def test_get_user_email_and_id_extracts_microsoft_role():
     assert parsed.get("user_role") == "proxy_admin_viewer"
 
 
+@pytest.mark.parametrize(
+    ("result", "expected_user_id"),
+    [
+        pytest.param(
+            CustomOpenID(id="entra-object-id", email="a@example.com", provider="microsoft", team_ids=[]),
+            "entra-object-id",
+            id="id",
+        ),
+        pytest.param(CustomOpenID(email="a@example.com", provider="generic", team_ids=[]), "a@example.com", id="email"),
+        pytest.param(
+            CustomOpenID(first_name="Ada", last_name="Lovelace", provider="generic", team_ids=[]),
+            "AdaLovelace",
+            id="names",
+        ),
+    ],
+)
+def test_get_user_email_and_id_resolves_identity(result, expected_user_id):
+    parsed = SSOAuthenticationHandler._get_user_email_and_id_from_result(result=result, generic_client_id=None)
+
+    assert parsed.get("user_id") == expected_user_id
+
+
+def _empty_identity_redirect_patches(custom_sso, user_info_from_db, generate_key):
+    mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.cookies = {}
+    stack = ExitStack()
+    for target, value in (
+        ("litellm.proxy.utils.get_prisma_client_or_throw", MagicMock(return_value=MagicMock())),
+        ("litellm.proxy.proxy_server.master_key", "sk-master"),
+        ("litellm.proxy.proxy_server.general_settings", {}),
+        ("litellm.proxy.proxy_server.premium_user", False),
+        ("litellm.proxy.proxy_server.user_custom_sso", custom_sso),
+        ("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ("litellm.proxy.proxy_server.redis_usage_cache", None),
+        ("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ("litellm.proxy.proxy_server.generate_key_helper_fn", generate_key),
+        ("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", user_info_from_db),
+    ):
+        stack.enter_context(patch(target, value))  # test-quality-ok: endpoint reads proxy globals and DB helpers
+    return mock_request, stack
+
+
+@pytest.mark.asyncio
+async def test_redirect_from_openid_allows_custom_sso_to_resolve_missing_provider_identity():
+    async def custom_sso(result):
+        return {
+            "models": [],
+            "user_id": result.extra_fields["employee_id"],
+            "user_email": None,
+            "user_role": None,
+            "max_budget": None,
+            "budget_duration": None,
+        }
+
+    user_info_from_db = AsyncMock(side_effect=RuntimeError("stop after identity resolution"))
+    generate_key = AsyncMock()
+    mock_request, stack = _empty_identity_redirect_patches(custom_sso, user_info_from_db, generate_key)
+    result = CustomOpenID(provider="generic", team_ids=[], extra_fields={"employee_id": "mapped-user"})
+
+    with stack, pytest.raises(RuntimeError, match="stop after identity resolution"):
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=result,
+            request=mock_request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=None,
+        )
+
+    assert user_info_from_db.await_args.kwargs["user_defined_values"]["user_id"] == "mapped-user"
+    generate_key.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_get_user_info_from_db_user_exists():
     """
@@ -3174,7 +3248,7 @@ class TestCLIKeyRegenerationFlow:
             teams=[],
             models=[],
         )
-        mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
+        mock_sso_result = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
 
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
@@ -3344,7 +3418,7 @@ class TestCLIKeyRegenerationFlow:
         )
 
         # Mock SSO result
-        mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
+        mock_sso_result = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
 
         # Mock cache
         mock_cache = MagicMock(redis_cache=None)
@@ -7402,11 +7476,12 @@ class TestCliSsoAttributionMetadata:
             teams=["team1"],
             models=["gpt-4"],
         )
-        mock_sso_result = {
-            "user_email": "test@example.com",
-            "user_id": "test-user-123",
-            "employment_type": "contractor",
-        }
+        mock_sso_result = CustomOpenID(
+            id="test-user-123",
+            email="test@example.com",
+            team_ids=[],
+            extra_fields={"employment_type": "contractor"},
+        )
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
