@@ -1062,10 +1062,40 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
 
 
 # C2: one proxy worker is killed during a burst; the other keeps serving and detect still runs for each call
+def _live_uvicorn_worker(child: psutil.Process, exclude: int) -> bool:
+    try:
+        return child.pid != exclude and child.is_running() and "spawn_main" in " ".join(child.cmdline())
+    except psutil.NoSuchProcess:
+        return False
+
+
 def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psutil.Process, ...]:
-    return tuple(
-        c for c in parent.children() if c.is_running() and c.pid != exclude and "spawn_main" in " ".join(c.cmdline())
-    )
+    return tuple(child for child in parent.children() if _live_uvicorn_worker(child, exclude))
+
+
+def test_an_unreaped_worker_does_not_hide_the_surviving_proxy_worker(rig: Rig) -> None:
+    parent: Final = psutil.Process(rig.owned.process.pid)
+    workers: Final = eventually(lambda: _uvicorn_workers(parent), lambda children: len(children) == 2)
+    victim: Final = workers[0]
+    survivor: Final = workers[1]
+    marker: Final = rig.marker()
+    os.kill(parent.pid, signal.SIGSTOP)
+    try:
+        os.kill(victim.pid, signal.SIGKILL)
+        assert eventually(victim.status, lambda status: status == psutil.STATUS_ZOMBIE) == psutil.STATUS_ZOMBIE
+        assert tuple(child.pid for child in _uvicorn_workers(parent)) == (survivor.pid,)
+        assert _uvicorn_workers(parent, exclude=survivor.pid) == ()
+        with httpx.Client(base_url=rig._base(), timeout=15, trust_env=False) as client:
+            response: Final = client.post(
+                "/v1/chat/completions",
+                json={"model": rig.chat_model, "messages": _messages(marker)},
+                headers={"Authorization": f"Bearer {rig.proxy.key}"},
+            )
+        assert response.status_code == 200, response.text
+        assert len(_v3_request_calls(rig, marker)) == 1
+    finally:
+        os.kill(parent.pid, signal.SIGCONT)
+    assert len(eventually(lambda: _uvicorn_workers(parent, exclude=victim.pid), lambda children: len(children) == 2)) == 2
 
 
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:

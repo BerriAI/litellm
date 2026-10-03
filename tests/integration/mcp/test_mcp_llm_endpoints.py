@@ -15,6 +15,9 @@ from integration._support.process import owned_proxy
 from integration._support.workers import worker_services
 
 
+pytestmark: Final = pytest.mark.xdist_group("mcp_llm_private_gateway")
+
+
 @pytest.fixture(scope="session")
 def _llm_gateway(
     tmp_path_factory: pytest.TempPathFactory, worker_id: str

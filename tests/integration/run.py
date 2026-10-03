@@ -80,6 +80,7 @@ def main() -> int:
             "junit_family=xunit1",
             *(("-n", str(options.workers)) if options.workers > 1 else ()),
             *(("--dist=loadfile",) if options.group == "security" and options.workers > 1 else ()),
+            *(("--dist=loadgroup",) if options.group == "mcp" and options.workers > 1 else ()),
         ],
         cwd=root,
         env=environment,
