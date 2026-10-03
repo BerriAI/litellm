@@ -3,7 +3,7 @@
 import { analysisKeyInfoQuery } from "../../api/queries";
 
 import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../../api/useLensApi";
+import { useLensApi } from "../../services";
 import { Button } from "@/components/ui/button";
 import { runTime } from "../../model/format";
 
@@ -26,8 +26,8 @@ function budgetLabel(amount: number | null, duration?: string | null): string {
 }
 
 export function useAnalysisKeyInfo(accessToken: string, keyId?: string) {
-  const apiClient = useLensApi();
-  return useQuery(analysisKeyInfoQuery(apiClient, accessToken, keyId));
+  const api = useLensApi(accessToken);
+  return useQuery(analysisKeyInfoQuery(api, keyId));
 }
 
 export function AnalysisKeyDetails({

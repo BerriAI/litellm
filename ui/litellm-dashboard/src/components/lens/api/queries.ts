@@ -1,41 +1,39 @@
 import { infiniteQueryOptions, queryOptions, type Query } from "@tanstack/react-query";
-import { z } from "zod";
-import type { ApiClient } from "@/lib/http/client";
-import type { components } from "@/lib/http/schema";
-import { type LensList, type Job, type Sample, type Settings, type ActivitySelection } from "../model/types";
-import type { AnalysisModelInfo } from "../setup/fields/analysisModels";
+import type { LensList, Settings, ActivitySelection } from "../model/types";
+import type { KeyPage, LensApi } from "./service";
+
+export type { Key } from "./service";
 
 export const lensKeys = {
   all: ["lens"] as const,
   lists: () => [...lensKeys.all, "list"] as const,
-  list: (accessToken: string) => [...lensKeys.lists(), { accessToken }] as const,
+  list: (scope: string) => [...lensKeys.lists(), { scope }] as const,
   histories: () => [...lensKeys.all, "history"] as const,
-  history: (accessToken: string, lensId: string | undefined, offset: number) =>
-    [...lensKeys.histories(), { accessToken, lensId, offset }] as const,
+  history: (scope: string, lensId: string | undefined, offset: number) =>
+    [...lensKeys.histories(), { scope, lensId, offset }] as const,
   runs: () => [...lensKeys.all, "run"] as const,
-  run: (accessToken: string, lensId: string | undefined, batchId: string) =>
-    [...lensKeys.runs(), { accessToken, lensId, batchId }] as const,
-  evidence: (accessToken: string, lensId: string | undefined, evidenceId: string | undefined, offset: number) =>
-    [...lensKeys.all, "evidence", { accessToken, lensId, evidenceId, offset }] as const,
-  models: (accessToken: string) => [...lensKeys.all, "models", { accessToken }] as const,
-  modelDetails: (accessToken: string) => [...lensKeys.all, "model-details", { accessToken }] as const,
-  activity: (accessToken: string) => [...lensKeys.all, "activity-available", { accessToken }] as const,
-  discovery: (accessToken: string, source: Settings["source"], hours: number | undefined, asOf: string) =>
-    [...lensKeys.all, "discovery", { accessToken, source, hours, asOf }] as const,
-  preview: (accessToken: string, scope: ActivitySelection, offset: number, asOf: string) =>
-    [...lensKeys.all, "preview", { accessToken, scope, offset, asOf }] as const,
-  agents: (accessToken: string, asOf: string) => [...lensKeys.all, "agents", { accessToken, asOf }] as const,
-  analysisKeys: (accessToken: string, query: string) =>
-    [...lensKeys.all, "analysis-keys", { accessToken, query }] as const,
-  analysisKeyInfo: (accessToken: string, keyId: string | undefined) =>
-    [...lensKeys.all, "analysis-key-info", { accessToken, keyId }] as const,
+  run: (scope: string, lensId: string | undefined, batchId: string) =>
+    [...lensKeys.runs(), { scope, lensId, batchId }] as const,
+  evidence: (scope: string, lensId: string | undefined, evidenceId: string | undefined, offset: number) =>
+    [...lensKeys.all, "evidence", { scope, lensId, evidenceId, offset }] as const,
+  models: (scope: string) => [...lensKeys.all, "models", { scope }] as const,
+  modelDetails: (scope: string) => [...lensKeys.all, "model-details", { scope }] as const,
+  activity: (scope: string) => [...lensKeys.all, "activity-available", { scope }] as const,
+  discovery: (scope: string, source: Settings["source"], hours: number | undefined, asOf: string) =>
+    [...lensKeys.all, "discovery", { scope, source, hours, asOf }] as const,
+  preview: (scope: string, selection: ActivitySelection, offset: number, asOf: string) =>
+    [...lensKeys.all, "preview", { scope, selection, offset, asOf }] as const,
+  agents: (scope: string, asOf: string) => [...lensKeys.all, "agents", { scope, asOf }] as const,
+  analysisKeys: (scope: string, query: string) => [...lensKeys.all, "analysis-keys", { scope, query }] as const,
+  analysisKeyInfo: (scope: string, keyId: string | undefined) =>
+    [...lensKeys.all, "analysis-key-info", { scope, keyId }] as const,
 };
 
 export const lensQueries = {
-  list(apiClient: ApiClient, accessToken: string, demo: boolean, workerSetup: boolean) {
+  list(api: LensApi, demo: boolean, workerSetup: boolean) {
     const options = {
-      queryKey: lensKeys.list(accessToken),
-      queryFn: () => apiClient.get<LensList>("/lens", { accessToken }),
+      queryKey: lensKeys.list(api.scope),
+      queryFn: () => api.lenses(),
       refetchInterval: (current: Query<LensList>): number | false => {
         if (demo) return false;
         const running = current.state.data?.lenses.some((item) =>
@@ -46,53 +44,43 @@ export const lensQueries = {
     };
     return queryOptions(options);
   },
-  models(apiClient: ApiClient, accessToken: string) {
-    const options = {
-      queryKey: lensKeys.models(accessToken),
-      queryFn: () => apiClient.get<{ data: { id: string }[] }>("/models", { accessToken }),
-    };
-    return queryOptions(options);
+  models(api: LensApi) {
+    return queryOptions({ queryKey: lensKeys.models(api.scope), queryFn: () => api.models() });
   },
-  modelDetails(apiClient: ApiClient, accessToken: string) {
-    const options = {
-      queryKey: lensKeys.modelDetails(accessToken),
-      queryFn: () => apiClient.get<{ data: AnalysisModelInfo[] }>("/model_group/info", { accessToken }),
-    };
-    return queryOptions(options);
+  modelDetails(api: LensApi) {
+    return queryOptions({ queryKey: lensKeys.modelDetails(api.scope), queryFn: () => api.modelDetails() });
   },
-  activity(apiClient: ApiClient, accessToken: string, loaded: boolean, demo: boolean) {
+  activity(api: LensApi, loaded: boolean, demo: boolean) {
     const options = {
-      queryKey: lensKeys.activity(accessToken),
-      queryFn: () => apiClient.get<{ traces: boolean; requests: boolean }>("/lens/activity/available", { accessToken }),
+      queryKey: lensKeys.activity(api.scope),
+      queryFn: () => api.activity(),
       enabled: loaded,
       refetchInterval: demo ? (false as const) : 5000,
     };
     return queryOptions(options);
   },
   history(
-    apiClient: ApiClient,
-    accessToken: string,
+    api: LensApi,
     { lensId, historyOffset, demo }: { lensId: string | undefined; historyOffset: number; demo: boolean },
   ) {
     const options = {
-      queryKey: lensKeys.history(accessToken, lensId, historyOffset),
+      queryKey: lensKeys.history(api.scope, lensId, historyOffset),
       enabled: !!lensId,
-      queryFn: () => apiClient.get<Job[]>(`/lens/${lensId}/runs`, { accessToken, query: { offset: historyOffset } }),
+      queryFn: () => api.runs(lensId as string, historyOffset),
       refetchInterval: demo ? (false as const) : 10000,
     };
     return queryOptions(options);
   },
-  run(apiClient: ApiClient, accessToken: string, lensId: string | undefined, batchId: string) {
+  run(api: LensApi, lensId: string | undefined, batchId: string) {
     const options = {
-      queryKey: lensKeys.run(accessToken, lensId, batchId),
+      queryKey: lensKeys.run(api.scope, lensId, batchId),
       enabled: !!lensId && !["latest", "all"].includes(batchId),
-      queryFn: () => apiClient.get<Job>(`/lens/${lensId}/runs/${batchId}`, { accessToken }),
+      queryFn: () => api.run(lensId as string, batchId),
     };
     return queryOptions(options);
   },
   evidence(
-    apiClient: ApiClient,
-    accessToken: string,
+    api: LensApi,
     {
       lensId,
       evidenceId,
@@ -106,78 +94,38 @@ export const lensQueries = {
     },
   ) {
     const options = {
-      queryKey: lensKeys.evidence(accessToken, lensId, evidenceId, requestOffset),
+      queryKey: lensKeys.evidence(api.scope, lensId, evidenceId, requestOffset),
       enabled: !!lensId && source === "requests",
-      queryFn: () =>
-        apiClient.get<components["schemas"]["ExecutionContent"]>(
-          `/lens/${lensId}/executions/${encodeURIComponent(evidenceId ?? "")}`,
-          { accessToken, query: { offset: requestOffset } },
-        ),
+      queryFn: () => api.execution(lensId as string, evidenceId ?? "", requestOffset),
     };
     return queryOptions(options);
   },
-  sample(
-    apiClient: ApiClient,
-    accessToken: string,
-    { selection, pageOffset, asOf }: { selection: ActivitySelection; pageOffset: number; asOf: string },
-  ) {
-    const { lookback_hours, ...selectionSettings } = selection;
-    return apiClient.post<Sample>("/lens/preview/sample", {
-      accessToken,
-      body: {
-        offset: pageOffset,
-        as_of: asOf,
-        settings: {
-          ...selectionSettings,
-          execution_ids: [],
-          name: "Preview",
-          model: "preview",
-          checks: [{ id: "preview", instruction: "Preview recorded activity" }],
-        },
-        lookback_hours: lookback_hours ?? 24,
-      },
-    });
-  },
-  discovery(
-    apiClient: ApiClient,
-    accessToken: string,
-    { value, asOf, enabled }: { value: ActivitySelection; asOf: string; enabled: boolean },
-  ) {
+  discovery(api: LensApi, { value, asOf, enabled }: { value: ActivitySelection; asOf: string; enabled: boolean }) {
+    const unfiltered = { source: value.source, service: "", filters: [], lookback_hours: value.lookback_hours };
     const options = {
-      queryKey: lensKeys.discovery(accessToken, value.source, value.lookback_hours, asOf),
-      queryFn: () =>
-        lensQueries.sample(apiClient, accessToken, {
-          selection: {
-            source: value.source,
-            service: "",
-            filters: [],
-            lookback_hours: value.lookback_hours,
-          },
-          pageOffset: 0,
-          asOf,
-        }),
+      queryKey: lensKeys.discovery(api.scope, value.source, value.lookback_hours, asOf),
+      queryFn: () => api.sample(unfiltered, 0, asOf),
       staleTime: 60000,
       enabled,
     };
     return queryOptions(options);
   },
   preview(
-    apiClient: ApiClient,
-    accessToken: string,
+    api: LensApi,
     { scope, offset, asOf, enabled }: { scope: ActivitySelection; offset: number; asOf: string; enabled: boolean },
   ) {
     const options = {
-      queryKey: lensKeys.preview(accessToken, scope, offset, asOf),
-      queryFn: () => lensQueries.sample(apiClient, accessToken, { selection: scope, pageOffset: offset, asOf }),
+      queryKey: lensKeys.preview(api.scope, scope, offset, asOf),
+      queryFn: () => api.sample(scope, offset, asOf),
       enabled,
       staleTime: 30000,
     };
     return queryOptions(options);
   },
-  agents(apiClient: ApiClient, accessToken: string, asOf: string, source: Settings["source"]) {
+  agents(api: LensApi, asOf: string, source: Settings["source"]) {
     const options = {
-      queryKey: lensKeys.agents(accessToken, asOf),
-      queryFn: () => apiClient.get<string[]>("/lens/agents", { accessToken }),
+      queryKey: lensKeys.agents(api.scope, asOf),
+      queryFn: () => api.agents(),
       enabled: source !== "requests",
       staleTime: 60000,
     };
@@ -185,55 +133,22 @@ export const lensQueries = {
   },
 };
 
-const keySchema = z.object({ token: z.string(), key_alias: z.string().nullable().optional() });
-const pageSchema = z.object({ keys: z.array(keySchema), total_pages: z.number() });
-export type Key = z.infer<typeof keySchema>;
-
-export function analysisKeysQuery(apiClient: ApiClient, accessToken: string, query: string) {
+export function analysisKeysQuery(api: LensApi, query: string) {
   const options = {
-    queryKey: lensKeys.analysisKeys(accessToken, query),
+    queryKey: lensKeys.analysisKeys(api.scope, query),
     initialPageParam: 1,
-    queryFn: async ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) =>
-      pageSchema.parse(
-        await apiClient.get("/key/list", {
-          accessToken,
-          signal,
-          query: {
-            page: String(pageParam),
-            size: "25",
-            return_full_object: "true",
-            key_alias: query || undefined,
-            substring_matching: "true",
-            include_team_keys: "true",
-            include_created_by_keys: "true",
-            status: "active",
-          },
-        }),
-      ),
-    getNextPageParam: (lastPage: z.infer<typeof pageSchema>, pages: z.infer<typeof pageSchema>[]) =>
+    queryFn: ({ pageParam, signal }: { pageParam: number; signal: AbortSignal }) => api.keys(query, pageParam, signal),
+    getNextPageParam: (lastPage: KeyPage, pages: KeyPage[]) =>
       pages.length < lastPage.total_pages ? pages.length + 1 : undefined,
   };
   return infiniteQueryOptions(options);
 }
 
-const keyInfoFields = {
-  key_alias: z.string().nullable().optional(),
-  models: z.array(z.string()),
-  max_budget: z.number().nullable(),
-  budget_duration: z.string().nullable().optional(),
-  rpm_limit: z.number().nullable().optional(),
-  tpm_limit: z.number().nullable().optional(),
-  expires: z.string().nullable().optional(),
-  status: z.string().optional(),
-};
-const keyInfoSchema = z.object({ info: z.object(keyInfoFields) });
-
-export function analysisKeyInfoQuery(apiClient: ApiClient, accessToken: string, keyId?: string) {
+export function analysisKeyInfoQuery(api: LensApi, keyId?: string) {
   const options = {
-    queryKey: lensKeys.analysisKeyInfo(accessToken, keyId),
+    queryKey: lensKeys.analysisKeyInfo(api.scope, keyId),
     enabled: !!keyId,
-    queryFn: async () =>
-      keyInfoSchema.parse(await apiClient.get("/key/info", { accessToken, query: { key: keyId } })).info,
+    queryFn: () => api.keyInfo(keyId as string),
   };
   return queryOptions(options);
 }

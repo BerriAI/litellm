@@ -4,9 +4,9 @@ import { InvestigationMissing, InvestigationsLoading, InvestigationError } from 
 import { InvestigationNavigation } from "./InvestigationNavigation";
 import { useInvestigationResults } from "./useInvestigationResults";
 
-import { useLensUpdate, useSaveLens } from "../api/mutations";
+import { useLensUpdate, useSaveLens, type LensWrite } from "../api/mutations";
 import { lensKeys, lensQueries } from "../api/queries";
-import { useLensApi } from "../api/useLensApi";
+import { useLensApi } from "../services";
 
 import { InvestigationDetail } from "./detail/InvestigationDetail";
 import { ReadinessBanner } from "./ReadinessBanner";
@@ -40,16 +40,16 @@ export function InvestigationsView({
   onDemo?: () => void;
 }) {
   const demo = useLensDemo();
-  const apiClient = useLensApi();
+  const api = useLensApi(accessToken);
   const client = useQueryClient();
   const updateLens = useLensUpdate(accessToken);
   const saveLens = useSaveLens(accessToken);
   const [workerSetup, setWorkerSetup] = useState(false);
   const [monitoring, setMonitoring] = useState(false);
   const now = useNow(2000);
-  const query = useQuery(lensQueries.list(apiClient, accessToken, !!demo, workerSetup));
-  const models = useQuery(lensQueries.models(apiClient, accessToken));
-  const modelDetails = useQuery(lensQueries.modelDetails(apiClient, accessToken));
+  const query = useQuery(lensQueries.list(api, !!demo, workerSetup));
+  const models = useQuery(lensQueries.models(api));
+  const modelDetails = useQuery(lensQueries.modelDetails(api));
   const [liveSelected, setLiveSelected] = useQueryState("lens", parseAsString.withOptions({ history: "push" }));
   const [demoSelected, setDemoSelected] = useState<string | null>(null);
   const selected = demo ? demoSelected : liveSelected;
@@ -96,7 +96,7 @@ export function InvestigationsView({
   const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
   const analysisAccess = useAnalysisKeyInfo(accessToken, defaultKeyId ?? undefined);
   const defaultModel = analysisAccess.data?.models.length === 1 ? analysisAccess.data.models[0] : undefined;
-  const activity = useQuery(lensQueries.activity(apiClient, accessToken, loaded, !!demo));
+  const activity = useQuery(lensQueries.activity(api, loaded, !!demo));
   const { tracesReady, requestsReady, activityReady, ready } = readiness(
     activity.data,
     activity.error,
@@ -110,15 +110,15 @@ export function InvestigationsView({
     return lens?.settings;
   };
   const refresh = () => {
-    void client.invalidateQueries({ queryKey: lensKeys.list(accessToken) });
+    void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
     void client.invalidateQueries({ queryKey: lensKeys.histories() });
   };
-  const update = async (path: string, body: unknown, method: "post" | "put" | "patch" = "post") => {
+  const update = async (write: LensWrite) => {
     setBusy(true);
     setError("");
     try {
-      await updateLens.mutateAsync({ path, body, method });
-      await client.invalidateQueries({ queryKey: lensKeys.list(accessToken) });
+      await updateLens.mutateAsync(write);
+      await client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not update lens");
     } finally {
@@ -137,7 +137,7 @@ export function InvestigationsView({
   };
   const changeFinding = async (status: Finding["status"], reason: string) => {
     if (!lens || !finding) return;
-    await update(`/lens/${lens.id}/findings/${finding.id}`, { status, reason }, "patch");
+    await update((current) => current.reviewFinding(lens.id, finding.id, status, reason));
   };
 
   return (
