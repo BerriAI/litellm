@@ -899,9 +899,9 @@ class IncompleteStreamError(APIError):
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: str,
+        llm_provider: str,
+        model: str,
         request: httpx.Request | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
