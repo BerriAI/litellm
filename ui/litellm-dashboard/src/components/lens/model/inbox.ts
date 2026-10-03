@@ -24,28 +24,32 @@ export const UNKNOWN_AGENT = "unknown agent";
 
 const priorityRank = { high: 0, medium: 1, low: 2 } as const;
 
-/** The agents a finding was actually seen in: the service recorded on each of its runs. */
+export function sampledExecutions(lens: Lens) {
+  return lens.jobs.flatMap((job) => job.sample?.executions ?? []);
+}
+
 export function findingAgents(lens: Lens, finding: Finding): readonly string[] {
-  const services = new Map(
-    lens.jobs.flatMap((job) => (job.sample?.executions ?? []).map((run) => [run.id, run.service] as const)),
-  );
+  const services = new Map(sampledExecutions(lens).map((run) => [run.id, run.service] as const));
   const seen = new Set(finding.occurrences.map((id) => services.get(id)).filter((s): s is string => !!s));
   if (seen.size) return [...seen].sort();
   const configured = lens.settings.agent_name || lens.settings.service;
   return [configured || UNKNOWN_AGENT];
 }
 
-/** One row per problem: the same title seen in the same agents across investigations is one problem. */
+function groupBy<T>(items: readonly T[], key: (item: T) => string): Map<string, T[]> {
+  return items.reduce((groups, item) => {
+    const k = key(item);
+    return groups.set(k, [...(groups.get(k) ?? []), item]);
+  }, new Map<string, T[]>());
+}
+
 export function inboxRows(lenses: readonly Lens[]): InboxRow[] {
   const open = lenses.flatMap((lens) =>
     lens.findings
       .filter((f) => f.status === "open" && f.kind === "issue")
       .map((finding) => ({ lens, finding, agents: findingAgents(lens, finding) })),
   );
-  const grouped = Map.groupBy(
-    open,
-    ({ agents, finding }) => `${agents.join(",")}::${finding.title.trim().toLowerCase()}`,
-  );
+  const grouped = groupBy(open, ({ agents, finding }) => `${agents.join(",")}::${finding.title.trim().toLowerCase()}`);
   return [...grouped.entries()]
     .map(([key, sources]): InboxRow => {
       const best = sources.reduce((a, b) =>
@@ -84,9 +88,8 @@ export function stepLine(step: Step): string {
   return `${step.label} · ${size} · $${step.cost.toFixed(4)}`;
 }
 
-/** Models used so far in a run, most used first, so the feed header can name them. */
 export function modelsUsed(steps: readonly Step[]): string[] {
-  const counts = Map.groupBy(
+  const counts = groupBy(
     steps.filter((s) => s.kind === "model" && s.model),
     (s) => s.model,
   );
