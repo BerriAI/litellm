@@ -702,17 +702,7 @@ class ModelResponseIterator:
 
             signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
-                thinking_blocks = [
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking="".join(
-                            cast(str, block["delta"].get("thinking"))
-                            for block in self.content_blocks
-                            if isinstance(block["delta"].get("thinking"), str)
-                        ),
-                        signature=signature,
-                    )
-                ]
+                thinking_blocks = [ChatCompletionThinkingBlock(type="thinking", thinking="", signature=signature)]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
                 if reasoning_content is None:
                     reasoning_content = ""
