@@ -1,0 +1,59 @@
+---
+source: crates/traces/tests/normalize.rs
+expression: projected
+---
+[
+  {
+    "scope": "openinference.instrumentation.google_adk",
+    "name": "call_llm",
+    "display_name": "call_llm",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "google-adk",
+    "model": "litellm_proxy/openai/gpt-6-luna",
+    "input_tokens": 29,
+    "output_tokens": 208,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkemggKbNJjwrxX31nbyYtI1R70r"
+    ],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  },
+  {
+    "scope": "openinference.instrumentation.google_adk",
+    "name": "agent_run [research_agent]",
+    "display_name": "agent_run [research_agent]",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "google-adk",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": ""
+  },
+  {
+    "scope": "openinference.instrumentation.google_adk",
+    "name": "invocation [research_app]",
+    "display_name": "invocation [research_app]",
+    "root": true,
+    "observation_type": "agent",
+    "wrapper_candidate": true,
+    "agent": "",
+    "framework": "google-adk",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  }
+]

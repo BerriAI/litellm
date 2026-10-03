@@ -23,6 +23,7 @@ time.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+insta = { version = "1.49.0", features = ["json"] }
 rstest.workspace = true
 
 [[bench]]

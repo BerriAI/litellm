@@ -1,0 +1,186 @@
+---
+source: crates/traces/tests/normalize.rs
+expression: projected
+---
+[
+  {
+    "scope": "pydantic-ai",
+    "name": "chat openai/gpt-6-luna",
+    "display_name": "chat openai/gpt-6-luna",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "pydantic-ai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 73,
+    "output_tokens": 33,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:resp_0bfd5aa5c8e4cdc7006ac07634d90087d090c0d60016a4bd9b"
+    ],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "chat openai/gpt-6-luna",
+    "display_name": "chat openai/gpt-6-luna",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "search_agent",
+    "framework": "pydantic-ai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 34,
+    "output_tokens": 318,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkhaKeJWjfc6ATJwZcqobwxud0ow"
+    ],
+    "tool_call_id": "",
+    "input_preview": "definition of an agent trace in AI agents sequence of steps tool calls observations reasoning execution trace"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "invoke_agent search_agent",
+    "display_name": "invoke_agent search_agent",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "search_agent",
+    "framework": "pydantic-ai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "definition of an agent trace in AI agents sequence of steps tool calls observations reasoning execution trace"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "execute_tool search",
+    "display_name": "execute_tool search",
+    "root": false,
+    "observation_type": "tool",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "pydantic-ai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "call_fwaZdpI8VFxGFaIMwhsyECfC",
+    "input_preview": "{\"query\":\"definition of an agent trace in AI agents sequence of steps tool calls observations reasoning execution trace\"}"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "chat openai/gpt-6-luna",
+    "display_name": "chat openai/gpt-6-luna",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "pydantic-ai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 331,
+    "output_tokens": 109,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:resp_00acbb450352a4ce006ac0763b539087d0a98db02a0c922806"
+    ],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "chat openai/gpt-6-luna",
+    "display_name": "chat openai/gpt-6-luna",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "writer_agent",
+    "framework": "pydantic-ai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 112,
+    "output_tokens": 86,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkhhvCuEhdL6o8qrlhloPMw5Vz8V"
+    ],
+    "tool_call_id": "",
+    "input_preview": "An agent trace is a chronological record of an AI agent’s execution: inputs/context, observable steps and decisions, tool calls and arguments, observations or results, and outputs/status/errors. Example: user asks weather → agent calls weat"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "invoke_agent writer_agent",
+    "display_name": "invoke_agent writer_agent",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "writer_agent",
+    "framework": "pydantic-ai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "An agent trace is a chronological record of an AI agent’s execution: inputs/context, observable steps and decisions, tool calls and arguments, observations or results, and outputs/status/errors. Example: user asks weather → agent calls weat"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "execute_tool write",
+    "display_name": "execute_tool write",
+    "root": false,
+    "observation_type": "tool",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "pydantic-ai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "call_Uxp9mhQWjJMkSgVeU5oWWG1H",
+    "input_preview": "{\"facts\":\"An agent trace is a chronological record of an AI agent’s execution: inputs/context, observable steps and decisions, tool calls and arguments, observations or results, and outputs/status/errors. Example: user asks weather → agent "
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "chat openai/gpt-6-luna",
+    "display_name": "chat openai/gpt-6-luna",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "pydantic-ai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 496,
+    "output_tokens": 63,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:resp_0712e57b3543bffe006ac0763f171087d0ad6d5735ea45b692"
+    ],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  },
+  {
+    "scope": "pydantic-ai",
+    "name": "invoke_agent research_agent",
+    "display_name": "invoke_agent research_agent",
+    "root": true,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "pydantic-ai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  }
+]

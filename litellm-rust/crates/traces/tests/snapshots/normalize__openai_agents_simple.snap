@@ -1,0 +1,91 @@
+---
+source: crates/traces/tests/normalize.rs
+expression: projected
+---
+[
+  {
+    "scope": "openinference.instrumentation.openai_agents",
+    "name": "response",
+    "display_name": "response",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai-agents",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 12,
+    "output_tokens": 221,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  },
+  {
+    "scope": "openinference.instrumentation.openai_agents",
+    "name": "turn",
+    "display_name": "turn",
+    "root": false,
+    "observation_type": "chain",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai-agents",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": ""
+  },
+  {
+    "scope": "openinference.instrumentation.openai_agents",
+    "name": "research_agent",
+    "display_name": "research_agent",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "openai-agents",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": ""
+  },
+  {
+    "scope": "openinference.instrumentation.openai_agents",
+    "name": "research_workflow",
+    "display_name": "research_workflow",
+    "root": false,
+    "observation_type": "chain",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai-agents",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": ""
+  },
+  {
+    "scope": "openinference.instrumentation.openai_agents",
+    "name": "research_workflow",
+    "display_name": "research_workflow",
+    "root": true,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai-agents",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": ""
+  }
+]

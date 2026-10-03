@@ -1,0 +1,131 @@
+---
+source: crates/traces/tests/normalize.rs
+expression: projected
+---
+[
+  {
+    "scope": "openinference.instrumentation.openai",
+    "name": "ChatCompletion",
+    "display_name": "ChatCompletion",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 89,
+    "output_tokens": 375,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkdoehIgh6Cyzgrs2GG0qYCm15CZ"
+    ],
+    "tool_call_id": "",
+    "input_preview": "\nCurrent Task: Plan how to answer: What is an agent trace?\n\nThis is the expected criteria for your final answer: A short research plan\nyou MUST return the actual complete content as the final answer, not a summary.\n\nProvide your complete re"
+  },
+  {
+    "scope": "openinference.instrumentation.crewai",
+    "name": "research_agent._execute_core",
+    "display_name": "research_agent._execute_core",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "crewai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "{\"agent\": {\"entity_type\": \"agent\", \"id\": \"db35a83c-512e-4668-8872-f1e2a5f863d7\", \"role\": \"research_agent\", \"goal\": \"Plan how to answer questions and brief your team\", \"backstory\": \"You coordinate a search specialist and a writer.\", \"cache\":"
+  },
+  {
+    "scope": "openinference.instrumentation.openai",
+    "name": "ChatCompletion",
+    "display_name": "ChatCompletion",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 227,
+    "output_tokens": 623,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkdtulvipEgGD6kc0c3fzvG4eGz8"
+    ],
+    "tool_call_id": "",
+    "input_preview": "\nCurrent Task: Gather facts for: What is an agent trace?\n\nThis is the expected criteria for your final answer: A few key facts\nyou MUST return the actual complete content as the final answer, not a summary.\n\nThis is the context you're worki"
+  },
+  {
+    "scope": "openinference.instrumentation.openai",
+    "name": "ChatCompletion",
+    "display_name": "ChatCompletion",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 451,
+    "output_tokens": 111,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkdze30twbC0jAV8LXxxoKbA7PXs"
+    ],
+    "tool_call_id": "",
+    "input_preview": "\nCurrent Task: What is an agent trace?\n\nThis is the expected criteria for your final answer: A short answer\nyou MUST return the actual complete content as the final answer, not a summary.\n\nThis is the context you're working with:\n**Research"
+  },
+  {
+    "scope": "openinference.instrumentation.crewai",
+    "name": "search_agent._execute_core",
+    "display_name": "search_agent._execute_core",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "search_agent",
+    "framework": "crewai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "{\"agent\": {\"entity_type\": \"agent\", \"id\": \"47b0e5a8-5a88-4992-8dce-11dac5ebb1bf\", \"role\": \"search_agent\", \"goal\": \"Gather key facts for the research plan\", \"backstory\": \"You find relevant technical facts.\", \"cache\": true, \"verbose\": false, \""
+  },
+  {
+    "scope": "openinference.instrumentation.crewai",
+    "name": "writer_agent._execute_core",
+    "display_name": "writer_agent._execute_core",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "writer_agent",
+    "framework": "crewai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "{\"agent\": {\"entity_type\": \"agent\", \"id\": \"f2ed418d-8028-487e-a5e9-d6a1a1055d2f\", \"role\": \"writer_agent\", \"goal\": \"Answer questions clearly from the gathered facts\", \"backstory\": \"You explain technical concepts.\", \"cache\": true, \"verbose\": f"
+  },
+  {
+    "scope": "openinference.instrumentation.crewai",
+    "name": "research_crew.kickoff",
+    "display_name": "research_crew.kickoff",
+    "root": true,
+    "observation_type": "agent",
+    "wrapper_candidate": true,
+    "agent": "",
+    "framework": "crewai",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "{\"question\": \"What is an agent trace?\"}"
+  }
+]

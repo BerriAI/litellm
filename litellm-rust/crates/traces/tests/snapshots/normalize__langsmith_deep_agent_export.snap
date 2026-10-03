@@ -1,0 +1,110 @@
+---
+source: crates/traces/tests/normalize.rs
+expression: projected
+---
+[
+  {
+    "scope": "langsmith",
+    "name": "deep_research_agent",
+    "display_name": "deep_research_agent",
+    "root": true,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "deep_research_agent",
+    "framework": "deepagents",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "Should we store OTEL agent spans in ClickHouse or Postgres at 50k spans/sec?"
+  },
+  {
+    "scope": "langsmith",
+    "name": "ChatOpenAI",
+    "display_name": "ChatOpenAI",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "deep_research_agent",
+    "framework": "langchain_chat_model",
+    "model": "claude-sonnet-4-5",
+    "input_tokens": 3332,
+    "output_tokens": 467,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-4077bb36-9380-4a3b-9481-245700cef09a"
+    ],
+    "tool_call_id": "",
+    "input_preview": "Should we store OTEL agent spans in ClickHouse or Postgres at 50k spans/sec?"
+  },
+  {
+    "scope": "langsmith",
+    "name": "FilesystemMiddleware.wrap_model_call",
+    "display_name": "FilesystemMiddleware.wrap_model_call",
+    "root": false,
+    "observation_type": "framework",
+    "wrapper_candidate": false,
+    "agent": "deep_research_agent",
+    "framework": "deepagents",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "{}"
+  },
+  {
+    "scope": "langsmith",
+    "name": "task",
+    "display_name": "task",
+    "root": false,
+    "observation_type": "tool",
+    "wrapper_candidate": false,
+    "agent": "deep_research_agent",
+    "framework": "deepagents",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "toolu_01PLyo8TKKTpXR4fp96Dn93W",
+    "input_preview": "{\"subagent_type\":\"researcher\",\"description\":\"Research and compare ClickHouse vs Postgres for storing OpenTelemetry (OTEL) agent spans at 50,000 spans per second.\\n\\nFocus on:\\n1. Write throughput capabilities...\"}"
+  },
+  {
+    "scope": "langsmith",
+    "name": "researcher",
+    "display_name": "researcher",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "researcher",
+    "framework": "langchain_create_agent",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "Research and compare ClickHouse vs Postgres for storing OpenTelemetry (OTEL) agent spans at 50,000 spans per second.\n\nFocus on:\n1. Write throughput capabilities..."
+  },
+  {
+    "scope": "langsmith",
+    "name": "search_docs",
+    "display_name": "search_docs",
+    "root": false,
+    "observation_type": "tool",
+    "wrapper_candidate": false,
+    "agent": "researcher",
+    "framework": "langchain_create_agent",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "toolu_01JsjHFFfpsw4opmK9UZi8VN",
+    "input_preview": "{\"query\":\"ClickHouse Postgres OpenTelemetry OTEL spans performance comparison\"}"
+  }
+]

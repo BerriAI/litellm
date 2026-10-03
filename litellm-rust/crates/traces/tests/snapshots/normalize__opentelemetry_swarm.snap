@@ -1,0 +1,95 @@
+---
+source: crates/traces/tests/normalize.rs
+expression: projected
+---
+[
+  {
+    "scope": "openinference.instrumentation.openai",
+    "name": "ChatCompletion",
+    "display_name": "ChatCompletion",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 17,
+    "output_tokens": 254,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkcXeaJntMyvQtwHLRjx34bGg1dx"
+    ],
+    "tool_call_id": "",
+    "input_preview": "List key facts about: What is an agent trace?"
+  },
+  {
+    "scope": "openinference.instrumentation.openai",
+    "name": "ChatCompletion",
+    "display_name": "ChatCompletion",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "openai",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 167,
+    "output_tokens": 99,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkcaGPMvaS7uTAEzU43oUd2noVUb"
+    ],
+    "tool_call_id": "",
+    "input_preview": "Using these notes, answer 'What is an agent trace?':\nAn **agent trace** is a record of an AI agent’s execution from a task’s start to its completion.\n\nKey facts:\n\n- It may include the user’s request, the agent’s messages, tool calls and the"
+  },
+  {
+    "scope": "__main__",
+    "name": "search_agent",
+    "display_name": "search_agent",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "search_agent",
+    "framework": "",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "List key facts about: What is an agent trace?"
+  },
+  {
+    "scope": "__main__",
+    "name": "writer_agent",
+    "display_name": "writer_agent",
+    "root": false,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "writer_agent",
+    "framework": "",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "Using these notes, answer 'What is an agent trace?':\nAn **agent trace** is a record of an AI agent’s execution from a task’s start to its completion.\n\nKey facts:\n\n- It may include the user’s request, the agent’s messages, tool calls and the"
+  },
+  {
+    "scope": "__main__",
+    "name": "research_agent",
+    "display_name": "research_agent",
+    "root": true,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  }
+]

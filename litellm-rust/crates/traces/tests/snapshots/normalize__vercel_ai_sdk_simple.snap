@@ -1,0 +1,59 @@
+---
+source: crates/traces/tests/normalize.rs
+expression: projected
+---
+[
+  {
+    "scope": "gen_ai",
+    "name": "chat openai/gpt-6-luna",
+    "display_name": "chat openai/gpt-6-luna",
+    "root": false,
+    "observation_type": "llm",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "vercel-ai-sdk",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 12,
+    "output_tokens": 219,
+    "call_evidence": "complete",
+    "call_keys": [
+      "provider_response:chatcmpl-EUkiQkhLhqAmN7UVQzdQ7nvB8LoFZ"
+    ],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  },
+  {
+    "scope": "gen_ai",
+    "name": "step 1",
+    "display_name": "step 1",
+    "root": false,
+    "observation_type": "chain",
+    "wrapper_candidate": false,
+    "agent": "",
+    "framework": "vercel-ai-sdk",
+    "model": "",
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": ""
+  },
+  {
+    "scope": "gen_ai",
+    "name": "invoke_agent research_agent",
+    "display_name": "invoke_agent research_agent",
+    "root": true,
+    "observation_type": "agent",
+    "wrapper_candidate": false,
+    "agent": "research_agent",
+    "framework": "vercel-ai-sdk",
+    "model": "openai/gpt-6-luna",
+    "input_tokens": 12,
+    "output_tokens": 219,
+    "call_evidence": "unknown",
+    "call_keys": [],
+    "tool_call_id": "",
+    "input_preview": "What is an agent trace?"
+  }
+]
