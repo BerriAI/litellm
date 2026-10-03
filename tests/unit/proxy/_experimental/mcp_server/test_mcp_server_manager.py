@@ -6978,6 +6978,20 @@ class TestMCPServerManager:
                 None,
                 id="scheme-less-value-is-not-a-subject",
             ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Bearer\teyJ.x.y"},
+                "sk-1234",
+                None,
+                None,
+                id="tab-separated-bearer-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Bearer  eyJ.x.y"},
+                "sk-1234",
+                " eyJ.x.y",
+                " eyJ.x.y",
+                id="bearer-credential-is-taken-verbatim-after-one-space",
+            ),
         ],
     )
     async def test_pre_call_tool_check_separates_raw_bearer_from_subject(

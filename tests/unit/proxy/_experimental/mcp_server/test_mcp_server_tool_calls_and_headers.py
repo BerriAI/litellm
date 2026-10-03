@@ -11061,6 +11061,36 @@ class TestPreemptive401ModeAware:
         assert moved_header == exact_header.replace("/obx", f"/{requested}")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("shape", ["alias_case", "server_id", "x_mcp_servers"])
+    async def test_moved_true_passthrough_shapes_relay_the_exact_name_routes_upstream_challenge(self, shape):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = MCPServer(
+            server_id="id-tpx",
+            name="tpx",
+            alias="tpx",
+            server_name="tpx",
+            url="https://tpx.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+            mcp_info={"server_name": "tpx"},
+        )
+        requested, path = {
+            "alias_case": ("TPX", "/mcp/TPX"),
+            "server_id": (server.server_id, f"/mcp/{server.server_id}"),
+            "x_mcp_servers": ("TPX", "/mcp"),
+        }[shape]
+        probe = AsyncMock(return_value=(401, 'Bearer realm="upstream"'))
+
+        with patch.object(server_module, "_probe_upstream_auth", probe):
+            exact = await self._connect_with_a_grant(server, "tpx", "/mcp/tpx")
+            moved = await self._connect_with_a_grant(server, requested, path)
+
+        assert exact.status_code == 401
+        assert (moved.status_code, moved.detail, moved.headers) == (exact.status_code, exact.detail, exact.headers)
+        assert probe.await_args_list == [call(server.url, ""), call(server.url, "")]
+
+    @pytest.mark.asyncio
     async def test_aggregate_connect_without_a_server_selection_is_not_challenged(self):
         from litellm.proxy._experimental.mcp_server import server as server_module
 

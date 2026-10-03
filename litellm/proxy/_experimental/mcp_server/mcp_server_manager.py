@@ -3964,10 +3964,9 @@ class MCPServerManager:
         authorization: Final = (oauth2_headers or {}).get("Authorization") or _raw_header_value(
             raw_headers, "authorization"
         )
-        scheme_and_credential: Final = (authorization or "").split(None, 1)
-        if len(scheme_and_credential) != 2 or scheme_and_credential[0].lower() != "bearer":
+        if not authorization or not authorization.lower().startswith("bearer "):
             return None
-        bearer: Final = scheme_and_credential[1]
+        bearer: Final = authorization[len("bearer ") :]
         if bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX) or _is_master_key(bearer, master_key):
             return None
         admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
