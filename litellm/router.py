@@ -1100,9 +1100,9 @@ class Router:
 
         ## SETTING FALLBACKS ##
         _fallbacks = fallbacks or litellm.fallbacks
-        self.default_fallbacks = list(
+        self.default_fallbacks: list[str] = (
             default_fallbacks if default_fallbacks is not None else (litellm.default_fallbacks or [])
-        )
+        ).copy()
         self._materialized_default_fallback: dict[str, list[str]] | None = None
         self._set_fallbacks(_fallbacks)
 
@@ -12226,8 +12226,9 @@ class Router:
         if "fallbacks" not in kwargs and "default_fallbacks" not in kwargs:
             return
         if "default_fallbacks" in kwargs:
-            self.default_fallbacks = list(kwargs["default_fallbacks"] or [])
-        self._set_fallbacks(kwargs.get("fallbacks", self.fallbacks))
+            self.default_fallbacks = (kwargs["default_fallbacks"] or []).copy()
+        requested: list | None = kwargs.get("fallbacks", self.fallbacks)
+        self._set_fallbacks(requested)
 
     def update_settings(self, **kwargs):
         """
