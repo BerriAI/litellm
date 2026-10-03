@@ -50,7 +50,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, assert_never
 
@@ -17023,9 +17023,6 @@ async def login(request: Request):
     return redirect_response
 
 
-_LOGIN_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
-
-
 @router.post("/v2/login", include_in_schema=False)  # hidden helper for UI logins via API
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
@@ -17034,7 +17031,7 @@ async def login_v2(request: Request):
     from litellm.proxy.utils import get_custom_url
 
     try:
-        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
+        body: Final = await request.json()
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17106,7 +17103,7 @@ async def login_v3(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
+        body: Final = await request.json()
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17178,7 +17175,7 @@ async def login_v3_exchange(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
+        body: Final = await request.json()
         code: Final = body.get("code")
         if not code:
             raise ProxyException(
