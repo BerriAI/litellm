@@ -2433,3 +2433,105 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+
+
+class _CapturingSpendWriter:
+    """DBSpendUpdateWriter boundary: records the kwargs each failure write receives."""
+
+    def __init__(self, captured: dict):
+        self.captured = captured
+
+    async def update_database(self, **kwargs):
+        self.captured.setdefault("spend_writes", []).append(kwargs)
+
+
+def _post_call_failure_with_db_logger(captured: dict, monkeypatch: pytest.MonkeyPatch):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+    writer = _CapturingSpendWriter(captured)
+    db_logger = _ProxyDBLogger(spend_writer=lambda: writer)
+    monkeypatch.setattr(litellm, "callbacks", [db_logger])
+    monkeypatch.setattr(Logging, "pre_call", lambda self, *args, **kwargs: None)
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(Logging, "async_failure_handler", _noop_async_failure)
+    return ProxyLogging(user_api_key_cache=DualCache())
+
+
+@pytest.mark.asyncio
+async def test_tag_ownership_denied_failure_writes_no_request_tags(monkeypatch: pytest.MonkeyPatch):
+    """A 403 tag_ownership_denied must attribute no tags to the failed request:
+    the spend writer driven by the real _ProxyDBLogger callback must see the
+    request without any of its tag fields."""
+    from litellm.proxy._types import ProxyException
+
+    captured: dict[str, object] = {}
+    proxy_logging_obj = _post_call_failure_with_db_logger(captured, monkeypatch)
+    request_metadata = {"tags": ["foreign-tag", "own-tag"], "other": "keep"}
+    request_litellm_metadata = {"tags": ["litellm-tag"]}
+    request_data: dict[str, object] = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tags": ["root-tag"],
+        "metadata": request_metadata,
+        "litellm_metadata": request_litellm_metadata,
+    }
+
+    await proxy_logging_obj.post_call_failure_hook(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-foreign", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=ProxyException(
+            message="Request tags not permitted",
+            type=ProxyErrorTypes.tag_ownership_denied,
+            param="tags",
+            code=403,
+        ),
+    )
+
+    writes = captured["spend_writes"]
+    assert len(writes) == 1, captured
+    kwargs = writes[0]["kwargs"]
+    assert "tags" not in kwargs
+    assert "tags" not in kwargs["metadata"]
+    assert "tags" not in kwargs["litellm_metadata"]
+    assert "tags" not in kwargs["litellm_params"]["metadata"]
+    assert request_metadata["tags"] == ["foreign-tag", "own-tag"]
+    assert request_litellm_metadata["tags"] == ["litellm-tag"]
+    assert request_data["tags"] == ["root-tag"]
+    assert "litellm_params" not in request_data
+
+
+@pytest.mark.asyncio
+async def test_other_proxy_errors_keep_their_request_tags(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._types import ProxyException
+
+    captured: dict[str, object] = {}
+    proxy_logging_obj = _post_call_failure_with_db_logger(captured, monkeypatch)
+
+    await proxy_logging_obj.post_call_failure_hook(
+        request_data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tags": ["root-tag"],
+            "metadata": {"tags": ["budget-tag"]},
+        },
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-over", request_route="/v1/chat/completions"),
+        route="/v1/chat/completions",
+        original_exception=ProxyException(
+            message="budget exceeded",
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=429,
+        ),
+    )
+
+    writes = captured["spend_writes"]
+    assert len(writes) == 1, captured
+    kwargs = writes[0]["kwargs"]
+    assert kwargs["litellm_params"]["metadata"]["tags"] == ["budget-tag"]

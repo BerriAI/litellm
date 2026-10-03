@@ -975,6 +975,50 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _without_tags(mapping: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in mapping.items() if key != "tags"}
+
+
+def _payload_map(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return cast(Mapping[str, object], value)  # cast-ok: the runtime check only narrows to Mapping[Unknown, Unknown]
+
+
+def _nested_without_tags(payload: Mapping[str, object], key: str) -> dict[str, object] | None:
+    nested: Final = _payload_map(payload.get(key))
+    if nested is None:
+        return None
+    return _without_tags(nested)
+
+
+def _without_attributed_tag_fields(payload: Mapping[str, object]) -> dict[str, object]:
+    overrides: Final = {
+        key: cleaned
+        for key in ("metadata", "litellm_metadata")
+        if (cleaned := _nested_without_tags(payload, key)) is not None
+    }
+    return {**_without_tags(payload), **overrides}
+
+
+def _request_data_without_attributed_tags(request_data: Mapping[str, object]) -> dict[str, object]:
+    scrubbed: Final[dict[str, object]] = _without_attributed_tag_fields(request_data)
+    litellm_params: Final = _payload_map(request_data.get("litellm_params"))
+    if litellm_params is not None:
+        litellm_metadata: Final = _nested_without_tags(litellm_params, "metadata")
+        if litellm_metadata is not None:
+            scrubbed["litellm_params"] = {**litellm_params, "metadata": litellm_metadata}
+    proxy_server_request: Final = _payload_map(request_data.get("proxy_server_request"))
+    if proxy_server_request is not None:
+        body: Final = _payload_map(proxy_server_request.get("body"))
+        if body is not None:
+            scrubbed["proxy_server_request"] = {
+                **proxy_server_request,
+                "body": _without_attributed_tag_fields(body),
+            }
+    return scrubbed
+
+
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
     """A provider handoff or a cached response both mean the router selected a deployment."""
     caching_details: Final = litellm_logging_obj.caching_details
@@ -3224,6 +3268,16 @@ class ProxyLogging:
             - Optional[HTTPException]: If any callback returns or raises an HTTPException, the first one found is returned.
                                       Otherwise, returns None and the original exception is used.
         """
+        if (
+            isinstance(original_exception, ProxyException)
+            and original_exception.type == ProxyErrorTypes.tag_ownership_denied
+        ):
+            # A request rejected for tag ownership attributes spend to no tag: every
+            # consumer below, logging-object synthesis and the callback spend writers
+            # alike, must see the request without its tag fields
+            request_data = _request_data_without_attributed_tags(  # rebind-ok: parameter swapped for a scrubbed copy, caller's dict untouched
+                cast(Mapping[str, object], request_data)  # cast-ok: the untyped request dict holds mixed runtime values
+            )
 
         logging_obj: Final[object] = request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # legacy request data is narrowed to Logging below
         if isinstance(logging_obj, Logging) and logging_obj.baseline_cache_context is not None:

@@ -565,12 +565,10 @@ def test_team_owned_tag_attributes_spend_to_owner_only(
     logs_total = sum(r.spend or 0 for r in tagged)
     assert logs_total > 0
 
-    b_logs = client.poll_logs_for_key(
-        key_b, predicate=lambda rs: any(tag in (r.request_tags or []) for r in rs)
-    )
+    b_logs = client.poll_logs_for_key(key_b, predicate=lambda rs: len(rs) > 0)
     b_rows = [r for r in b_logs if tag in (r.request_tags or [])]
-    assert all((r.spend or 0) == 0 for r in b_rows), (
-        f"team B logged spend on a foreign tag: {_summarize(b_rows)}"
+    assert b_rows == [], (
+        f"team B's denied request was still attributed to the owned tag: {_summarize(b_rows)}"
     )
 
     entry = client.poll_tag_spend(tag, minimum=logs_total * 0.999)
@@ -578,8 +576,8 @@ def test_team_owned_tag_attributes_spend_to_owner_only(
     assert _approx_equal(entry.total_spend or 0, logs_total), (
         f"/spend/tags total_spend {entry} != sum of tagged rows {logs_total}"
     )
-    assert (entry.log_count or 0) == len(tagged) + len(b_rows), (
-        f"/spend/tags log_count {entry.log_count} != tagged rows {len(tagged) + len(b_rows)}"
+    assert (entry.log_count or 0) == len(tagged), (
+        f"/spend/tags log_count {entry.log_count} != owner tagged rows {len(tagged)}"
     )
 
 

@@ -11,6 +11,7 @@ import psycopg.errors
 import pytest
 from pydantic import JsonValue
 
+from litellm.proxy._types import hash_token
 from tests.integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 
@@ -309,6 +310,38 @@ def test_owned_tag_gates_inference_requests(gateway: Gateway) -> None:
             (f"{marker}-unregistered",),
         ]
 
+        hashed_b: Final = hash_token(key_b)
+        failure_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND status = %s',
+                (hashed_b, "failure"),
+            ),
+            lambda rows: len(rows) >= 3,
+            seconds=30,
+        )
+        assert all(row["request_tags"] == [] for row in failure_rows), failure_rows
+
+        flush_marker: Final = f"flush-{uuid.uuid4().hex}"
+        flushed: Final = _chat_with_tag(
+            gateway, model, f"{marker}-flush", key=key_b, metadata_tags=[flush_marker]
+        )
+        assert flushed.status_code == 200, flushed.text
+        eventually(
+            lambda: read_rows(
+                'SELECT 1 AS used FROM "LiteLLM_DailyTagSpend" WHERE tag = %s AND api_key = %s LIMIT 1',
+                (flush_marker, hashed_b),
+            ),
+            lambda rows: len(rows) == 1,
+            seconds=30,
+        )
+        assert (
+            read_rows(
+                'SELECT 1 AS used FROM "LiteLLM_DailyTagSpend" WHERE tag = %s AND api_key = %s',
+                (tag, hashed_b),
+            )
+            == []
+        )
+
 
 def test_owned_tag_denies_inherited_and_mixed_sources(gateway: Gateway) -> None:
     with (
@@ -342,6 +375,38 @@ def test_owned_tag_denies_inherited_and_mixed_sources(gateway: Gateway) -> None:
         _assert_tag_ownership_denied(mixed, tag, team_a)
 
         assert _upstream_marker_chats(upstream, marker) == []
+
+        hashed_inherited: Final = hash_token(key_b_inherited)
+        inherited_failure_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND status = %s',
+                (hashed_inherited, "failure"),
+            ),
+            lambda rows: len(rows) >= 1,
+            seconds=30,
+        )
+        assert all(row["request_tags"] == [] for row in inherited_failure_rows), inherited_failure_rows
+
+        flush_marker: Final = f"flush-{uuid.uuid4().hex}"
+        flushed: Final = _chat_with_tag(
+            gateway, model, f"{marker}-flush", key=key_b_plain, metadata_tags=[flush_marker]
+        )
+        assert flushed.status_code == 200, flushed.text
+        eventually(
+            lambda: read_rows(
+                'SELECT 1 AS used FROM "LiteLLM_DailyTagSpend" WHERE tag = %s AND api_key = %s LIMIT 1',
+                (flush_marker, hash_token(key_b_plain)),
+            ),
+            lambda rows: len(rows) == 1,
+            seconds=30,
+        )
+        assert (
+            read_rows(
+                'SELECT 1 AS used FROM "LiteLLM_DailyTagSpend" WHERE tag = %s AND api_key = %s',
+                (tag, hashed_inherited),
+            )
+            == []
+        )
 
 
 def test_tag_ownership_transitions_take_effect_with_warm_cache(gateway: Gateway, peer: Gateway) -> None:
