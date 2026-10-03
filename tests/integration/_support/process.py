@@ -50,12 +50,20 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def ready_deadline_seconds() -> float:
+    return float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
+
+
+def stop_deadline_seconds() -> float:
+    return float(os.environ.get("INTEGRATION_PROXY_STOP_SECONDS", "30"))
+
+
 def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
         return True
     process.terminate()
     try:
-        process.wait(timeout=30)
+        process.wait(timeout=stop_deadline_seconds())
     except subprocess.TimeoutExpired:
         return False
     return True
@@ -144,7 +152,7 @@ def _lost_port_race(launch: _Launch) -> bool:
 
 def _wait_until_ready(launch: _Launch) -> None:
     with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
-        deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
+        deadline: Final = time.monotonic() + ready_deadline_seconds()
         while launch.process.poll() is None:
             try:
                 if client.get("/health/readiness", timeout=2).status_code == 200:
