@@ -27,7 +27,7 @@ export function InvestigationActions({
   active: Job | undefined;
   setEditing: (mode: "new" | "edit" | "duplicate") => void;
   setMonitoring: (open: boolean) => void;
-  update: (write: LensWrite) => Promise<void>;
+  update: (write: LensWrite) => Promise<unknown>;
   onRunNow: () => void;
 }) {
   return (
