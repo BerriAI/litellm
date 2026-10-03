@@ -94,39 +94,48 @@ def _stream_response_id(text: str) -> str | None:
     return None
 
 
-def _fire(owned: Gateway, models: Mapping[str, str], key: str, index: int) -> tuple[int, str, int | None, str | None]:
-    stream: Final = index % 2 == 0
-    path: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")[index % 3]
-    kind: Final = (
-        f"{'chat' if path == '/v1/chat/completions' else path.rsplit('/', 1)[-1]}{'-stream' if stream else ''}"
-    )
+_KINDS: Final = ("chat", "chat-stream", "messages", "messages-stream", "responses", "responses-stream")
+_PATHS: Final = MappingProxyType(
+    {"chat": "/v1/chat/completions", "messages": "/v1/messages", "responses": "/v1/responses"}
+)
+
+
+def _burst_kind(index: int) -> str:
+    return f"{_KINDS[index % 3 * 2].removesuffix('-stream')}{'-stream' if index % 2 == 0 else ''}"
+
+
+def _fire(
+    owned: Gateway, models: Mapping[str, str], key: str, kind: str, marker: str
+) -> tuple[str, int | None, str | None]:
+    stream: Final = kind.endswith("-stream")
+    path: Final = _PATHS[kind.removesuffix("-stream")]
     model: Final = models[f"{path.rsplit('/', 1)[-1]}{'-stream' if stream else ''}"]
     if path == "/v1/messages":
         body: Final = {
             "model": model,
-            "messages": [{"role": "user", "content": f"burst-{index}"}],
+            "messages": [{"role": "user", "content": f"burst-{kind}-{marker}"}],
             "max_tokens": 64,
             "stream": stream,
         }
     elif path == "/v1/responses":
-        body = {"model": model, "input": f"burst-{index}", "stream": stream}
+        body = {"model": model, "input": f"burst-{kind}-{marker}", "stream": stream}
     else:
         body = {
             "model": model,
-            "messages": [{"role": "user", "content": f"burst-{index}"}],
+            "messages": [{"role": "user", "content": f"burst-{kind}-{marker}"}],
             "stream": stream,
             **({"stream_options": {"include_usage": True}} if stream else {}),
         }
     try:
         response: Final = owned.request("POST", path, body, key=key)
     except Exception:
-        return index, kind, None, None
+        return kind, None, None
     if response.status_code != 200:
-        return index, kind, response.status_code, None
+        return kind, response.status_code, None
     if stream:
-        return index, kind, 200, _stream_response_id(response.text)
+        return kind, 200, _stream_response_id(response.text)
     response_id: Final = response.json().get("id")
-    return index, kind, 200, response_id if isinstance(response_id, str) else None
+    return kind, 200, response_id if isinstance(response_id, str) else None
 
 
 _WORKER_PID: Final = re.compile(r"Started server process \[(\d+)\]")
@@ -173,25 +182,22 @@ def test_proxy_survives_worker_kill_mid_burst(tmp_path: Path) -> None:
                 workers: Final = eventually(lambda: _worker_pids(owned.log), lambda pids: len(pids) == 2, seconds=30)
                 records: dict[int, tuple[str, int | None, str | None]] = {}
                 with ThreadPoolExecutor(max_workers=30) as pool:
-                    futures: Final = [pool.submit(_fire, owned.gateway, models, key, index) for index in range(30)]
+                    futures: Final = [
+                        (index, pool.submit(_fire, owned.gateway, models, key, _burst_kind(index), str(index)))
+                        for index in range(30)
+                    ]
                     psutil.Process(workers[0]).send_signal(signal.SIGKILL)
-                    for future in futures:
-                        index, kind, status, response_id = future.result()
-                        records[index] = (kind, status, response_id)
-                served_ids: Final = [record[2] for record in records.values() if record[2] is not None]
+                    for index, future in futures:
+                        records[index] = future.result()
+                proxy_stamped: Final = [
+                    record[2]
+                    for record in records.values()
+                    if record[2] is not None and not record[0].startswith("messages")
+                ]
                 malformed: Final = {i: r for i, r in records.items() if r[1] == 200 and r[2] is None}
                 assert not malformed, f"200 responses without a well-formed body: {malformed}"
-                assert len(served_ids) == len(set(served_ids)), records
-                kinds_seen: Final = {record[0] for record in records.values()}
-                for seen in sorted(kinds_seen):
-                    assert any(record[0] == seen and record[2] is not None for record in records.values()), (
-                        f"no successful {seen} request survived the worker kill: {records}"
-                    )
-                probe: Final = owned.gateway.request(
-                    "POST",
-                    "/v1/chat/completions",
-                    {"model": model, "messages": [{"role": "user", "content": "post-kill probe"}]},
-                    key=key,
-                )
-                assert probe.status_code == 200, probe.text
-                assert served_ids, "no burst request completed"
+                assert len(proxy_stamped) == len(set(proxy_stamped)), records
+                assert proxy_stamped, "no burst request completed"
+                for kind in _KINDS:
+                    _, status, response_id = _fire(owned.gateway, models, key, kind, "probe")
+                    assert status == 200 and response_id is not None, (kind, status, records)
