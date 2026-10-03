@@ -15,6 +15,7 @@ from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     AgentAccess,
+    AgentAccessLookup,
     AgentRequestHandler,
     RestrictedAgentAccess,
     UnrestrictedAgentAccess,
@@ -41,6 +42,15 @@ def _agent_id(registry: AgentRegistry, agent_name: str) -> str:
     agent: Final = registry.get_agent_by_name(agent_name)
     assert agent is not None
     return agent.agent_id
+
+
+def _lookup(result: AgentAccess | Exception) -> AgentAccessLookup:
+    async def lookup(_user_api_key_auth: UserAPIKeyAuth | None, /, *, strict: bool) -> AgentAccess:
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    return lookup
 
 
 async def _single_context(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
@@ -132,6 +142,176 @@ class TestAgentRequestHandler:
                     user_api_key_auth=mock_user_auth
                 )
                 assert result == UnrestrictedAgentAccess()
+
+    async def test_agent_access_default_deny_is_opt_in(self):
+        auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        key_lookup: Final = _lookup(UnrestrictedAgentAccess())
+        team_lookup: Final = _lookup(UnrestrictedAgentAccess())
+
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                auth,
+                default_deny=lambda: False,
+                lookup_key_access=key_lookup,
+                lookup_team_access=team_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            default_deny=lambda: True,
+            lookup_key_access=key_lookup,
+            lookup_team_access=team_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+        assert await AgentRequestHandler.resolve_agent_access(
+            None,
+            default_deny=lambda: True,
+            lookup_key_access=key_lookup,
+            lookup_team_access=team_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+
+    async def test_explicit_key_and_team_grants_work_with_key_agent_access_required(self):
+        auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        unrestricted_lookup: Final = _lookup(UnrestrictedAgentAccess())
+
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            default_deny=lambda: True,
+            lookup_key_access=unrestricted_lookup,
+            lookup_team_access=_lookup(RestrictedAgentAccess(frozenset({"team-agent"}))),
+        ) == RestrictedAgentAccess(frozenset({"team-agent"}))
+
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            default_deny=lambda: True,
+            lookup_key_access=_lookup(RestrictedAgentAccess(frozenset({"key-agent"}))),
+            lookup_team_access=unrestricted_lookup,
+        ) == RestrictedAgentAccess(frozenset({"key-agent"}))
+
+    async def test_proxy_admin_is_exempt_from_key_agent_access_requirement(self):
+        admin: Final = UserAPIKeyAuth(
+            api_key="admin-key",
+            user_id="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        string_admin: Final = admin.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN.value})
+        key_lookup: Final = _lookup(UnrestrictedAgentAccess())
+        team_lookup: Final = _lookup(UnrestrictedAgentAccess())
+
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                admin,
+                default_deny=lambda: True,
+                lookup_key_access=key_lookup,
+                lookup_team_access=team_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                string_admin,
+                default_deny=lambda: True,
+                lookup_key_access=key_lookup,
+                lookup_team_access=team_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
+
+    async def test_key_agent_access_requirement_precedes_agent_access_group_ceiling(self):
+        agent_key: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            agent_id="caller-agent",
+        )
+        resolve, _ = self._ceiling_resolver(frozenset({"agent-beta"}))
+        unrestricted_lookup: Final = _lookup(UnrestrictedAgentAccess())
+
+        assert await AgentRequestHandler.resolve_agent_access(
+            agent_key,
+            resolve,
+            default_deny=lambda: True,
+            lookup_key_access=unrestricted_lookup,
+            lookup_team_access=unrestricted_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+
+    async def test_key_agent_access_requirement_fails_closed_on_lookup_errors(self):
+        auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+        unrestricted_lookup: Final = _lookup(UnrestrictedAgentAccess())
+        key_error_lookup: Final = _lookup(Exception("DB Error"))
+
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            default_deny=lambda: True,
+            lookup_key_access=key_error_lookup,
+            lookup_team_access=unrestricted_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                auth,
+                default_deny=lambda: False,
+                lookup_key_access=key_error_lookup,
+                lookup_team_access=unrestricted_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
+
+        team_error_lookup: Final = _lookup(Exception("DB Error"))
+        key_grant_lookup: Final = _lookup(RestrictedAgentAccess(frozenset({"key-agent"})))
+        assert await AgentRequestHandler.resolve_agent_access(
+            auth,
+            default_deny=lambda: True,
+            lookup_key_access=key_grant_lookup,
+            lookup_team_access=team_error_lookup,
+        ) == RestrictedAgentAccess(frozenset())
+        assert (
+            await AgentRequestHandler.resolve_agent_access(
+                auth,
+                default_deny=lambda: False,
+                lookup_key_access=key_grant_lookup,
+                lookup_team_access=team_error_lookup,
+            )
+            == UnrestrictedAgentAccess()
+        )
+
+    async def test_agent_access_default_deny_reads_general_settings(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy import proxy_server
+
+        auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+        with patch.object(proxy_server, "general_settings", {"agent_access_default_deny": True}):
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", auth) is False
+
+        with patch.object(proxy_server, "general_settings", {}):
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", auth) is True
+
+    @pytest.mark.parametrize(
+        ("settings", "expected_allowed"),
+        [
+            pytest.param({"agent_access_default_deny": True}, False, id="true-bool"),
+            pytest.param({"agent_access_default_deny": "true"}, False, id="true-lower-string"),
+            pytest.param({"agent_access_default_deny": "True"}, False, id="true-capitalized-string"),
+            pytest.param({"agent_access_default_deny": 1}, False, id="one"),
+            pytest.param({"agent_access_default_deny": False}, True, id="false-bool"),
+            pytest.param({"agent_access_default_deny": "false"}, True, id="false-string"),
+            pytest.param({"agent_access_default_deny": 0}, True, id="zero"),
+            pytest.param({}, True, id="missing"),
+            pytest.param({"agent_access_default_deny": "not-a-bool"}, False, id="invalid-string"),
+        ],
+    )
+    async def test_agent_access_default_deny_coerces_general_settings(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings: dict[str, object],
+        expected_allowed: bool,
+    ):
+        from litellm.proxy import proxy_server
+
+        auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+        with patch.object(proxy_server, "general_settings", settings):
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", auth) is expected_allowed
 
     async def test_disjoint_key_and_team_grants_deny_every_agent(self):
         """LIT-5143: a key restricted to one agent inside a team restricted to another
