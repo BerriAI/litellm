@@ -568,6 +568,9 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
     browser_paths: Final = frozenset(node.split("::", 1)[0] for node in browser_nodes)
     circle_path: Final = repo_root / ".circleci/config.yml"
     circle: Final = yaml.safe_load(circle_path.read_text()) if circle_path.exists() else {}
+    circle_test_path_tokens: Final = _invoked_test_tokens(
+        scalar for scalar in _scalars(circle, "config.yml") if scalar.key == "test_path"
+    )
     steps: Final = circle.get("jobs", {}).get("integration_contracts", {}).get("steps", ())
     invoked: Final = any(
         ".circleci/scripts/run_integration.sh" in scalar.value
@@ -609,9 +612,9 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
             if any(_token_covers(token, path) for token in gha_tokens)
         )
         + tuple(
-            Finding(path, "GitHub-owned integration contract has no invoking workflow")
+            Finding(path, "GitHub-owned integration contract has no invoking job")
             for path in sorted(github_files)
-            if not any(_token_covers(token, path) for token in gha_tokens)
+            if not any(_token_covers(token, path) for token in gha_tokens | circle_test_path_tokens)
         )
         + tuple(
             Finding(path, "GitHub-owned integration file is missing")

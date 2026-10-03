@@ -84,8 +84,14 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     workflow.write_text(yaml.safe_dump({"jobs": {}}))
     _, missing_invocation = coverage._integration_ownership(tmp_path)
     assert [(finding.subject, finding.detail) for finding in missing_invocation] == [
-        (github_path, "GitHub-owned integration contract has no invoking workflow")
+        (github_path, "GitHub-owned integration contract has no invoking job")
     ]
+    circle_config: Final = yaml.safe_load(circle.read_text())
+    circle_config["jobs"]["postgres_suite"] = {"parameters": {"test_path": {"type": "string"}}}
+    circle_config["workflows"]["integration"]["jobs"].append({"postgres_suite": {"test_path": github_path}})
+    circle.write_text(yaml.safe_dump(circle_config))
+    _, circle_invocation = coverage._integration_ownership(tmp_path)
+    assert circle_invocation == ()
 
 
 def test_an_ancestor_directory_covers_a_file_but_does_not_name_it():

@@ -3569,6 +3569,12 @@ workflows:
           test_path: tests/proxy_migration_tests
           seed: false
           timeout_minutes: 20
+      - postgres_suite:
+          name: roi-database
+          test_path: tests/integration/database/test_roi_observed.py
+          seed: false
+          coverage_flag: roi-postgres
+          timeout_minutes: 10
       - mcp_integration:
           name: mcp-integration
       - redis_compat:
