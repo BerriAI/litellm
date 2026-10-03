@@ -16,6 +16,9 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 const { POST } = vi.hoisted(() => ({ POST: vi.fn() }));
 vi.mock("@/lib/http/api", () => ({ fetchClient: { POST } }));
 
+const { toast } = vi.hoisted(() => ({ toast: { success: vi.fn(), fromError: vi.fn() } }));
+vi.mock("@/lib/toast", () => ({ toast }));
+
 vi.mock("@/utils/roles", () => ({
   isUserTeamAdminForSingleTeam: vi.fn(() => false),
   isProxyAdminRole: vi.fn(() => false),
@@ -31,6 +34,7 @@ const mockSetIsEditMemberModalVisible = vi.fn();
 const mockSetIsAddMemberModalVisible = vi.fn();
 const mockOnMemberSpendReset = vi.fn();
 const mockOnMemberBudgetReset = vi.fn();
+const mockOnMembersBulkUpdated = vi.fn();
 
 const budgetResetIso = new Date(2026, 6, 15, 12, 0, 0).toISOString();
 
@@ -129,6 +133,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -146,6 +151,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -166,6 +172,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -211,6 +218,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -239,6 +247,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -267,6 +276,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -284,6 +294,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -307,6 +318,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -324,6 +336,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -342,6 +355,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -363,6 +377,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -399,6 +414,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -454,6 +470,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -486,6 +503,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -507,6 +525,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -525,6 +544,7 @@ describe("TeamMembersComponent", () => {
         handleMemberDelete={mockHandleMemberDelete}
         onMemberSpendReset={mockOnMemberSpendReset}
         onMemberBudgetReset={mockOnMemberBudgetReset}
+        onMembersBulkUpdated={mockOnMembersBulkUpdated}
         setSelectedEditMember={mockSetSelectedEditMember}
         setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
         setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -544,6 +564,7 @@ describe("TeamMembersComponent", () => {
           handleMemberDelete={mockHandleMemberDelete}
           onMemberSpendReset={mockOnMemberSpendReset}
           onMemberBudgetReset={mockOnMemberBudgetReset}
+          onMembersBulkUpdated={mockOnMembersBulkUpdated}
           setSelectedEditMember={mockSetSelectedEditMember}
           setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
           setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -668,6 +689,7 @@ describe("TeamMembersComponent", () => {
           handleMemberDelete={mockHandleMemberDelete}
           onMemberSpendReset={mockOnMemberSpendReset}
           onMemberBudgetReset={mockOnMemberBudgetReset}
+          onMembersBulkUpdated={mockOnMembersBulkUpdated}
           setSelectedEditMember={mockSetSelectedEditMember}
           setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
           setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
@@ -792,6 +814,132 @@ describe("TeamMembersComponent", () => {
 
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       expect(POST).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bulk edit", () => {
+    const BULK_UPDATE_ROUTE = "/management/v1/teams/{team_id}/members/bulk_update";
+
+    const renderTab = (canEditTeam: boolean) =>
+      renderWithProviders(
+        <TeamMembersComponent
+          teamData={createMockTeamData()}
+          canEditTeam={canEditTeam}
+          handleMemberDelete={mockHandleMemberDelete}
+          onMemberSpendReset={mockOnMemberSpendReset}
+          onMemberBudgetReset={mockOnMemberBudgetReset}
+          onMembersBulkUpdated={mockOnMembersBulkUpdated}
+          setSelectedEditMember={mockSetSelectedEditMember}
+          setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+          setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+        />,
+      );
+
+    const openBulkEditForBothMembers = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByRole("checkbox", { name: "Select user1@test.com" }));
+      await user.click(screen.getByRole("checkbox", { name: "Select user2@test.com" }));
+      await user.click(screen.getByRole("button", { name: "Bulk Edit (2 selected)" }));
+      return screen.findByRole("dialog", { name: "Bulk Edit Members" });
+    };
+
+    it("offers no row selection or bulk edit to someone who cannot edit the team", () => {
+      renderTab(false);
+
+      expect(screen.queryByRole("checkbox", { name: "Select user1@test.com" })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("bulk-edit-members")).not.toBeInTheDocument();
+    });
+
+    it("sends only the ticked limits, with a blank ticked limit as a clear, for every selected member", async () => {
+      const user = userEvent.setup();
+      POST.mockResolvedValue({
+        data: {
+          data: [
+            { user_id: "user1@test.com", success: true },
+            { user_id: "user2@test.com", success: true },
+          ],
+        },
+      });
+      renderTab(true);
+      expect(screen.getByRole("button", { name: "Bulk Edit (0 selected)" })).toBeDisabled();
+
+      const dialog = await openBulkEditForBothMembers(user);
+      const submit = within(dialog).getByRole("button", { name: "Update 2 members" });
+      expect(submit).toBeDisabled();
+
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member Budget (USD)" }));
+      await user.type(within(dialog).getByRole("textbox", { name: /Team Member Budget/ }), "50");
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member TPM Limit" }));
+      await user.click(submit);
+
+      await waitFor(() => expect(mockOnMembersBulkUpdated).toHaveBeenCalledTimes(1));
+      expect(POST).toHaveBeenCalledExactlyOnceWith(BULK_UPDATE_ROUTE, {
+        params: { path: { team_id: "team-123" } },
+        body: {
+          members: [
+            { user_id: "user1@test.com", max_budget_in_team: 50, tpm_limit: null },
+            { user_id: "user2@test.com", max_budget_in_team: 50, tpm_limit: null },
+          ],
+        },
+      });
+      expect(toast.success).toHaveBeenCalledWith("Updated 2 members");
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Bulk Edit (0 selected)" })).toBeDisabled();
+    });
+
+    it("keeps only the members that failed selected and names them in the error", async () => {
+      const user = userEvent.setup();
+      POST.mockResolvedValue({
+        data: {
+          data: [
+            { user_id: "user1@test.com", success: true },
+            { user_id: "user2@test.com", success: false, error: "Member not found in team" },
+          ],
+        },
+      });
+      renderTab(true);
+
+      const dialog = await openBulkEditForBothMembers(user);
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member RPM Limit" }));
+      await user.type(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), "10");
+      await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
+
+      await waitFor(() => expect(mockOnMembersBulkUpdated).toHaveBeenCalledTimes(1));
+      expect(toast.fromError).toHaveBeenCalledWith(
+        "Updated 1 of 2 members. Failed: user2@test.com: Member not found in team",
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Bulk Edit (1 selected)" })).toBeEnabled();
+      expect(screen.getByRole("checkbox", { name: "Select user2@test.com" })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: "Select user1@test.com" })).not.toBeChecked();
+    });
+
+    it("blocks a malformed limit in the form without calling the API", async () => {
+      const user = userEvent.setup();
+      renderTab(true);
+
+      const dialog = await openBulkEditForBothMembers(user);
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member TPM Limit" }));
+      await user.type(within(dialog).getByRole("textbox", { name: /Team Member TPM Limit/ }), "1.5");
+      await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
+
+      expect(await within(dialog).findByText(/Enter a whole number/)).toBeVisible();
+      expect(POST).not.toHaveBeenCalled();
+      expect(mockOnMembersBulkUpdated).not.toHaveBeenCalled();
+    });
+
+    it("keeps the dialog open and the selection intact when the request fails", async () => {
+      const user = userEvent.setup();
+      POST.mockRejectedValue(new Error("Only team admins can update member budgets"));
+      renderTab(true);
+
+      const dialog = await openBulkEditForBothMembers(user);
+      await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member RPM Limit" }));
+      await user.type(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), "10");
+      await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
+
+      await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith("Only team admins can update member budgets"));
+      expect(mockOnMembersBulkUpdated).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Bulk Edit Members" })).toBeInTheDocument();
     });
   });
 });

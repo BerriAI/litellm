@@ -130,7 +130,7 @@ import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import ResetMemberBudgetsDialog from "./ResetMemberBudgetsDialog";
 import { customBudgetMemberUserIds, shouldPromptMemberBudgetReset } from "./memberBudgetReset";
 import { useMemberBudgetReset } from "./useMemberBudgetReset";
-import { fetchClient } from "@/lib/http/api";
+import { bulkUpdateTeamMembers } from "@/app/(dashboard)/hooks/teams/useBulkUpdateTeamMembers";
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -931,13 +931,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         setIsTeamSaving(false);
       }
     },
-    resetMemberBudgets: async (bulkTeamId, userIds) => {
-      const { data } = await fetchClient.POST("/management/v1/teams/{team_id}/members/bulk_update", {
-        params: { path: { team_id: bulkTeamId } },
-        body: { members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })) },
-      });
-      return data?.data ?? [];
-    },
+    resetMemberBudgets: (bulkTeamId, userIds) =>
+      bulkUpdateTeamMembers({
+        teamId: bulkTeamId,
+        members: userIds.map((user_id) => ({ user_id, max_budget_in_team: null })),
+      }),
     refreshTeamData,
   });
 
@@ -1452,11 +1450,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       label: TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBERS],
       children: (
         <TeamMembersComponent
+          key={teamId}
           teamData={teamData}
           canEditTeam={canEditTeam}
           handleMemberDelete={handleMemberDelete}
           onMemberSpendReset={refreshTeamData}
           onMemberBudgetReset={refreshTeamData}
+          onMembersBulkUpdated={refreshTeamData}
           setSelectedEditMember={setSelectedEditMember}
           setIsEditMemberModalVisible={setIsEditMemberModalVisible}
           setIsAddMemberModalVisible={setIsAddMemberModalVisible}

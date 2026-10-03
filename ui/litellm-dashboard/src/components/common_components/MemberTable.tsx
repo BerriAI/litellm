@@ -1,9 +1,10 @@
-import type { ColumnDef, ColumnFiltersState } from "@tanstack/react-table";
+import type { ColumnDef, ColumnFiltersState, OnChangeFn, RowSelectionState } from "@tanstack/react-table";
 import { Crown, Info, User, UserPlus } from "lucide-react";
 import React, { useState } from "react";
 
 import { Member } from "@/components/networking";
 import {
+  createSelectionColumn,
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
@@ -40,11 +41,24 @@ export interface MemberTableProps {
   onResetSpend?: (member: Member) => void;
   showResetSpendForMember?: (member: Member) => boolean;
   emptyText?: string;
+  selection?: MemberTableSelection;
+  toolbarActions?: React.ReactNode;
 }
+
+export interface MemberTableSelection {
+  rowSelection: RowSelectionState;
+  onRowSelectionChange: OnChangeFn<RowSelectionState>;
+}
+
+const NO_SELECTION: MemberTableSelection = { rowSelection: {}, onRowSelectionChange: () => undefined };
 
 const ALL_ROLES = "all";
 
 export const memberRowId = (member: Member): string => member.user_id ?? member.user_email ?? JSON.stringify(member);
+
+const memberSelectionColumn = createSelectionColumn<Member>({
+  rowAriaLabel: (row) => `Select ${row.original.user_email || row.original.user_id || "member"}`,
+});
 
 export const memberRoleOptions = (members: readonly Member[]): string[] =>
   Array.from(new Set(members.map((member) => member.role).filter((role) => role !== ""))).sort();
@@ -216,6 +230,8 @@ export default function MemberTable({
   onResetSpend,
   showResetSpendForMember,
   emptyText,
+  selection,
+  toolbarActions,
 }: MemberTableProps) {
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -232,7 +248,7 @@ export default function MemberTable({
     onResetSpend,
     showResetSpendForMember,
   };
-  const columns = buildColumns(columnDeps);
+  const columns = selection ? [memberSelectionColumn, ...buildColumns(columnDeps)] : buildColumns(columnDeps);
   const roleFilterItems = [
     { value: ALL_ROLES, label: "All Roles" },
     ...memberRoleOptions(members).map((role) => ({ value: role, label: role })),
@@ -249,6 +265,8 @@ export default function MemberTable({
         data={members}
         columns={columns}
         getRowId={memberRowId}
+        enableRowSelection={selection !== undefined}
+        {...(selection ?? NO_SELECTION)}
         sortingMode="client"
         defaultSorting={[{ id: "user_alias", desc: false }]}
         filterMode="client"
@@ -270,7 +288,9 @@ export default function MemberTable({
               searchPlaceholder="Search by name, email, or user ID"
               onOpenFilters={() => setFiltersOpen(true)}
               showViewOptions={false}
-            />
+            >
+              {toolbarActions}
+            </DataTableToolbar>
             <DataTableFilterDrawer
               table={table}
               open={filtersOpen}
