@@ -68,7 +68,7 @@ pub struct TraceSpansParams {
     pub trace_ref: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TraceSpansRow {
     #[serde(default)]
     pub trace_id: String,
@@ -176,6 +176,7 @@ pub struct SpendByResponseIdsParams {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SpendByResponseIdsRow {
     pub request_id: String,
+    pub litellm_call_id: String,
     pub response_id: String,
     pub upstream_response_id: String,
     pub trace_id: String,
@@ -185,6 +186,12 @@ pub struct SpendByResponseIdsRow {
     pub user: String,
     pub spend: Option<f64>,
     pub start_ms: i64,
+}
+
+impl SpendByResponseIdsRow {
+    pub(crate) fn identity(&self) -> (&str, i64, &str) {
+        (&self.team_id, self.start_ms, &self.request_id)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -147,10 +147,8 @@ impl Instrumentation {
             facts,
             display_name,
             consumed_attributes,
-        } = self.adjust(
-            context,
-            prepared.map_facts(|facts| with_response_id(context, facts)),
-        );
+        } = self.adjust(context, prepared);
+        let facts = with_call_ids(context, facts);
         let role = match (facts.role, metadata.ls_agent_type) {
             (
                 None
@@ -216,15 +214,15 @@ impl Instrumentation {
     }
 }
 
-/// `gen_ai.response.id` names one provider response, whichever convention recorded it.
-fn with_response_id(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
-    match present(context.attributes, &["gen_ai.response.id"]) {
-        Some(id) => SpanFacts {
-            calls: facts.calls.with(CallKey::ProviderResponse(id)),
-            ..facts
-        },
-        None => facts,
-    }
+fn with_call_ids(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
+    let calls = [
+        present(context.attributes, &["gen_ai.response.id"]).map(CallKey::ProviderResponse),
+        present(context.attributes, &["litellm.call_id"]).map(CallKey::LiteLlmRequest),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(facts.calls, CallEvidence::with);
+    SpanFacts { calls, ..facts }
 }
 
 fn recorded_agent_name(

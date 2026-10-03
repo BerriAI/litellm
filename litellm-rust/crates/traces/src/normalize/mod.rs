@@ -47,7 +47,7 @@ pub enum ObservationType {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(try_from = "String")]
 pub enum CallKey {
-    /// LiteLLM's own id for the request (`spend_logs.request_id`).
+    /// LiteLLM's gateway call id, with a fallback to legacy spend request ids.
     LiteLlmRequest(String),
     /// The provider response id returned to the caller (`spend_logs.response_id`).
     ProviderResponse(String),
@@ -126,7 +126,7 @@ impl CallEvidence {
     pub(crate) fn from_row(row: &crate::query::named::TraceSpansRow) -> Self {
         let kind = row
             .call_evidence
-            .unwrap_or(if row.litellm_request_id.is_empty() {
+            .unwrap_or(if Self::row_keys(row).is_empty() {
                 CallEvidenceKind::Unknown
             } else {
                 CallEvidenceKind::Complete
@@ -146,7 +146,7 @@ impl CallEvidence {
     /// convention found, but says nothing about completeness.
     fn with(self, key: CallKey) -> Self {
         match self {
-            Self::Unknown => Self::complete(key),
+            Self::Unknown => Self::Partial(BTreeSet::from([key])),
             Self::Partial(keys) => Self::Partial(keys.into_iter().chain([key]).collect()),
             Self::Complete(keys) => Self::Complete(keys.into_iter().chain([key]).collect()),
         }
