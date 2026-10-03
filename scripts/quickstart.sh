@@ -42,7 +42,7 @@ POINTER='>' S_OK='+' S_WARN='!' S_ERR='x' S_HEAD='*' S_ASK='?'
 SPIN_FRAMES='| / - \'
 HINT='Up/Down to move, Enter to choose'
 BOX_TL='+' BOX_TR='+' BOX_BL='+' BOX_BR='+' BOX_H='-' BOX_V='|'
-SPIN_PID='' SPIN_LOG=''
+SPIN_PID='' SPIN_LOG='' ENV_TMP=''
 
 setup_output() {
   case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
@@ -201,6 +201,7 @@ restore_terminal() {
 on_interrupt() {
   if [ -n "$SPIN_PID" ]; then kill "$SPIN_PID" 2>/dev/null || true; fi
   if [ -n "$SPIN_LOG" ]; then rm -f "$SPIN_LOG"; fi
+  if [ -n "$ENV_TMP" ]; then rm -f "$ENV_TMP"; fi
   if [ "$STYLE" = 1 ]; then printf '\r\033[2K'; fi
   restore_terminal
   printf '\nCancelled.\n' >&2
@@ -570,13 +571,14 @@ EOF
     # Write a fresh mktemp file (mode 600, never a reused one) and rename it, so a
     # failed write never leaves a partial .env that a rerun would mistake for a
     # finished install.
-    if ! env_tmp="$(mktemp .env.XXXXXX)" ||
+    if ! ENV_TMP="$(mktemp .env.XXXXXX)" ||
       ! printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1:\nCOMPOSE_PROJECT_NAME=%s\n' \
-        "$master" "$salt" "$db_password" "$PORT" "$project" >"$env_tmp" || ! mv -f "$env_tmp" .env; then
-      [ -z "${env_tmp:-}" ] || rm -f "$env_tmp"
+        "$master" "$salt" "$db_password" "$PORT" "$project" >"$ENV_TMP" || ! mv -f "$ENV_TMP" .env; then
+      if [ -n "$ENV_TMP" ]; then rm -f "$ENV_TMP"; fi
       fail "Could not write $(tildify "$DIR")/.env."
       exit 1
     fi
+    ENV_TMP=''
     unset master salt db_password
     step "Generated .env with your master key, salt key, and database password ${C_DIM}(keep this file; only you can read it)"
   fi
