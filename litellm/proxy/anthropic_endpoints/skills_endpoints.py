@@ -2,11 +2,14 @@
 Anthropic Skills API endpoints - /v1/skills
 """
 
+from functools import partial
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
-import orjson
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -23,14 +26,17 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
     convert_upload_files_to_file_data,
-    get_form_data,
+    get_request_body,
+    resolve_inference_model,
 )
-from litellm.types.llms.anthropic_skills import (
-    DeleteSkillResponse,
-    ListSkillsResponse,
-    Skill,
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _extract_model_param as extract_model_param,
 )
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.llms.anthropic_skills import ListSkillsResponse
+from litellm.types.router import CredentialLiteLLMParams
 
 router: Final = APIRouter()
 
@@ -84,7 +90,6 @@ async def _search_skills(
     "/v1/skills",
     tags=["[beta] Anthropic Skills API"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=Skill,
 )
 async def create_skill(
     fastapi_response: Response,
@@ -136,17 +141,7 @@ async def create_skill(
         version,
     )
 
-    # Read form data and convert UploadFile objects to file data tuples
-    form_data: Final = await get_form_data(request)
-    data: Final = await convert_upload_files_to_file_data(form_data)
-
-    # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
-    if model:
-        data["model"] = model
-
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
+    data: Final = await _skill_request_data(request, "create", custom_llm_provider)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -161,7 +156,7 @@ async def create_skill(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=extract_model_param(request, data),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -182,7 +177,6 @@ async def create_skill(
     "/v1/skills",
     tags=["[beta] Anthropic Skills API"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=ListSkillsResponse,
 )
 async def list_skills(
     fastapi_response: Response,
@@ -257,9 +251,7 @@ async def list_skills(
         version,
     )
 
-    # Read request body
-    body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    data: Final = await _skill_request_data(request, "list", custom_llm_provider)
 
     # Use query params if not in body
     if "limit" not in data and limit is not None:
@@ -268,15 +260,6 @@ async def list_skills(
         data["after_id"] = after_id
     if "before_id" not in data and before_id is not None:
         data["before_id"] = before_id
-
-    # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
-    if model:
-        data["model"] = model
-
-    # Set custom_llm_provider: body > query param > default
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -291,7 +274,7 @@ async def list_skills(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=extract_model_param(request, data),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -312,7 +295,6 @@ async def list_skills(
     "/v1/skills/{skill_id}",
     tags=["[beta] Anthropic Skills API"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=Skill,
 )
 async def get_skill(
     skill_id: str,
@@ -359,21 +341,7 @@ async def get_skill(
         version,
     )
 
-    # Read request body
-    body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
-
-    # Set skill_id from path parameter
-    data["skill_id"] = skill_id
-
-    # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
-    if model:
-        data["model"] = model
-
-    # Set custom_llm_provider: body > query param > default
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
+    data: Final = await _skill_request_data(request, "get", custom_llm_provider)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -388,7 +356,7 @@ async def get_skill(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=extract_model_param(request, data),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -409,7 +377,6 @@ async def get_skill(
     "/v1/skills/{skill_id}",
     tags=["[beta] Anthropic Skills API"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=DeleteSkillResponse,
 )
 async def delete_skill(
     skill_id: str,
@@ -458,21 +425,7 @@ async def delete_skill(
         version,
     )
 
-    # Read request body
-    body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
-
-    # Set skill_id from path parameter
-    data["skill_id"] = skill_id
-
-    # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
-    if model:
-        data["model"] = model
-
-    # Set custom_llm_provider: body > query param > default
-    if "custom_llm_provider" not in data:
-        data["custom_llm_provider"] = custom_llm_provider
+    data: Final = await _skill_request_data(request, "delete", custom_llm_provider)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -487,7 +440,7 @@ async def delete_skill(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=extract_model_param(request, data),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -502,3 +455,139 @@ async def delete_skill(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+SkillRouteType = Literal["acreate_skill", "alist_skills", "aget_skill", "adelete_skill"]
+_MODEL_CREDENTIAL_PARAMS: Final = frozenset(CredentialLiteLLMParams.model_fields) | {
+    "client",
+    "extra_headers",
+    "organization",
+    "azure_ad_token_provider",
+    "litellm_credential_name",
+    "configurable_clientside_auth_params",
+}
+
+
+async def _skill_request_data(
+    request: Request, operation: str, default_provider: str | None
+) -> dict[str, object]:  # mutable-ok: proxy processing mutates routing data
+    from litellm.proxy.proxy_server import general_settings_view, user_model
+
+    try:
+        raw_body: Final[object] = (
+            await get_request_body(request) if request.method == "POST" else await _read_request_body(request)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not isinstance(raw_body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    body: Final = await convert_upload_files_to_file_data(raw_body)
+    model: Final = body.get("model") if body.get("model") not in (None, "") else extract_model_param(request, body)
+    resolved_model: Final = resolve_inference_model(model, general_settings_view(), user_model, model)
+    provider: Final = (
+        body.get("custom_llm_provider")
+        if body.get("custom_llm_provider") not in (None, "")
+        else request.query_params.get("custom_llm_provider") or default_provider
+    )
+    if resolved_model is None and provider is not None and not isinstance(provider, str):
+        raise HTTPException(status_code=400, detail="custom_llm_provider must be a string")
+    request_params: Final = {**request.query_params, **body}
+    return {
+        **{
+            key: value
+            for key, value in request_params.items()
+            if resolved_model is None or key not in _MODEL_CREDENTIAL_PARAMS
+        },
+        **request.path_params,
+        "model": model,
+        "custom_llm_provider": provider,
+        "_skill_operation": operation,
+        "_skill_single_file_upload": isinstance(raw_body.get("files"), UploadFile),
+    }
+
+
+async def _native_skill_endpoint(
+    operation: str,
+    route_type: SkillRouteType,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> object:
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        user_api_base,
+        user_model,
+        user_request_timeout,
+        version,
+    )
+
+    data: Final = await _skill_request_data(request, operation, "openai")
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        result: Final[object] = await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type=route_type,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            model=extract_model_param(request, data),
+            user_model=user_model,
+            user_request_timeout=user_request_timeout,
+            user_api_base=user_api_base,
+            version=version,
+        )
+        if operation not in ("content", "version_content"):
+            return result
+        response: Final = getattr(result, "response", None)
+        if not isinstance(response, httpx.Response):
+            raise TypeError("Skills content response did not contain an HTTP response")
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                response.headers, custom_headers=dict(fastapi_response.headers)
+            ),
+        )
+    except Exception as e:  # noqa: BLE001  # proxy maps provider errors to the public exception contract
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+_NATIVE_SKILL_ROUTES: Final[tuple[tuple[str, str, str, SkillRouteType], ...]] = (
+    ("POST", "/v1/skills/{skill_id}", "update", "acreate_skill"),
+    ("GET", "/v1/skills/{skill_id}/content", "content", "aget_skill"),
+    ("POST", "/v1/skills/{skill_id}/versions", "create_version", "acreate_skill"),
+    ("GET", "/v1/skills/{skill_id}/versions", "list_versions", "alist_skills"),
+    ("GET", "/v1/skills/{skill_id}/versions/{version}", "version", "aget_skill"),
+    ("DELETE", "/v1/skills/{skill_id}/versions/{version}", "delete_version", "adelete_skill"),
+    ("GET", "/v1/skills/{skill_id}/versions/{version}/content", "version_content", "aget_skill"),
+)
+
+for method, path, operation, route_type in _NATIVE_SKILL_ROUTES:
+    router.add_api_route(
+        path,
+        partial(_native_skill_endpoint, operation, route_type),
+        methods=[method],
+        name=f"{operation}_skill",
+        description=f"Native skill operation: {operation.replace('_', ' ')}",
+        response_model=None,
+        response_class=Response if operation in ("content", "version_content") else JSONResponse,
+        openapi_extra={
+            "parameters": [
+                {"name": field, "in": "path", "required": True, "schema": {"type": "string"}}
+                for field in ("skill_id", "version")
+                if f"{{{field}}}" in path
+            ]
+        },
+        tags=["[beta] OpenAI Skills API"],
+    )
