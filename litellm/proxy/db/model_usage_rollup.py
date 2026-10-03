@@ -13,16 +13,14 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MODEL_INSIGHTS_DEFAULT_TASK,
-    MODEL_INSIGHTS_TASK_TAG_PREFIX,
 )
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES, SpendLogsPayload
-from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 _METADATA: Final = TypeAdapter(dict[str, object])
-_TAGS: Final = TypeAdapter(list[object])
+MODEL_USAGE_PROMPT_MAX_CHARS: Final = 2000
 
 
 class _UpsertTable(Protocol):
@@ -55,23 +53,7 @@ class ModelUsageTransaction:
     prompt_tokens: int
     completion_tokens: int
     successful: bool
-
-
-def model_usage_task_type(request_tags: str) -> str:
-    try:
-        tags: Final = _TAGS.validate_json(request_tags)
-    except ValidationError:
-        return MODEL_INSIGHTS_DEFAULT_TASK
-    return next(
-        (
-            task
-            for tag in tags
-            if isinstance(tag, str)
-            and tag.startswith(MODEL_INSIGHTS_TASK_TAG_PREFIX)
-            and (task := tag.removeprefix(MODEL_INSIGHTS_TASK_TAG_PREFIX)) in load_model_insight_tasks()
-        ),
-        MODEL_INSIGHTS_DEFAULT_TASK,
-    )
+    prompt: str | None = None
 
 
 def _is_internal_call(metadata: str) -> bool:
@@ -88,23 +70,28 @@ def _date_from_start_time(start_time: datetime | str) -> str | None:
     return start_time[:10] if len(start_time) >= 10 else None
 
 
-def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransaction | None:
+def build_model_usage_transaction(
+    payload: SpendLogsPayload,
+    prompt: str | None = None,
+) -> ModelUsageTransaction | None:
     date: Final = _date_from_start_time(payload["startTime"])
     if date is None or _is_internal_call(payload["metadata"]):
         return None
     model: Final = payload["model"] or "unknown"
+    bounded_prompt: Final = prompt[:MODEL_USAGE_PROMPT_MAX_CHARS] if prompt is not None else None
     return ModelUsageTransaction(
         key=ModelUsageKey(
             date=date,
             model_group=payload["model_group"] or model,
             model=model,
             custom_llm_provider=payload["custom_llm_provider"] or "unknown",
-            task_type=model_usage_task_type(payload["request_tags"]),
+            task_type=MODEL_INSIGHTS_DEFAULT_TASK,
         ),
         spend=payload["spend"],
         prompt_tokens=payload["prompt_tokens"],
         completion_tokens=payload["completion_tokens"],
         successful=payload["status"] == "success",
+        prompt=bounded_prompt,
     )
 
 

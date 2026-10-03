@@ -1,6 +1,7 @@
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -12,7 +13,6 @@ from litellm.proxy.db.model_usage_rollup import (
     ModelUsageTransaction,
     build_model_usage_transaction,
     flush_model_usage_transactions,
-    model_usage_task_type,
 )
 
 
@@ -65,16 +65,8 @@ async def _no_sleep(seconds: float) -> None:
     return None
 
 
-def test_model_usage_task_type_reads_task_tag_or_defaults() -> None:
-    assert model_usage_task_type('["team-a", "task:classification"]') == "classification"
-    assert model_usage_task_type('["task:made-up"]') == "uncategorized"
-    assert model_usage_task_type('["debugging"]') == "uncategorized"
-    assert model_usage_task_type("[]") == "uncategorized"
-    assert model_usage_task_type("not json") == "uncategorized"
-
-
-def test_build_model_usage_transaction_keys_on_day_model_and_task() -> None:
-    transaction = build_model_usage_transaction(_payload(request_tags='["task:debugging"]', status="failure"))
+def test_build_model_usage_transaction_defaults_to_uncategorized() -> None:
+    transaction = build_model_usage_transaction(_payload(status="failure"))
 
     assert transaction == ModelUsageTransaction(
         key=ModelUsageKey(
@@ -82,13 +74,22 @@ def test_build_model_usage_transaction_keys_on_day_model_and_task() -> None:
             model_group="fast-chat",
             model="openai/gpt-5.4-mini",
             custom_llm_provider="openai",
-            task_type="debugging",
+            task_type="uncategorized",
         ),
         spend=0.25,
         prompt_tokens=10,
         completion_tokens=20,
         successful=False,
+        prompt=None,
     )
+
+
+def test_build_model_usage_transaction_truncates_and_keeps_the_prompt_separate_from_spend_fields() -> None:
+    transaction = build_model_usage_transaction(_payload(), prompt="x" * 2500)
+
+    assert transaction is not None
+    assert transaction.prompt == "x" * 2000
+    assert transaction.key.task_type == "uncategorized"
 
 
 def test_build_model_usage_transaction_falls_back_for_missing_model_fields() -> None:
@@ -104,6 +105,7 @@ def test_build_model_usage_transaction_falls_back_for_missing_model_fields() -> 
         custom_llm_provider="unknown",
         task_type="uncategorized",
     )
+    assert transaction.prompt is None
 
 
 @pytest.mark.parametrize(
@@ -183,9 +185,17 @@ async def test_flush_does_not_retry_ambiguous_errors() -> None:
 
 @pytest.mark.asyncio
 async def test_request_time_path_queues_usage_instead_of_writing_to_the_db() -> None:
-    prisma = MagicMock()
+    prisma: Final = MagicMock()
     prisma.model_usage_transactions = []
     prisma._model_usage_transactions_lock = asyncio.Lock()
+
+    async def append_model_usage_transactions(
+        transactions: Sequence[ModelUsageTransaction],
+    ) -> None:
+        async with prisma._model_usage_transactions_lock:
+            prisma.model_usage_transactions.extend(transactions)
+
+    prisma.append_model_usage_transactions = append_model_usage_transactions
 
     await DBSpendUpdateWriter()._batch_database_updates(
         response_cost=0.25,

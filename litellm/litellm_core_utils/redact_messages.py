@@ -13,6 +13,8 @@ import inspect
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
@@ -26,7 +28,6 @@ from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_logged_object,
 )
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+_LOGGING_MAPPING_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 def redact_message_input_output_from_custom_logger(
@@ -334,18 +337,22 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     2. Headers (litellm-disable-message-redaction / litellm-enable-message-redaction)
     3. Global setting (litellm.turn_off_message_logging)
     """
-    litellm_params: Final = model_call_details.get("litellm_params", {})
+    details: Final = _LOGGING_MAPPING_ADAPTER.validate_python(model_call_details)
+    litellm_params: Final = _LOGGING_MAPPING_ADAPTER.validate_python(details.get("litellm_params", {}))
 
     metadata_field: Final = get_metadata_variable_name_from_kwargs(litellm_params)
-    metadata = litellm_params.get(metadata_field, {})
-    if not isinstance(metadata, dict):
-        # Fall back: litellm_metadata was None, try metadata
-        metadata = litellm_params.get("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
+    metadata_value: Final = litellm_params.get(metadata_field, {})
+    metadata_fallback: Final = (
+        metadata_value if isinstance(metadata_value, Mapping) else litellm_params.get("metadata", {})
+    )
+    metadata: Final = _LOGGING_MAPPING_ADAPTER.validate_python(
+        metadata_fallback if isinstance(metadata_fallback, Mapping) else {}
+    )
 
-    # Get headers from the metadata
-    request_headers: Final = metadata.get("headers", {})
+    request_headers_value: Final = metadata.get("headers", {})
+    request_headers: Final = _LOGGING_MAPPING_ADAPTER.validate_python(
+        request_headers_value if isinstance(request_headers_value, Mapping) else {}
+    )
 
     # Check for headers that explicitly control redaction
     if request_headers and bool(request_headers.get("litellm-disable-message-redaction", False)):
@@ -364,7 +371,7 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
             break
 
     # Priority 1: Check dynamic parameter first (if explicitly set)
-    dynamic_turn_off: Final = _get_turn_off_message_logging_from_dynamic_params(model_call_details)
+    dynamic_turn_off: Final = _get_turn_off_message_logging_from_dynamic_params(details)
     if dynamic_turn_off is not None:
         # Dynamic parameter is explicitly set, use it
         return dynamic_turn_off
@@ -388,22 +395,24 @@ def redact_message_input_output_from_logging(model_call_details: dict, result, i
 
 
 def _get_turn_off_message_logging_from_dynamic_params(
-    model_call_details: dict,
+    model_call_details: Mapping[str, object],
 ) -> bool | None:
     """
     gets the value of `turn_off_message_logging` from the dynamic params, if it exists.
 
     handles boolean and string values of `turn_off_message_logging`
     """
-    standard_callback_dynamic_params: Final[StandardCallbackDynamicParams | None] = model_call_details.get(
-        "standard_callback_dynamic_params", None
+    standard_callback_dynamic_params_value: Final = model_call_details.get("standard_callback_dynamic_params")
+    if not isinstance(standard_callback_dynamic_params_value, Mapping):
+        return None
+    standard_callback_dynamic_params: Final = _LOGGING_MAPPING_ADAPTER.validate_python(
+        standard_callback_dynamic_params_value
     )
-    if standard_callback_dynamic_params:
-        _turn_off_message_logging: Final = standard_callback_dynamic_params.get("turn_off_message_logging")
-        if isinstance(_turn_off_message_logging, bool):
-            return _turn_off_message_logging
-        elif isinstance(_turn_off_message_logging, str):
-            return str_to_bool(_turn_off_message_logging)
+    turn_off_message_logging: Final = standard_callback_dynamic_params.get("turn_off_message_logging")
+    if isinstance(turn_off_message_logging, bool):
+        return turn_off_message_logging
+    if isinstance(turn_off_message_logging, str):
+        return str_to_bool(turn_off_message_logging)
     return None
 
 

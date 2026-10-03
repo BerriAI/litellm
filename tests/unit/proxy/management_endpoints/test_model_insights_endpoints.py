@@ -1,4 +1,9 @@
+import asyncio
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,11 +13,50 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction, flush_model_usage_transactions
-from litellm.proxy.management_endpoints.model_insights_endpoints import router
+from litellm.proxy.db.model_usage_task_classifier import ModelUsageTaskClassifier
+from litellm.proxy.management_endpoints.model_insights_endpoints import (
+    _model_insights_task_classifier_client_builder,
+    _model_insights_task_classifier_environment_lookup,
+    _model_insights_task_classifier_runtime,
+    router,
+)
+from litellm.llms.oss_decision import OSS_DECISION_MODELS
 
 
 def _override_auth() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+def _task_classifier_app(
+    role: LitellmUserRoles,
+    environment: Mapping[str, str],
+    configured: Mapping[str, str] | None = None,
+) -> tuple[FastAPI, MagicMock]:
+    def lookup_environment_value(key: str) -> str | None:
+        return environment.get(key)
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_config.find_unique = AsyncMock(
+        return_value=(
+            SimpleNamespace(param_name="model_insights_task_classifier", param_value=dict(configured))
+            if configured is not None
+            else None
+        )
+    )
+    prisma.db.litellm_config.upsert = AsyncMock()
+    prisma.db.litellm_config.delete = AsyncMock()
+    prisma._model_usage_transactions_lock = asyncio.Lock()
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test", user_id="test-user", user_role=role
+    )
+    app.dependency_overrides[_model_insights_task_classifier_environment_lookup] = (
+        lambda: lookup_environment_value
+    )
+    app.dependency_overrides[_model_insights_task_classifier_client_builder] = lambda: lambda _: MagicMock()
+    app.dependency_overrides[_model_insights_task_classifier_runtime] = lambda: ModelUsageTaskClassifier()
+    return app, prisma
 
 
 def _grouped_row(*, prompt_tokens: str = "100", completion_tokens: str = "200", **dimensions: str) -> dict[str, object]:
@@ -195,6 +239,136 @@ def test_model_insights_rejects_unknown_metric() -> None:
     assert _call(MagicMock(group_by=AsyncMock()), "metric=bogus").status_code == 422
 
 
+def test_task_classifier_get_reports_config_and_readiness_from_injected_environment() -> None:
+    app, prisma = _task_classifier_app(
+        LitellmUserRoles.PROXY_ADMIN,
+        {"LAYA_API_BASE": "https://laya.example"},
+        {"provider": "laya", "model": "english"},
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response: Final = TestClient(app).get("/model-insights/task-classifier")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "configured": {"provider": "laya", "model": "english"},
+        "providers": [
+            {
+                "provider": "jev",
+                "label": "Jev (TypeSafe)",
+                "models": ["jev-latest"],
+                "ready": False,
+                "missing_env": ["TYPESAFE_API_KEY"],
+            },
+            {
+                "provider": "laya",
+                "label": "Laya",
+                "models": list(OSS_DECISION_MODELS["laya"]),
+                "ready": True,
+                "missing_env": [],
+            },
+            {
+                "provider": "bespoke",
+                "label": "Bespoke Nimble",
+                "models": list(OSS_DECISION_MODELS["bespoke"]),
+                "ready": False,
+                "missing_env": ["BESPOKE_API_BASE"],
+            },
+        ],
+    }
+
+
+def test_task_classifier_put_rejects_an_unready_provider() -> None:
+    app: Final = _task_classifier_app(LitellmUserRoles.PROXY_ADMIN, {})[0]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):
+        response: Final = TestClient(app).put(
+            "/model-insights/task-classifier",
+            json={"provider": "jev", "model": "jev-latest"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Provider 'jev' is not ready; set TYPESAFE_API_KEY"
+
+
+def test_task_classifier_put_rejects_a_model_not_in_the_provider_catalog() -> None:
+    app: Final = _task_classifier_app(
+        LitellmUserRoles.PROXY_ADMIN,
+        {"LAYA_API_BASE": "https://laya.example"},
+    )[0]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):
+        response: Final = TestClient(app).put(
+            "/model-insights/task-classifier",
+            json={"provider": "laya", "model": "not-a-laya-model"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid model 'not-a-laya-model' for provider 'laya'"
+
+
+def test_task_classifier_put_persists_and_returns_the_selected_config() -> None:
+    app, prisma = _task_classifier_app(
+        LitellmUserRoles.PROXY_ADMIN,
+        {"LAYA_API_BASE": "https://laya.example"},
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response: Final = TestClient(app).put(
+            "/model-insights/task-classifier",
+            json={"provider": "laya", "model": "english"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["configured"] == {"provider": "laya", "model": "english"}
+    assert prisma.db.litellm_config.upsert.await_args.kwargs["where"] == {
+        "param_name": "model_insights_task_classifier"
+    }
+    assert prisma.db.litellm_config.upsert.await_args.kwargs["data"]["create"]["param_value"] == (
+        '{"provider": "laya", "model": "english"}'
+    )
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+def test_non_admin_cannot_put_task_classifier(role: LitellmUserRoles) -> None:
+    app: Final = _task_classifier_app(role, {"LAYA_API_BASE": "https://laya.example"})[0]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()):
+        response: Final = TestClient(app).put(
+            "/model-insights/task-classifier",
+            json={"provider": "laya", "model": "english"},
+        )
+
+    assert response.status_code == 403
+
+
+def test_view_only_admin_can_get_task_classifier() -> None:
+    app, prisma = _task_classifier_app(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, {})
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response: Final = TestClient(app).get("/model-insights/task-classifier")
+
+    assert response.status_code == 200
+    assert response.json()["configured"] is None
+
+
+def test_admin_can_delete_task_classifier_and_clear_the_local_runtime() -> None:
+    app, prisma = _task_classifier_app(
+        LitellmUserRoles.PROXY_ADMIN,
+        {},
+        {"provider": "laya", "model": "english"},
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        response: Final = TestClient(app).delete("/model-insights/task-classifier")
+
+    assert response.status_code == 200
+    assert response.json()["configured"] is None
+    prisma.db.litellm_config.delete.assert_awaited_once_with(
+        where={"param_name": "model_insights_task_classifier"}
+    )
+
+
 class _InMemoryUsageTable:
     def __init__(self) -> None:
         self.rows: dict[tuple[str, ...], dict[str, float]] = {}
@@ -247,16 +421,24 @@ async def test_model_insights_reads_back_what_the_rollup_wrote() -> None:
         "model": "gpt-5",
         "model_group": "gpt-5",
         "metadata": "{}",
-        "request_tags": '["task:debugging"]',
+        "request_tags": "[]",
         "custom_llm_provider": "openai",
         "status": "success",
     }
 
-    transactions = (
-        build_model_usage_transaction(payload),
-        build_model_usage_transaction({**payload, "request_tags": "[]"}),
+    transactions = tuple(
+        build_model_usage_transaction({**payload, "request_tags": "[]"})
+        for _ in range(2)
     )
-    await flush_model_usage_transactions(prisma, [t for t in transactions if t is not None])
+    uncategorized: Final = tuple(transaction for transaction in transactions if transaction is not None)
+    classified: Final = (
+        replace(
+            uncategorized[0],
+            key=replace(uncategorized[0].key, task_type="debugging"),
+        ),
+        uncategorized[1],
+    )
+    await flush_model_usage_transactions(prisma, classified)
 
     body = _call(table, "metric=requests").json()
 

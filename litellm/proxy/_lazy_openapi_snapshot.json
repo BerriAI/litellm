@@ -42503,10 +42503,108 @@
           "title": "ModelInsightMetric",
           "type": "object"
         },
+        "ModelInsightTaskClassifierConfig": {
+          "properties": {
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "provider": {
+              "enum": [
+                "jev",
+                "laya",
+                "bespoke"
+              ],
+              "title": "Provider",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "model"
+          ],
+          "title": "ModelInsightTaskClassifierConfig",
+          "type": "object"
+        },
+        "ModelInsightTaskClassifierProvider": {
+          "properties": {
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "missing_env": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Missing Env",
+              "type": "array"
+            },
+            "models": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Models",
+              "type": "array"
+            },
+            "provider": {
+              "enum": [
+                "jev",
+                "laya",
+                "bespoke"
+              ],
+              "title": "Provider",
+              "type": "string"
+            },
+            "ready": {
+              "title": "Ready",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "provider",
+            "label",
+            "models",
+            "ready",
+            "missing_env"
+          ],
+          "title": "ModelInsightTaskClassifierProvider",
+          "type": "object"
+        },
+        "ModelInsightTaskClassifierResponse": {
+          "properties": {
+            "configured": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ModelInsightTaskClassifierConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "providers": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightTaskClassifierProvider"
+              },
+              "title": "Providers",
+              "type": "array"
+            }
+          },
+          "required": [
+            "configured",
+            "providers"
+          ],
+          "title": "ModelInsightTaskClassifierResponse",
+          "type": "object"
+        },
         "ModelInsightTaskSummary": {
           "properties": {
             "category": {
               "title": "Category",
+              "type": "string"
+            },
+            "description": {
+              "title": "Description",
               "type": "string"
             },
             "label": {
@@ -42538,6 +42636,7 @@
             "task_type",
             "label",
             "category",
+            "description",
             "value",
             "share",
             "leader",
@@ -42743,6 +42842,100 @@
             }
           ],
           "summary": "Get Model Insights",
+          "tags": [
+            "model_insights"
+          ]
+        }
+      },
+      "/model-insights/task-classifier": {
+        "delete": {
+          "operationId": "delete_model_insights_task_classifier_model_insights_task_classifier_delete",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelInsightTaskClassifierResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Model Insights Task Classifier",
+          "tags": [
+            "model_insights"
+          ]
+        },
+        "get": {
+          "operationId": "get_model_insights_task_classifier_model_insights_task_classifier_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelInsightTaskClassifierResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Model Insights Task Classifier",
+          "tags": [
+            "model_insights"
+          ]
+        },
+        "put": {
+          "operationId": "put_model_insights_task_classifier_model_insights_task_classifier_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelInsightTaskClassifierConfig"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelInsightTaskClassifierResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Put Model Insights Task Classifier",
           "tags": [
             "model_insights"
           ]
