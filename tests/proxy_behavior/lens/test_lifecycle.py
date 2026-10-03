@@ -441,6 +441,7 @@ async def test_failed_model_requests_release_lens_budget_reservations(lens_datab
         stored: Final = await endpoints.get_lens(lens.id, worker.scope)
         assert stored.spent == 0
         assert stored.jobs[0].cost == 0
+        assert not any(step.kind == "model" for step in stored.jobs[0].steps)
     finally:
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_LensRun" WHERE lens_id=$1', lens.id)
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)
