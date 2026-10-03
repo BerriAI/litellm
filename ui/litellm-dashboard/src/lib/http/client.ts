@@ -45,9 +45,9 @@ export class ApiError extends Error {
 }
 
 /** `Retry-After` as milliseconds; the header is whole seconds or an HTTP date. */
-export const retryAfterMs = (headers: Headers): number | null => {
-  const header = headers.get("retry-after");
-  if (header === null) return null;
+export const retryAfterMs = (headers?: Headers): number | null => {
+  const header = headers?.get("retry-after");
+  if (header === null || header === undefined) return null;
   const seconds = Number(header);
   if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
   const at = Date.parse(header);
