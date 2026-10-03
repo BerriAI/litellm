@@ -1,9 +1,12 @@
 import asyncio
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
 
 from litellm.proxy.common_utils.registry_read_through import RegistryReadThrough
+
+if TYPE_CHECKING:
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 
 
 def nothing_loaded(_key: str) -> bool:
@@ -116,42 +119,40 @@ async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
     assert read_through._recent_misses.get_cache("ghost-c") is None
 
 
-class GatedLoadingResync:
-    def __init__(self) -> None:
-        self.calls: tuple[str, ...] = ()
-        self.loaded: frozenset[str] = frozenset()
-        self.entered: Final = asyncio.Event()
-        self.release: Final = asyncio.Event()
-
-    async def __call__(self, key: str) -> bool:
-        self.calls = (*self.calls, key)
-        self.entered.set()
-        await self.release.wait()
-        self.loaded = self.loaded | {key}
-        return True
-
-    def is_loaded(self, key: str) -> bool:
-        return key in self.loaded
-
-
 @pytest.mark.asyncio
 async def test_requests_queued_behind_a_successful_resync_spend_no_budget():
-    resync: Final = GatedLoadingResync()
+    from unittest.mock import AsyncMock, call
+
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    new_model_loaded: Final = asyncio.Event()
+
+    async def gated_load(key: str) -> bool:
+        entered.set()
+        await release.wait()
+        if key == "new-model":
+            new_model_loaded.set()
+        return True
+
+    def is_loaded(key: str) -> bool:
+        return key == "new-model" and new_model_loaded.is_set()
+
+    resync: Final = AsyncMock(side_effect=gated_load)
     read_through: Final = RegistryReadThrough(
         resync=resync,
-        is_loaded=resync.is_loaded,
+        is_loaded=is_loaded,
         max_resyncs_per_window=2,
         resync_window_seconds=60.0,
     )
 
     burst: Final = asyncio.gather(*(read_through.attempt("new-model") for _ in range(25)))
-    await resync.entered.wait()
-    resync.release.set()
+    await entered.wait()
+    release.set()
 
     assert await burst == [True] * 25
-    assert resync.calls == ("new-model",)
+    assert resync.await_args_list == [call("new-model")]
     assert await read_through.attempt("other-model") is True
-    assert resync.calls == ("new-model", "other-model")
+    assert resync.await_args_list == [call("new-model"), call("other-model")]
 
 
 @pytest.mark.asyncio
@@ -681,7 +682,7 @@ async def test_guardrail_read_through_answers_a_loaded_guardrail_without_reading
 
 @pytest.mark.asyncio
 async def test_agent_read_through_answers_a_loaded_agent_without_reading_the_db(
-    clean_agent_registry, monkeypatch: pytest.MonkeyPatch
+    clean_agent_registry: "AgentRegistry", monkeypatch: pytest.MonkeyPatch
 ):
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy.common_utils.registry_read_through import agent_registry_read_through
