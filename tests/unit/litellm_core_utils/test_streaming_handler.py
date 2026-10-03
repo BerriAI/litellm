@@ -5111,3 +5111,35 @@ async def test_logged_response_keeps_finish_reason_from_last_content_chunk(
         assert tool_calls[0].function.arguments == '{"command": "ls"}'
     else:
         assert logged.choices[0].message.content == "Hello, this reply is cut off"
+
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_no_synthetic_finish_reason_logged_when_provider_sent_none(sync_mode: bool, logging_obj: Logging):
+    """A stream that ends before the provider sent any finish_reason (e.g. an Anthropic stream cut after
+    message_start) must not gain one in ``chunks``: the response builder relies on its absence to estimate usage
+    instead of taking the provider's placeholder."""
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-1",
+            created=1,
+            model=None,
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content=text, role="assistant"))],
+        )
+        for text in ("partial", " reply")
+    ]
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="bedrock/m",
+        custom_llm_provider="bedrock",
+        logging_obj=logging_obj,
+    )
+    if sync_mode:
+        list(response)
+    else:
+        [c async for c in response]
+
+    assert response.received_finish_reason is None
+    assert all(not (c.choices and c.choices[0].finish_reason) for c in response.chunks)
