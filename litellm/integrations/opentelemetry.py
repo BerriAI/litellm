@@ -2232,6 +2232,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         try:
             from opentelemetry.trace import Status, StatusCode
+
             from litellm.integrations._types.open_inference import (
                 ErrorAttributes,
             )
