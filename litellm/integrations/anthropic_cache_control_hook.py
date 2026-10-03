@@ -25,6 +25,9 @@ from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    find_anthropic_server_tool_result,
+)
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -122,7 +125,40 @@ def targets_openai_api(api_base: object) -> bool:
 
 
 def _carries_cache_breakpoint(block: object) -> bool:
-    return isinstance(block, dict) and any(block.get(key) is not None for key in CACHE_BREAKPOINT_KEYS)
+    return any(_attribute_or_key(block, key) is not None for key in CACHE_BREAKPOINT_KEYS)
+
+
+def _attribute_or_key(value: object, key: str) -> object | None:
+    if hasattr(value, key):
+        return getattr(value, key)
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return None
+
+
+def _as_object_list(value: object | None) -> list[object] | None:
+    if not isinstance(value, list):
+        return None
+    return _validated_object_list(value)
+
+
+def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> bool:
+    if _attribute_or_key(tool_call, "cache_control") is None:
+        return False
+
+    tool_call_id: Final = _attribute_or_key(tool_call, "id")
+    provider_specific_fields: Final = _validated_object_mapping(_attribute_or_key(message, "provider_specific_fields"))
+    if not isinstance(tool_call_id, str) or provider_specific_fields is None:
+        return True
+
+    return (
+        find_anthropic_server_tool_result(
+            tool_call_id,
+            _as_object_list(provider_specific_fields.get("web_search_results")),
+            _as_object_list(provider_specific_fields.get("tool_results")),
+        )
+        is None
+    )
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -471,13 +507,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _count_cache_control_blocks(message: object) -> int:
-        if not isinstance(message, dict):
-            return 0
-        count = 1 if _carries_cache_breakpoint(message) else 0
-        content: Final = message.get("content")
-        if isinstance(content, list):
-            count += sum(1 for block in content if _carries_cache_breakpoint(block))
-        return count
+        message_count: Final = 1 if _carries_cache_breakpoint(message) else 0
+        content: Final = _as_object_list(_attribute_or_key(message, "content"))
+        content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
+        tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
+        tool_call_count: Final = (
+            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, message))
+            if tool_calls
+            else 0
+        )
+        return message_count + content_count + tool_call_count
 
     @staticmethod
     def _message_has_cache_control(message: AllMessageValues) -> bool:
