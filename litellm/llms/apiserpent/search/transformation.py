@@ -8,10 +8,12 @@ Two endpoints under one provider, selected via the ``deep`` boolean param:
 APISerpent API Reference: https://apiserpent.com/docs
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, Literal, cast
 from urllib.parse import urlencode
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.apiserpent.search.defaults import (
@@ -32,6 +34,19 @@ from litellm.secret_managers.main import get_secret_str
 DEEP_SEARCH_PARAM: Final = "deep"
 APISERPENT_BASE: Final = "https://apiserpent.com"
 APISERPENT_PARAMS_KEY: Final = "_apiserpent_params"
+
+
+class _APISerpentResultFields(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+    date: str | None = None
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class APISerpentSearchConfig(BaseSearchConfig):
@@ -151,19 +166,22 @@ class APISerpentSearchConfig(BaseSearchConfig):
         Full format nests results under ``results.organic[]``; simple format
         returns a flat ``results[]`` array. Both expose title/url/snippet.
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         raw_results: Final = response_json.get("results") or {}
-        organic: Final = raw_results.get("organic", []) if isinstance(raw_results, dict) else raw_results
+        organic: Final = _JSON_OBJECTS.validate_python(
+            raw_results.get("organic", []) if isinstance(raw_results, dict) else raw_results
+        )
 
         results: Final[list[SearchResult]] = []
         for result in organic:
+            fields = _APISerpentResultFields.model_validate(result)
             results.append(
                 SearchResult(
-                    title=result.get("title", ""),
-                    url=result.get("url", ""),
-                    snippet=result.get("snippet", ""),
-                    date=result.get("date"),
+                    title=fields.title,
+                    url=fields.url,
+                    snippet=fields.snippet,
+                    date=fields.date,
                     last_updated=None,
                 )
             )

@@ -5,9 +5,11 @@ You.com API Reference: https://you.com/docs/api-reference/search/v1-search
 OpenAPI spec:          https://you.com/specs/openapi_search_v1.yaml
 """
 
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -37,6 +39,22 @@ class YouComSearchRequest(_YouComSearchRequestRequired, total=False):
     include_domains: list[str]
     exclude_domains: list[str]
     safesearch: str
+
+
+class _YouComResultFields(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    title: str = ""
+    url: str = ""
+    page_age: str | None = None
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str)
+_SNIPPETS: Final[TypeAdapter[Sequence[object] | str]] = TypeAdapter(
+    Sequence[object] | str, config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class YouComSearchConfig(BaseSearchConfig):
@@ -168,22 +186,23 @@ class YouComSearchConfig(BaseSearchConfig):
         - snippets[0] → SearchResult.snippet (falls back to `description`)
         - page_age    → SearchResult.date
         """
-        response_json: Final = raw_response.json()
-        raw_results: Final = response_json.get("results") or {}
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        raw_results: Final = _JSON_OBJECT.validate_python(response_json.get("results") or {})
 
-        web_results: Final = raw_results.get("web") or []
-        news_results: Final = raw_results.get("news") or []
+        web_results: Final = _JSON_OBJECTS.validate_python(raw_results.get("web") or [])
+        news_results: Final = _JSON_OBJECTS.validate_python(raw_results.get("news") or [])
 
         results: Final[list[SearchResult]] = []
         for item in list(web_results) + list(news_results):
-            snippets = item.get("snippets") or []
-            snippet = snippets[0] if snippets else item.get("description", "")
+            snippets = _SNIPPETS.validate_python(item.get("snippets") or [])
+            snippet = _STR.validate_python(snippets[0] if snippets else item.get("description", ""))
+            fields = _YouComResultFields.model_validate(item)
             results.append(
                 SearchResult(
-                    title=item.get("title", ""),
-                    url=item.get("url", ""),
+                    title=fields.title,
+                    url=fields.url,
                     snippet=snippet,
-                    date=item.get("page_age"),
+                    date=fields.page_age,
                     last_updated=None,
                 )
             )

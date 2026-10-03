@@ -1,9 +1,12 @@
 import os
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
 
 
@@ -180,3 +183,39 @@ def test_transform_search_response_non_list_data():
         _resp({"success": True, "data": {"unexpected": "shape"}}), logging_obj=Mock()
     )
     assert resp.results == []
+
+
+def _transform(payload: object) -> SearchResponse:
+    return _config().transform_search_response(raw_response=httpx.Response(200, json=payload), logging_obj=Mock())
+
+
+def test_transform_search_response_maps_a_decoded_json_object_in_order():
+    response = _transform(
+        {
+            "success": True,
+            "data": [
+                {"title": "First", "url": "https://a.example", "markdown": "md", "description": "ignored"},
+                {"title": "Second", "url": "https://b.example", "description": "desc"},
+                {},
+            ],
+            "unrelated": {"nested": [1, 2]},
+        }
+    )
+
+    assert [(r.title, r.url, r.snippet, r.date, r.last_updated) for r in response.results] == [
+        ("First", "https://a.example", "md", None, None),
+        ("Second", "https://b.example", "desc", None, None),
+        ("", "", "", None, None),
+    ]
+    assert response.object == "search"
+
+
+@pytest.mark.parametrize("payload", [{}, {"success": True}, {"data": None}, {"data": "text"}, {"data": {"web": []}}])
+def test_transform_search_response_without_a_data_list_is_empty(payload: dict[str, object]):
+    assert _transform(payload).results == []
+
+
+@pytest.mark.parametrize("payload", [[], [{"data": []}], "data", 5, True])
+def test_transform_search_response_rejects_a_body_that_is_not_an_object(payload: object):
+    with pytest.raises(ValidationError):
+        _transform(payload)

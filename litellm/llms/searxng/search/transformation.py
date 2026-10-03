@@ -4,9 +4,11 @@ Calls SearXNG's /search endpoint to search the web.
 SearXNG API Reference: https://docs.searxng.org/dev/search_api.html
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -35,6 +37,19 @@ class SearXNGSearchRequest(_SearXNGSearchRequestRequired, total=False):
     pageno: int  # Optional - page number (default 1)
     time_range: str  # Optional - time range filter (day, month, year)
     format: str  # Optional - output format (json, csv, rss) - should be 'json'
+
+
+class _SearXNGResultFields(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    title: str = ""
+    url: str = ""
+    content: str = ""
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_STR: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 class SearXNGSearchConfig(BaseSearchConfig):
@@ -204,20 +219,21 @@ class SearXNGSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         # Note: SearXNG doesn't natively support limiting results via API params
         # It returns ~20 results per page by default
         results: Final = []
-        for result in response_json.get("results", []):
+        for result in _JSON_OBJECTS.validate_python(response_json.get("results", [])):
             # Get date from either publishedDate or pubdate field
-            date = result.get("publishedDate") or result.get("pubdate")
+            date = _OPTIONAL_STR.validate_python(result.get("publishedDate") or result.get("pubdate"))
 
+            fields = _SearXNGResultFields.model_validate(result)
             search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("content", ""),  # SearXNG uses "content" for snippet
+                title=fields.title,
+                url=fields.url,
+                snippet=fields.content,  # SearXNG uses "content" for snippet
                 date=date,
                 last_updated=None,  # SearXNG doesn't provide last_updated in response
             )

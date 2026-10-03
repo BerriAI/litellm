@@ -37,6 +37,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -80,6 +81,9 @@ _GATEWAY_HOST_PATTERN: Final = re.compile(r"[a-z0-9-]+\.gateway\.bedrock-agentco
 _SSE_EVENT_SEPARATOR: Final = re.compile(r"\r?\n[ \t]*\r?\n")
 
 _SSE_LINE_PREFIXES: Final = ("event:", "data:", ":", "id:", "retry:")
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _gateway_host_match(api_base: str) -> re.Match[str] | None:
@@ -128,7 +132,7 @@ def _parse_result_items(raw_text: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(raw_text, str):
         return ()
     try:
-        parsed: Final = json.loads(raw_text)
+        parsed: Final = _JSON_VALUE.validate_python(json.loads(raw_text))
     except json.JSONDecodeError:
         return ()
     return _result_items(parsed)
@@ -147,7 +151,7 @@ def _iter_sse_events(text: str) -> Iterator[Mapping[str, object]]:
         if not payload:
             continue
         try:
-            parsed = json.loads(payload)
+            parsed = _JSON_VALUE.validate_python(json.loads(payload))
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict):
@@ -427,7 +431,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         """
         text: Final = raw_response.text
         if not text.lstrip().startswith(_SSE_LINE_PREFIXES):
-            return raw_response.json()
+            return _JSON_OBJECT.validate_python(raw_response.json())
 
         events: Final = tuple(_iter_sse_events(text))
         response_event: Final = next(

@@ -6,7 +6,9 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.apiserpent.search.defaults import APISerpentSearchParams
@@ -290,3 +292,84 @@ class TestAPISerpentSearchIntegration:
                 == "https://apiserpent.com/api/search"
             )
             assert parse_qs(parsed.query)["num"] == ["40"]
+
+
+def _transform(payload: object) -> SearchResponse:
+    return APISerpentSearchConfig().transform_search_response(
+        raw_response=httpx.Response(200, json=payload),
+        logging_obj=None,
+    )
+
+
+def _as_tuples(response: SearchResponse) -> list[tuple[str, str, str, str | None, str | None]]:
+    return [(r.title, r.url, r.snippet, r.date, r.last_updated) for r in response.results]
+
+
+@pytest.mark.parametrize(
+    ("item", "expected"),
+    [
+        (
+            {"position": 1, "title": "Title", "url": "https://a.example", "snippet": "Body", "date": "2024-01-02"},
+            ("Title", "https://a.example", "Body", "2024-01-02", None),
+        ),
+        ({"title": "Title", "date": None}, ("Title", "", "", None, None)),
+        ({"snippet": "Only snippet"}, ("", "", "Only snippet", None, None)),
+        ({}, ("", "", "", None, None)),
+    ],
+)
+def test_transform_search_response_maps_one_result_in_the_full_and_the_simple_format(
+    item: dict[str, object], expected: tuple[str, str, str, str | None, str | None]
+):
+    assert _as_tuples(_transform({"results": {"organic": [item], "ads": [{"title": "never read"}]}})) == [expected]
+    assert _as_tuples(_transform({"results": [item]})) == [expected]
+
+
+def test_transform_search_response_keeps_result_order():
+    response = _transform({"results": [{"title": "first"}, {"title": "second"}, {"title": "third"}]})
+
+    assert [result.title for result in response.results] == ["first", "second", "third"]
+    assert response.object == "search"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"results": None},
+        {"results": []},
+        {"results": {}},
+        {"results": ""},
+        {"results": 0},
+        {"results": {"organic": []}},
+        {"results": {"organic": {}}},
+        {"results": {"organic": ""}},
+        {"results": {"news": [{"title": "never read"}]}},
+    ],
+)
+def test_transform_search_response_without_organic_results_is_empty(payload: dict[str, object]):
+    assert _transform(payload).results == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        "text",
+        5,
+        {"results": 5},
+        {"results": "text"},
+        {"results": [5]},
+        {"results": ["text"]},
+        {"results": {"organic": None}},
+        {"results": {"organic": 5}},
+        {"results": {"organic": [None]}},
+        {"results": {"organic": {"title": "not a list"}}},
+        {"results": [{"title": None}]},
+        {"results": [{"url": 5}]},
+        {"results": [{"snippet": ["not", "text"]}]},
+        {"results": [{"date": 2024}]},
+    ],
+)
+def test_transform_search_response_rejects_malformed_payloads(payload: object):
+    with pytest.raises(ValidationError):
+        _transform(payload)

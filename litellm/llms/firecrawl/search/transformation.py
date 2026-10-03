@@ -4,9 +4,11 @@ Calls Firecrawl's /search endpoint to search the web.
 Firecrawl API Reference: https://docs.firecrawl.dev/api-reference/endpoint/search
 """
 
+from collections.abc import Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -38,6 +40,9 @@ class FirecrawlSearchRequest(_FirecrawlSearchRequestRequired, total=False):
     timeout: int  # Optional - timeout in milliseconds (default 60000)
     ignoreInvalidURLs: bool  # Optional - exclude invalid URLs (default false)
     scrapeOptions: dict  # Optional - options for scraping search results
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FirecrawlSearchConfig(BaseSearchConfig):
@@ -170,7 +175,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []

@@ -2,9 +2,11 @@
 Calls Perplexity's /search endpoint to search the web.
 """
 
+from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -31,6 +33,20 @@ class PerplexitySearchRequest(_PerplexitySearchRequestRequired, total=False):
     search_domain_filter: list[str]  # Optional - list of domains to filter (max 20)
     max_tokens_per_page: int  # Optional - max tokens per page, default 1024
     country: str  # Optional - country code filter (e.g., 'US', 'GB', 'DE')
+
+
+class _PerplexityResultFields(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+    date: str | None = None
+    last_updated: str | None = None
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class PerplexitySearchConfig(BaseSearchConfig):
@@ -146,17 +162,18 @@ class PerplexitySearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
         results: Final = []
-        for result in response_json.get("results", []):
+        for result in _JSON_OBJECTS.validate_python(response_json.get("results", [])):
+            fields = _PerplexityResultFields.model_validate(result)
             search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=result.get("snippet", ""),
-                date=result.get("date"),
-                last_updated=result.get("last_updated"),
+                title=fields.title,
+                url=fields.url,
+                snippet=fields.snippet,
+                date=fields.date,
+                last_updated=fields.last_updated,
             )
             results.append(search_result)
 

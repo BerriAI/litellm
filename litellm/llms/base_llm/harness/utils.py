@@ -7,7 +7,9 @@ import json
 import os
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
+
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
@@ -16,6 +18,7 @@ JSONValue: TypeAlias = "dict[str, JSONValue] | list[JSONValue] | str | int | flo
 
 SKILL_MANIFEST: Final = "SKILL.md"
 _JSON_DECODER: Final = json.JSONDecoder()
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def normalize_tool_name(native_name: str, mapping: Mapping[str, str]) -> str:
@@ -45,7 +48,7 @@ def last_json_object(text: str) -> str | None:
     return last
 
 
-def structured_output_instruction(schema: Mapping[str, Any]) -> str:
+def structured_output_instruction(schema: Mapping[str, object]) -> str:
     return (
         "When you have finished, your final message must be a single JSON object that "
         "matches this JSON schema, with no other text before or after it:\n"
@@ -82,16 +85,15 @@ def strict_json_schema(schema: JSONValue, depth: int = 0) -> JSONValue:
     return result
 
 
-def decode_json_line(line: bytes | str) -> Mapping[str, Any] | None:
+def decode_json_line(line: bytes | str) -> Mapping[str, object] | None:
     """One JSONL line as a dict, or None for blank / non-JSON / non-object lines."""
     text = line.strip()
     if not text:
         return None
     try:
-        obj = json.loads(text)
-    except json.JSONDecodeError:
+        return _JSON_OBJECT.validate_python(json.loads(text))
+    except (json.JSONDecodeError, ValidationError):
         return None
-    return obj if isinstance(obj, dict) else None
 
 
 def stderr_tail_text(stderr_tail: Sequence[str]) -> str:

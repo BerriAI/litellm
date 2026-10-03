@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 import openai
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import (
@@ -84,6 +85,8 @@ DROPPED_REQUEST_HEADERS = HOP_BY_HOP_HEADERS | frozenset(
 DROPPED_RESPONSE_HEADERS = HOP_BY_HOP_HEADERS | frozenset(("content-encoding",))
 COST_HEADER = "x-litellm-response-cost"
 SSE_MEDIA_TYPE = "text/event-stream"
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_PORT: Final = TypeAdapter(int)
 
 
 class _ApplicationsModule(Protocol):
@@ -207,11 +210,10 @@ class SSEUsageParser:
         if not payload or payload == b"[DONE]":
             return
         try:
-            event = json.loads(payload)
+            event: Final = _JSON_OBJECT.validate_python(json.loads(payload))
         except ValueError:
             return
-        if isinstance(event, Mapping):
-            self.absorb(event)
+        self.absorb(event)
 
     def absorb(self, event: Mapping[str, object]) -> None:
         event_type = event.get("type")
@@ -434,7 +436,7 @@ class ModelEndpoint:
         except BaseException:
             await self.stop()
             raise
-        self.port = self._server.servers[0].sockets[0].getsockname()[1]
+        self.port = _PORT.validate_python(self._server.servers[0].sockets[0].getsockname()[1])
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -540,11 +542,11 @@ class ModelEndpoint:
         if not self._authorized(request):
             return self._unauthorized()
         try:
-            body = json.loads(await request.body())
+            body: Final = _JSON_OBJECT.validate_python(json.loads(await request.body()))
+        except ValidationError:
+            return self._error(ValueError("request body must be a JSON object"), 400)
         except ValueError as e:
             return self._error(e, 400)
-        if not isinstance(body, dict):
-            return self._error(ValueError("request body must be a JSON object"), 400)
         route = route_of(request.url.path)
         if self.gateway is not None:
             return await self._forward(request, route, body)
@@ -615,7 +617,7 @@ class ModelEndpoint:
             tokens = (parser.input_tokens, parser.output_tokens)
         else:
             try:
-                tokens = usage_from_body(json.loads(collected))
+                tokens = usage_from_body(_JSON_OBJECT.validate_python(json.loads(collected)))
             except ValueError:
                 tokens = (0, 0)
         self._record(model, tokens[0], tokens[1], header_cost(upstream.headers))
