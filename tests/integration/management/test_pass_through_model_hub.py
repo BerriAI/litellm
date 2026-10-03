@@ -51,15 +51,16 @@ def pass_through(
     path: str | None = None,
     target_path: str = "",
 ) -> Generator[PassThrough]:
-    body: dict[str, JsonValue] = {
+    optional: Final[dict[str, JsonValue]] = {
+        "display_name": display_name,
+        "methods": list(methods) if methods is not None else None,
+    }
+    body: Final[dict[str, JsonValue]] = {
         "path": path or f"/integration-nlp-{uuid.uuid4().hex[:8]}",
         "target": gateway.upstream_url + target_path,
         "show_in_model_hub": show_in_model_hub,
+        **{key: value for key, value in optional.items() if value is not None},
     }
-    if display_name is not None:
-        body["display_name"] = display_name
-    if methods is not None:
-        body["methods"] = list(methods)
     created: Final = gateway.request("POST", "/config/pass_through_endpoint", body)
     assert created.status_code == 200, created.text
     endpoints: Final = object_value(created.json())["endpoints"]
@@ -377,11 +378,17 @@ def endpoint_ids(gateway: Gateway, paths: tuple[str, ...]) -> tuple[str, ...]:
 def test_a_config_file_pass_through_is_listed_once_beside_database_rows(gateway: Gateway, tmp_path: Path) -> None:
     display_name: Final = f"Config NLP {uuid.uuid4().hex[:6]}"
     path: Final = f"/integration-config-nlp-{uuid.uuid4().hex[:8]}"
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["general_settings"]["pass_through_endpoints"] = [
-        {"path": path, "target": gateway.upstream_url, "display_name": display_name, "show_in_model_hub": True},
-        {"path": f"{path}-hidden", "target": gateway.upstream_url, "display_name": "Hidden config NLP"},
-    ]
+    base_config: Final = object_value(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **base_config,
+        "general_settings": {
+            **object_value(base_config["general_settings"]),
+            "pass_through_endpoints": [
+                {"path": path, "target": gateway.upstream_url, "display_name": display_name, "show_in_model_hub": True},
+                {"path": f"{path}-hidden", "target": gateway.upstream_url, "display_name": "Hidden config NLP"},
+            ],
+        },
+    }
     config_path: Final = tmp_path / "pass_through_hub.yaml"
     config_path.write_text(yaml.safe_dump(config))
     with owned_proxy(gateway, tmp_path, {}, config=config_path) as owned:

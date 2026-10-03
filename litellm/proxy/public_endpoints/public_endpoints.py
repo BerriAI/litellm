@@ -269,7 +269,7 @@ def _with_legacy_health(row: HubRow, health_checks_map: Mapping[str, Mapping[str
                 }
             )
         case _:
-            assert_never(row)
+            return assert_never(row)
 
 
 @router.get(
