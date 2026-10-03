@@ -2,7 +2,7 @@
 
 The dashboard compares merged pull or merge requests, elapsed time from opening to merge, new bug and regression issues, and recorded gateway spend over 7, 28, or 90 complete UTC days. Compare against the immediately preceding period of the same length or the same-length period last year
 
-No estimator model is required. Spend per person is their recorded gateway spend during the period divided by their matched merged changes. Branch spend remains separate and uses repository and branch tags on spend logs
+The calculator combines repository activity with spend recorded by the gateway. Spend per merged change is a person's recorded gateway spend during the period divided by their matched merged changes. To track a branch's AI cost, send repository and branch tags with each request
 
 ## Connect repositories
 
@@ -43,4 +43,4 @@ Send `repo:github.com/owner/repo` or `repo:gitlab.com/group/project` together wi
 
 The report sums recorded requests inside its UTC dates. A branch cost is assigned to a merged change only when that source branch matches one change in the period. Reused branches stay visible in Branch spend without duplicating costs across changes. No retained tagged requests means unknown cost; a recorded zero remains zero
 
-Existing single-provider settings and historical tags remain readable. An empty repository produces a successful report with zero merged changes and no merge duration or spend-per-change ratio
+An empty repository produces a successful report with zero merged changes and no merge duration or spend-per-change ratio
