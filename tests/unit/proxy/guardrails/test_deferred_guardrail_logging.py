@@ -322,9 +322,10 @@ async def test_deferred_slot_keeps_the_innermost_wrapper_result():
 async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the_provider_usage(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    """/v1/messages on an Azure gpt-5.4+ deployment with function tools runs three nested
-    wrappers: anthropic_messages, the chat adapter's acompletion, and the Responses bridge
-    acompletion hands the call to, which retags the call as ``responses``. With logging
+    """/v1/messages on an Azure gpt-5.4+ deployment with explicit reasoning effort and
+    function tools runs three nested wrappers: anthropic_messages, the chat adapter's
+    acompletion, and the Responses bridge acompletion hands the call to, which retags the
+    call as ``responses``. With logging
     deferred for a post-call guardrail the stored closure must carry the innermost provider
     response: logging the Anthropic-shaped reply under Responses semantics books this
     7,336-token prompt as 3 tokens, since Anthropic's input_tokens excludes the cache hit."""
@@ -374,6 +375,7 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
 
     response: Final = await litellm.anthropic_messages(
         model="azure/gpt-5.4-nano",
+        reasoning_effort="low",
         messages=[{"role": "user", "content": "hi"}],
         max_tokens=16,
         tools=[
