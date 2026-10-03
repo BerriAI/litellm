@@ -112,7 +112,7 @@ def _row_with_health(row: HubRow, health: Mapping[str, HealthSnapshot]) -> HubRo
         case ModelGroupRow():
             return ModelGroupRow(info=_with_health(row.info, health.get(row.info.model_group)))
         case _:
-            assert_never(row)
+            return assert_never(row)
 
 
 FEATURE_PREFIX: Final = "supports_"
