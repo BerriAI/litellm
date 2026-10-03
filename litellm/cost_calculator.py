@@ -333,25 +333,38 @@ def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
     return (
         (model_info.get("input_cost_per_token") or 0.0) > 0
         or (model_info.get("output_cost_per_token") or 0.0) > 0
+        or (model_info.get("cache_read_input_token_cost") or 0.0) > 0
+        or (model_info.get("cache_creation_input_token_cost") or 0.0) > 0
+        or (model_info.get("input_cost_per_character") or 0.0) > 0
+        or (model_info.get("output_cost_per_character") or 0.0) > 0
         or model_info.get("tiered_pricing") is not None
     )
 
 
-def _bills_wall_clock_seconds(model_info: ModelInfoBase) -> bool:
+def _billed_seconds(model_info: ModelInfoBase, response_time_ms: float | None, audio_seconds: float) -> float | None:
     mode: Final = model_info.get("mode")
-    return mode is None or mode in _WALL_CLOCK_PRICED_MODES
+    wall_clock_seconds: Final = (response_time_ms or 0.0) / 1000
+    if mode is None or mode in _WALL_CLOCK_PRICED_MODES:
+        return wall_clock_seconds
+    if mode == "audio_transcription":
+        return audio_seconds if audio_seconds > 0 else wall_clock_seconds
+    return None
 
 
 def _per_second_pricing_cost(
     model: str,
     custom_llm_provider: str | None,
     response_time_ms: float | None,
+    audio_seconds: float,
 ) -> tuple[float, float] | None:
     try:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # the lookup raises plain Exception for an unmapped model
         return None
-    if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
+    if _has_token_or_tiered_pricing(model_info):
+        return None
+    seconds: Final = _billed_seconds(model_info, response_time_ms, audio_seconds)
+    if seconds is None:
         return None
     cost_per_second: Final = model_info.get("cost_per_second")
     input_cost_per_second: Final = model_info.get("input_cost_per_second")
@@ -366,12 +379,11 @@ def _per_second_pricing_cost(
     if resolved_cost_per_second is None:
         return None
 
-    seconds: Final = (response_time_ms or 0.0) / 1000
     verbose_logger.debug(
-        "For model=%s - cost_per_second: %s; response time: %s",
+        "For model=%s - cost_per_second: %s; billed seconds: %s",
         model,
         resolved_cost_per_second,
-        response_time_ms,
+        seconds,
     )
     return resolved_cost_per_second * seconds, 0.0
 
@@ -667,6 +679,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             response_time_ms=response_time_ms,
+            audio_seconds=audio_transcription_file_duration,
         )
     ) is not None:
         return per_second_cost

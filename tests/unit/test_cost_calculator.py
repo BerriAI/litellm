@@ -3299,7 +3299,7 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
     assert cost == pytest.approx(0.02 * expected_seconds)
 
 
-@pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])
+@pytest.mark.parametrize("mode", ["audio_speech", "video_generation", "realtime"])
 def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monkeypatch, mode: str):
     """
     A media-mode entry's per-second rates price audio or video seconds, which the dedicated
@@ -3315,6 +3315,60 @@ def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monke
 
     assert cost_per_token(model=model, custom_llm_provider="openai", response_time_ms=2000.0) == (0.0, 0.0)
 
+
+
+@pytest.mark.parametrize(
+    ("audio_seconds", "expected_seconds"),
+    [(0.0, 2.0), (60.0, 60.0)],
+    ids=["request_time_without_audio_length", "audio_length_when_passed"],
+)
+def test_cost_per_token_bills_transcription_second_rates(
+    monkeypatch: pytest.MonkeyPatch, audio_seconds: float, expected_seconds: float
+) -> None:
+    model: Final = "test-transcription-per-second"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.02, "litellm_provider": "deepgram", "mode": "audio_transcription"},
+    )
+
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider="deepgram",
+        response_time_ms=2000.0,
+        audio_transcription_file_duration=audio_seconds,
+    ) == pytest.approx((0.02 * expected_seconds, 0.0))
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "extra_pricing", "usage_kwargs", "expected_prompt_cost"),
+    [
+        ("openai", {"cache_read_input_token_cost": 1e-6}, {"cache_read_input_tokens": 5}, 5 * 1e-6),
+        ("vertex_ai", {"input_cost_per_character": 0.001}, {"prompt_characters": 100}, 100 * 0.001),
+    ],
+    ids=["cache_read_tokens", "characters"],
+)
+def test_cost_per_token_keeps_token_or_character_billing_beside_second_rates(
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str,
+    extra_pricing: dict[str, float],
+    usage_kwargs: dict[str, int],
+    expected_prompt_cost: float,
+) -> None:
+    model: Final = f"test-per-second-with-{custom_llm_provider}-pricing"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, **extra_pricing, "litellm_provider": custom_llm_provider, "mode": "chat"},
+    )
+
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        prompt_tokens=10,
+        response_time_ms=5000.0,
+        **usage_kwargs,
+    ) == pytest.approx((expected_prompt_cost, 0.0))
 
 def test_completion_cost_video_status_poll_bills_nothing_on_a_per_second_video_model(monkeypatch):
     """
