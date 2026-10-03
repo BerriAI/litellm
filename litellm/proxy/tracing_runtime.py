@@ -8,7 +8,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing import TraceReceiver
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(

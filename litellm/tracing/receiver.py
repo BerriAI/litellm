@@ -19,8 +19,8 @@ from threading import BoundedSemaphore
 from typing import Final
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_BODY_BYTES, OTLP_MAX_CONCURRENT_INGESTS
-from litellm.rust_bridge.trace_query_responses import SpanDetail, SpanErrorPage, Trace, TracePage
-from litellm.rust_bridge.traces import ClickHouseStorage, Tenant, TraceScope
+from litellm.rust_bridge.trace.generated.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing.config import trace_storage_config
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, TracingPayloadTooLargeError, decompress
 

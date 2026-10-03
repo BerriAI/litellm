@@ -1,18 +1,12 @@
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Final, Literal, Protocol, TypedDict, TypeVar, runtime_checkable
+from typing import Final, Protocol, TypeVar, runtime_checkable
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge.loader import get_native_bridge
-from litellm.rust_bridge.trace_queries import (
-    LENS_AGENTS,
-    LENS_AVAILABILITY,
-    LENS_CONTENT,
-    LENS_EVIDENCE,
-    LENS_SAMPLE,
+from litellm.rust_bridge.trace.generated.models import (
     ActivityAvailability,
     AgentRow,
     CountRow,
@@ -21,28 +15,30 @@ from litellm.rust_bridge.trace_queries import (
     LensContentParams,
     LensEvidenceParams,
     LensSampleParams,
-    ParamsT,
     PartRow,
+)
+from litellm.rust_bridge.trace.generated.types import ReadQueryName
+from litellm.rust_bridge.trace.queries import (
+    LENS_AGENTS,
+    LENS_AVAILABILITY,
+    LENS_CONTENT,
+    LENS_EVIDENCE,
+    LENS_SAMPLE,
+    ParamsT,
     ReadQuery,
-    ReadQueryName,
     RowT,
 )
-from litellm.rust_bridge.trace_query_responses import (
+
+from .generated.models import TraceQueryHelp
+from .generated.types import (
+    QueryScope,
     SpanDetail,
     SpanErrorPage,
     Trace,
     TracePage,
-    TraceQueryHelp,
-    TraceSQLResponse,
+    TraceScope,
 )
-
-
-class TraceScope(TypedDict):
-    """Authenticated request-log visibility."""
-
-    all_teams: ReadOnly[Literal[0, 1]]
-    user_id: ReadOnly[str]
-    team_ids: ReadOnly[tuple[str, ...]]
+from .queries import TraceSQLResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,19 +49,6 @@ class Tenant:
     api_key_hash: str
     org_id: str = ""
     user_id: str = ""
-
-
-class AllQueryScope(TypedDict):
-    kind: ReadOnly[Literal["all"]]
-
-
-class OwnedQueryScope(TypedDict):
-    kind: ReadOnly[Literal["owned"]]
-    user_id: ReadOnly[str]
-    team_ids: ReadOnly[tuple[str, ...]]
-
-
-QueryScope = AllQueryScope | OwnedQueryScope
 
 
 class NativeStore(Protocol):

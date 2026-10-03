@@ -3,7 +3,7 @@ LiteLLM agent tracing: OTLP traces from agents, joined to LiteLLM spend logs, in
 
 """
 
-from litellm.rust_bridge.traces import Tenant
+from litellm.rust_bridge.trace.storage import Tenant
 from litellm.tracing.otlp_http import TracingPayloadTooLargeError
 from litellm.tracing.receiver import TraceReceiver
 

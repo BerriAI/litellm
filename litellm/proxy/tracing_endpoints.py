@@ -26,22 +26,19 @@ from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependenc
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
-from litellm.rust_bridge.trace_query_responses import (
+from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.types import (
+    AllQueryScope,
+    OwnedQueryScope,
+    QueryScope,
     SpanDetail,
     SpanErrorPage,
     Trace,
     TracePage,
-    TraceQueryHelp,
-    TraceSQLResponse,
-)
-from litellm.rust_bridge.traces import (
-    AllQueryScope,
-    ClickHouseStorage,
-    OwnedQueryScope,
-    QueryScope,
-    Tenant,
     TraceScope,
 )
+from litellm.rust_bridge.trace.queries import TraceSQLResponse
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, encode_otlp_response
 

@@ -9,7 +9,7 @@ from typing import Final
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import OTLP_MAX_BODY_BYTES
-from litellm.rust_bridge.traces import encode_error
+from litellm.rust_bridge.trace.storage import encode_error
 
 
 class InvalidOTLPPayloadError(ValueError):

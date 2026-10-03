@@ -18,9 +18,9 @@ from prisma import Json, Prisma
 from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from litellm.rust_bridge.traces import AllQueryScope, ClickHouseStorage
+from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing.config import trace_storage_config
-from litellm.rust_bridge.trace_query_responses import Trace
 from litellm.tracing.types import SpendLogRecord
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
