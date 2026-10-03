@@ -46901,8 +46901,11 @@ export interface components {
             expression: string;
             /** Key */
             key: string;
-            /** Type */
-            type: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "String";
         };
         /** TraceQueryAttributes */
         TraceQueryAttributes: {
@@ -46916,8 +46919,11 @@ export interface components {
             fields: components["schemas"]["TraceQueryAttributeField"][];
             /** Scope */
             scope: string;
-            /** Table */
-            table: string;
+            /**
+             * Table
+             * @enum {string}
+             */
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
             /** Truncated */
             truncated: boolean;
         };
@@ -46977,8 +46983,11 @@ export interface components {
             sampled_rows: number;
             /** Scope */
             scope: string;
-            /** Table */
-            table: string;
+            /**
+             * Table
+             * @enum {string}
+             */
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
             /** Truncated */
             truncated: boolean;
         };
@@ -46989,7 +46998,7 @@ export interface components {
             /** Path */
             path: (string | number)[];
             /** Types */
-            types: string[];
+            types: ("array" | "boolean" | "integer" | "null" | "number" | "object" | "string")[];
         };
         /** TraceQueryNormalizedField */
         TraceQueryNormalizedField: {
@@ -46999,8 +47008,11 @@ export interface components {
             meaning: string;
             /** Name */
             name: string;
-            /** Table */
-            table: string;
+            /**
+             * Table
+             * @enum {string}
+             */
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
             /** Type */
             type: string;
         };
@@ -47035,8 +47047,11 @@ export interface components {
         TraceQueryTable: {
             /** Columns */
             columns: components["schemas"]["TraceQueryColumn"][];
-            /** Name */
-            name: string;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
         };
         /** TraceSQLResponse */
         TraceSQLResponse: {
