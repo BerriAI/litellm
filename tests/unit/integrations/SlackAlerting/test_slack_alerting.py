@@ -822,6 +822,33 @@ def test_slack_budget_key_alias_patterns_reject_invalid_config(patterns: object)
         SlackAlertingArgs.model_validate({"slack_budget_alert_key_aliases": patterns})
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("patterns, delivered", (([], False), (["github-example-*"], True)))
+async def test_slack_budget_key_alias_filter_reload_validates_and_changes_delivery(
+    patterns: list[str], delivered: bool
+) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        async_http_handler=http_handler,
+    )
+    slack_alerting.update_values(alerting_args={"slack_budget_alert_key_aliases": patterns})
+    with pytest.raises(ValidationError, match="slack_budget_alert_key_aliases"):
+        slack_alerting.update_values(alerting_args={"slack_budget_alert_key_aliases": "github-example-*"})
+    await slack_alerting.send_alert(
+        message=THRESHOLD_ALERT,
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={},
+        user_info=_budget_webhook_event("github-example-api"),
+    )
+    await slack_alerting.flush_queue()
+    assert http_handler.post.await_count == int(delivered)
+    if delivered:
+        assert THRESHOLD_ALERT in _posted_slack_bodies(http_handler)[0]["text"]
+
+
 def _periodic_flush_tasks() -> list[asyncio.Task[object]]:
     return [
         t

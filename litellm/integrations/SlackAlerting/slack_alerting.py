@@ -115,7 +115,7 @@ class SlackAlerting(CustomBatchLogger):
         )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
-        self.alerting_args = SlackAlertingArgs(**alerting_args)
+        self.alerting_args = SlackAlertingArgs.model_validate(alerting_args)
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
@@ -155,7 +155,7 @@ class SlackAlerting(CustomBatchLogger):
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
-            self.alerting_args = SlackAlertingArgs(**alerting_args)
+            self.alerting_args = SlackAlertingArgs.model_validate(alerting_args)
             self._ensure_periodic_flush_task()
         if alert_type_config is not None:
             for key, val in alert_type_config.items():
