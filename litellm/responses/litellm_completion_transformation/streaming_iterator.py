@@ -1,6 +1,6 @@
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
 import litellm
@@ -11,7 +11,10 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     is_custom_tool_call,
     serialize_tool_call_arguments,
 )
-from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    mint_reasoning_item_id,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -655,6 +658,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
         return response
 
+    def _encoded_thinking_blocks(self) -> str | None:
+        response: Final = self.create_litellm_model_response()
+        if response is None:
+            return None
+        thinking_blocks: Final[Sequence[Mapping[str, object]]] = (
+            getattr(response.choices[0].message, "thinking_blocks", None) or ()
+        )
+        return encode_thinking_blocks(thinking_blocks)
+
     @staticmethod
     def _snapshot_chunk_for_stream_chunk_builder(
         chunk: ModelResponseStream,
@@ -845,6 +857,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 **{
                     "id": reasoning_item_id,
                     "type": "reasoning",
+                    "encrypted_content": self._encoded_thinking_blocks(),
                     "summary": [
                         {
                             "type": "summary_text",
