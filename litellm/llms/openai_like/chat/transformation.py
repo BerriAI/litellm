@@ -8,7 +8,7 @@ import httpx
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
-from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper
+from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -133,41 +133,14 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
 
-        if hasattr(returned_response, "usage") and returned_response.usage is not None:
-            raw_usage: Final = response_json.get("usage") or {}
-            if isinstance(raw_usage, dict):
-                cache_read = raw_usage.get("cache_read_input_tokens")
-                if cache_read is not None:
-                    object.__setattr__(returned_response.usage, "_cache_read_input_tokens", cache_read)
-                    if returned_response.usage.prompt_tokens_details is None:
-                        returned_response.usage.prompt_tokens_details = PromptTokensDetailsWrapper(
-                            cached_tokens=cache_read
-                        )
-                    else:
-                        returned_response.usage.prompt_tokens_details.cached_tokens = cache_read
-                cache_creation = raw_usage.get("cache_creation_input_tokens")
-                if cache_creation is not None:
-                    object.__setattr__(returned_response.usage, "_cache_creation_input_tokens", cache_creation)
-                    if returned_response.usage.prompt_tokens_details is None:
-                        returned_response.usage.prompt_tokens_details = PromptTokensDetailsWrapper(
-                            cache_write_tokens=cache_creation
-                        )
-                    else:
-                        returned_response.usage.prompt_tokens_details.cache_write_tokens = cache_creation
-
         return returned_response
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: OpenAIGPTConfig contract
         supported_params: Final = super().get_supported_openai_params(model=model)
-        import litellm
+        from litellm.utils import supports_reasoning
 
-        cost_map: Final[dict[str, Any]] = getattr(litellm, "model_cost", {})
-        model_info: Final = (
-            cost_map.get(model) or cost_map.get(f"openai_like/{model}") or cost_map.get(f"openai/{model}")
-        )
         if (
-            isinstance(model_info, dict)
-            and model_info.get("supports_reasoning") is True
+            supports_reasoning(model=model, custom_llm_provider="openai_like")
             and "reasoning_effort" not in supported_params
         ):
             supported_params.append("reasoning_effort")
