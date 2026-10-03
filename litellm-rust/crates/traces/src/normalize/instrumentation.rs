@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::{
     AgentMetadata, AgentType, CLAUDE_CODE_SCOPE, CallEvidence, CallKey, Integration, Normalization,
     NormalizedSpan, ObservationType, RoleEvidence, SpanContext, attr,
-    convention::{
+    format::{
         Extraction, SpanFacts, claude_code, genai::Operation, langsmith::is_langchain_middleware,
     },
     messages, present, select_attribute,

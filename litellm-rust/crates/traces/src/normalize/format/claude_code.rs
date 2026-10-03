@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
 
-use super::{Convention, Extraction, SpanFacts};
+use super::{Extraction, Format, SpanFacts};
 use crate::{
     Error,
     normalize::{
@@ -170,7 +170,7 @@ fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
         })
 }
 
-impl Convention for ClaudeCode {
+impl Format for ClaudeCode {
     fn matches(&self, context: &SpanContext<'_>) -> bool {
         context.scope == CLAUDE_CODE_SCOPE
     }

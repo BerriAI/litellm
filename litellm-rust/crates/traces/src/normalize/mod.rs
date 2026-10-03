@@ -1,4 +1,4 @@
-//! Span normalization in two steps: a [`Convention`] extracts what a span records in its format,
+//! Span normalization in two steps: a [`format::Format`] extracts what a span records in its format,
 //! then an [`Instrumentation`] interprets those facts with what is known about the SDK that emitted
 //! it. Relationships between spans (wrappers, ownership, spend) are resolved later, over the whole
 //! trace, because parents and children can arrive in separate exports.
@@ -11,12 +11,12 @@ use std::{
 use crate::{Error, otlp::DecodedEvent};
 use serde::{Serialize, Serializer};
 
-mod convention;
+mod format;
 mod instrumentation;
 mod messages;
 mod metadata;
 
-pub(crate) use convention::claude_code::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
+pub(crate) use format::claude_code::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
 use instrumentation::Instrumentation;
 pub(crate) use messages::{HIDDEN_BLOCK_TYPES, encode};
 pub use metadata::{AgentMetadata, AgentType, Integration};
@@ -165,7 +165,7 @@ pub fn normalize(
         attributes,
         events,
     };
-    let extraction = convention::extract(&context)?;
+    let extraction = format::extract(&context)?;
     Ok(Instrumentation::detect(&context).interpret(
         &context,
         extraction,
@@ -243,7 +243,7 @@ mod tests {
     #[case::openinference("other", [("openinference.span.kind", "LLM"), ("gen_ai.operation.name", "execute_tool")], ObservationType::Llm)]
     #[case::genai("other", [("gen_ai.operation.name", "execute_tool"), ("gen_ai.usage.input_tokens", "7")], ObservationType::Tool)]
     #[case::claude_code("com.anthropic.claude_code.tracing", [("span.type", "llm_request"), ("openinference.span.kind", "TOOL")], ObservationType::Llm)]
-    fn convention_dispatch_preserves_precedence(
+    fn format_dispatch_preserves_precedence(
         #[case] scope: &str,
         #[case] attributes: [(&str, &str); 2],
         #[case] expected: ObservationType,

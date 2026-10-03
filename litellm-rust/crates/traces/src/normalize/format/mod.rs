@@ -57,13 +57,13 @@ impl From<AttributeText<'_>> for Payload {
 }
 
 /// A span format: whether a span is recorded in it, and what the span then records.
-pub(crate) trait Convention {
+pub(crate) trait Format {
     fn matches(&self, context: &SpanContext<'_>) -> bool;
     fn extract(&self, context: &SpanContext<'_>) -> Result<Extraction, Error>;
 }
 
 /// In precedence order. `gen_ai` accepts every span, so it is last.
-const CONVENTIONS: [&dyn Convention; 4] = [
+const FORMATS: [&dyn Format; 4] = [
     &claude_code::ClaudeCode,
     &langsmith::LangSmith,
     &openinference::OpenInference,
@@ -71,9 +71,9 @@ const CONVENTIONS: [&dyn Convention; 4] = [
 ];
 
 pub(crate) fn extract(context: &SpanContext<'_>) -> Result<Extraction, Error> {
-    CONVENTIONS
+    FORMATS
         .into_iter()
-        .find(|convention| convention.matches(context))
+        .find(|format| format.matches(context))
         .unwrap_or(&genai::GenAi)
         .extract(context)
 }

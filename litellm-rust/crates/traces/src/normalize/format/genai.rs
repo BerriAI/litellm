@@ -1,4 +1,4 @@
-use super::{Convention, Extraction, Payload, SpanFacts};
+use super::{Extraction, Format, Payload, SpanFacts};
 use crate::{
     Error,
     normalize::{
@@ -71,7 +71,7 @@ fn payload(context: &SpanContext<'_>, keys: &[&'static str]) -> Payload {
     }
 }
 
-impl Convention for GenAi {
+impl Format for GenAi {
     fn matches(&self, _context: &SpanContext<'_>) -> bool {
         true
     }

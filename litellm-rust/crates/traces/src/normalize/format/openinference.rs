@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::{Convention, Extraction, Payload, SpanFacts};
+use super::{Extraction, Format, Payload, SpanFacts};
 use crate::{
     Error,
     normalize::{
@@ -61,7 +61,7 @@ fn token_count(attributes: &BTreeMap<String, String>, key: &str, usage: u32) -> 
     }
 }
 
-impl Convention for OpenInference {
+impl Format for OpenInference {
     fn matches(&self, context: &SpanContext<'_>) -> bool {
         context.attributes.contains_key("openinference.span.kind")
     }

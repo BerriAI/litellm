@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::Value;
 
-use super::{Convention, Extraction, SpanFacts};
+use super::{Extraction, Format, SpanFacts};
 use crate::{
     Error,
     normalize::{
@@ -220,7 +220,7 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
     }
 }
 
-impl Convention for LangSmith {
+impl Format for LangSmith {
     fn matches(&self, context: &SpanContext<'_>) -> bool {
         context.scope == "langsmith" || context.attributes.contains_key("langsmith.span.kind")
     }
