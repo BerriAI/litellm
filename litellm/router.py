@@ -795,9 +795,12 @@ class FallbackAwareAnthropicMessagesStream:
         existing_headers: Final = cast(  # cast-ok: additional_headers is always a dict[str, object] when present
             "dict[str, object]", self._hidden_params.get("additional_headers") or {}
         )
+        fallback_hidden_params_without_cost: Final = {
+            key: value for key, value in fallback_hidden_params.items() if key != "response_cost"
+        }
         self._hidden_params = {
             **self._hidden_params,
-            **fallback_hidden_params,
+            **fallback_hidden_params_without_cost,
             "additional_headers": dict(replace_complexity_router_headers(existing_headers, fallback_headers)),
         }
 
@@ -2998,9 +3001,14 @@ class Router:
         if not isinstance(item_headers, dict):
             item_headers = {}
 
+        # Streaming wrappers carry a placeholder response_cost (0.0) priced before any
+        # chunk arrives; the item's own value (None until usage lands) is the truthful one
+        fallback_hidden_params_without_cost: Final = {
+            key: value for key, value in fallback_hidden_params.items() if key != "response_cost"
+        }
         cast(HiddenParamsHost, fallback_item)._hidden_params = {
             **item_hidden_params,
-            **fallback_hidden_params,
+            **fallback_hidden_params_without_cost,
             "additional_headers": {**item_headers, **fallback_headers},
         }
 
