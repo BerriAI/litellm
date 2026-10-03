@@ -10,7 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from typing_extensions import Self
 
 from litellm.exceptions import GuardrailRaisedException
-from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # native logging decorator has an untyped signature
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
