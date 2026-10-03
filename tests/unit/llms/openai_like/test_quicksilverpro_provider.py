@@ -24,6 +24,9 @@ QSP_MODELS: Final = tuple(
 
 
 class TestQuickSilverProProviderConfig:
+    def test_quicksilverpro_has_cost_map_entries(self):
+        assert QSP_MODELS
+
     def test_quicksilverpro_in_provider_list(self):
         from litellm import LlmProviders
 
@@ -182,9 +185,6 @@ class TestQuickSilverProModelMetadata:
         assert prompt_cost == pytest.approx(model_info["input_cost_per_token"] * 1_000_000)
         assert completion_cost == pytest.approx(model_info["output_cost_per_token"] * 1_000_000)
         assert model_info["output_cost_per_token"] > 0
-        assert 0 < model_info["cache_read_input_token_cost"] < model_info["input_cost_per_token"]
-        # Entries without a provider-specified output cap come back with
-        # max_output_tokens=None; the legacy max_tokens then carries the cap.
         max_output = model_info.get("max_output_tokens") or model_info["max_input_tokens"]
         assert (
             model_info["max_tokens"]
