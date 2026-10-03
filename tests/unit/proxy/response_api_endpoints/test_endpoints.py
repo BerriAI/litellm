@@ -999,7 +999,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
 class TestReadWSModelFromFirstFrameErrors:
     @pytest.mark.asyncio
-    async def test_timeout_closes_without_error_frame(self):
+    async def test_transport_error_first_frame_closes_with_internal_error(self):
         import asyncio
 
         from litellm.proxy.response_api_endpoints.endpoints import (
@@ -1015,7 +1015,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -1105,6 +1105,140 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result == ("reasoning-group", raw)
         ws.send_text.assert_not_awaited()
         ws.close.assert_not_awaited()
+
+
+class TestResponsesWSSessionLimit:
+    def _ws(self, receive_text):
+        ws = MagicMock()
+        ws.headers = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(side_effect=receive_text)
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+        return ws
+
+    @pytest.mark.asyncio
+    async def test_idle_connection_is_closed_at_session_limit(self):
+        import asyncio
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        async def silent_socket():
+            await asyncio.sleep(60)
+
+        ws = self._ws(silent_socket)
+
+        with patch(
+            "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
+            return_value=0.05,
+        ):
+            await responses_websocket_endpoint(websocket=ws, model="gpt-4o-mini", user_api_key_dict=MagicMock())
+
+        ws.close.assert_awaited_once_with(code=1000, reason="Session duration limit reached")
+
+    @pytest.mark.asyncio
+    async def test_active_session_is_closed_at_session_limit(self):
+        import asyncio
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = self._ws(lambda: json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []}))
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o-mini"}, MagicMock()))
+
+        async def hanging_relay():
+            await asyncio.sleep(60)
+
+        with (
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
+                return_value=0.05,
+            ),
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=hanging_relay(),
+            ),
+        ):
+            await responses_websocket_endpoint(websocket=ws, model="gpt-4o-mini", user_api_key_dict=MagicMock())
+
+        ws.close.assert_awaited_once_with(code=1000, reason="Session duration limit reached")
+
+    @pytest.mark.asyncio
+    async def test_delayed_first_frame_is_routed_within_session_limit(self, monkeypatch):
+        import asyncio
+
+        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        monkeypatch.setitem(general_settings, "responses_websocket_session_limit_seconds", 60)
+
+        async def delayed_frame():
+            await asyncio.sleep(0.2)
+            return json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+
+        ws = self._ws(delayed_frame)
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o-mini"}, MagicMock()))
+
+        async def fake_llm_call():
+            return None
+
+        with (
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ) as mock_route_request,
+        ):
+            await responses_websocket_endpoint(websocket=ws, model="gpt-4o-mini", user_api_key_dict=MagicMock())
+
+        mock_route_request.assert_awaited_once()
+        ws.close.assert_not_awaited()
+
+@pytest.mark.parametrize(
+    "configured,expected",
+    [
+        (None, 3600.0),
+        (60, 60.0),
+        (1200, 1200.0),
+        (7200, 7200.0),
+        (59, 3600.0),
+        (0, 3600.0),
+        (9000, 3600.0),
+        ("not-a-number", 3600.0),
+    ],
+)
+def test_responses_ws_session_limit_resolution(monkeypatch, configured, expected):
+    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.response_api_endpoints.endpoints import (
+        _resolve_responses_ws_session_limit_seconds,
+    )
+
+    if configured is None:
+        monkeypatch.delitem(general_settings, "responses_websocket_session_limit_seconds", raising=False)
+    else:
+        monkeypatch.setitem(general_settings, "responses_websocket_session_limit_seconds", configured)
+
+    assert _resolve_responses_ws_session_limit_seconds() == expected
 
 
 class TestManagedResponsesSameProvider:
