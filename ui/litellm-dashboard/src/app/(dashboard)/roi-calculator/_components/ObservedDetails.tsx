@@ -143,7 +143,7 @@ export function PersonDetails({
         if (!open) onClose();
       }}
     >
-      <SheetContent className="w-full overflow-y-auto p-6 sm:max-w-3xl">
+      <SheetContent className="overflow-y-auto p-6 data-[side=right]:w-full data-[side=right]:sm:max-w-3xl">
         <SheetHeader className="p-0 pr-8">
           <SheetTitle className="text-xl">{person.name}</SheetTitle>
           <SheetDescription>
@@ -155,7 +155,7 @@ export function PersonDetails({
             Edit linked accounts
           </Button>
         )}
-        <div className="mt-2 grid grid-cols-3 divide-x rounded-lg border py-5">
+        <div className="mt-2 grid grid-cols-1 gap-y-4 divide-y rounded-lg border py-5 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
           <div className="px-4">
             <p className="text-xs text-muted-foreground">Merged {terms.plural}</p>
             <p className="mt-2 text-2xl font-semibold">{number(current.merged_prs)}</p>

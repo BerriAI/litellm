@@ -661,17 +661,22 @@ export default function ObservedROIView({
   const { data, error, refresh } = useObservedReport(accessToken);
   const [returned] = useState(() => new URLSearchParams(typeof window === "undefined" ? "" : window.location.search));
   const [connections, setConnections] = useState(
-    ["github", "gitlab"].includes(returned.get("connected") ?? "") || returned.has("connection_cancelled"),
+    ["github", "gitlab"].includes(returned.get("connected") ?? "") ||
+      returned.has("connection_cancelled") ||
+      returned.has("connection_failed"),
   );
-  const [connectionError, setConnectionError] = useState(
-    returned.has("connection_cancelled") ? "Connection cancelled. Choose an app or token to try again" : "",
-  );
+  const [connectionError, setConnectionError] = useState(() => {
+    if (returned.has("connection_failed")) return "Connection failed or expired. Try again or use a token";
+    if (returned.has("connection_cancelled")) return "Connection cancelled. Choose an app or token to try again";
+    return "";
+  });
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("connected");
     url.searchParams.delete("connection_cancelled");
+    url.searchParams.delete("connection_failed");
     window.history.replaceState(window.history.state, "", url);
   }, []);
   function closeConnections() {

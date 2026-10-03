@@ -97,6 +97,7 @@ describe("observed ROI dashboard", () => {
 
   it.each([
     { query: "connected=gitlab", alerts: [] },
+    { query: "connection_failed=1", alerts: ["Connection failed or expired. Try again or use a token"] },
     { query: "connection_cancelled=1", alerts: ["Connection cancelled. Choose an app or token to try again"] },
   ])("resumes setup after $query and refreshes saved changes after closing", async ({ query, alerts }) => {
     window.history.replaceState(null, "", `/roi-calculator/?${query}`);

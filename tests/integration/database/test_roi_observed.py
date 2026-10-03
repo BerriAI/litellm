@@ -279,6 +279,8 @@ async def test_app_callback_round_trip_and_admin_authorization(
     def respond(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
             assert str(request.url) == config.token_url
+            if parse_qs(request.content.decode()).get("code") == ["rejected-code"]:
+                return httpx.Response(400, json={"error": "invalid_grant"})
             return httpx.Response(
                 200,
                 json={
@@ -335,7 +337,8 @@ async def test_app_callback_round_trip_and_admin_authorization(
         replay: Final = await client.get(
             f"/roi-calculator/observed/oauth/{provider}/callback", params={"state": state, "code": "test-code"}
         )
-        assert replay.status_code == 400
+        assert replay.status_code == 303
+        assert replay.headers["location"] == config.proxy_url + "/ui/roi-calculator/?connection_failed=1"
         restart: Final = await client.post(f"/roi-calculator/observed/oauth/{provider}/start")
         denied_state: Final = parse_qs(urlsplit(restart.json()["url"]).query)["state"][0]
         denied: Final = await client.get(
@@ -346,6 +349,23 @@ async def test_app_callback_round_trip_and_admin_authorization(
         assert denied.headers["location"] == config.proxy_url + "/ui/roi-calculator/?connection_cancelled=1"
         unchanged: Final = await client.get("/roi-calculator/observed/settings")
         assert unchanged.json() == saved.json()
+        expired_installation: Final = (
+            await client.get("/roi-calculator/observed/oauth/github/installed", params={"state": initial_state})
+            if install_first
+            else None
+        )
+        if expired_installation is not None:
+            assert expired_installation.status_code == 303
+            assert expired_installation.headers["location"].endswith("?connection_failed=1")
+        retry: Final = await client.post(f"/roi-calculator/observed/oauth/{provider}/start")
+        rejected: Final = await client.get(
+            f"/roi-calculator/observed/oauth/{provider}/callback",
+            params={"state": parse_qs(urlsplit(retry.json()["url"]).query)["state"][0], "code": "rejected-code"},
+        )
+        assert rejected.status_code == 303
+        assert rejected.headers["location"] == config.proxy_url + "/ui/roi-calculator/?connection_failed=1"
+        assert "litellm_roi_oauth" not in client.cookies
+        assert (await client.get("/roi-calculator/observed/settings")).json() == saved.json()
 
 
 @pytest.mark.asyncio

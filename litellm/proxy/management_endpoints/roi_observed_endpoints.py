@@ -426,6 +426,21 @@ async def observed_authorization_callback(
     config: Final = oauth_config(provider)
     if config is None:
         raise HTTPException(409, "The provider app is not configured.")
+    try:
+        return await _complete_authorization(config, request, repository, transport, state, code, error)
+    except HTTPException:
+        return _authorization_redirect(config, "connection_failed=1")
+
+
+async def _complete_authorization(
+    config: OAuthConfig,
+    request: Request,
+    repository: ConfigRepository,
+    transport: httpx.AsyncBaseTransport | None,
+    state: str,
+    code: str,
+    error: str,
+) -> RedirectResponse:
     verified: Final = await consume_state(repository, state, request.cookies.get("litellm_roi_oauth", ""), config)
     if error or not code:
         return _authorization_redirect(config, "connection_cancelled=1")
@@ -434,10 +449,10 @@ async def observed_authorization_callback(
     grant: Final = await exchange_code(config, verified, code, transport)
     validation_settings: Final = ROISettings.model_validate(
         {
-            "source_provider": provider,
+            "source_provider": config.provider,
             "connection_type": "app",
-            ("github_api_url" if provider == "github" else "gitlab_api_url"): config.api_url,
-            ("github_token" if provider == "github" else "gitlab_token"): grant.access_token,
+            ("github_api_url" if config.provider == "github" else "gitlab_api_url"): config.api_url,
+            ("github_token" if config.provider == "github" else "gitlab_token"): grant.access_token,
         }
     )
     source: Final = create_source(validation_settings, transport)
@@ -448,7 +463,7 @@ async def observed_authorization_callback(
     finally:
         await source.close()
     await save_grant(repository, config, grant, revision=verified.settings_revision)
-    return _authorization_redirect(config, "connected=" + provider)
+    return _authorization_redirect(config, "connected=" + config.provider)
 
 
 @router.get("/oauth/github/installed", include_in_schema=False)
@@ -460,12 +475,15 @@ async def observed_installation_callback(
     config: Final = oauth_config("github")
     if config is None or config.installation_url is None:
         raise HTTPException(409, "The GitHub app is not configured.")
-    verified: Final = await consume_state(
-        repository, state, request.cookies.get("litellm_roi_oauth", ""), config, flow="install"
-    )
-    if (await load_stored_settings(repository)).revision != verified.settings_revision:
-        raise HTTPException(409, "The connection changed during installation. Start again from Connections.")
-    url, nonce = await begin_authorization(repository, config)
+    try:
+        verified: Final = await consume_state(
+            repository, state, request.cookies.get("litellm_roi_oauth", ""), config, flow="install"
+        )
+        if (await load_stored_settings(repository)).revision != verified.settings_revision:
+            raise HTTPException(409, "The connection changed during installation. Start again from Connections.")
+        url, nonce = await begin_authorization(repository, config)
+    except HTTPException:
+        return _authorization_redirect(config, "connection_failed=1")
     response: Final = RedirectResponse(url, status_code=303)
     response.set_cookie(
         "litellm_roi_oauth",

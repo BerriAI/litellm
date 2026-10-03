@@ -208,7 +208,12 @@ function ConnectionMethod({
           onToken={setToken}
           apiUrl={apiUrl}
           onUrl={setApiUrl}
-          hasToken={connected.has_token && connected.connection_type === "token"}
+          hasToken={
+            connected.source_provider === provider &&
+            connected.api_url === apiUrl &&
+            connected.has_token &&
+            connected.connection_type === "token"
+          }
         />
       )}
       {method === "app" && <AppMessage configured={Boolean(apps?.[provider].configured)} label={label} />}
