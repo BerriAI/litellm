@@ -213,42 +213,17 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .send()
             .await?
             .error_for_status()?;
-        let read_queries = client.post(writer.url().clone()).body(format!(
-            "SELECT count() FROM system.query_log WHERE type = 'QueryFinish' AND current_database = '{DATABASE}' AND query LIKE '%FROM otel_traces AS o%' AND query NOT LIKE '%system.query_log%'"
-        )).send().await?.error_for_status()?.text().await?;
-        let read_queries = read_queries.trim().parse::<usize>()?;
-        assert!(
-            read_queries > 0 && read_queries < runs,
-            "{read_queries} span queries for {runs} runs"
-        );
-        if costed {
-            let overlapping = client
-                .post(writer.url().clone())
-                .body(format!(
-                    "WITH spend_reads AS (
-                        SELECT query_start_time_microseconds AS started, event_time_microseconds AS finished
-                        FROM system.query_log
-                        WHERE type = 'QueryFinish' AND current_database = '{DATABASE}'
-                          AND query LIKE '%FROM spend_logs FINAL%' AND query NOT LIKE '%system.query_log%'
-                    ), events AS (
-                        SELECT started AS at, 1 AS delta FROM spend_reads
-                        UNION ALL SELECT finished AS at, -1 AS delta FROM spend_reads
-                    )
-                    SELECT max(active) FROM (
-                        SELECT sum(delta) OVER (ORDER BY at, delta ROWS UNBOUNDED PRECEDING) AS active
-                        FROM events
-                    )"
-                ))
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await?
-                .trim()
-                .parse::<usize>()?;
+        for table in ["otel_traces AS o", "spend_logs FINAL"]
+            .into_iter()
+            .take(if costed { 2 } else { 1 })
+        {
+            let read_queries = client.post(writer.url().clone()).body(format!(
+                "SELECT count() FROM system.query_log WHERE type = 'QueryFinish' AND current_database = '{DATABASE}' AND query LIKE '%FROM {table}%' AND query NOT LIKE '%system.query_log%'"
+            )).send().await?.error_for_status()?.text().await?;
+            let read_queries = read_queries.trim().parse::<usize>()?;
             assert!(
-                (2..=4).contains(&overlapping),
-                "{overlapping} simultaneous spend reads for {runs} runs"
+                read_queries > 0 && read_queries < runs,
+                "{read_queries} {table} queries for {runs} runs"
             );
         }
     }

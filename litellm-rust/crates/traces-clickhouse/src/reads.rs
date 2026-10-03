@@ -1,11 +1,11 @@
 //! Scoped trace reads: the trace list, one trace resolved with its spend, and span payloads.
 
+use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE};
-use futures_util::{StreamExt, TryStreamExt, stream};
-use itertools::Itertools;
 use litellm_http::Client;
 use litellm_storage_clickhouse::{Query, fetch};
 use litellm_traces::{
@@ -37,23 +37,74 @@ impl Query for RunCandidates {
     );
 }
 
+/// A resolved graph pinned at one `snapshot_ms`, with the facts every page of it needs.
+struct Snapshot {
+    trace: Trace,
+    version: String,
+    weight: u32,
+}
+
+impl Snapshot {
+    fn new(trace: Trace) -> Result<Self, Error> {
+        let encoded = serde_json::to_vec(&trace).map_err(|_| Error::InvalidResponse)?;
+        if encoded.len() > crate::span_batches::MAX_GRAPH_BYTES {
+            return Err(Error::ReadTooLarge);
+        }
+        let span_ids: Vec<&str> = trace
+            .spans
+            .iter()
+            .map(|span| span.span_id.as_str())
+            .collect();
+        let version = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&span_ids).map_err(|_| Error::InvalidResponse)?)
+        );
+        Ok(Self {
+            trace,
+            version,
+            weight: u32::try_from(encoded.len() * 2).unwrap_or(u32::MAX),
+        })
+    }
+}
+
 // Cursor pages share a bounded snapshot so advancing does not resolve the whole graph again.
-static TRACE_SNAPSHOTS: LazyLock<Cache<String, Arc<Trace>>> = LazyLock::new(|| {
+static TRACE_SNAPSHOTS: LazyLock<Cache<String, Arc<Snapshot>>> = LazyLock::new(|| {
     Cache::builder()
         .max_capacity((2 * crate::span_batches::MAX_GRAPH_BYTES) as u64)
-        .weigher(|_: &String, trace: &Arc<Trace>| {
-            serde_json::to_vec(trace.as_ref())
-                .ok()
-                .and_then(|bytes| u32::try_from(bytes.len().saturating_mul(2)).ok())
-                .unwrap_or(u32::MAX)
-        })
+        .weigher(|_: &String, snapshot: &Arc<Snapshot>| snapshot.weight)
         .time_to_live(Duration::from_secs(120))
         .build()
 });
 
 const NANOS_PER_MS: i64 = 1_000_000;
 const SPEND_WINDOW_MS: i64 = 30 * 60 * 1000;
-const SPEND_CONCURRENCY: usize = 4;
+
+fn now_ms() -> u64 {
+    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64
+}
+
+/// Spend logged within half an hour of the spans belongs to the same run.
+fn spend_window(rows: &[contracts::TraceSpansRow]) -> Option<Range<i64>> {
+    let start_ns = rows.iter().map(|row| row.start_ns).min()?;
+    let end_ns = rows
+        .iter()
+        .map(|row| row.start_ns.saturating_add_unsigned(row.duration_ns))
+        .max()?;
+    Some(
+        start_ns.div_euclid(NANOS_PER_MS) - SPEND_WINDOW_MS
+            ..end_ns.div_euclid(NANOS_PER_MS) + SPEND_WINDOW_MS,
+    )
+}
+
+/// The rows of `spend`, sorted by `start_ms`, that fall inside `window`.
+fn spend_within(
+    spend: &[contracts::SpendByResponseIdsRow],
+    window: Range<i64>,
+) -> &[contracts::SpendByResponseIdsRow] {
+    let first = spend.partition_point(|row| row.start_ms < window.start);
+    let end = spend.partition_point(|row| row.start_ms < window.end);
+    &spend[first..end.max(first)]
+}
 
 fn encode_cursor<T: Serialize>(position: &T) -> String {
     URL_SAFE.encode(serde_json::to_vec(position).unwrap_or_default())
@@ -124,8 +175,8 @@ async fn reference(
     Ok(identities.pop().map(|identity| identity.trace_ref))
 }
 
-/// Spend records behind the spans' calls. A failed lookup leaves cost unknown instead of failing
-/// the read.
+/// Spend records behind the spans' calls, sorted by `start_ms`. A failed lookup leaves cost
+/// unknown instead of failing the read.
 async fn spend(
     client: &Client,
     connection: &Connection,
@@ -133,12 +184,7 @@ async fn spend(
     rows: &[contracts::TraceSpansRow],
 ) -> Vec<contracts::SpendByResponseIdsRow> {
     let lookup = SpendLookup::new(rows);
-    let (Some(start_ns), Some(end_ns)) = (
-        rows.iter().map(|row| row.start_ns).min(),
-        rows.iter()
-            .map(|row| row.start_ns.saturating_add_unsigned(row.duration_ns))
-            .max(),
-    ) else {
+    let Some(window) = spend_window(rows) else {
         return Vec::new();
     };
     if lookup.is_empty() {
@@ -149,11 +195,14 @@ async fn spend(
         response_ids: lookup.response_ids,
         request_ids: lookup.request_ids,
         trace_ids: lookup.trace_ids,
-        start_ms: start_ns.div_euclid(NANOS_PER_MS) - SPEND_WINDOW_MS,
-        end_ms: end_ns.div_euclid(NANOS_PER_MS) + SPEND_WINDOW_MS,
+        start_ms: window.start,
+        end_ms: window.end,
     });
     match crate::span_batches::read_spend(client, connection, params).await {
-        Ok(rows) => rows,
+        Ok(mut rows) => {
+            rows.sort_by_key(|row| row.start_ms);
+            rows
+        }
         Err(error) => {
             tracing::warn!(%error, "trace spend lookup unavailable");
             Vec::new()
@@ -197,16 +246,34 @@ pub async fn list_traces(
         .last()
         .filter(|_| page.len() == params.0.limit as usize)
         .map(|last| encode_cursor(&(last.start_ms, &last.trace_ref)));
-    let data = stream::iter(page.chunks(16))
-        .then(|batch| list_summaries(client, connection, access, batch))
-        .try_collect::<Vec<_>>()
-        .await?
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut data = Vec::with_capacity(page.len());
+    for batch in page.chunks(RUNS_PER_SPAN_READ) {
+        match list_summaries(client, connection, access, batch).await {
+            Ok(summaries) => data.extend(summaries),
+            Err(Error::ReadTooLarge) => {
+                for row in batch {
+                    data.push(run_summary(client, connection, access, row).await?);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
     Ok(TracePage { data, next_cursor })
 }
 
+const RUNS_PER_SPAN_READ: usize = 16;
+
+fn run_key(team_id: &str, api_key_hash: &str, trace_id: &str) -> (String, String, String) {
+    (
+        team_id.to_owned(),
+        api_key_hash.to_owned(),
+        trace_id.to_owned(),
+    )
+}
+
+/// Summaries for a few runs from one span read and one spend read. Spend is matched to each run
+/// inside that run's own window, so a response id reused across runs costs each run only its own
+/// calls.
 async fn list_summaries(
     client: &Client,
     connection: &Connection,
@@ -227,54 +294,57 @@ async fn list_summaries(
         start_ms,
         end_ms: end_ms.saturating_add(1),
     });
-    let spans = match crate::span_batches::read_list_spans(client, connection, params).await {
-        Ok(spans) => spans,
-        Err(Error::ReadTooLarge) => {
-            return stream::iter(runs)
-                .then(|row| async move {
-                    match get_trace(client, connection, access, &row.trace_id, &row.trace_ref).await
-                    {
-                        Ok(trace) => {
-                            Ok(trace.map_or_else(|| listed_summary(row), |trace| trace.summary))
-                        }
-                        Err(Error::ReadTooLarge) => Ok(listed_summary(row)),
-                        Err(error) => Err(error),
-                    }
-                })
-                .try_collect()
-                .await;
-        }
-        Err(error) => return Err(error),
-    };
-    let by_trace = spans.into_iter().into_group_map_by(|span| {
-        (
-            span.team_id.clone(),
-            span.api_key_hash.clone(),
-            span.trace_id.clone(),
-        )
+    let mut spans =
+        crate::span_batches::read_list_spans(client, connection, params, now_ms()).await?;
+    let spend_rows = spend(client, connection, access, &spans).await;
+    spans.sort_by(|left, right| {
+        run_key(&left.team_id, &left.api_key_hash, &left.trace_id)
+            .cmp(&run_key(
+                &right.team_id,
+                &right.api_key_hash,
+                &right.trace_id,
+            ))
+            .then(left.start_ns.cmp(&right.start_ns))
     });
-    let summaries = runs
+    let by_run: HashMap<_, &[contracts::TraceSpansRow]> = spans
+        .chunk_by(|left, right| {
+            (&left.team_id, &left.api_key_hash, &left.trace_id)
+                == (&right.team_id, &right.api_key_hash, &right.trace_id)
+        })
+        .map(|run| {
+            (
+                run_key(&run[0].team_id, &run[0].api_key_hash, &run[0].trace_id),
+                run,
+            )
+        })
+        .collect();
+    Ok(runs
         .iter()
         .map(|row| {
-            let spans = by_trace
-                .get(&(
-                    row.team_id.clone(),
-                    row.api_key_hash.clone(),
-                    row.trace_id.clone(),
-                ))
-                .map(Vec::as_slice)
+            let spans = by_run
+                .get(&run_key(&row.team_id, &row.api_key_hash, &row.trace_id))
+                .copied()
                 .unwrap_or_default();
-            async move {
-                let spend_rows = spend(client, connection, access, spans).await;
-                resolve_trace(&row.trace_id, &row.trace_ref, spans, &spend_rows)
-                    .map_or_else(|| listed_summary(row), |trace| trace.summary)
-            }
+            let spend =
+                spend_window(spans).map_or(&[][..], |window| spend_within(&spend_rows, window));
+            resolve_trace(&row.trace_id, &row.trace_ref, spans, spend)
+                .map_or_else(|| listed_summary(row), |trace| trace.summary)
         })
-        .collect::<Vec<_>>();
-    Ok(stream::iter(summaries)
-        .buffered(SPEND_CONCURRENCY)
-        .collect()
-        .await)
+        .collect())
+}
+
+/// One run resolved on its own; the fallback when a batch of runs exceeds the read budget.
+async fn run_summary(
+    client: &Client,
+    connection: &Connection,
+    access: &ReadAccessParams,
+    row: &contracts::ListTracesRow,
+) -> Result<litellm_traces::TraceSummary, Error> {
+    match get_trace(client, connection, access, &row.trace_id, &row.trace_ref).await {
+        Ok(trace) => Ok(trace.map_or_else(|| listed_summary(row), |trace| trace.summary)),
+        Err(Error::ReadTooLarge) => Ok(listed_summary(row)),
+        Err(error) => Err(error),
+    }
 }
 
 pub async fn get_trace(
@@ -333,8 +403,7 @@ pub async fn get_trace_page(
         }
         None => SpanPosition {
             trace_ref: trace_ref.clone(),
-            snapshot_ms: (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
-                as u64,
+            snapshot_ms: now_ms(),
             offset: 0,
             version: String::new(),
         },
@@ -348,8 +417,8 @@ pub async fn get_trace_page(
     ))
     .map_err(|_| Error::InvalidParameters)?;
     let key = format!("{:x}", Sha256::digest(key_bytes));
-    let snapshot = if let Some(trace) = TRACE_SNAPSHOTS.get(&key).await {
-        trace
+    let snapshot = if let Some(snapshot) = TRACE_SNAPSHOTS.get(&key).await {
+        snapshot
     } else {
         let params = TraceSpansParams {
             access: access.clone(),
@@ -363,50 +432,34 @@ pub async fn get_trace_page(
         let Some(trace) = resolve_trace(trace_id, &trace_ref, &rows, &spend_rows) else {
             return Ok(None);
         };
-        if serde_json::to_vec(&trace)
-            .map_err(|_| Error::InvalidResponse)?
-            .len()
-            > crate::span_batches::MAX_GRAPH_BYTES
-        {
-            return Err(Error::ReadTooLarge);
-        }
-        let trace = Arc::new(trace);
-        TRACE_SNAPSHOTS.insert(key, Arc::clone(&trace)).await;
-        trace
+        let snapshot = Arc::new(Snapshot::new(trace)?);
+        TRACE_SNAPSHOTS.insert(key, Arc::clone(&snapshot)).await;
+        snapshot
     };
-    let span_ids: Vec<&str> = snapshot
-        .spans
-        .iter()
-        .map(|span| span.span_id.as_str())
-        .collect();
-    let version = format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&span_ids).map_err(|_| Error::InvalidResponse)?)
-    );
-    if cursor.is_some() && position.version != version {
+    if cursor.is_some() && position.version != snapshot.version {
         return Err(Error::TraceChanged);
     }
-    let mut trace = Trace {
-        summary: snapshot.summary.clone(),
-        agents: snapshot.agents.clone(),
-        spans: Vec::new(),
-        next_cursor: None,
-    };
-    if position.offset > snapshot.spans.len() {
+    let spans = &snapshot.trace.spans;
+    if position.offset > spans.len() {
         return Err(Error::InvalidCursor("span"));
     }
-    let end = position
-        .offset
-        .saturating_add(page_size as usize)
-        .min(snapshot.spans.len());
-    trace.next_cursor = (end < snapshot.spans.len()).then(|| {
-        encode_cursor(&SpanPosition {
-            offset: end,
-            version: version.clone(),
-            ..position
-        })
-    });
-    trace.spans = snapshot.spans[position.offset..end].to_vec();
+    let page = |count: usize| {
+        let end = position.offset.saturating_add(count).min(spans.len());
+        Trace {
+            summary: snapshot.trace.summary.clone(),
+            agents: snapshot.trace.agents.clone(),
+            spans: spans[position.offset..end].to_vec(),
+            next_cursor: (end < spans.len()).then(|| {
+                encode_cursor(&SpanPosition {
+                    trace_ref: trace_ref.clone(),
+                    snapshot_ms: position.snapshot_ms,
+                    offset: end,
+                    version: snapshot.version.clone(),
+                })
+            }),
+        }
+    };
+    let mut trace = page(page_size as usize);
     while serde_json::to_vec(&trace)
         .map_err(|_| Error::InvalidResponse)?
         .len()
@@ -415,13 +468,7 @@ pub async fn get_trace_page(
         if trace.spans.len() <= 1 {
             return Err(Error::ReadTooLarge);
         }
-        trace.spans.truncate(trace.spans.len() / 2);
-        trace.next_cursor = Some(encode_cursor(&SpanPosition {
-            trace_ref: trace_ref.clone(),
-            snapshot_ms: position.snapshot_ms,
-            offset: position.offset + trace.spans.len(),
-            version: version.clone(),
-        }));
+        trace = page(trace.spans.len() / 2);
     }
     Ok(Some(trace))
 }
