@@ -2461,6 +2461,8 @@ class BaseLLMHTTPHandler:
                 )
             )
         stream = bool(stream or data.get("stream"))
+        logging_obj.stream = stream  # rebind-ok: record provider-resolved stream mode
+        logging_obj.model_call_details.update(stream=stream)
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
@@ -2653,6 +2655,8 @@ class BaseLLMHTTPHandler:
                 )
             )
         stream = bool(stream or data.get("stream"))
+        logging_obj.stream = stream  # rebind-ok: record provider-resolved stream mode
+        logging_obj.model_call_details.update(stream=stream)
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
