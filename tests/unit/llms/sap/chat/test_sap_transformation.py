@@ -1,5 +1,6 @@
 import warnings
 import pytest
+from unittest.mock import MagicMock, patch
 from pydantic import ValidationError
 
 
@@ -639,3 +640,131 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by deployment-resolution tests
+# ---------------------------------------------------------------------------
+
+
+def _make_config():
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    cfg = GenAIHubOrchestrationConfig()
+    cfg.token_creator = lambda: "Bearer TEST"
+    cfg._base_url = "https://api.test-sap.com"
+    cfg._resource_group = "test-group"
+    return cfg
+
+
+def _mock_client(*names: str):
+    """Fake httpx client returning a /lm/deployments response for the given deployment names.
+
+    The backend filters by scenarioId/executableIds/status, so there is no
+    second call to /lm/configurations; the mock only needs one response shape.
+    """
+    resources = [
+        {
+            "scenarioId": "orchestration",
+            "configurationId": f"cfg-{n}",
+            "deploymentUrl": f"https://deploy-{n}.sap.com",
+            "createdAt": f"2024-01-{i + 1:02d}T00:00:00Z",
+            "configurationName": n,
+        }
+        for i, n in enumerate(names)
+    ]
+    resp = MagicMock()
+    resp.json.return_value = {"resources": resources}
+    client = MagicMock()
+    client.get.return_value = resp
+    return client
+
+
+class TestDeploymentResolution:
+    def test_single_deployment_returns_url(self):
+        cfg = _make_config()
+        with patch("litellm.module_level_client", _mock_client("orch-a")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            url = cfg._resolve_deployment_url()
+        assert url == "https://deploy-orch-a.sap.com"
+
+    def test_multiple_deployments_picks_newest(self):
+        # "older" has createdAt 2024-01-01, "newer" has 2024-01-02
+        cfg = _make_config()
+        with patch("litellm.module_level_client", _mock_client("older", "newer")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            url = cfg._resolve_deployment_url()
+        assert url == "https://deploy-newer.sap.com"
+
+    def test_multiple_deployments_emits_warning(self):
+        cfg = _make_config()
+        with patch("litellm.module_level_client", _mock_client("older", "newer")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            with patch("litellm.llms.sap.chat.transformation.verbose_logger") as mock_log:  # test-quality-ok: patching module-level logger to intercept warning calls
+                url = cfg._resolve_deployment_url()
+        mock_log.warning.assert_called_once()
+        assert 2 == mock_log.warning.call_args[0][1]
+        assert url == "https://deploy-newer.sap.com"
+
+    def test_no_deployments_raises(self):
+        from litellm.llms.sap.chat.handler import GenAIHubOrchestrationError
+
+        cfg = _make_config()
+        with patch("litellm.module_level_client", _mock_client()):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            with pytest.raises(GenAIHubOrchestrationError) as exc:
+                cfg._resolve_deployment_url()
+        assert "No orchestration deployment found" in str(exc.value)
+
+    def test_query_params_sent_to_backend(self):
+        """The whole point of this refactor: filtering must happen server-side."""
+        cfg = _make_config()
+        mock = _mock_client("orch-a")
+        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            cfg._resolve_deployment_url()
+        _, kwargs = mock.get.call_args
+        assert kwargs["params"] == {
+            "scenarioId": "orchestration",
+            "executableIds": ["orchestration"],
+            "status": "RUNNING",
+        }
+
+
+class TestGetCompleteUrl:
+    def test_optional_params_used_first(self):
+        """Step 1: deployment_url in optional_params skips discovery entirely."""
+        cfg = _make_config()
+        explicit = "https://custom.sap.com/deployments/abc"
+        mock = MagicMock()
+        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            url = cfg.get_complete_url(None, None, "gpt-4o", {"deployment_url": explicit}, {})
+        assert url == f"{explicit}/v2/completion"
+        mock.get.assert_not_called()
+
+    def test_env_var_used_when_no_optional_param(self):
+        """Step 2: AICORE_ORCHESTRATION_DEPLOYMENT_URL skips discovery."""
+        cfg = _make_config()
+        env_url = "https://env.sap.com/deployments/env"
+        mock = MagicMock()
+        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
+                url = cfg.get_complete_url(None, None, "gpt-4o", {}, {})
+        assert url == f"{env_url}/v2/completion"
+        mock.get.assert_not_called()
+
+    def test_optional_params_beats_env_var(self):
+        """Step 1 takes precedence over step 2."""
+        cfg = _make_config()
+        opt_url = "https://opt.sap.com/deployments/opt"
+        env_url = "https://env.sap.com/deployments/env"
+        mock = MagicMock()
+        with patch("litellm.module_level_client", mock):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            with patch.dict("os.environ", {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": env_url}):
+                url = cfg.get_complete_url(None, None, "gpt-4o", {"deployment_url": opt_url}, {})
+        assert url == f"{opt_url}/v2/completion"
+        mock.get.assert_not_called()
+
+    def test_discovery_used_when_no_override(self):
+        """Step 3: no optional_param, no env var — discovery runs."""
+        cfg = _make_config()
+        env = {"AICORE_ORCHESTRATION_DEPLOYMENT_URL": ""}  # empty = falsy
+        with patch("litellm.module_level_client", _mock_client("orch-a")):  # test-quality-ok: patching the HTTP client at the litellm transport boundary
+            with patch.dict("os.environ", env):
+                url = cfg.get_complete_url(None, None, "gpt-4o", {}, {})
+        assert url == "https://deploy-orch-a.sap.com/v2/completion"
