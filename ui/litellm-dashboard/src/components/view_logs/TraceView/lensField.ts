@@ -63,5 +63,5 @@ export function agoLabel(thenMs: number, nowMs: number): string {
 export const RECEIVING_WINDOW_MS = 5 * 60 * 1000;
 
 export function isReceiving(lastMs: number | null, nowMs: number): boolean {
-  return lastMs !== null && nowMs - lastMs < RECEIVING_WINDOW_MS;
+  return lastMs !== null && nowMs >= lastMs && nowMs - lastMs < RECEIVING_WINDOW_MS;
 }
