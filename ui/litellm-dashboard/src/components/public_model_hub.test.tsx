@@ -376,7 +376,7 @@ describe("PublicModelHub", () => {
     respondWith([passThrough("Clinical NER", "/clinical-ner")]);
     renderHub();
 
-    const row = (await screen.findByRole("button", { name: "Clinical NER" })).closest("tr");
+    const row = await screen.findByRole("row", { name: /Clinical NER/ });
     expect(row).toHaveTextContent("passthrough");
     expect(row).toHaveTextContent("n/a");
     expect(row).not.toHaveTextContent("Free");
