@@ -32,3 +32,7 @@ export type ActivitySelection = Pick<Settings, "source"> &
   >;
 
 export type Worker = LensList["workers"][number];
+
+export type Review = components["schemas"]["Review"];
+
+export type ReviewVerdict = components["schemas"]["ReviewVerdict"];

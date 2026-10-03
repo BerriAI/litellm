@@ -87,6 +87,8 @@ const lens: Lens = {
       findings: [pattern, issue],
       assessments: [],
       steps: [],
+      reviews: [],
+      reviewed: 0,
       trigger: "schedule",
       attempts: 0,
       error: "",

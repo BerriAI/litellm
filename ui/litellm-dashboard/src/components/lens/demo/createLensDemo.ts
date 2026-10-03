@@ -297,6 +297,8 @@ export function createLensDemoData(now = Date.now()) {
         })),
         attempts: 1,
         steps: [],
+        reviews: [],
+        reviewed: 0,
         trigger: "schedule" as const,
         error: "",
         cost: sample.length * 0.012,
