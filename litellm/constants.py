@@ -1035,6 +1035,7 @@ openai_compatible_providers: Final[list] = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "coralbricks",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "cortecs",
