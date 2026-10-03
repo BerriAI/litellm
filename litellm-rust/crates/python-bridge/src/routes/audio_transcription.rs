@@ -1,4 +1,4 @@
-use crate::logger::{run_async, run_sync};
+use crate::execution::{run_async, run_sync};
 use litellm_core::audio_transcription::{
     AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
 };

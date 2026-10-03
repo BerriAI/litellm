@@ -2,7 +2,9 @@ import glob
 import os
 import re
 import sys
+import threading
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -1024,3 +1026,221 @@ class TestJWTKeyMappingCascade:
                 f"{path} must declare onDelete: Cascade on the JWT key mapping "
                 "relation (issue #33702)"
             )
+
+
+
+class TestStripPrismaQueryParams:
+    """The psycopg URL the job connects with is derived from the Prisma-dialect
+    DATABASE_URL, whose TLS params mean something else to libpq."""
+
+    @staticmethod
+    def _query(url: str) -> dict[str, str]:
+        from urllib.parse import parse_qsl, urlparse
+
+        return dict(parse_qsl(urlparse(url).query))
+
+    def test_prisma_ca_sslcert_becomes_sslrootcert_with_verify_full(self):
+        url = "postgresql://u:p@writer:5432/db?schema=public&sslmode=require&sslcert=/tmp/pinned.pem&sslaccept=strict"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/tmp/pinned.pem"}
+        assert cleaned.startswith("postgresql://u:p@writer:5432/db?")
+
+    @pytest.mark.parametrize("sslmode", ["prefer", "require"])
+    @pytest.mark.parametrize("sslaccept", ["strict", "unknown-mode-prisma-treats-as-strict"])
+    def test_strict_verifies_chain_and_hostname_whatever_sslmode_prisma_was_given(self, sslmode, sslaccept):
+        url = f"postgresql://writer/db?sslmode={sslmode}&sslcert=/certs/ca.pem&sslaccept={sslaccept}"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/certs/ca.pem"}
+
+    def test_strict_with_tls_disabled_stays_off(self):
+        url = "postgresql://writer/db?sslmode=disable&sslcert=/certs/ca.pem&sslaccept=strict"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "disable"}
+
+    @pytest.mark.parametrize("sslaccept", ["&sslaccept=accept_invalid_certs", ""])
+    def test_without_strict_the_ca_is_dropped_so_libpq_checks_nothing_like_prisma(self, sslaccept):
+        url = f"postgresql://writer/db?sslmode=require&sslcert=/certs/ca.pem{sslaccept}"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "require"}
+
+    def test_a_ca_alone_without_strict_or_sslmode_leaves_libpq_its_defaults(self):
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params("postgresql://writer/db?sslcert=/certs/ca.pem")
+
+        assert cleaned == "postgresql://writer/db"
+
+    def test_a_libpq_client_certificate_pair_is_left_alone(self):
+        url = "postgresql://writer/db?sslmode=verify-full&sslrootcert=/ca.pem&sslcert=/client.crt&sslkey=/client.key"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {
+            "sslmode": "verify-full",
+            "sslrootcert": "/ca.pem",
+            "sslcert": "/client.crt",
+            "sslkey": "/client.key",
+        }
+
+    def test_an_explicit_sslrootcert_wins_over_the_prisma_sslcert(self):
+        url = "postgresql://writer/db?sslmode=require&sslrootcert=/ca.pem&sslcert=/pinned.pem&sslaccept=strict"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/ca.pem"}
+
+    def test_prisma_only_params_are_dropped_and_plain_urls_pass_through(self):
+        url = "postgresql://u:p@pooler:6543/db?schema=tenant&pgbouncer=true&connection_limit=5&connect_timeout=3"
+
+        cleaned = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert cleaned == "postgresql://u:p@pooler:6543/db?connect_timeout=3"
+        assert (
+            ProxyExtrasDBManager._strip_prisma_query_params("postgresql://u:p@writer/db")
+            == "postgresql://u:p@writer/db"
+        )
+
+
+class TestBuildRequestLogIndexes:
+    """The migration job hands the index build the direct database URL and the schema
+    the migrations target, waits for it, and reports its result."""
+
+    @pytest.fixture
+    def builds(self):
+        return []
+
+    @pytest.fixture
+    def build(self, builds):
+        def record(database_url: str, schema: str) -> bool:
+            builds.append((database_url, schema))
+            return True
+
+        return record
+
+    def test_the_build_gets_the_direct_url_without_prisma_params_and_the_prisma_schema(self, monkeypatch, builds, build):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@pooler:6543/db?schema=tenant&pgbouncer=true")
+        monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@primary:5432/db?connection_limit=1")
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == [("postgresql://u:p@primary:5432/db", "tenant")]
+
+    def test_the_build_defaults_to_the_database_url_and_the_public_schema(self, monkeypatch, builds, build):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == [("postgresql://u:p@primary:5432/db", "public")]
+
+    def test_a_build_that_leaves_indexes_missing_is_reported_so_the_job_reruns(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=lambda url, schema: False) is False
+
+    def test_without_a_database_url_nothing_is_built(self, monkeypatch, builds, build):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == []
+
+
+class TestStartRequestLogIndexBuild:
+    """A serving proxy that ran the migrations starts the index build on a daemon thread
+    and goes on to serve while it runs."""
+
+    def test_the_build_runs_on_a_daemon_thread_that_does_not_hold_up_the_caller(self):
+        release: Final = threading.Event()
+        builds: Final[list[str]] = []  # mutable-ok: the builder thread hands back the thread it ran on
+
+        def build() -> bool:
+            assert release.wait(5), "the caller never came back from start_request_log_index_build"
+            builds.append(threading.current_thread().name)
+            return True
+
+        thread: Final = ProxyExtrasDBManager.start_request_log_index_build(build=build)
+
+        assert builds == [], "the build ran before start_request_log_index_build returned"
+        assert thread.daemon is True
+        release.set()
+        thread.join(5)
+        assert builds == ["litellm-request-log-indexes"]
+
+
+class TestRunMigrationJob:
+    """`run_migration_job` is `setup_database` followed by the index build, each step's
+    result deciding whether the job reports success."""
+
+    @pytest.fixture
+    def calls(self):
+        return []
+
+    @pytest.fixture
+    def setup(self, calls):
+        def record(result: bool):
+            def setup_database(use_migrate: bool, use_v2_resolver: bool) -> bool:
+                calls.append(("setup", use_migrate, use_v2_resolver))
+                return result
+
+            return setup_database
+
+        return record
+
+    @pytest.fixture
+    def build(self, calls):
+        def record(result: bool):
+            def build_request_log_indexes() -> bool:
+                calls.append(("build",))
+                return result
+
+            return build_request_log_indexes
+
+        return record
+
+    def test_the_job_builds_the_indexes_after_the_migrations_succeed(self, calls, setup, build):
+        assert ProxyExtrasDBManager.run_migration_job(True, False, setup=setup(True), build=build(True)) is True
+
+        assert calls == [("setup", True, False), ("build",)]
+
+    def test_the_job_fails_without_building_when_the_migrations_fail(self, calls, setup, build):
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(False), build=build(True)) is False
+
+        assert calls == [("setup", True, True)]
+
+    def test_the_job_fails_when_an_index_could_not_be_built(self, calls, setup, build):
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(True), build=build(False)) is False
+
+        assert calls == [("setup", True, True), ("build",)]
+
+
+class TestMigrationJobOwnedDrift:
+    JOB_INDEXES = (
+        "-- CreateIndex\n"
+        'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id");\n'
+        "\n-- CreateIndex\n"
+        'CREATE INDEX "LiteLLM_SpendLogs_api_key_startTime_idx" ON "LiteLLM_SpendLogs"("api_key", "startTime");\n'
+    )
+
+    def test_a_plain_spend_logs_table_only_loses_the_migration_job_indexes(self):
+        filtered = ProxyExtrasDBManager._filter_migration_job_owned_drift(
+            _PARTITIONED_DRIFT_SQL + self.JOB_INDEXES, partitioned=False
+        )
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in filtered
+        assert "LiteLLM_SpendLogs_api_key_startTime_idx" not in filtered
+        assert 'PRIMARY KEY ("request_id")' in filtered
+
+    def test_a_partitioned_spend_logs_table_also_loses_its_partitioning_artifacts(self):
+        filtered = ProxyExtrasDBManager._filter_migration_job_owned_drift(
+            _PARTITIONED_DRIFT_SQL + self.JOB_INDEXES, partitioned=True
+        )
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in filtered
+        assert 'PRIMARY KEY ("request_id")' not in filtered
+        assert "LiteLLM_SpendLogs_legacy" not in filtered
+        assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in filtered

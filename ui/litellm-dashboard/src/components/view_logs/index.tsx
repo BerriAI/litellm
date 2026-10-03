@@ -81,11 +81,15 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   };
 
   return (
-    <div className="flex h-full w-full flex-col p-6">
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as LogsTabId)} className="min-h-0 flex-1">
-        <TabsList variant="line">
+    <div className="flex h-full w-full flex-col px-4 pb-4">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as LogsTabId)}
+        className="min-h-0 flex-1 gap-0"
+      >
+        <TabsList variant="line" className="-mx-4 h-10 w-auto justify-start gap-4 border-b border-border px-4">
           {tabs.map((tab) => (
-            <TabsTrigger key={tab.id} value={tab.id} className="flex-none">
+            <TabsTrigger key={tab.id} value={tab.id} className="flex-none gap-1.5 px-0 text-[13px] font-normal">
               {tab.label}
             </TabsTrigger>
           ))}

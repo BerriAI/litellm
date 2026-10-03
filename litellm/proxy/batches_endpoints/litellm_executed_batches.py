@@ -217,11 +217,7 @@ async def upstream_lacks_files_api(api_base: str, api_key: str | None, http_clie
     try:
         response: Final = await client.get(
             f"{api_base.rstrip('/')}/files",
-            headers=(
-                {"Authorization": f"Bearer {api_key}"}  # mutable-ok: AsyncHTTPHandler.get wants a plain dict
-                if api_key
-                else None
-            ),
+            headers=({"Authorization": f"Bearer {api_key}"} if api_key else None),
             timeout=_FILES_API_PROBE_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError:
@@ -516,7 +512,7 @@ class LiteLLMExecutedBatchRunner:
 
     async def fail_abandoned(self, batch: LiteLLMBatch, user_api_key_dict: UserAPIKeyAuth) -> LiteLLMBatch:
         error: Final = BatchError(message=_RUNNER_LOST_MESSAGE, code="runner_lost")
-        errors: Final = Errors(data=[error], object="list")  # mutable-ok: Errors.data is typed as a list
+        errors: Final = Errors(data=[error], object="list")
         failed: Final = batch.model_copy(
             update=MappingProxyType({"status": "failed", "failed_at": int(time.time()), "errors": errors})
         )
@@ -535,8 +531,8 @@ class LiteLLMExecutedBatchRunner:
         def reject(body: Mapping[str, object]) -> str | None:
             try:
                 is_request_body_safe(
-                    request_body=dict(body),  # mutable-ok: is_request_body_safe takes a dict
-                    general_settings=dict(self.general_settings),  # mutable-ok: is_request_body_safe takes a dict
+                    request_body=dict(body),
+                    general_settings=dict(self.general_settings),
                     llm_router=self.llm_router,
                     model=model,
                 )
@@ -569,7 +565,7 @@ class LiteLLMExecutedBatchRunner:
         except Exception as e:  # noqa: BLE001  # whatever fails, the batch must end up marked failed
             verbose_proxy_logger.exception("LiteLLM-executed batch %s failed: %s", run.unified_batch_id, e)
             error: Final = BatchError(message=str(e), code="internal_error")
-            errors: Final = Errors(data=[error], object="list")  # mutable-ok: Errors.data is typed as a list
+            errors: Final = Errors(data=[error], object="list")
             try:
                 await self._advance(run, "failed", MappingProxyType({"errors": errors}))
             except Exception as advance_error:  # noqa: BLE001  # a failed status write is logged, never raised
@@ -654,11 +650,11 @@ class LiteLLMExecutedBatchRunner:
         return method
 
     def _row_metadata(self, run: _BatchRun) -> dict[str, object]:  # mutable-ok: router updates metadata in place
-        return {  # mutable-ok: the router updates request metadata in place
+        return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(run.user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),
             "user_api_end_user_max_budget": run.user_api_key_dict.end_user_max_budget,
-            "tags": list(run.request_tags),  # mutable-ok: litellm types request tags as a list
+            "tags": list(run.request_tags),
             "batch_id": run.unified_batch_id,
         }
 

@@ -85,8 +85,6 @@ class SingulrGuardrail(CustomGuardrail):
         else:
             self.block_on_error = block_on_error
 
-        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
-
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -101,6 +99,7 @@ class SingulrGuardrail(CustomGuardrail):
             ]
 
         super().__init__(**kwargs)
+        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -157,11 +156,11 @@ class SingulrGuardrail(CustomGuardrail):
         )
         if not any(value for _, value in resolved):
             return None
-        return {key: value for key, value in resolved if value}  # mutable-ok: short-lived JSON payload dict
+        return {key: value for key, value in resolved if value}
 
     @staticmethod
     def _build_user_message(text: str) -> Mapping[str, str]:
-        return {"role": "user", "content": text}  # mutable-ok: short-lived JSON payload dict
+        return {"role": "user", "content": text}
 
     def _build_headers(self) -> Mapping[str, str]:
         all_headers: Final = MappingProxyType(

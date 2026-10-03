@@ -56,7 +56,7 @@ type After = fn(&mut LegacyLogging, Python<'_>, &RawResponse) -> Step<()>;
 type Transform = fn(&mut LegacyLogging, Python<'_>, Py<PyAny>, Timing) -> Step<Py<PyAny>>;
 type Success = fn(&mut LegacyLogging, Python<'_>, Timing, &Py<PyAny>) -> Step<()>;
 type Failure = fn(&mut LegacyLogging, Python<'_>, Timing, FailureOrigin, &PyErr) -> Step<()>;
-type Open = fn(&mut LegacyLogging, Python<'_>) -> PyResult<()>;
+type Open = fn(&mut LegacyLogging, Python<'_>, &Py<PyAny>) -> PyResult<()>;
 type Chunk = fn(&mut LegacyLogging, Python<'_>, &Py<PyAny>) -> PyResult<()>;
 
 const PREPARE: Binding<Prepare> = Binding {
@@ -173,6 +173,9 @@ impl CallHooks<PythonRuntime> for LegacyLogging {
             PythonCallEvent::Started { .. } | PythonCallEvent::Cancelled { .. } => {
                 Ok(HookStep::Ready(()))
             }
+            PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts }) => {
+                self.result_ready(py, &facts)
+            }
             PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                 (AFTER.invoke)(self, py, raw)
             }
@@ -187,8 +190,8 @@ impl CallHooks<PythonRuntime> for LegacyLogging {
         }
     }
 
-    fn on_stream_open(&mut self, py: Python<'_>) -> PyResult<()> {
-        (OPEN.invoke)(self, py)
+    fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
+        (OPEN.invoke)(self, py, head)
     }
 
     fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
