@@ -12,6 +12,7 @@ from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -23,6 +24,7 @@ from litellm.integrations.SlackAlerting.ms_teams import (
     get_ms_teams_webhook_url,
 )
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -54,6 +56,7 @@ from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
+    _resolve_health_check_mode,
     _update_litellm_params_for_health_check,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
@@ -203,6 +206,7 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 services = (
     Literal[
         "slack_budget_alerts",
@@ -2033,11 +2037,15 @@ async def test_model_connection(
         "rerank",
         "realtime",
         "responses",
+        "anthropic_messages",
         "ocr",
     ]
     | None = fastapi.Body(
         None,
-        description="The mode to test the model with. If not provided, auto-detected from model capabilities.",
+        description=(
+            "The mode to test the model with. If not provided, resolved the way /health does: the deployment's "
+            "model_info.mode, then the mode the provider requires for that model, then the model cost map."
+        ),
     ),
     litellm_params: dict = fastapi.Body(
         None,
@@ -2204,12 +2212,19 @@ async def test_model_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        mode = mode or litellm_params.pop("mode", None)
+        probe_mode: Final = (
+            mode
+            or OPTIONAL_STR.validate_python(litellm_params.pop("mode", None))
+            or _resolve_health_check_mode(
+                _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
+                _OBJECT_MAPPING.validate_python(litellm_params),
+            )
+        )
 
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
                 model_params=litellm_params,
-                mode=mode,
+                mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
             ),
