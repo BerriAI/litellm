@@ -74,6 +74,20 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
                 # Sanitize if the key ends with '_tokens' and its value is None
                 if key.endswith("_tokens") and value is None:
                     usage[key] = 0
+
+            if "prompt_tokens_details" not in usage or not usage.get("prompt_tokens_details"):
+                prompt_tokens_details: Final = {}
+                if "cache_read_input_tokens" in usage and isinstance(usage["cache_read_input_tokens"], int):
+                    prompt_tokens_details["cached_tokens"] = usage["cache_read_input_tokens"]
+                elif "prompt_cache_hit_tokens" in usage and isinstance(usage["prompt_cache_hit_tokens"], int):
+                    prompt_tokens_details["cached_tokens"] = usage["prompt_cache_hit_tokens"]
+
+                if "cache_creation_input_tokens" in usage and isinstance(usage["cache_creation_input_tokens"], int):
+                    prompt_tokens_details["cache_write_tokens"] = usage["cache_creation_input_tokens"]
+
+                if prompt_tokens_details:
+                    usage["prompt_tokens_details"] = prompt_tokens_details
+
         return response_json
 
     @staticmethod
@@ -118,7 +132,22 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
         if base_model is not None:
             returned_response._hidden_params["model"] = base_model
+
         return returned_response
+
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: OpenAIGPTConfig contract
+        supported_params: Final = super().get_supported_openai_params(model=model)
+        import litellm
+
+        cost_map: Final[dict[str, object]] = getattr(litellm, "model_cost", {})
+        raw_info: Final = cost_map.get(model) or cost_map.get(f"openai_like/{model}") or cost_map.get(f"openai/{model}")
+        if (
+            isinstance(raw_info, dict)
+            and raw_info.get("supports_reasoning") is True
+            and "reasoning_effort" not in supported_params
+        ):
+            supported_params.append("reasoning_effort")
+        return supported_params
 
     def transform_response(
         self,
