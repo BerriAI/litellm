@@ -1479,7 +1479,8 @@ class ProxyLogging:
             if request_obj.tool_input_schema is not None
             else kwargs.get("mcp_input_schema")
         )
-        description_line: Final = f"\nDescription: {mcp_tool_description}" if mcp_tool_description else ""
+        listing_description: Final = kwargs.get("mcp_tool_description")
+        description_line: Final = f"\nDescription: {listing_description}" if listing_description else ""
         tool_call_content: Final = (
             f"Tool: {request_obj.tool_name}{description_line}\nArguments: {request_obj.arguments}"
         )

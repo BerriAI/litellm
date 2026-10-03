@@ -1026,29 +1026,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if existing_cap is None or effective_cap < existing_cap:
             data[cap_field] = effective_cap  # rebind-ok: downstream routing requires the bounded output cap
 
-    @staticmethod
-    def _mcp_token_reservation_data(data: object, call_type: str | None) -> object:
-        if (
-            call_type != CallTypes.call_mcp_tool.value
-            or not isinstance(data, dict)
-            or "mcp_tool_name" not in data
-            or "mcp_arguments" not in data
-        ):
-            return data
-        mcp_data: Final = TypeAdapter(dict[str, object]).validate_python(data)
-        return {
-            **mcp_data,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"Tool: {mcp_data['mcp_tool_name']}\nArguments: {mcp_data['mcp_arguments']}",
-                }
-            ],
-        }
-
     def _estimate_tokens_for_request(
         self,
-        data: dict[str, object],
+        data: dict,
         model: str | None = None,
         min_configured_tpm_limit: int | None = None,
         call_type: str | None = None,
@@ -1074,9 +1054,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         floor entirely, so the reservation reflects what this tenant's model
         actually emits rather than one constant shared by every tenant.
         """
-        reservation_data: Final = self._mcp_token_reservation_data(data, call_type)
         estimated_input_tokens, max_tokens_estimate = self._estimate_input_and_output_tokens(
-            data=reservation_data,
+            data=data,
             min_configured_tpm_limit=min_configured_tpm_limit,
             call_type=call_type,
             configured_output_tokens=configured_output_tokens,
@@ -3795,14 +3774,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if v is not None
         ]
         min_configured_otpm_limit: Final = min(configured_otpm_limits) if configured_otpm_limits else None
-        reservation_data: Final = self._mcp_token_reservation_data(data, call_type)
         _, raw_estimated_output_tokens = self._estimate_input_and_output_tokens(
-            data=reservation_data,
+            data=data,
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
         )
         raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
-            data=reservation_data, model=requested_model, call_type=call_type
+            data=data, model=requested_model, call_type=call_type
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
         estimated_output_tokens: Final = (

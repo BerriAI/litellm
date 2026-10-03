@@ -115,7 +115,10 @@ def test_api_key_descriptor_applies_budget_throttle(
 @pytest.mark.parametrize(
     "description", [None, "Gateway metadata, not caller input. " * 100], ids=["unlisted", "listed"]
 )
-async def test_mcp_description_does_not_change_admission_or_reserved_tokens(description: str | None) -> None:
+@pytest.mark.parametrize("arguments_rewritten", [False, True])
+async def test_mcp_description_does_not_change_admission_or_reserved_tokens(
+    description: str | None, arguments_rewritten: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     cache: Final = DualCache()
     handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
     logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
@@ -127,7 +130,10 @@ async def test_mcp_description_does_not_change_admission_or_reserved_tokens(desc
     messages: Final = data["messages"]
     caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-description-reservation"), tpm_limit=64)
 
-    await handler.async_pre_call_hook(user_api_key_dict=caller, cache=cache, data=data, call_type="call_mcp_tool")
+    if arguments_rewritten:
+        data["mcp_arguments"] = {"q": "Transformed arguments " * 100}
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    await logger.pre_call_hook(user_api_key_dict=caller, data=data, call_type="call_mcp_tool")
 
     stash: Final = get_request_stash()
     assert stash is not None
@@ -144,11 +150,7 @@ async def test_mcp_description_does_not_change_admission_or_reserved_tokens(desc
     assert messages == [
         {
             "role": "user",
-            "content": (
-                f"Tool: echo\nDescription: {description}\nArguments: {{'q': 'hello'}}"
-                if description
-                else "Tool: echo\nArguments: {'q': 'hello'}"
-            ),
+            "content": "Tool: echo\nArguments: {'q': 'hello'}",
         }
     ]
 
@@ -158,8 +160,10 @@ async def test_mcp_description_does_not_change_admission_or_reserved_tokens(desc
     "description", [None, "Gateway metadata, not caller input. " * 100], ids=["unlisted", "listed"]
 )
 @pytest.mark.parametrize("itpm_limit,otpm_limit", [(64, 4096), (4096, 64), (4096, 4096)])
+@pytest.mark.parametrize("arguments_rewritten", [False, True])
 async def test_mcp_description_preserves_project_input_and_output_reservations(
-    description: str | None, itpm_limit: int, otpm_limit: int
+    description: str | None, itpm_limit: int, otpm_limit: int,
+    arguments_rewritten: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache: Final = DualCache()
     handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
@@ -188,7 +192,10 @@ async def test_mcp_description_preserves_project_input_and_output_reservations(
         },
     )
 
-    await handler.async_pre_call_hook(user_api_key_dict=caller, cache=cache, data=data, call_type="call_mcp_tool")
+    if arguments_rewritten:
+        data["mcp_arguments"] = {"q": "Transformed arguments " * 100}
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    await logger.pre_call_hook(user_api_key_dict=caller, data=data, call_type="call_mcp_tool")
 
     stash: Final = get_request_stash()
     assert stash is not None
@@ -221,11 +228,7 @@ async def test_mcp_description_preserves_project_input_and_output_reservations(
     assert messages == [
         {
             "role": "user",
-            "content": (
-                f"Tool: echo\nDescription: {description}\nArguments: {{'q': 'hello'}}"
-                if description
-                else "Tool: echo\nArguments: {'q': 'hello'}"
-            ),
+            "content": "Tool: echo\nArguments: {'q': 'hello'}",
         }
     ]
 
