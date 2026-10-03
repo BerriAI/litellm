@@ -109,12 +109,12 @@ def test_openai_credential_is_never_transmitted(no_request_allowed):
 
 
 def test_unknown_kwargs_are_flattened_not_wrapped_in_extra_body():
-    """`extra_body` is an OpenAI-SDK concept the SDK unwraps client-side.
+    """Unknown kwargs stay flat in the optional params.
 
-    ClinePass dispatches through `BaseLLMHTTPHandler`, which serialises optional
-    params directly into the JSON body, so an `extra_body` key would be sent to
-    the API verbatim and a genuine vendor kwarg would arrive nested one level
-    too deep.
+    For a provider listed in `openai_compatible_providers`, `get_optional_params`
+    nests them under `extra_body`. `BaseLLMHTTPHandler` later merges that back
+    into the request body, so the wire body does not distinguish the two cases;
+    this params-level check is what fails if ClinePass drifts back into the list.
     """
     params = litellm.utils.get_optional_params(
         model="cline-pass/deepseek-v4-flash",

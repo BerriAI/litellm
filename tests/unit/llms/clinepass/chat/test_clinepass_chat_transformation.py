@@ -112,9 +112,12 @@ def test_clinepass_is_not_in_openai_compatible_providers():
     credential to the Cline host for an endpoint ClinePass does not implement --
     by `OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS`, which is derived from it, by
     image generation in `litellm/images/main.py`, and by
-    `_add_provider_specific_params`, which wraps unknown kwargs in `extra_body`
-    (an OpenAI *SDK* concept that `BaseLLMHTTPHandler` never unwraps, so it went
-    on the wire verbatim).
+    `_add_provider_specific_params`, which nests unknown kwargs under
+    `extra_body` for listed providers. `BaseLLMHTTPHandler` merges that back into
+    the request body, so the wire body is the same either way: membership is
+    pinned structurally here and at the params level in
+    `test_unknown_kwargs_are_flattened_not_wrapped_in_extra_body`, not by the
+    request body.
 
     Exception mapping is preserved by registering ClinePass explicitly beside
     `mistral` in `exception_mapping_utils.py`; see
@@ -126,10 +129,11 @@ def test_clinepass_is_not_in_openai_compatible_providers():
 
 def test_clinepass_is_not_in_openai_compatible_providers_via_behaviour():
     """ClinePass must NOT be in `openai_compatible_providers`.
-    If it drifts back there, LiteLLM packs unknown kwargs into an `extra_body` dict.
-    We assert they are flattened straight into the JSON body instead.
-    We also assert transcription raises UnsupportedProviderError instead of
-    attempting an OpenAI-shaped request to the third-party endpoint."""
+    The drift guard here is the transcription half: a listed provider is picked up
+    by the OpenAI transcription branch instead of raising as unmapped.
+    The body assertions only pin the contract that an unknown kwarg reaches the
+    JSON body flat; they hold for listed providers too, so they do not detect
+    drift (the request body is identical either way)."""
     captured = {}
 
     def fake_post(self, url, *args, **kwargs):
