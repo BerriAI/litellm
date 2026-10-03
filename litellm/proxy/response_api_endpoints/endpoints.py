@@ -1654,13 +1654,6 @@ async def responses_websocket_endpoint(
         session_task.cancel()
         with contextlib.suppress(Exception):
             await websocket.close(code=1000, reason="Session duration limit reached")
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await session_task
-    except asyncio.CancelledError:
-        session_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await session_task
-        raise
     finally:
         if not session_task.done():
             session_task.cancel()
