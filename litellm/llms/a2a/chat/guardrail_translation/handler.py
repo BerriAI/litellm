@@ -12,6 +12,7 @@ A2A Protocol Format:
 
 import json
 from collections.abc import Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from typing_extensions import ReadOnly, TypedDict
@@ -103,9 +104,7 @@ class A2AGuardrailHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
-            inputs: Final = GenericGuardrailAPIInputs(
-                texts=list(texts_to_check)  # mutable-ok: GenericGuardrailAPIInputs.texts is typed List[str]
-            )
+            inputs: Final = GenericGuardrailAPIInputs(texts=list(texts_to_check))
 
             # Pass the structured A2A message to guardrails
             inputs["structured_messages"] = [message]
@@ -201,9 +200,7 @@ class A2AGuardrailHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
-        inputs: Final = GenericGuardrailAPIInputs(
-            texts=list(texts_to_check)  # mutable-ok: GenericGuardrailAPIInputs.texts is typed List[str]
-        )
+        inputs: Final = GenericGuardrailAPIInputs(texts=list(texts_to_check))
 
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
@@ -456,7 +453,7 @@ class A2AGuardrailHandler(BaseTranslation):
                 )
             return ()
 
-        return tuple(entry for part_idx, part in enumerate(parts) for entry in _scan(part_idx, part))
+        return tuple(chain.from_iterable(_scan(part_idx, part) for part_idx, part in enumerate(parts)))
 
     def _apply_text_to_path(
         self,
