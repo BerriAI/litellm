@@ -368,7 +368,10 @@ interface RunViewProps {
   embedded?: boolean;
 }
 
-/** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
+function initialSpanMissing(trace: Trace | undefined, spanId?: string): boolean {
+  return Boolean(spanId && trace && !trace.spans.some((span) => span.span_id === spanId));
+}
+
 export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
   const traces = useTracesApi(accessToken);
   const [view, setView] = useState<TraceView>("steps");
@@ -386,7 +389,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
     if (!pages?.length) return undefined;
     return { ...pages[0], spans: pages.flatMap((page) => page.spans) };
   }, [traceQuery.data]);
-  const seekingSpan = Boolean(initialSpanId && trace && !trace.spans.some((span) => span.span_id === initialSpanId));
+  const seekingSpan = initialSpanMissing(trace, initialSpanId);
   const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
   const canSeek = seekingSpan && hasNextPage;
   useEffect(() => {

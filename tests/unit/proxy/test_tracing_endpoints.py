@@ -727,7 +727,7 @@ class _NativeConfig:
 
 
 class _NativeReturningHelp(ModuleType):
-    def __init__(self, help_payload: Mapping[str, object]) -> None:
+    def __init__(self, help_payload: Mapping[str, object], trace_payload: Mapping[str, object] | None = None) -> None:
         super().__init__("native_traces")
 
         class Storage:
@@ -737,10 +737,29 @@ class _NativeReturningHelp(ModuleType):
             async def query_help(self, scope: AllQueryScope, secret: str) -> Mapping[str, object]:
                 return help_payload
 
+            get_trace = AsyncMock(return_value=trace_payload)
+
+        self.trace_read: Final = Storage.get_trace
         self.NativeTraceConfig: Final = _NativeConfig
         self.NativeTraceStorage: Final = Storage
         self.trace_encode_error: Final = bytes
         self.trace_span_rows: Final = list
+
+
+@pytest.mark.parametrize("cursor,page_size", ((None, None), ("next", 200)))
+async def test_storage_preserves_page_cursor_and_normalizes_native_trace_data(
+    monkeypatch: pytest.MonkeyPatch, cursor: str | None, page_size: int | None
+) -> None:
+    native: Final = _NativeReturningHelp(QUERY_HELP, {**TRACE_RESPONSE, "next_cursor": "more"})
+    monkeypatch.setattr(loader, "_cached_bridge", native)
+    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
+    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "owner", "team_ids": ()}
+    trace: Final = await storage.get_trace("t1", scope, "run", cursor, page_size)
+    assert trace is not None
+    assert trace["next_cursor"] == "more"
+    assert trace["spans"] == ()
+    assert trace["summary"]["span_count"] == 0
+    native.trace_read.assert_awaited_once_with("t1", scope, "run", cursor, page_size)
 
 
 async def test_storage_validates_the_native_query_help_value(monkeypatch: pytest.MonkeyPatch) -> None:
