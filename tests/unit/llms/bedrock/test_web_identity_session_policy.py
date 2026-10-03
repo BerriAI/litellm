@@ -346,3 +346,20 @@ class TestSessionPolicyGrantsEveryBedrockRoute:
 
     def test_policy_document_fits_the_sts_plaintext_limit(self):
         assert len(_captured_policy_document()) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT
+
+class TestBedrockWebSearchActionsCovered:
+    """Mantle's hosted web_search tool authorizes against the ``bedrock-websearch``
+    namespace, so the session-policy ceiling must include it or web_search calls
+    come back status=failed on OIDC/WIF auth."""
+
+    @pytest.mark.parametrize("action", ["InvokeSearch", "InvokeFetch", "ExternalWebAccess"])
+    def test_bedrock_websearch_action_present(self, action: str):
+        assert f"bedrock-websearch:{action}" in _granted_actions(_captured_policy())
+
+    def test_bedrock_websearch_statement_is_scoped(self):
+        stmt = _statement_by_sid(_captured_policy(), "BedrockWebSearchLiteLLM")
+        actions = [stmt["Action"]] if isinstance(stmt["Action"], str) else stmt["Action"]
+        assert stmt["Effect"] == "Allow"
+        assert stmt["Resource"] == "*"
+        assert "bedrock-websearch:*" not in actions
+        assert (stmt.get("Condition") or {}).get("Bool", {}).get("aws:SecureTransport") == "true"
