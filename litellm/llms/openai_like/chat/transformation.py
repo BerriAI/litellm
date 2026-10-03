@@ -135,10 +135,15 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
         if hasattr(returned_response, "usage") and returned_response.usage is not None:
             raw_usage: Final = response_json.get("usage") or {}
-            if "cache_read_input_tokens" in raw_usage and raw_usage["cache_read_input_tokens"] is not None:
-                returned_response.usage.cache_read_input_tokens = raw_usage["cache_read_input_tokens"]
-            if "cache_creation_input_tokens" in raw_usage and raw_usage["cache_creation_input_tokens"] is not None:
-                returned_response.usage.cache_creation_input_tokens = raw_usage["cache_creation_input_tokens"]
+            if isinstance(raw_usage, dict):
+                cache_read = raw_usage.get("cache_read_input_tokens")
+                if cache_read is not None:
+                    setattr(returned_response.usage, "cache_read_input_tokens", cache_read)
+                    setattr(returned_response.usage, "_cache_read_input_tokens", cache_read)
+                cache_creation = raw_usage.get("cache_creation_input_tokens")
+                if cache_creation is not None:
+                    setattr(returned_response.usage, "cache_creation_input_tokens", cache_creation)
+                    setattr(returned_response.usage, "_cache_creation_input_tokens", cache_creation)
 
         return returned_response
 
@@ -146,10 +151,11 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         supported_params: Final = super().get_supported_openai_params(model=model)
         import litellm
 
+        cost_map: Final[dict[str, Any]] = getattr(litellm, "model_cost", {})
         model_info: Final = (
-            litellm.model_cost.get(model)
-            or litellm.model_cost.get(f"openai_like/{model}")
-            or litellm.model_cost.get(f"openai/{model}")
+            cost_map.get(model)
+            or cost_map.get(f"openai_like/{model}")
+            or cost_map.get(f"openai/{model}")
         )
         if (
             isinstance(model_info, dict)

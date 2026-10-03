@@ -183,10 +183,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
 
+        cost_map: Final[dict[str, Any]] = getattr(litellm, "model_cost", {})
         model_info: Final = (
-            litellm.model_cost.get(model)
-            or litellm.model_cost.get(f"openai/{model}")
-            or litellm.model_cost.get(f"openai_like/{model}")
+            cost_map.get(model)
+            or cost_map.get(f"openai/{model}")
+            or cost_map.get(f"openai_like/{model}")
         )
         if (
             isinstance(model_info, dict)
