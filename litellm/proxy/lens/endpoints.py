@@ -29,6 +29,7 @@ from litellm.proxy.lens.models import (
     Lens,
     LensList,
     LensSettings,
+    LookbackHours,
     ModelRequest,
     ModelResult,
     Progress,
@@ -325,18 +326,23 @@ class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
     settings: LensSettings
-    lookback_hours: int = Field(default=24, ge=1)
+    lookback_hours: LookbackHours = 24
 
 
 @router.post("/preview/sample", response_model=Sample)
 async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Sample:
     validate_selection(body.settings)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
+    try:
+        start: Final = int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000)
+        end: Final = int((now - timedelta(minutes=2)).timestamp() * 1000)
+    except (OverflowError, ValueError) as error:
+        raise HTTPException(422, "Preview window exceeds the supported calendar range") from error
     return await source_reader(storage).sample(
         user_scope(auth),
         body.settings,
-        int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000),
-        int((now - timedelta(minutes=2)).timestamp() * 1000),
+        start,
+        end,
         offset=body.offset,
         preview=True,
     )

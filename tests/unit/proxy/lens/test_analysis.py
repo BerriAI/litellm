@@ -502,16 +502,18 @@ async def test_investigator_can_cite_a_later_page_or_offset(later_span: str) -> 
     draft: Final = finding("run1").model_copy(
         update={"evidence": (Evidence(execution_id="run1", span_id=later_span, quote="timeout"),)}
     )
-    decisions: Final = iter(("read", "submit"))
+    offsets: Final = iter((8000, 16000, None))
 
     async def model(request: ModelRequest) -> ModelResult:
-        if next(decisions) == "read":
-            return ModelResult(content='{"action":"read","execution_id":"run1","offset":8000}', cost=0)
+        offset: Final = next(offsets)
+        if offset is not None:
+            return ModelResult(content=json.dumps({"action": "read", "execution_id": "run1", "offset": offset}), cost=0)
+        assert json.loads(request.prompt)["must_decide"] is False
         assert '"content": "timeout"' in request.prompt
         return ModelResult(content='{"action":"submit","finding":' + draft.model_dump_json() + "}", cost=0)
 
     async def read(execution_id: str, _cursor: str, offset: int) -> ExecutionContent:
-        assert execution_id == "run1" and offset == 8000
+        assert execution_id == "run1" and offset in (8000, 16000)
         return ExecutionContent(execution=execution, parts=(later,))
 
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
@@ -1079,7 +1081,7 @@ async def test_reviewer_can_read_every_offset_of_a_long_span_before_deciding() -
     execution: Final = Execution(
         id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
     )
-    original: Final = "trace evidence " * 16000 + "late verified failure"
+    original: Final = "trace evidence! " * 16000 + "late verified failure"
     offsets: Final = SimpleQueue[int]()
     seen: Final = SimpleQueue[str]()
 

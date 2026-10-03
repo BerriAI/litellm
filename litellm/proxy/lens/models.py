@@ -1,7 +1,27 @@
-from datetime import datetime
-from typing import Final, Literal
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+
+def calendar_lookback(hours: int) -> int:
+    try:
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    except OverflowError as error:
+        raise ValueError("Lookback exceeds the supported calendar range") from error
+    return hours
+
+
+def calendar_interval(minutes: int) -> int:
+    try:
+        datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    except OverflowError as error:
+        raise ValueError("Interval exceeds the supported calendar range") from error
+    return minutes
+
+
+LookbackHours: TypeAlias = Annotated[int, Field(ge=1), AfterValidator(calendar_lookback)]
+IntervalMinutes: TypeAlias = Annotated[int, Field(ge=1), AfterValidator(calendar_interval)]
 
 
 class Record(BaseModel):
@@ -29,14 +49,14 @@ class LensSettings(Record):
     name: str = Field(min_length=1)
     context: str = Field(default="")
     source: Literal["traces", "requests", "both"] = "traces"
-    lookback_hours: int = Field(default=24, ge=1)
+    lookback_hours: LookbackHours = 24
     service: str = Field(default="")
     agent_name: str = Field(default="")
     filters: tuple[MetadataFilter, ...] = Field(default=())
     checks: tuple[Check, ...] = ()
     model: str = Field(min_length=1)
     enabled: bool = True
-    interval_minutes: int = Field(default=15, ge=1)
+    interval_minutes: IntervalMinutes = 15
     sample_size: int | None = Field(default=None, ge=1)
     sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
     concurrency: int = Field(default=8, ge=1)
@@ -228,7 +248,7 @@ class LensList(Record):
 
 class RunRequest(Record):
     settings: LensSettings | None = None
-    lookback_hours: int | None = Field(default=None, ge=1)
+    lookback_hours: LookbackHours | None = None
 
 
 class FindingUpdate(Record):

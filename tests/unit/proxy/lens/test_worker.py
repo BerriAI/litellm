@@ -1,3 +1,4 @@
+import asyncio
 from queue import SimpleQueue
 from typing import Final
 
@@ -293,3 +294,60 @@ def test_response_validation_diagnostics_omit_input_values_and_unexpected_field_
     assert "cost:" in message and "[float_parsing]" in message
     assert "[extra_forbidden]" in message
     assert "private" not in message and "secret" not in message
+
+
+@pytest.mark.asyncio
+async def test_losing_the_lease_interrupts_an_in_flight_model_request() -> None:
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    started: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    never: Final = asyncio.Event()
+    saved: Final = SimpleQueue[Result]()
+
+    async def heartbeat_wait(_seconds: float) -> None:
+        await started.wait()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        match request.url.path.rsplit("/", 1)[-1]:
+            case "claim":
+                return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "sample":
+                return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
+            case "content":
+                return httpx.Response(
+                    200,
+                    json=ExecutionContent(
+                        execution=execution,
+                        parts=(
+                            TracePart(execution_id="run", span_id="span", name="step", kind="tool", content="evidence"),
+                        ),
+                    ).model_dump(),
+                )
+            case "model":
+                assert request.extensions["timeout"] == {"connect": 13, "read": None, "write": 13, "pool": 13}
+                started.set()
+                try:
+                    await never.wait()
+                finally:
+                    cancelled.set()
+                pytest.fail("The cancelled model request must not finish")
+            case "heartbeat":
+                return httpx.Response(409)
+            case "progress":
+                return httpx.Response(200, json=True)
+            case "result":
+                saved.put(Result.model_validate_json(request.content))
+                return httpx.Response(409)
+            case _:
+                pytest.fail(f"Unexpected worker request: {request.url.path}")
+
+    async with httpx.AsyncClient(
+        base_url="https://proxy.test", transport=httpx.MockTransport(handle), timeout=13
+    ) as client:
+        assert await LensWorker(client, heartbeat_wait=heartbeat_wait).run_once()
+    assert cancelled.is_set()
+    assert "no longer owns the run" in saved.get_nowait().error
+    assert saved.empty()

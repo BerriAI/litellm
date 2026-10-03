@@ -350,7 +350,7 @@ async def extract_stored(
                 previous = response
                 continue
             fetched = tuple([parts async for parts in concurrent_results(requested, fetch)])
-            if not any(p.content and p not in additional for p in chain.from_iterable(fetched)):
+            if not any(p.content for p in chain.from_iterable(fetched)):
                 must_decide = True
                 previous = response
                 continue
@@ -593,7 +593,7 @@ async def investigate_stored(
             feedback_page = step_result.page
         elif any(e.execution.id == step_result.execution_id for e in examined):
             navigation = await read(step_result.execution_id or "", step_result.cursor, step_result.offset)
-            if not any(p.content and p not in additional for p in navigation.parts):
+            if not any(p.content for p in navigation.parts):
                 stalled = True
             store.add_reads(navigation.parts)
             additional = navigation.parts

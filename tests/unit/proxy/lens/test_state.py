@@ -285,3 +285,13 @@ def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check
     separate: Final = merge_finding(reviewed, other, 2, NOW)
     assert separate.id != legacy_id
     assert separate.status == "open" and separate.reason == ""
+
+
+@pytest.mark.parametrize("field", ("lookback_hours", "interval_minutes"))
+def test_calendar_overflow_is_rejected_without_the_old_history_and_interval_caps(field: str) -> None:
+    from pydantic import ValidationError
+
+    accepted: Final = LensSettings.model_validate({**lens().settings.model_dump(), field: 100000})
+    assert getattr(accepted, field) == 100000
+    with pytest.raises(ValidationError, match="supported calendar range"):
+        LensSettings.model_validate({**lens().settings.model_dump(), field: 10**30})

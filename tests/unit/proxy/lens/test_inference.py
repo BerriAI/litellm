@@ -108,3 +108,15 @@ def test_shared_context_capacity_leaves_room_for_the_entire_prompt(monkeypatch: 
     long: Final = output_tokens(deployment, "Review this trace " * 500)
     assert 0 < long < short < output_tokens(deployment)
     assert quote((deployment,), "Review this trace " * 500) == pytest.approx(long * 0.001)
+
+
+def test_unknown_model_capacity_requires_explicit_operator_metadata() -> None:
+    from litellm.proxy.lens.inference import ModelCapacity, output_tokens
+
+    params: Final = DeploymentParams(model="openai/lens-unknown-capacity")
+    with pytest.raises(HTTPException) as error:
+        output_tokens(Deployment(litellm_params=params))
+    assert error.value.status_code == 400
+    assert "model_info.max_output_tokens" in error.value.detail
+    configured: Final = Deployment(litellm_params=params, model_info=ModelCapacity(max_output_tokens=32000))
+    assert output_tokens(configured) == 32000

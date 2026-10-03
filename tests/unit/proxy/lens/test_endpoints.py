@@ -191,3 +191,19 @@ def test_model_errors_reach_worker_with_status_and_redacted_provider_message(pro
     assert "Retry in 60 seconds." in diagnostic
     assert "secret-example" not in diagnostic
     assert error.headers == {"retry-after": "60"}
+
+
+@pytest.mark.asyncio
+async def test_preview_reports_calendar_overflow_as_a_validation_error() -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy.lens.endpoints import Preview, preview_sample
+
+    body: Final = Preview(
+        settings=LensSettings(name="Calendar regression", model="analysis", context="Read recorded activity"),
+        as_of=datetime.min.replace(tzinfo=timezone.utc),
+    )
+    with pytest.raises(HTTPException) as error:
+        await preview_sample(body, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), None)
+    assert error.value.status_code == 422
+    assert "supported calendar range" in error.value.detail

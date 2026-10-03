@@ -3,7 +3,6 @@ import logging
 import os
 import sqlite3
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from types import MappingProxyType
 from typing import Final
 
@@ -82,13 +81,25 @@ def failure_message(error: Exception) -> str:
 
 
 class LensWorker:
-    def __init__(self, client: httpx.AsyncClient, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        heartbeat_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self.client: Final = client
         self.sleep: Final = sleep
+        self.heartbeat_wait: Final = heartbeat_wait
 
     async def model_request(self, path: str, body: ModelRequest, attempt: int = 0) -> ModelResult:
         try:
-            result: Final = await self.client.post(path, json=body.model_dump(), timeout=None)
+            timeout: Final = httpx.Timeout(
+                None,
+                connect=self.client.timeout.connect,
+                write=self.client.timeout.write,
+                pool=self.client.timeout.pool,
+            )
+            result: Final = await self.client.post(path, json=body.model_dump(), timeout=timeout)
             result.raise_for_status()
             parsed: Final = ModelResult.model_validate(result.json())
             reason: Final = result.headers.get("x-litellm-lens-finish-reason")
@@ -157,17 +168,23 @@ class LensWorker:
 
         async def heartbeat() -> None:
             while True:
-                await asyncio.sleep(30)
+                await self.heartbeat_wait(30)
                 (await self.client.post(prefix + "/heartbeat")).raise_for_status()
 
-        pulse_task: Final = asyncio.create_task(heartbeat())
-        try:
+        async def investigate() -> None:
             data: Final = await self.client.get(prefix + "/sample")
             data.raise_for_status()
             sample: Final = Sample.model_validate(data.json())
             result: Final = await analyze_sample(claim, sample, read, model, progress)
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
+
+        pulse_task: Final = asyncio.create_task(heartbeat())
+        work_task: Final = asyncio.create_task(investigate())
+        try:
+            finished, _ = await asyncio.wait((pulse_task, work_task), return_when=asyncio.FIRST_COMPLETED)
+            for task in finished:
+                await task
         except (httpx.HTTPError, ValueError, OSError, sqlite3.Error) as exc:
             message: Final = failure_message(exc)
             logger.warning("Analysis %s interrupted (%s)", claim.job.id, type(exc).__name__)
@@ -178,8 +195,8 @@ class LensWorker:
                 failed.raise_for_status()
         finally:
             pulse_task.cancel()
-            with suppress(asyncio.CancelledError, httpx.HTTPError):
-                await pulse_task
+            work_task.cancel()
+            await asyncio.gather(pulse_task, work_task, return_exceptions=True)
         return True
 
 
