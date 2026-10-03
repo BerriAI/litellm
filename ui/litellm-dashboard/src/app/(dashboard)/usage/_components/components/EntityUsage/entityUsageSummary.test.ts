@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost } from "./entityUsageSummary";
+import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, hasPtuHours } from "./entityUsageSummary";
 
 const metadata = {
   total_spend: 100,
@@ -9,6 +9,17 @@ const metadata = {
   total_failed_requests: 2,
   total_tokens: 3456,
 };
+
+describe("hasPtuHours", () => {
+  it("is false when no PTU hours were consumed or the backend predates the field", () => {
+    expect(hasPtuHours({ ...metadata, total_ptu_hours: 0 })).toBe(false);
+    expect(hasPtuHours(metadata)).toBe(false);
+  });
+
+  it("is true once a PTU model group has been used", () => {
+    expect(hasPtuHours({ ...metadata, total_ptu_hours: 0.25 })).toBe(true);
+  });
+});
 
 describe("hasFlatCost", () => {
   it("is false when there is no flat cost to report", () => {
@@ -26,6 +37,23 @@ describe("buildSummaryTiles", () => {
   it("keeps the row at five tiles either way so adding flat cost never narrows the cards", () => {
     expect(buildSummaryTiles(metadata, false)).toHaveLength(5);
     expect(buildSummaryTiles(metadata, true)).toHaveLength(5);
+  });
+
+  it("adds a sixth PTU Hours tile only when asked, after Total Tokens", () => {
+    const withPtu = { ...metadata, total_ptu_hours: 1234.5678 };
+    expect(buildSummaryTiles(withPtu, true)).toHaveLength(5);
+    const tiles = buildSummaryTiles(withPtu, true, true);
+    expect(tiles).toHaveLength(6);
+    const last = tiles[tiles.length - 1];
+    expect(last.title).toBe("PTU Hours");
+    expect(last.value).toBe("1,234.57");
+    expect(last.tooltip).toContain("PTU-hours");
+    expect(tiles[tiles.length - 2].title).toBe("Total Tokens");
+  });
+
+  it("treats missing PTU hours as zero when the tile is forced on", () => {
+    const tiles = buildSummaryTiles(metadata, false, true);
+    expect(tiles[tiles.length - 1].value).toBe("0.00");
   });
 
   it("shows request-only spend under the original title when there is no flat cost", () => {

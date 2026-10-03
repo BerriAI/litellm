@@ -185,6 +185,7 @@ from litellm.router_utils.common_utils import (
     get_request_team_id,
     provider_for_generic_call,
     resolve_model_group_alias,
+    team_may_use_deployment,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
 )
@@ -244,6 +245,7 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
+from litellm.router_utils.ptu_shares import filter_ptu_shared_deployments, ptu_capacity_warning
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -8955,11 +8957,27 @@ class Router:
             ptu_error: Final = (
                 (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
             )
-            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+            declares_split: Final = _model_info.get("ptu_shares") is not None
+            if ptu_error is not None and (declares_split or is_ptu_cost_attribution_enabled()):
                 raise ValueError(ptu_error)
             access_windows_error: Final = access_windows_config_error(_model_info, model_name=_model_name)
             if access_windows_error is not None:
                 raise ValueError(access_windows_error)
+            capacity_warning: Final = (
+                ptu_capacity_warning(
+                    _model_name,
+                    MappingProxyType(
+                        {  # pyright: ignore[reportUnknownArgumentType]  # router deployment dicts are untyped
+                            "model_info": _model_info,
+                            "litellm_params": _litellm_params,
+                        }
+                    ),
+                )
+                if is_ptu_cost_attribution_enabled()
+                else None
+            )
+            if capacity_warning is not None:
+                verbose_router_logger.warning(capacity_warning)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
                 **(  # pyright: ignore[reportArgumentType]  # untyped merged dict; already true for every field here
@@ -10309,8 +10327,7 @@ class Router:
         callers from that same team; deployments without a team owner are shared.
         """
         model_info: Final = model.get("model_info") if isinstance(model, dict) else model.model_info
-        owner_team_id: Final = model_info.get("team_id") if model_info is not None else None
-        return owner_team_id is None or owner_team_id == team_id
+        return team_may_use_deployment(model_info.get("team_id") if model_info is not None else None, team_id)
 
     def _get_model_group_deployment_usable_by_team(
         self, model_group_name: str, team_id: str | None
@@ -12918,7 +12935,14 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return result.deployments
+        shared: Final = filter_ptu_shared_deployments(result.deployments, request_team_id)
+        if shared.withheld and len(shared.deployments) == 0:
+            raise litellm.BadRequestError(
+                message=f"Deployment {model} is reserved for the teams holding a PTU share of it",
+                model=model,
+                llm_provider="",
+            )
+        return shared.deployments
 
     def _filter_deployments_by_model_access_groups(
         self,

@@ -34,10 +34,12 @@ from litellm.proxy.management_endpoints.daily_activity_scopes import (
     EntityScopeResolver,
     ResolvedScope,
 )
+from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.team_endpoints import aggregated_date_range_error
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
 from litellm.repositories.daily_activity_repository import DailyActivityRepository
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     CacheLeakageKeysResponse,
     DailyActivityKeyPageResponse,
@@ -66,6 +68,12 @@ def get_daily_activity_prisma_client() -> PrismaClient:
 
 def get_daily_activity_repository() -> DailyActivityRepository:
     return daily_activity_repository(get_daily_activity_prisma_client())
+
+
+def get_daily_activity_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
 
 
 def _date_range_error(query: EntityQuery, *, user_aggregated: bool) -> InvalidDateRange | None:
@@ -244,6 +252,7 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
         user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
         repository: Annotated[DailyActivityRepository, Depends(get_daily_activity_repository)],
         prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+        llm_router: Annotated[Router | None, Depends(get_daily_activity_llm_router)],
         api_key_limit: Annotated[
             int, Query(ge=1, le=constants.USAGE_TOP_API_KEYS_MAX)
         ] = constants.USAGE_TOP_API_KEYS_DEFAULT,
@@ -256,13 +265,16 @@ def _register_aggregated_route(router: APIRouter, resolver: EntityScopeResolver,
                 prisma_client,
                 user_aggregated=resolver.entity == "user",
             )
-            return await get_daily_activity_aggregated(
+            activity: Final = await get_daily_activity_aggregated(
                 repository,
                 resolved.scope,
                 entity_metadata_field=resolved.entity_metadata,
                 include_entity_breakdown=resolver.include_entity_breakdown,
                 api_key_limit=api_key_limit,
             )
+            if resolver.entity != "team":
+                return activity
+            return with_ptu_consumption(activity, llm_router, single_team_id(resolved.scope.entity_ids))
         except HTTPException:
             raise
         except Exception as exc:
