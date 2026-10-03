@@ -84,10 +84,6 @@ class _SettlementTableActions(Protocol):
     def update_many(self, *, data: _Claim | _Outcome, where: _RowKey | _UnclaimedRowKey) -> Awaitable[int]: ...
 
 
-def _settlement_table(prisma_client: "PrismaClient") -> _SettlementTableActions:
-    return BackgroundInteractionSettlementRepository(prisma_client).table
-
-
 _CLEARED_CREATE_CONTEXT: Final[Mapping[str, object]] = MappingProxyType({})
 _T = TypeVar("_T")
 
