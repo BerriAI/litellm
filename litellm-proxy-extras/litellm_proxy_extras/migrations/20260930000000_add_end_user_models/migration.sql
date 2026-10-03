@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "LiteLLM_EndUserTable" ADD COLUMN IF NOT EXISTS "models" TEXT[] DEFAULT ARRAY[]::TEXT[];

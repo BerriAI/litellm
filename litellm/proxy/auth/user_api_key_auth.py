@@ -51,6 +51,7 @@ from litellm.proxy.auth.auth_checks import (
     _is_model_cost_zero,
     _is_user_proxy_admin,
     _team_member_max_budget_alert_check,
+    _typed_request_body,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -81,11 +82,11 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route,
     get_request_route_template,
     is_invalid_virtual_key_error,
-    iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
+    request_fallback_model_names,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -1585,6 +1586,7 @@ async def _user_api_key_auth_builder(
                 )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
+                validated.end_user_models = None
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
                     validated = await _run_post_custom_auth_checks(
                         valid_token=validated,
@@ -1601,6 +1603,7 @@ async def _user_api_key_auth_builder(
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)
             validated = UserAPIKeyAuth.model_validate(response)
+            validated.end_user_models = None
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
                     valid_token=validated,
@@ -2076,6 +2079,7 @@ async def _user_api_key_auth_builder(
                 valid_token=valid_token, end_user_params=end_user_params
             )
             valid_token.parent_otel_span = parent_otel_span
+            valid_token.end_user_models = _end_user_object.models if _end_user_object is not None else None
             if _end_user_object is not None:
                 valid_token.end_user_object_permission = _end_user_object.object_permission
 
@@ -2153,6 +2157,7 @@ async def _user_api_key_auth_builder(
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
+            _user_api_key_obj.end_user_models = _end_user_object.models if _end_user_object is not None else None
             _user_api_key_obj.via_virtual_key = True
 
             return _user_api_key_obj
@@ -2643,6 +2648,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
         if _end_user_object is not None:
             valid_token_dict.update(end_user_params)
             valid_token_dict["end_user_object_permission"] = _end_user_object.object_permission
+            valid_token_dict["end_user_models"] = _end_user_object.models
 
     # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
     # sso/login, ui/login, /key functions and /user functions
@@ -3025,6 +3031,7 @@ async def _run_centralized_common_checks(
     end_user_object: Final[LiteLLM_EndUserTable | None] = (
         None if isinstance(end_user_result, BaseException) else end_user_result
     )
+    user_api_key_auth_obj.end_user_models = end_user_object.models if end_user_object is not None else None
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
     carry_team_and_user_budget_state(
         valid_token=user_api_key_auth_obj,
@@ -3685,6 +3692,7 @@ async def _lookup_end_user_and_apply_budget(
     proxy_logging_obj,
 ):
     """Look up end_user from DB and apply budget limits to valid_token."""
+    valid_token.end_user_models = None
     end_user_object = None
     key_end_user_budget_id: Final = get_key_end_user_budget_id(valid_token.metadata)
     try:
@@ -3698,6 +3706,7 @@ async def _lookup_end_user_and_apply_budget(
             token_end_user_max_budget=valid_token.end_user_max_budget,
             key_end_user_budget_id=key_end_user_budget_id,
         )
+        valid_token.end_user_models = end_user_object.models if end_user_object is not None else None
         if end_user_object is not None:
             end_user_params = {
                 "end_user_id": valid_token.end_user_id,
@@ -3778,13 +3787,7 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        fallback_names: Final = tuple(
-            name
-            for target in iter_request_fallback_targets(request_data)
-            if (name := _fallback_target_model_name(target)) is not None
-        )
-
-        for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
+        for _name in request_fallback_model_names(_typed_request_body(request_data)):
             await can_key_call_model(
                 model=_name,
                 llm_model_list=llm_model_list,
@@ -3796,16 +3799,6 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
                 user_model=None,
             )
-
-
-def _fallback_target_model_name(target: object) -> str | None:
-    if isinstance(target, str):
-        return target
-    if isinstance(target, dict):
-        model: Final = target.get("model")
-        if isinstance(model, str):
-            return model
-    return None
 
 
 async def _run_post_custom_auth_checks(

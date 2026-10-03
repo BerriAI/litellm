@@ -80,6 +80,15 @@ async def test_enforced_check_does_not_restrict_requests_without_a_key():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "expected"), [("secret-model", False), ("open-model", True)])
+async def test_enforced_check_applies_customer_model_allowlist(model: str, expected: bool) -> None:
+    token = UserAPIKeyAuth(api_key="unrestricted", end_user_id="customer-1", end_user_models=["open-model"])
+    request_kwargs = {"metadata": {"user_api_key_auth": token}}
+
+    assert await ENFORCED(model=model, request_kwargs=request_kwargs, llm_router=_router()) is expected
+
+
+@pytest.mark.asyncio
 async def test_check_allows_every_fallback_while_not_enforced():
     assert await NOT_ENFORCED(model="secret-model", request_kwargs=_request_with_key(), llm_router=_router())
 

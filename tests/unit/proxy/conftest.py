@@ -7,13 +7,11 @@ import os
 import tempfile
 import warnings
 from collections.abc import Iterator
-from typing import Dict, Optional
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
-
 
 import litellm
 import litellm.proxy.proxy_server
@@ -178,9 +176,7 @@ def setup_and_teardown():
 
 def pytest_collection_modifyitems(config, items):
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
-    custom_logger_tests = [
-        item for item in items if "custom_logger" in item.parent.name
-    ]
+    custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
     # Sort tests based on their names
@@ -197,7 +193,7 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "llm_router",
 )
 
-_proxy_module_globals_snapshot = pytest.StashKey[Dict[str, object]]()
+_proxy_module_globals_snapshot = pytest.StashKey[dict[str, object]]()
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -205,9 +201,7 @@ def pytest_runtest_setup(item):
     from litellm.proxy import proxy_server
 
     item.stash[_proxy_module_globals_snapshot] = {
-        name: vars(proxy_server)[name]
-        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
-        if name in vars(proxy_server)
+        name: vars(proxy_server)[name] for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE if name in vars(proxy_server)
     }
     yield
 
@@ -251,7 +245,7 @@ def _reset_graceful_shutdown_state():
     GracefulShutdownManager.reset()
 
 
-def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:
+def build_cache_config(enable_cache: bool = True) -> dict | None:
     """
     Build Redis cache configuration from environment variables.
 
@@ -282,9 +276,7 @@ def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:
     return {"cache": True, "cache_params": cache_params}
 
 
-def build_minimal_proxy_config(
-    database_url: Optional[str] = None, **init_options
-) -> Dict:
+def build_minimal_proxy_config(database_url: str | None = None, **init_options) -> dict:
     """
     Build a minimal proxy configuration YAML.
 
@@ -313,9 +305,7 @@ def build_minimal_proxy_config(
         config["litellm_settings"].update(cache_config)
 
     if init_options.get("success_callback") is not None:
-        config["litellm_settings"]["success_callback"] = init_options[
-            "success_callback"
-        ]
+        config["litellm_settings"]["success_callback"] = init_options["success_callback"]
 
     excluded_keys = {
         "master_key",
@@ -331,9 +321,7 @@ def build_minimal_proxy_config(
     return config
 
 
-def set_proxy_environment_variables(
-    monkeypatch, database_url: Optional[str] = None
-) -> None:
+def set_proxy_environment_variables(monkeypatch, database_url: str | None = None) -> None:
     """
     Set environment variables for database and Redis.
 
@@ -354,9 +342,7 @@ def set_proxy_environment_variables(
             monkeypatch.setenv("REDIS_PASSWORD", redis_password)
 
 
-def create_proxy_test_client(
-    monkeypatch, database_url: Optional[str] = None, **init_options
-) -> TestClient:
+def create_proxy_test_client(monkeypatch, database_url: str | None = None, **init_options) -> TestClient:
     """
     Create a proxy TestClient with optional database and Redis cache configuration.
 
@@ -373,26 +359,22 @@ def create_proxy_test_client(
         TestClient: FastAPI test client for the proxy server
     """
     from litellm.proxy.proxy_server import (
+        app,
         cleanup_router_config_variables,
         initialize,
-        app,
     )
 
     cleanup_router_config_variables()
 
     filepath = os.path.dirname(os.path.abspath(__file__))
-    default_config_fp = os.path.join(
-        filepath, "test_configs", "test_config_hosted_vllm_embedding.yaml"
-    )
+    default_config_fp = os.path.join(filepath, "test_configs", "test_config_hosted_vllm_embedding.yaml")
 
     enable_cache = init_options.get("enable_cache", True)
     needs_redis = enable_cache and os.getenv("REDIS_HOST") is not None
     needs_db = (database_url or os.getenv("DATABASE_URL")) is not None
 
     if not os.path.exists(default_config_fp) or needs_redis or needs_db:
-        minimal_config = build_minimal_proxy_config(
-            database_url=database_url, **init_options
-        )
+        minimal_config = build_minimal_proxy_config(database_url=database_url, **init_options)
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             yaml.dump(minimal_config, f)
