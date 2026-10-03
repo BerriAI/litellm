@@ -42,13 +42,19 @@ load_master_key() {
   master_key="$(cat "$key_file")"
 }
 
+postgres_ok() {
+  "$py" -c 'import sys, psycopg; psycopg.connect(sys.argv[1], connect_timeout=5).close()' "$database_url" 2>/dev/null
+}
+
+# An explicit LENS_DEV_DATABASE_URL is used as is, so compose never starts Postgres for it.
 # Only reuse a listener on 15432/18123 if it accepts the tracing stack's credentials;
 # start the compose service when nothing is listening; fail if something else is.
 ensure_services() {
   local services=()
-  if listening 15432; then
-    "$py" -c 'import sys, psycopg; psycopg.connect(sys.argv[1], connect_timeout=5).close()' "$database_url" 2>/dev/null \
-      || die "port 15432 is taken by something that isn't the tracing Postgres (litellm/litellm)"
+  if [ -n "${LENS_DEV_DATABASE_URL:-}" ]; then
+    postgres_ok || die "can't connect to LENS_DEV_DATABASE_URL"
+  elif listening 15432; then
+    postgres_ok || die "port 15432 is taken by something that isn't the tracing Postgres (litellm/litellm)"
   else
     services+=(db)
   fi
@@ -61,7 +67,7 @@ ensure_services() {
   if [ "${#services[@]}" -gt 0 ]; then
     docker compose -f docker/docker-compose.tracing.yml up -d --wait "${services[@]}"
   else
-    echo "lens-dev: reusing Postgres on :15432 and ClickHouse on :18123"
+    echo "lens-dev: reusing running Postgres and ClickHouse"
   fi
 }
 
