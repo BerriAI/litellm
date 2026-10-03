@@ -754,7 +754,7 @@ class _LedgerRow:
 
 
 @dataclass(frozen=True, slots=True)
-class _FakeCursor:
+class _LedgerCursor:
     row: tuple[object, ...] | None = None
 
     def fetchone(self) -> tuple[object, ...] | None:
@@ -764,17 +764,17 @@ class _FakeCursor:
         return ()
 
 
-class _FakeConnection:
+class _LedgerConnection:
     def __init__(self, ledger: "_FakeLedger") -> None:
         self.ledger = ledger
 
-    def __enter__(self) -> "_FakeConnection":
+    def __enter__(self) -> "_LedgerConnection":
         return self
 
     def __exit__(self, *args: object) -> None:
         return None
 
-    def execute(self, query: object, params: tuple[object, ...] = ()) -> _FakeCursor:
+    def execute(self, query: object, params: tuple[object, ...] = ()) -> _LedgerCursor:
         return self.ledger.execute(query, params)
 
 
@@ -784,13 +784,13 @@ class _FakeLedger:
         self.after_peer = after_peer
         self._peer_observed = False
 
-    def connect(self, *args: object, **kwargs: object) -> _FakeConnection:
-        return _FakeConnection(self)
+    def connect(self, *args: object, **kwargs: object) -> _LedgerConnection:
+        return _LedgerConnection(self)
 
-    def execute(self, query: object, params: tuple[object, ...]) -> _FakeCursor:
+    def execute(self, query: object, params: tuple[object, ...]) -> _LedgerCursor:
         text: Final = str(query)
         if "WHERE migration_name = %s" not in text or not params:
-            return _FakeCursor()
+            return _LedgerCursor()
         if not self._peer_observed:
             self.rows = self.after_peer
             self._peer_observed = True
@@ -801,11 +801,11 @@ class _FakeLedger:
         )
         if "rolled_back_at IS NULL" in text:
             unresolved: Final = next((row for row in matching if not row.finished and not row.rolled_back), None)
-            return _FakeCursor((unresolved.logs,) if unresolved else None)
+            return _LedgerCursor((unresolved.logs,) if unresolved else None)
         if "IS NOT NULL" in text:
             resolved: Final = next((row for row in matching if row.finished or row.rolled_back), None)
-            return _FakeCursor((1,) if resolved else None)
-        return _FakeCursor()
+            return _LedgerCursor((1,) if resolved else None)
+        return _LedgerCursor()
 
 
 @pytest.mark.parametrize(
