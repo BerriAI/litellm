@@ -10,6 +10,7 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
@@ -116,6 +117,40 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         sent = _reasoning_effort_sent_for_thinking(model, provider, SUMMARIZED_THINKING)
 
         assert sent == {"effort": "high", "summary": "auto"}
+
+    @pytest.mark.parametrize(
+        "deployment_mode, expected",
+        [("responses", {"effort": "high", "summary": "auto"}), ("chat", "high")],
+    )
+    def test_the_routed_deployments_own_mode_decides_the_shape(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, deployment_mode: str, expected: object
+    ) -> None:
+        """https://github.com/BerriAI/litellm/issues/38543 - the routed deployment's own mode, not the
+        model's shared cost-map entry, decides the API, and this probe has to agree with
+        ``litellm.completion`` about which API that request lands on"""
+        monkeypatch.setitem(litellm.model_cost, "routed-deployment", {"mode": deployment_mode})
+        completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="databricks/databricks-qwen35-122b-a10b",
+            metadata=None,
+            stop_sequences=None,
+            stream=False,
+            system=None,
+            temperature=None,
+            thinking=SUMMARIZED_THINKING,
+            tool_choice=None,
+            tools=None,
+            top_k=None,
+            top_p=None,
+            output_format=None,
+            extra_kwargs={
+                "custom_llm_provider": "databricks",
+                "litellm_metadata": {"model_info": {"id": "routed-deployment"}},
+            },
+        )
+
+        assert completion_kwargs.get("reasoning_effort") == expected
 
     def test_auto_summary_still_reaches_a_bridged_target(
         self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
