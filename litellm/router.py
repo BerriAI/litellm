@@ -5628,11 +5628,8 @@ class Router:
                         else chunk
                     )
                     error_event = parse_anthropic_error_event(parse_window)
-                    retriable_pending_error = (
-                        not has_generated_content
-                        and error_event is not None
-                        and _is_retriable_anthropic_status(error_event[2])
-                        and not _anthropic_stream_error_is_gateway_verdict(chunk)
+                    recoverable_frame_error = self._anthropic_messages_recoverable_frame_error(
+                        error_event, chunk, has_generated_content, model, initial_kwargs
                     )
                     refusal_stop_details = (
                         parse_anthropic_refusal_stop_details(parse_window)
@@ -5648,17 +5645,16 @@ class Router:
                             original_exception=refusal_error,
                             is_pre_first_chunk=True,
                         )
-                    if not has_generated_content and not retriable_pending_error and error_event is None:
+                    if not has_generated_content and error_event is None:
                         buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
                         continue
-                    if retriable_pending_error:
+                    if recoverable_frame_error is not None:
                         assert error_event is not None
-                        error_type, message, status_code = error_event
                         raise MidStreamFallbackError(
-                            message=message,
+                            message=error_event[1],
                             model=model,
                             llm_provider="anthropic",
-                            original_exception=anthropic_error_frame_exception(error_type, message, status_code, model),
+                            original_exception=recoverable_frame_error,
                             is_pre_first_chunk=True,
                         )
                     for buffered_chunk in buffered_lifecycle_chunks:
@@ -5802,6 +5798,33 @@ class Router:
         policy: Final = self._anthropic_messages_resolved_retry_policy(kwargs)
         ceiling: Final = plain_budget if policy is None else max(plain_budget, _retry_policy_ceiling(policy))
         return ceiling > attempted
+
+    def _anthropic_messages_recoverable_frame_error(
+        self,
+        error_event: tuple[str, str, int] | None,
+        chunk: object,
+        has_generated_content: bool,
+        model_group: str,
+        kwargs: Mapping[str, object],
+    ) -> Exception | None:
+        """
+        The exception a provider `event: error` frame before content recovers through when a retry of its
+        class or a fallback can still take over. A frame nothing can take over for (content already out, a
+        gateway verdict, or a class granted no retry with no fallback) reaches the client as the provider
+        sent it, the way the last exhausted attempt's does.
+        """
+        if has_generated_content or error_event is None:
+            return None
+        error_type, message, status_code = error_event
+        if not _is_retriable_anthropic_status(status_code) or _anthropic_stream_error_is_gateway_verdict(chunk):
+            return None
+        frame_error: Final = anthropic_error_frame_exception(error_type, message, status_code, model_group)
+        budget, _ = self._anthropic_messages_retry_budget(frame_error, kwargs)
+        if budget > attempted_retries_for_request(kwargs):
+            return frame_error
+        if self._anthropic_messages_stream_can_fall_back(model_group, kwargs):
+            return frame_error
+        return None
 
     def _anthropic_messages_should_retry(
         self,

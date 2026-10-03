@@ -15380,22 +15380,76 @@ async def test_anthropic_messages_error_frame_is_retried_under_the_class_the_pre
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_error_frame_outside_the_policy_class_reaches_the_client_with_its_status():
+async def test_anthropic_messages_error_frame_of_a_class_granted_no_retry_reaches_the_client_as_sent():
     """A rate limit frame is the RateLimitError a 429 answer is, so a policy granting only InternalServerError
-    retries leaves it unretried and the client gets that error with its status."""
+    retries leaves it unretried. With no fallback to take over either, the frame reaches the client as the
+    provider sent it, behind the lifecycle frames held back for a retry that never opened, the way the last
+    exhausted attempt's frames do; raising it instead turned a provider error frame into an HTTP error only
+    on the first attempt."""
     router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
+    frame = _anthropic_messages_error_frame("rate_limit_error")
     provider = _AnthropicMessagesScriptedProvider(
-        lambda: _AnthropicMessagesFakeByteStream(
-            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("rate_limit_error")]
-        )
+        lambda: _AnthropicMessagesFakeByteStream([_anthropic_messages_message_start_chunk(), frame])
     )
 
     stream = await _anthropic_messages_stream_through_router(router, provider)
-    with pytest.raises(litellm.RateLimitError) as raised:
-        [chunk async for chunk in stream]
+    body = [chunk async for chunk in stream]
 
-    assert raised.value.status_code == 429
+    assert body == [_anthropic_messages_message_start_chunk(), frame]
     assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_error_frame_of_a_class_granted_no_retry_still_reaches_a_configured_fallback():
+    """The same unretried rate limit frame goes to the fallback group when one is configured, since a
+    fallback can still take over before any byte reached the client."""
+    router = _anthropic_messages_retry_router(
+        num_retries=0, fallbacks=[{"glm": ["fb"]}], retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame("rate_limit_error")]
+        ),
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb")]
+    assert [model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls] == [True, False]
+    assert provider.calls[-1][0] == "anthropic/fb-model"
+
+
+def test_anthropic_messages_recoverable_frame_error_direct_call():
+    """Which `event: error` frames are intercepted for a retry or a fallback, and which reach the client as sent."""
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+    fallback_router = _anthropic_messages_retry_router(num_retries=0, fallbacks=[{"glm": ["fb"]}])
+    api_error = ("api_error", "reset", 500)
+    rate_limit = ("rate_limit_error", "slow down", 429)
+    kwargs = {"model": "glm"}
+
+    recovered = policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", False, "glm", kwargs)
+    assert isinstance(recovered, litellm.InternalServerError)
+    assert policy_router._anthropic_messages_recoverable_frame_error(rate_limit, b"", False, "glm", kwargs) is None
+    assert policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", True, "glm", kwargs) is None
+    assert policy_router._anthropic_messages_recoverable_frame_error(None, b"", False, "glm", kwargs) is None
+    assert (
+        policy_router._anthropic_messages_recoverable_frame_error(
+            ("invalid_request_error", "bad", 400), b"", False, "glm", kwargs
+        )
+        is None
+    )
+    spent = {"model": "glm", "litellm_metadata": {"attempted_retries": 1, "max_retries": 1}}
+    assert policy_router._anthropic_messages_recoverable_frame_error(api_error, b"", False, "glm", spent) is None
+    assert isinstance(
+        fallback_router._anthropic_messages_recoverable_frame_error(rate_limit, b"", False, "glm", kwargs),
+        litellm.RateLimitError,
+    )
 
 
 _ANTHROPIC_MESSAGES_MALFORMED_POLICIES: Final = (
