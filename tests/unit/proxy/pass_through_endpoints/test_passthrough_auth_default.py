@@ -27,7 +27,8 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 
-from litellm.proxy._types import PassThroughGenericEndpoint
+import litellm.proxy.pass_through_endpoints.pass_through_endpoints as pass_through_endpoints_module
+from litellm.proxy._types import LiteLLMRoutes, PassThroughGenericEndpoint
 from litellm.proxy.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
     user_api_key_auth,
@@ -66,6 +67,12 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
     # configuration.
     app = FastAPI()
     visited: set = set()
+    registry: Final = {}
+    monkeypatch.setattr(
+        pass_through_endpoints_module, "_registered_pass_through_routes", registry
+    )
+    openai_routes: Final = LiteLLMRoutes.openai_routes.value
+    snapshot: Final = list(openai_routes)
 
     endpoint = PassThroughGenericEndpoint(
         path="/forwarder",
@@ -74,28 +81,34 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
     )
 
     # Should not raise; OSS premium_user=False is allowed to use auth=True.
-    await _register_pass_through_endpoint(
-        endpoint=endpoint,
-        app=app,
-        premium_user=False,
-        visited_endpoints=visited,
-    )
+    try:
+        await _register_pass_through_endpoint(
+            endpoint=endpoint,
+            app=app,
+            premium_user=False,
+            visited_endpoints=visited,
+        )
 
-    forwarder_routes: Final = [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute) and route.path == "/forwarder"
-    ]
-    assert len(forwarder_routes) == 1
-    route: Final = forwarder_routes[0]
-    assert any(
-        dependency.call is user_api_key_auth
-        for dependency in route.dependant.dependencies
-    )
-    assert any(
-        dependency.dependency is user_api_key_auth
-        for dependency in route.dependencies
-    )
+        forwarder_routes: Final = [
+            route
+            for route in app.routes
+            if isinstance(route, APIRoute) and route.path == "/forwarder"
+        ]
+        assert len(forwarder_routes) == 1
+        route: Final = forwarder_routes[0]
+        assert any(
+            dependency.call is user_api_key_auth
+            for dependency in route.dependant.dependencies
+        )
+        assert any(
+            dependency.dependency is user_api_key_auth
+            for dependency in route.dependencies
+        )
+        assert "/forwarder" in openai_routes
+        assert [entry["path"] for entry in registry.values()] == ["/forwarder"]
+        assert all(entry["auth"] is True for entry in registry.values())
+    finally:
+        openai_routes[:] = snapshot
 
 
 @pytest.mark.asyncio
