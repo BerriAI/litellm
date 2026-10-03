@@ -15,7 +15,6 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
-    "filelock>=3.16.1,<4.0",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
@@ -26,7 +25,6 @@ dependencies = [
     "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
     "tokenizers>=0.21.0,<1.0",
     "huggingface-hub>=0.34.0,<2.0",
-    "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
@@ -50,6 +48,8 @@ Documentation = "https://docs.litellm.ai"
 # supply-chain-pinned to a vetted, aged release.
 [project.optional-dependencies]
 proxy = [
+    "click>=8.0.0,<9.0",
+    "filelock>=3.16.1,<4.0",
     "gunicorn>=23.0.0,<24.0",
     "uvicorn>=0.33.0,<1.0",
     "granian>=2.7.4,<3.0",
@@ -93,6 +93,8 @@ proxy = [
 # keyring reaches the Secret Service through secretstorage, which brings
 # cryptography with it.
 cli = [
+    "click>=8.0.0,<9.0",
+    "filelock>=3.16.1,<4.0",
     "rich>=13.9.4,<14.0",
     "pyyaml>=6.0.3,<7.0",
     "requests>=2.32.0,<3.0",
@@ -188,12 +190,14 @@ proxy-runtime = [
 ]
 
 [project.scripts]
-litellm = "litellm:run_server"
-lite = "litellm.proxy.client.cli:cli"
-litellm-proxy = "litellm.proxy.client.cli:litellm_proxy_cli"
+litellm = "litellm._cli:run_server"
+lite = "litellm._cli:cli"
+litellm-proxy = "litellm._cli:litellm_proxy_cli"
 
 [dependency-groups]
 dev = [
+    "click>=8.0.0,<9.0",
+    "filelock>=3.16.1,<4.0",
     "numpy>=1.26.0,<3.0",
     "diff-cover==9.7.2",
     "hypothesis==6.165.10",

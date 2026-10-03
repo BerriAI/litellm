@@ -94,17 +94,22 @@ jobs:
       - name: Check locked runtime installations
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          for extra in core mcp proxy; do
+          for extra in core cli mcp proxy; do
             args=()
             if [ "$extra" != core ]; then args=(--extra "$extra"); fi
             UV_PROJECT_ENVIRONMENT=".venv-$extra" .github/scripts/uv_sync_with_retries.sh --frozen --no-dev --no-editable --python ${{ matrix.python-version }} "${args[@]}"
             uv pip check --python ".venv-$extra"
             if [ "$extra" = core ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+            elif [ "$extra" = cli ]; then
+              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile cli)
             else
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "${checker[@]}")
+            if [ "$extra" = core ] || [ "$extra" = proxy ]; then
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile "$extra")
+            fi
             if [ "$extra" = core ] || [ "$extra" = proxy ]; then
               (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_proxy_ui.py" --profile "$extra")
             fi
@@ -118,7 +123,7 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         run: |
           wheel=$(realpath dist/mcp-check/litellm-[0-9]*.whl)
-          for extra in core mcp proxy; do
+          for extra in core cli mcp proxy; do
             args=()
             if [ "$extra" != core ]; then args=(--extra "$extra"); fi
             uv pip compile pyproject.toml --no-sources --find-links dist/mcp-check "${args[@]}" --python-version ${{ matrix.python-version }} --resolution lowest-direct -o "lowest-$extra.txt"
@@ -128,10 +133,15 @@ jobs:
             uv pip check --python ".venv-lowest-$extra"
             if [ "$extra" = core ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+            elif [ "$extra" = cli ]; then
+              checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile cli)
             else
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "${checker[@]}")
+            if [ "$extra" = core ] || [ "$extra" = proxy ]; then
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_cli_install.py" --profile "$extra")
+            fi
             if [ "$extra" = core ] || [ "$extra" = proxy ]; then
               (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-lowest-$extra/bin/python" "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_proxy_ui.py" --profile "$extra")
             fi

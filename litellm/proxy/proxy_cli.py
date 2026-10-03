@@ -11,7 +11,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-import click
+try:
+    import click
+except ModuleNotFoundError as error:
+    if error.name != "click":
+        raise
+    raise ImportError('Install the proxy CLI with pip install "litellm[proxy]"') from error
+
 import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv

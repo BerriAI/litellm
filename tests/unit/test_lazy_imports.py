@@ -377,3 +377,9 @@ def test_kwargs_funnel_and_its_importers_load_first_in_fresh_process(module: str
     the funnel and all_litellm_params must not turn that into a cycle."""
     result = run_child_interpreter(f"import {module}", timeout=120)
     assert result.returncode == 0, result.stderr
+
+
+def test_server_command_preserves_public_identity() -> None:
+    from litellm.proxy.proxy_cli import run_server
+
+    assert litellm.run_server is run_server
