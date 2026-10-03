@@ -11215,3 +11215,14 @@ async def test_session_identity_checks_saved_row_when_registry_is_empty(monkeypa
     )
     resolved = await management._resolve_session_server_id(payload)
     assert (resolved != saved.server_id) is upstream_changed
+
+
+def test_new_oauth_session_does_not_look_up_saved_credentials(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+
+    lookup = MagicMock()
+    monkeypatch.setattr(management.global_mcp_server_manager, "get_mcp_server_by_id", lookup)
+    payload = NewMCPServerRequest(url="https://new.example/mcp", auth_type="oauth2", transport="http")
+    assert management._inherit_credentials_from_existing_server(payload) is payload
+    assert not payload.credentials
+    lookup.assert_not_called()

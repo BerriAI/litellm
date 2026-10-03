@@ -13049,17 +13049,19 @@ async def test_bound_client_cannot_be_sent_to_a_different_issuer(monkeypatch, op
     monkeypatch.setattr(endpoints, "_server_with_oauth_endpoints", AsyncMock(return_value=server))
     http_client = MagicMock()
     monkeypatch.setattr(endpoints, "get_async_httpx_client", http_client)
+    request = (
+        endpoints.authorize_with_server(
+            mcp_server=server, request=MagicMock(spec=Request), redirect_uri="http://localhost/callback", client_id="old-client",
+        )
+        if operation == "authorize"
+        else endpoints.exchange_token_with_server(
+            mcp_server=server, request=MagicMock(spec=Request), grant_type="authorization_code",
+            code="test-code", redirect_uri="http://localhost/callback", client_id="old-client",
+            client_secret=None, code_verifier="verifier",
+        )
+    )
     with pytest.raises(HTTPException) as error:
-        if operation == "authorize":
-            await endpoints.authorize_with_server(
-                mcp_server=server, request=MagicMock(spec=Request), redirect_uri="http://localhost/callback", client_id="old-client",
-            )
-        else:
-            await endpoints.exchange_token_with_server(
-                mcp_server=server, request=MagicMock(spec=Request), grant_type="authorization_code",
-                code="test-code", redirect_uri="http://localhost/callback", client_id="old-client",
-                client_secret=None, code_verifier="verifier",
-            )
+        await request
     assert error.value.status_code == 400
     assert "different issuer" in error.value.detail
     http_client.assert_not_called()

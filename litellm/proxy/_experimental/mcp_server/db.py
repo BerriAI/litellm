@@ -1257,7 +1257,7 @@ async def update_mcp_server(
         if not stale_oauth_client or key not in _OAUTH_CLIENT_CREDENTIAL_FIELDS
     }
     cleared_credentials: Final = {"credentials": safe_dumps(retained_credentials)} if stale_oauth_client else {}
-    data_dict = {**cleared_credentials, **data_dict}
+    data_dict.update({**cleared_credentials, **data_dict})
 
     # Clear stale credentials when auth_type changes but no new credentials provided
     if auth_type_changed and "credentials" not in data_dict:
