@@ -32,7 +32,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: lens-worker
-          image: "{{ .Values.lensWorker.image.repository }}:{{ .Values.lensWorker.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "litellm.lensWorker.image" . | quote }}
           imagePullPolicy: {{ .Values.lensWorker.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

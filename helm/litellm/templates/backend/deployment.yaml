@@ -58,7 +58,7 @@ spec:
               protocol: TCP
           env:
             - name: LENS_WORKER_IMAGE
-              value: "{{ .Values.lensWorker.image.repository }}:{{ .Values.lensWorker.image.tag | default .Chart.AppVersion }}"
+              value: {{ include "litellm.lensWorker.image" . | quote }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.backend) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH

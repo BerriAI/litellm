@@ -71,3 +71,34 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[0].value
           value: https://gateway.example/proxy
+  - it: prefixes a numeric chart release with v
+    template: lens/deployment.yaml
+    chart:
+      appVersion: 1.2.3-rc.4
+    set:
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker:v1.2.3-rc.4
+  - it: follows a backend image override when no worker tag is set
+    template: lens/deployment.yaml
+    set:
+      backend.image.tag: branch-main-1234567
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker:branch-main-1234567
+  - it: recommends the overridden backend release for standalone installers
+    template: backend/deployment.yaml
+    set:
+      backend.image.tag: v1.2.3-dev.4
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_WORKER_IMAGE
+            value: ghcr.io/berriai/litellm-lens-worker:v1.2.3-dev.4

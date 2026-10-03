@@ -17,6 +17,8 @@ curl -fSLo config.yaml "https://raw.githubusercontent.com/BerriAI/litellm/v${LEN
 umask 077
 printf 'LITELLM_VERSION=%s\nLITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\n' \
   "$LENS_RELEASE" "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+printf 'POSTGRES_PASSWORD=%s\nCLICKHOUSE_PASSWORD=%s\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
 docker compose up -d
 ```
 

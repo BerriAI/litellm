@@ -12,6 +12,8 @@ trap cleanup EXIT
 umask 077
 printf 'LITELLM_VERSION=0.0.0-lens-ci\nLITELLM_PORT=4418\nLITELLM_MASTER_KEY=%s\nLITELLM_SALT_KEY=sk-%s\n' \
   "$master_key" "$(openssl rand -hex 32)" > "$qa_dir/env"
+printf 'POSTGRES_PASSWORD=%s\nCLICKHOUSE_PASSWORD=%s\n' \
+  "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> "$qa_dir/env"
 docker tag "${LITELLM_IMAGE:?Set LITELLM_IMAGE to the built gateway image}" ghcr.io/berriai/litellm:0.0.0-lens-ci
 docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -f deploy/lens/Dockerfile \
   -t ghcr.io/berriai/litellm-lens-worker:v0.0.0-lens-ci .
@@ -77,6 +79,23 @@ connected() {
 }
 connected
 printf 'Fresh Compose stack: matching worker image and authenticated heartbeat passed\n'
+
+for target in db:5432 clickhouse:8123; do
+  service=${target%:*}
+  port=${target#*:}
+  address=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${compose[@]}" ps -q "$service")")
+  "${compose[@]}" exec -T lens-worker python -c '
+import socket, sys
+for host in (sys.argv[1], sys.argv[2]):
+    try:
+        connection = socket.create_connection((host, int(sys.argv[3])), timeout=2)
+    except OSError:
+        continue
+    connection.close()
+    raise SystemExit("Worker can reach a datastore directly")
+' "$service" "$address" "$port"
+done
+printf 'Worker can reach the proxy but cannot connect directly to PostgreSQL or ClickHouse\n'
 
 status=$(curl --silent --show-error -o "$qa_dir/mismatch.json" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $(jq -r '.token' "$qa_dir/worker.json")" \

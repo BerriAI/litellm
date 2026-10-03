@@ -7,14 +7,15 @@ services:
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set a strong master key}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set a permanent encryption key and keep it across upgrades}
-      DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?Set a permanent database password}@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
-      CLICKHOUSE_URL: http://default:local-lens@clickhouse:8123
+      CLICKHOUSE_URL: http://default:${CLICKHOUSE_PASSWORD:?Set a permanent ClickHouse password}@clickhouse:8123
       LENS_WORKER_IMAGE: ghcr.io/berriai/litellm-lens-worker:v${LITELLM_VERSION}
     volumes:
       - ./config.yaml:/app/lens-config.yaml:ro
     ports:
       - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+    networks: [proxy, storage]
     depends_on:
       db:
         condition: service_healthy
@@ -29,6 +30,7 @@ services:
       LITELLM_URL: http://litellm:4000
       LENS_WORKER_TOKEN: ${LENS_WORKER_TOKEN:-}
     depends_on: [litellm]
+    networks: [proxy]
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -41,7 +43,8 @@ services:
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm
-      POSTGRES_PASSWORD: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks: [storage]
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -55,16 +58,22 @@ services:
     image: clickhouse/clickhouse-server:26.9.6.6
     environment:
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: local-lens
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     healthcheck:
-      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "local-lens", "--query", "SELECT 1"]
+      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    networks: [storage]
+
+networks:
+  proxy:
+  storage:
+    internal: true
 
 volumes:
   postgres_data:
