@@ -69,13 +69,14 @@ def _reject_non_admin_wif_fields(
     )
 
 
-def _incoming_wif_fields(credential: UpdateCredentialItem) -> tuple[str, ...]:
-    """WIF fields the request payload itself touches: the ones it sets (to any value, ``None``
-    included, since the key alone is what the federation resolver reacts to), plus the ones it
+def _incoming_wif_fields(incoming_values: Mapping[str, object], credential: UpdateCredentialItem) -> tuple[str, ...]:
+    """WIF fields the request touches: the ones its values set (to any value, ``None`` included,
+    since the key alone is what the federation resolver reacts to), whether the caller sent them
+    or named a deployment through ``model_id`` for the proxy to copy them from, plus the ones it
     names in ``credential_values_to_delete``, since dropping a federation field off the stored
     credential breaks every deployment referencing it just as installing one would redirect them.
     """
-    return server_owned_wif_fields_named(credential.credential_values or ()) + server_owned_wif_fields_named(
+    return server_owned_wif_fields_named(incoming_values) + server_owned_wif_fields_named(
         credential.credential_values_to_delete or ()
     )
 
@@ -515,7 +516,12 @@ async def update_credential(
 
     try:
         _reject_overlapping_credential_values(credential)
-        _reject_non_admin_wif_fields(_incoming_wif_fields(credential), user_api_key_dict)
+        incoming_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
+            _resolve_deployment_credentials(llm_router, credential.model_id)
+            if credential.model_id
+            else credential.credential_values or {}
+        )
+        _reject_non_admin_wif_fields(_incoming_wif_fields(incoming_values, credential), user_api_key_dict)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -533,11 +539,7 @@ async def update_credential(
         patch: Final = CredentialItem(
             credential_name=credential.credential_name,
             credential_info=_CREDENTIAL_DICT_ADAPTER.validate_python(credential.credential_info),
-            credential_values=_CREDENTIAL_DICT_ADAPTER.validate_python(
-                _resolve_deployment_credentials(llm_router, credential.model_id)
-                if credential.model_id
-                else credential.credential_values or {}
-            ),
+            credential_values=incoming_values,
             credential_values_to_delete=credential.credential_values_to_delete,
         )
         merged_credential: Final = update_db_credential(db_credential, patch)

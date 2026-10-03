@@ -695,6 +695,47 @@ class TestNonAdminCannotPersistWifFieldsOnCredential:
         assert response.status_code == 403, response.text
         update_mock.assert_not_awaited()
 
+    def test_non_admin_cannot_patch_wif_fields_onto_a_credential_through_model_id(self, credential_store):
+        """Regression: the PATCH gate read only the submitted ``credential_values``, so a non-admin
+        naming a federated deployment through ``model_id`` had its WIF fields copied onto an
+        ordinary credential unchecked, while POST already gated the resolved values."""
+        stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
+        update_by_name = AsyncMock(return_value=None)
+        router = MagicMock()
+        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.get_deployment_credentials.return_value = {
+            "anthropic_keycloak_token_url": "https://keycloak.internal/token",
+            "anthropic_keycloak_client_secret_ref": "os.environ/KEYCLOAK_CLIENT_SECRET",
+        }
+        credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
+
+        response = _patch_credential(
+            "existing",
+            {"credential_name": "existing", "model_id": "federated-deployment", "credential_info": {}},
+            auth=_as_non_admin,
+        )
+
+        assert response.status_code == 403, response.text
+        update_by_name.assert_not_awaited()
+
+    def test_proxy_admin_can_patch_wif_fields_onto_a_credential_through_model_id(self, credential_store):
+        stored = CredentialItem(credential_name="existing", credential_values={"api_key": "sk-old"}, credential_info={})
+        update_by_name = AsyncMock(return_value=None)
+        router = MagicMock()
+        router.get_deployment.return_value = {"model_name": "claude-opus-5-5"}
+        router.get_deployment_credentials.return_value = {"anthropic_keycloak_token_url": "https://keycloak.internal/token"}
+        credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name, llm_router=router)
+
+        response = _patch_credential(
+            "existing",
+            {"credential_name": "existing", "model_id": "federated-deployment", "credential_info": {}},
+            auth=_as_admin,
+        )
+
+        assert response.status_code == 200, response.text
+        written = json.loads(update_by_name.await_args.kwargs["data"]["credential_values"])
+        assert "anthropic_keycloak_token_url" in written, "the deployment's WIF field reaches the stored credential"
+
     def test_proxy_admin_can_update_a_credential_to_add_a_wif_destination(self):
         stored = CredentialItem(
             credential_name="existing",
