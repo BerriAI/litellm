@@ -5494,7 +5494,12 @@ class BaseLLMHTTPHandler:
             raise ValueError("Agentic loop plan missing patched messages")
 
         full_model_name = patch.model or model
-        if custom_llm_provider and not full_model_name.startswith(f"{custom_llm_provider}/"):
+        known_providers: Final = getattr(litellm, "provider_list", [])
+        has_provider_prefix: Final = (
+            full_model_name.startswith(f"{custom_llm_provider}/")
+            or ("/" in full_model_name and full_model_name.split("/", 1)[0] in known_providers)
+        )
+        if custom_llm_provider and not has_provider_prefix:
             full_model_name = f"{custom_llm_provider}/{full_model_name}"
 
         optional_params_for_followup: Final = dict(optional_params)

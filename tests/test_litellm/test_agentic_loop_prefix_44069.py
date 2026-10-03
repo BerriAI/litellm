@@ -25,8 +25,9 @@ from litellm.types.utils import ModelResponse
         ("zai-org/GLM-5.3-Flash", "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
         ("hosted_vllm/zai-org/GLM-5.3-Flash", "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
         ("hosted_vllm/zai-org/GLM-5.3-Flash", "", "hosted_vllm/zai-org/GLM-5.3-Flash"),
+        ("openai/gpt-4o", "hosted_vllm", "openai/gpt-4o"),
     ),
-    ids=("organization-model", "already-prefixed", "no-provider"),
+    ids=("organization-model", "already-prefixed", "no-provider", "cross-provider"),
 )
 async def test_agentic_followup_preserves_provider_prefix(
     execution_path: Literal["http", "sdk"],
@@ -75,8 +76,8 @@ async def test_agentic_followup_preserves_provider_prefix(
             )
         )
 
-    assert isinstance(response, ModelResponse)
-    assert response.model == expected_model.removeprefix("hosted_vllm/")
     followup.assert_awaited_once()
     assert followup.await_args is not None
     assert followup.await_args.kwargs["model"] == expected_model
+    assert isinstance(response, ModelResponse)
+    assert response.model == expected_model.split("/", 1)[1]
