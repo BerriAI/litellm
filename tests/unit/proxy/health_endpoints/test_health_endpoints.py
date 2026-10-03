@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import time
+from importlib import import_module
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -1322,6 +1323,23 @@ def test_health_liveness_endpoint(proxy_client):
 
     # Log the duration for visibility (useful for CI/CD monitoring)
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
+
+
+def test_proxy_client_serves_full_proxy_routes_after_gateway_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setattr(app.router, "lifespan_context", app.router.lifespan_context)
+    import_module("gateway.main")
+
+    with create_proxy_test_client(monkeypatch) as client:
+        response: Final = client.post(
+            "/utils/token_counter",
+            headers={"Authorization": "Bearer sk-1234"},
+            json={"model": "gpt-4o", "prompt": "hello"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total_tokens"] > 0
 
 
 def test_health_backlog_includes_admission_control_stats(proxy_client):

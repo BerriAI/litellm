@@ -7,7 +7,7 @@ import os
 import tempfile
 import warnings
 from collections.abc import Iterator
-from typing import Dict, Optional
+from typing import Dict, Final, Optional
 
 import pytest
 import yaml
@@ -136,6 +136,7 @@ def _flush_caches(targets):
 _LITELLM_STATE = _snapshot_mutable_state(litellm)
 _PROXY_SERVER_STATE = _snapshot_mutable_state(litellm.proxy.proxy_server)
 _FLUSHABLE_CACHES = _collect_flushable_caches()
+_PROXY_APP_LIFESPAN: Final = litellm.proxy.proxy_server.app.router.lifespan_context
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -379,6 +380,7 @@ def create_proxy_test_client(
     )
 
     cleanup_router_config_variables()
+    monkeypatch.setattr(app.router, "lifespan_context", _PROXY_APP_LIFESPAN)
 
     filepath = os.path.dirname(os.path.abspath(__file__))
     default_config_fp = os.path.join(
