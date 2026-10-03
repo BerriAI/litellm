@@ -415,7 +415,7 @@ export default function ROISettingsPanel({
                     value={model}
                     onChange={(event) => setModel(event.target.value)}
                   >
-                    <option value="">Select a router model</option>
+                    <option value="">Select an estimator model</option>
                     {model && !initialSettings.available_models.includes(model) && (
                       <option value={model}>{model}</option>
                     )}
