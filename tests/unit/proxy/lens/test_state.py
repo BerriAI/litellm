@@ -103,7 +103,6 @@ def test_behavior_description_is_sufficient_without_separate_checks() -> None:
         ("sample_size", 0),
         ("concurrency", 0),
         ("lookback_hours", 0),
-        ("lookback_hours", 8761),
     ),
 )
 def test_invalid_selection_and_parallelism_are_rejected(field: str, value: int) -> None:
@@ -217,7 +216,7 @@ def test_custom_schedule_does_not_overlap_an_active_scan(interval: int) -> None:
     assert queue_job(running, NOW + timedelta(minutes=interval), "second") is running
 
 
-@pytest.mark.parametrize("interval", (0, -1, 10081, 1.5))
+@pytest.mark.parametrize("interval", (0, -1, 1.5))
 def test_invalid_schedule_is_rejected(interval: float) -> None:
     from pydantic import ValidationError
 

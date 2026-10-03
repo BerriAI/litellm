@@ -7,7 +7,7 @@ from itertools import chain, islice
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
-from pydantic import Field, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError
 
 from .models import (
     Claim,
@@ -31,8 +31,8 @@ from .trace_store import TraceStore, overview_content, trace_store
 class Observation(Record):
     check_id: str
     kind: Literal["issue", "pattern"] = "issue"
-    summary: str = Field(max_length=2000)
-    evidence: tuple[Evidence, ...] = Field(default=(), max_length=6)
+    summary: str
+    evidence: tuple[Evidence, ...] = Field(default=())
 
 
 class Extraction(Record):
@@ -47,14 +47,14 @@ class SpanRead(Record):
 
 class TraceReview(Extraction):
     feedback_page: int | None = Field(default=None, ge=0)
-    reads: tuple[SpanRead, ...] = Field(default=(), max_length=2)
+    reads: tuple[SpanRead, ...] = Field(default=())
 
 
 class Candidate(Record):
     check_id: str
     kind: Literal["issue", "pattern"] = "issue"
-    title: str = Field(max_length=160)
-    hypothesis: str = Field(max_length=2000)
+    title: str
+    hypothesis: str
     execution_ids: tuple[str, ...]
     existing_finding_id: str | None = None
 
@@ -83,11 +83,13 @@ class Examined(Record):
     parts: tuple[TracePart, ...]
     partial: bool
     cannot_assess: bool
+    error: str = ""
 
 
 class Investigation(Record):
     finding: FindingDraft | None
     parts: tuple[TracePart, ...]
+    error: str = ""
 
 
 ModelCall: TypeAlias = Callable[[ModelRequest], Awaitable[ModelResult]]
@@ -96,6 +98,28 @@ ReportProgress: TypeAlias = Callable[[str, Coverage], Awaitable[None]]
 
 
 ResponseT = TypeVar("ResponseT", bound=Record)
+
+
+class ValidationIssue(Record):
+    type: str
+    loc: tuple[str | int, ...]
+    msg: str
+
+
+def validation_details(error: ValidationError) -> str:
+    issues: Final = TypeAdapter(tuple[ValidationIssue, ...]).validate_json(
+        error.json(include_input=False, include_context=False, include_url=False)
+    )
+    return "\n".join(
+        f"{'.'.join(str(part) for part in issue.loc) or '$'}: {issue.msg} [{issue.type}]"
+        if issue.type != "extra_forbidden"
+        else "Unexpected field: Extra inputs are not permitted [extra_forbidden]"
+        for issue in issues
+    )
+
+
+class AnalysisResponseError(ValueError):
+    pass
 
 
 async def structured_response(
@@ -107,6 +131,8 @@ async def structured_response(
     response: Final = await model(request)
     try:
         parsed: Final = schema.model_validate_json(response.content)
+        if response.finish_reason:
+            raise ValueError(f"Model did not finish its response (finish_reason={response.finish_reason})")
         invalid: Final = validate(parsed)
         if invalid:
             raise ValueError(invalid)
@@ -124,11 +150,34 @@ async def structured_response(
             }
         )
     )
-    corrected: Final = schema.model_validate_json((await model(repair)).content)
-    remaining: Final = validate(corrected)
-    if remaining:
-        raise ValueError(remaining)
-    return corrected
+    repaired: Final = await model(repair)
+    try:
+        corrected: Final = schema.model_validate_json(repaired.content)
+        if repaired.finish_reason:
+            raise ValueError(f"Model did not finish its response (finish_reason={repaired.finish_reason})")
+        remaining: Final = validate(corrected)
+        if remaining:
+            raise ValueError(remaining)
+        return corrected
+    except ValueError as error:
+        stage: Final = MappingProxyType(
+            {
+                "extract": "Reading executions",
+                "cluster": "Grouping observations",
+                "investigate": "Checking original evidence",
+            }
+        )[request.purpose]
+        detail: Final = validation_details(error) if isinstance(error, ValidationError) else str(error)
+        stopped: Final = (
+            " Model output was truncated (finish_reason=length)."
+            if repaired.finish_reason == "length"
+            else " Model output was blocked (finish_reason=content_filter)."
+            if repaired.finish_reason == "content_filter"
+            else ""
+        )
+        raise AnalysisResponseError(
+            f"{stage} failed: {schema.__name__} response invalid after 2 attempts.{stopped}\n{detail}"
+        ) from error
 
 
 def evidence_valid(evidence: Evidence, parts: tuple[TracePart, ...]) -> bool:
@@ -203,8 +252,15 @@ async def extract(claim: Claim, execution: Execution, read: ReadContent, model: 
     with trace_store() as store:
         try:
             return await extract_stored(claim, execution, read, model, store)
-        except ValidationError:
-            return Examined(execution=execution, observations=(), parts=(), partial=True, cannot_assess=True)
+        except (ValidationError, AnalysisResponseError) as error:
+            return Examined(
+                execution=execution,
+                observations=(),
+                parts=(),
+                partial=True,
+                cannot_assess=True,
+                error=validation_details(error) if isinstance(error, ValidationError) else str(error),
+            )
 
 
 async def extract_stored(
@@ -254,7 +310,7 @@ async def extract_stored(
                         for p in (first_root,)
                         if p is not None
                     ),
-                    "read_evidence": tuple(p.model_dump() for p in additional[-2:]),
+                    "read_evidence": tuple(p.model_dump() for p in additional),
                     "previous_observations": tuple(o.model_dump() for o in previous.observations),
                     "completed_read_count": len(reads),
                     "last_completed_read": reads[-1].model_dump() if reads else None,
@@ -355,8 +411,12 @@ async def investigate(
     with trace_store() as store:
         try:
             return await investigate_stored(claim, candidate, examined, read, model, store)
-        except ValidationError:
-            return Investigation(finding=None, parts=())
+        except (ValidationError, AnalysisResponseError) as error:
+            return Investigation(
+                finding=None,
+                parts=(),
+                error=validation_details(error) if isinstance(error, ValidationError) else str(error),
+            )
 
 
 async def investigate_stored(
@@ -457,8 +517,6 @@ async def investigate_stored(
             },
             ensure_ascii=False,
         )
-        if len(prompt) > 100000:
-            return Investigation(finding=None, parts=evidence)
         request: Final = ModelRequest(purpose="investigate", prompt=prompt)
         decision: Final = await investigation_decision(request, model, 1 if stalled else 2)
         if decision.action == "submit" and decision.finding:
@@ -619,7 +677,11 @@ async def _analyze_sample(
     await progress("Grouping observations", coverage)
     observations: Final = tuple(chain.from_iterable(item.observations for item in examined))
     if not observations:
-        return Result(coverage=coverage, assessments=assessments)
+        return Result(
+            coverage=coverage,
+            assessments=assessments,
+            error="\n\n".join(dict.fromkeys(item.error for item in examined if item.error)),
+        )
     batches: Final = observation_batches(observations)
     grouping: Final = coverage.model_copy(update=MappingProxyType({"grouping_batches": len(batches)}))
     clusters: Final = await cluster_batches(batches, limited_model, progress, grouping)
@@ -638,6 +700,7 @@ async def _analyze_sample(
     return Result(
         findings=tuple(item.finding for item in investigated if item.finding is not None),
         assessments=assessments,
+        error="\n\n".join(dict.fromkeys(item.error for item in (*examined, *investigated) if item.error)),
         coverage=investigating.model_copy(
             update=MappingProxyType(
                 {"investigated": len(candidates), "inconclusive": sum(item.finding is None for item in investigated)}
@@ -657,7 +720,7 @@ async def cluster_batches(
             Candidate(
                 check_id=o.check_id,
                 kind=o.kind,
-                title=o.summary[:160],
+                title=o.summary,
                 hypothesis=f"{o.kind}: {o.summary}",
                 execution_ids=tuple(sorted(frozenset(e.execution_id for e in o.evidence))),
             )

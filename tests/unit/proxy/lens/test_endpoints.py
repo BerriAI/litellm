@@ -165,3 +165,29 @@ def test_regular_keys_cannot_read_lens_results(role: LitellmUserRoles | None) ->
     with pytest.raises(HTTPException) as error:
         user_scope(auth)
     assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("provider", (False, True))
+def test_model_errors_reach_worker_with_status_and_redacted_provider_message(provider: bool) -> None:
+    import httpx
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.lens.endpoints import model_failure
+    from litellm.proxy.lens.worker import failure_message
+
+    message: Final = "Token rate limit exceeded. api_key=secret-example-value-123456 Retry in 60 seconds."
+    error: Final = model_failure(
+        ProxyException(message, "rate_limit_error", None, 429, headers={"retry-after": "60"})
+        if provider
+        else HTTPException(429, message, headers={"retry-after": "60"})
+    )
+    request: Final = httpx.Request("POST", "https://proxy.test/lens/worker/lens/run/model")
+    response: Final = httpx.Response(error.status_code, json={"detail": error.detail}, request=request)
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        response.raise_for_status()
+    diagnostic: Final = failure_message(caught.value)
+    assert diagnostic.startswith("Model request failed (HTTP 429):")
+    assert "Token rate limit exceeded." in diagnostic
+    assert "Retry in 60 seconds." in diagnostic
+    assert "secret-example" not in diagnostic
+    assert error.headers == {"retry-after": "60"}

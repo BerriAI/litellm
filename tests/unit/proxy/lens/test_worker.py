@@ -89,7 +89,8 @@ async def test_incompatible_claim_reports_failure_instead_of_leaving_the_investi
 ) -> None:
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     payload: Final = claim.model_dump(mode="json") | {
-        "job": claim.job.model_dump(mode="json") | {
+        "job": claim.job.model_dump(mode="json")
+        | {
             "settings": claim.job.settings.model_dump() | {"future_setting": "private content"},
         },
     }
@@ -197,3 +198,98 @@ def test_connection_timeout_and_invalid_response_have_distinct_private_diagnosti
     assert "connect to the proxy" in failure_message(httpx.ConnectError("private hostname"))
     assert "timed out" in failure_message(httpx.ReadTimeout("private prompt"))
     assert "structured JSON" in failure_message(ValueError("private model response"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "purpose,stage,schema",
+    (
+        ("extract", "Reading executions", "TraceReview"),
+        ("cluster", "Grouping observations", "Clusters"),
+        ("investigate", "Checking original evidence", "Decision"),
+    ),
+)
+async def test_worker_saves_validation_errors_from_every_analysis_stage(purpose: str, stage: str, schema: str) -> None:
+    import json
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="trace", team_id="alpha", name="review", start_time="", span_count=1
+    )
+    sample: Final = Sample(executions=(execution,), eligible=1)
+    content: Final = ExecutionContent(
+        execution=execution,
+        parts=(TracePart(execution_id="run", span_id="span", name="lead", kind="agent", content="Tool timeout"),),
+    )
+    saved: Final = SimpleQueue[Result]()
+    attempts: Final = SimpleQueue[str]()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        match request.url.path.rsplit("/", 1)[-1]:
+            case "claim":
+                return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "sample":
+                return httpx.Response(200, json=sample.model_dump(mode="json"))
+            case "content":
+                return httpx.Response(200, json=content.model_dump(mode="json"))
+            case "model":
+                body: Final = ModelRequest.model_validate_json(request.content)
+                if body.purpose == purpose:
+                    attempts.put(body.purpose)
+                    return httpx.Response(
+                        200,
+                        json={"content": '{"candidates":[', "cost": 0.01},
+                        headers={"x-litellm-lens-finish-reason": "length"},
+                    )
+                if body.purpose == "cluster":
+                    return httpx.Response(
+                        200,
+                        json={
+                            "content": json.dumps({"candidates": json.loads(body.prompt)["candidates"]}),
+                            "cost": 0.01,
+                        },
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "content": json.dumps(
+                            {
+                                "observations": [
+                                    {
+                                        "check_id": claim.job.settings.analysis_checks[0].id,
+                                        "summary": "Tool timeout",
+                                        "evidence": [
+                                            {"execution_id": "r0", "span_id": "span", "quote": "Tool timeout"}
+                                        ],
+                                    }
+                                ]
+                            }
+                        ),
+                        "cost": 0.01,
+                    },
+                )
+            case "progress":
+                return httpx.Response(200, json=True)
+            case "result":
+                saved.put(Result.model_validate_json(request.content))
+                return httpx.Response(200, json=True)
+            case _:
+                pytest.fail(f"Unexpected worker request: {request.url.path}")
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert await LensWorker(client).run_once()
+    message: Final = saved.get_nowait().error
+    assert message.startswith(f"{stage} failed: {schema} response invalid after 2 attempts.")
+    assert "finish_reason=length" in message
+    assert "EOF while parsing" in message and "[json_invalid]" in message
+    assert attempts.qsize() == 2 and saved.empty()
+
+
+def test_response_validation_diagnostics_omit_input_values_and_unexpected_field_names() -> None:
+    with pytest.raises(ValidationError) as caught:
+        ModelResult.model_validate({"content": "private trace", "cost": "private token", "private field": "secret"})
+    message: Final = failure_message(caught.value)
+    assert "Invalid ModelResult response" in message
+    assert "cost:" in message and "[float_parsing]" in message
+    assert "[extra_forbidden]" in message
+    assert "private" not in message and "secret" not in message

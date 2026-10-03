@@ -10,7 +10,7 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .analysis import analyze_sample
+from .analysis import AnalysisResponseError, analyze_sample, validation_details
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 
 logger: Final = logging.getLogger("litellm.lens.worker")
@@ -27,7 +27,21 @@ class ClaimIdentity(BaseModel):
     job: ClaimedJobIdentity
 
 
+class PublicModelError(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    lens_error: str
+
+
+class ModelErrorEnvelope(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    detail: PublicModelError
+
+
 def failure_message(error: Exception) -> str:
+    if isinstance(error, AnalysisResponseError):
+        return str(error)
+    if isinstance(error, ValidationError):
+        return f"Invalid {error.title} response (ValidationError):\n{validation_details(error)}"
     if isinstance(error, (OSError, sqlite3.Error)):
         return "Worker temporary storage failed. Increase its capacity or reduce analysis parallelism."
     if isinstance(error, httpx.TimeoutException):
@@ -46,6 +60,12 @@ def failure_message(error: Exception) -> str:
             else "Worker request"
         )
         status: Final = error.response.status_code
+        if path.endswith("/model"):
+            try:
+                diagnostic: Final = ModelErrorEnvelope.model_validate_json(error.response.content)
+                return f"Model request failed (HTTP {status}):\n{diagnostic.detail.lens_error}"
+            except ValueError:
+                pass
         guidance: Final = MappingProxyType(
             {
                 400: "Check the configured model and whether the worker's billing key is enabled.",
@@ -68,9 +88,15 @@ class LensWorker:
 
     async def model_request(self, path: str, body: ModelRequest, attempt: int = 0) -> ModelResult:
         try:
-            result: Final = await self.client.post(path, json=body.model_dump())
+            result: Final = await self.client.post(path, json=body.model_dump(), timeout=None)
             result.raise_for_status()
-            return ModelResult.model_validate(result.json())
+            parsed: Final = ModelResult.model_validate(result.json())
+            reason: Final = result.headers.get("x-litellm-lens-finish-reason")
+            return (
+                parsed.model_copy(update=MappingProxyType({"finish_reason": reason}))
+                if reason in ("length", "content_filter")
+                else parsed
+            )
         except (httpx.TransportError, httpx.HTTPStatusError) as exc:
             retryable: Final = not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code in (
                 429,
@@ -84,7 +110,7 @@ class LensWorker:
             return await self.model_request(path, body, attempt + 1)
 
     async def run_once(self) -> bool:
-        response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 2}))
+        response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 3}))
         response.raise_for_status()
         payload: Final = response.json()
         if payload is None:
