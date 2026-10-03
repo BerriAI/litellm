@@ -6,7 +6,7 @@ import pytest
 
 from litellm.proxy.lens.models import MetadataFilter, Scope
 from litellm.proxy.lens.sources import SourceReader, execution_id, parse_execution
-from litellm.rust_bridge.trace_queries import ActivityAvailability, AgentRow, ExecutionRow
+from litellm.rust_bridge.trace.generated.models import ActivityAvailability, AgentRow, ExecutionRow
 from tests.unit.proxy.lens.test_state import lens
 
 

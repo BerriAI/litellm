@@ -1,6 +1,18 @@
 "use client";
 
-import { MessageSquareText, Link2, Network, Wrench } from "lucide-react";
+import {
+  ArrowDownUp,
+  ClipboardCheck,
+  FileText,
+  Layers,
+  Link2,
+  MessageSquareText,
+  Network,
+  Search,
+  ShieldCheck,
+  Split,
+  Wrench,
+} from "lucide-react";
 
 import { Logo } from "@/components/molecules/logo/Logo";
 import { cn } from "@/lib/cva.config";
@@ -32,6 +44,13 @@ const TYPE_GLYPH: Record<SpanType, typeof Network> = {
   tool: Wrench,
   chain: Link2,
   framework: Network,
+  retriever: Search,
+  embedding: Layers,
+  reranker: ArrowDownUp,
+  guardrail: ShieldCheck,
+  evaluator: ClipboardCheck,
+  prompt: FileText,
+  decision: Split,
 };
 
 const tileTone = (error: boolean): string => (error ? "text-destructive" : "text-muted-foreground");

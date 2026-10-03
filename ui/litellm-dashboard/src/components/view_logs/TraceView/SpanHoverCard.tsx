@@ -20,6 +20,13 @@ const TYPE_LABEL: Record<SpanType, string> = {
   tool: "Tool",
   chain: "Chain",
   framework: "Framework",
+  retriever: "Retriever",
+  embedding: "Embedding",
+  reranker: "Reranker",
+  guardrail: "Guardrail",
+  evaluator: "Evaluator",
+  prompt: "Prompt",
+  decision: "Decision",
 };
 
 const ABSOLUTE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
