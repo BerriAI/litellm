@@ -9467,12 +9467,13 @@ def _restamp_streaming_chunk_model(
         )
         model_mismatch_logged = True
 
+    # The streaming wrapper keeps these same chunk objects to assemble the response it
+    # prices, so stamp a copy for the client and leave the provider's model for pricing.
     if isinstance(chunk, dict):
-        chunk["model"] = target_model
-        return chunk, model_mismatch_logged
+        return {**chunk, "model": target_model}, model_mismatch_logged
 
     try:
-        chunk.model = target_model
+        return chunk.model_copy(update={"model": target_model}), model_mismatch_logged
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
