@@ -25,6 +25,8 @@ import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
 import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
+import { HeaderActions } from "./HeaderActions";
+import { RunNowDialog } from "./detail/RunNowDialog";
 import { FindingsInbox } from "./FindingsInbox";
 import { findingAgents, type InboxRow } from "../model/inbox";
 import { WatchAllBanner } from "./WatchAllBanner";
@@ -34,10 +36,14 @@ import { workerConnected, readiness } from "../model/status";
 import { type Finding, type Settings } from "../model/types";
 
 export function InvestigationsView({
+  view = "findings",
+  active = true,
   accessToken,
   readOnly = false,
   onDemo,
 }: {
+  view?: "findings" | "investigations";
+  active?: boolean;
   accessToken: string;
   readOnly?: boolean;
   onDemo?: () => void;
@@ -60,12 +66,9 @@ export function InvestigationsView({
   const selected = demo ? demoSelected : liveSelected;
   const setSelected = demo ? setDemoSelected : setLiveSelected;
   const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
-  const [liveView, setLiveView] = useQueryState("view", parseAsString.withDefault("findings"));
-  const [demoView, setDemoView] = useState("findings");
   const [peek, setPeek] = useState(false);
+  const [runNowId, setRunNowId] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
-  const view = demo ? demoView : liveView;
-  const setView = (next: string) => (demo ? setDemoView(next) : void setLiveView(next));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const lenses = [...(query.data?.lenses ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
@@ -142,9 +145,15 @@ export function InvestigationsView({
     if (editing !== "edit" && !ready)
       throw new Error("Wait for recorded activity and a connected worker before starting an investigation");
     const saved = await saveLens.mutateAsync({ id: editing === "edit" ? lens?.id : undefined, settings });
-    selectLens(saved.id);
+    selectLens(peek ? null : saved.id);
+    setPeek(false);
     setEditing(null);
     refresh();
+  };
+  const editFromTable = (id: string) => {
+    setPeek(true);
+    selectLens(id);
+    setEditing("edit");
   };
   const openFinding = (row: InboxRow) => {
     setPeek(true);
@@ -192,22 +201,8 @@ export function InvestigationsView({
       {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
       {(!selected || peek) && lenses.length > 0 && (
         <div className="flex min-h-0 flex-1 flex-col gap-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div role="tablist" aria-label="Findings or manage" className="flex rounded-lg bg-muted/60 p-0.5">
-              {(["findings", "investigations"] as const).map((name) => (
-                <button
-                  key={name}
-                  role="tab"
-                  type="button"
-                  aria-selected={view === name}
-                  onClick={() => setView(name)}
-                  className="rounded-md px-3 py-1 text-sm text-muted-foreground hover:text-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm"
-                >
-                  {name === "findings" ? "Findings" : `Manage (${lenses.length})`}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
+          {active && (
+            <HeaderActions>
               {!readOnly && (
                 <WatchAllBanner
                   lenses={lenses}
@@ -231,18 +226,16 @@ export function InvestigationsView({
                 setWorkerSetup={setWorkerSetup}
                 setEditing={setEditing}
               />
-            </div>
-          </div>
+            </HeaderActions>
+          )}
           {view === "findings" ? (
             <FindingsInbox lenses={lenses} onOpen={openFinding} />
           ) : (
             <InvestigationList
               lenses={lenses}
               connected={connected}
-              onSelect={(id) => {
-                setPeek(false);
-                selectLens(id);
-              }}
+              onEdit={editFromTable}
+              onRunNow={(id) => setRunNowId(id)}
             />
           )}
         </div>
@@ -274,8 +267,26 @@ export function InvestigationsView({
           modelsLoading={models.isLoading}
           modelsError={models.error?.message}
           accessToken={accessToken}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null);
+            if (peek) {
+              setPeek(false);
+              selectLens(null);
+            }
+          }}
           onSave={save}
+        />
+      )}
+      {runNowId && (
+        <RunNowDialog
+          lens={lenses.find((l) => l.id === runNowId) ?? lenses[0]}
+          agents={Array.isArray(agents.data) ? agents.data : []}
+          busy={busy}
+          onClose={() => setRunNowId(null)}
+          onRun={async (request) => {
+            await update((api) => api.startRun(runNowId, request));
+            setRunNowId(null);
+          }}
         />
       )}
       {workerSetup && (
