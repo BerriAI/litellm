@@ -2468,9 +2468,7 @@ def _complete_clinepass(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
 
     api_key = api_key or get_secret_str("CLINEPASS_API_KEY") or litellm.api_key
 
-    api_base = (
-        api_base or litellm.api_base or get_secret_str("CLINEPASS_API_BASE") or "https://api.cline.bot/api/v1"
-    )
+    api_base = api_base or litellm.api_base or get_secret_str("CLINEPASS_API_BASE") or "https://api.cline.bot/api/v1"
 
     ## COMPLETION CALL
     response: Final = base_llm_http_handler.completion(

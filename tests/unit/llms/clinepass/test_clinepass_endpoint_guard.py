@@ -87,13 +87,9 @@ def test_image_generation_makes_no_outbound_request(no_request_allowed):
 def test_openai_credential_is_never_transmitted(no_request_allowed):
     """The point of the P1: whatever happens, the OpenAI key must not go out."""
     for call in (
-        lambda: litellm.speech(
-            model="clinepass/deepseek-v4-flash", input="hi", voice="alloy"
-        ),
+        lambda: litellm.speech(model="clinepass/deepseek-v4-flash", input="hi", voice="alloy"),
         lambda: litellm.transcription(model="clinepass/deepseek-v4-flash", file=None),
-        lambda: litellm.image_generation(
-            model="clinepass/deepseek-v4-flash", prompt="a cat"
-        ),
+        lambda: litellm.image_generation(model="clinepass/deepseek-v4-flash", prompt="a cat"),
     ):
         # Whether each endpoint raises or returns an empty response is upstream's
         # business; that no credential leaves the process is ours.
