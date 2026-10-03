@@ -6,8 +6,8 @@ from pydantic import JsonValue
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TranslationTestCase:
-    """One client request through the proxy to a deployment in `proxy_config.yaml`: what the client sends, the
-    exact request the provider must receive, the provider's reply, and the exact response the client must get."""
+    """One request through the proxy to a deployment in `proxy_config.yaml`: what the test sends to LiteLLM, the
+    exact request the provider must receive, the fake provider's reply, and the exact response LiteLLM must return."""
 
     scenario: str
     litellm_endpoint: str
