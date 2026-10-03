@@ -348,7 +348,7 @@ async def test_create_user_without_groups_defers_to_default_team(mocker: MockerF
     await create_user(user=scim_user)
 
     assert new_user_mock.call_args.kwargs["data"].teams is None
-    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth.get_litellm_scim_user_api_key_auth()
 
 
 @pytest.mark.asyncio
@@ -387,7 +387,7 @@ async def test_create_user_if_not_exists_defers_to_default_team(mocker: MockerFi
 
     assert created is not None
     assert new_user_mock.call_args.kwargs["data"].teams is None
-    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth.get_litellm_scim_user_api_key_auth()
 
 
 @pytest.mark.asyncio
@@ -1230,6 +1230,30 @@ async def test_handle_team_membership_changes_add_and_remove(mocker):
     assert call_args[1]["user_id"] == "test-user"
     assert call_args[1]["teams_ids_to_add_user_to"] == ["team3"]
     assert call_args[1]["teams_ids_to_remove_user_from"] == ["team1"]
+
+
+@pytest.mark.asyncio
+async def test_patch_team_membership_remove_attributes_scim_service_account(mocker):
+    """Removing a member via SCIM must run team_member_delete under the SCIM
+    service-account identity so the cascaded key deletions record a deleted_by."""
+    from litellm.constants import LITELLM_SCIM_SERVICE_ACCOUNT_NAME
+
+    mock_team_member_delete = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.team_member_delete",
+        AsyncMock(),
+    )
+
+    await patch_team_membership(
+        user_id="uid",
+        teams_ids_to_add_user_to=[],
+        teams_ids_to_remove_user_from=["team-1"],
+        raise_on_error=True,
+    )
+
+    mock_team_member_delete.assert_awaited_once()
+    auth = mock_team_member_delete.await_args.kwargs["user_api_key_dict"]
+    assert auth.user_id == LITELLM_SCIM_SERVICE_ACCOUNT_NAME
+    assert auth.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
 @pytest.mark.asyncio
