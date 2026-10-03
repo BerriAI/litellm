@@ -3527,3 +3527,54 @@ def test_bedrock_clear_thinking_preserves_display_updates() -> None:
 
     assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_bedrock_messages_tool_changes_beta(action: str | None, explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    content: Final = (
+        [{"type": action, "tool": {"type": "tool_reference", "name": "mcp__test__ping"}}]
+        if action
+        else "Answer briefly"
+    )
+    messages: Final = [{"role": "user", "content": "Hello"}, {"role": "system", "content": content}]
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result.get("anthropic_beta", []).count(beta) == int(action is not None or explicit_beta)
+    assert result["messages"] == messages
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}],
+            },
+            {"role": "user", "content": "Reply with OK"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 512},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
+    assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)

@@ -1,4 +1,5 @@
 "use client";
+import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
@@ -15,6 +16,7 @@ import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
 import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
+import { FrameworkLogo, traceFramework } from "./TraceFramework";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
 import {
@@ -25,6 +27,7 @@ import {
   isFrameworkSpan,
   nearestVisibleSpanId,
   revealSpanInState,
+  traceAgentNames,
   traceDisplayName,
 } from "./traceUtils";
 
@@ -72,6 +75,7 @@ const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
 };
 
 function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: string }) {
+  const demo = useLensDemo();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -84,11 +88,16 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
       size="xs"
       className="h-7 shrink-0 gap-1.5 rounded-md text-[12px] shadow-none"
       onClick={async () =>
-        setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))
+        setCopied(
+          await copyToClipboard(
+            demo ? demo.copyTrace(traceId) : agentHandoffText(traceId, null, traceRef),
+            demo ? "Trace copied" : "Command copied",
+          ),
+        )
       }
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-      {copied ? "Command copied" : "Copy for agent"}
+      {copied ? "Copied" : "Copy for agent"}
     </Button>
   );
 }
@@ -103,6 +112,21 @@ function Stat({ label, value, error = false }: { label: string; value: string; e
     >
       <span className={cn("text-muted-foreground", error && "text-destructive/80")}>{label} </span>
       {value}
+    </span>
+  );
+}
+
+function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boolean }) {
+  const framework = traceFramework(summary);
+  if (!framework) return <SpanIcon type="agent" error={failed} size="lg" />;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border bg-card px-1.5 py-px text-[12px] text-foreground"
+      data-testid="run-framework"
+      title={framework.label}
+    >
+      <FrameworkLogo framework={framework} />
+      {traceAgentNames(summary).join(", ") || framework.label}
     </span>
   );
 }
@@ -125,7 +149,7 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
           <span className="mx-1 h-[18px] w-px bg-border" />
         </>
       )}
-      <SpanIcon type="agent" error={failed} size="lg" />
+      <RunIcon summary={summary} failed={failed} />
       <h1 className="min-w-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
       <IdChip value={summary.trace_id} label="Copy trace ID" showValue />
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -236,6 +260,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) 
         onToggleSpan={toggleSpan}
         onToggleGroup={toggleGroup}
         onLoadMore={loadMore}
+        onOpenDetails={detailOpen ? undefined : () => setDetailOpen(true)}
         embedded={embedded}
       />
       {detailOpen && (
@@ -259,9 +284,13 @@ interface RunViewProps {
 
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
 export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
+  const demo = useLensDemo();
   const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
-    queryFn: () => agentTraceCall(accessToken, traceId, traceRef),
+    queryFn: () =>
+      demo
+        ? demo.client.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`)
+        : agentTraceCall(accessToken, traceId, traceRef),
     staleTime: 30_000,
   });
   const trace = traceQuery.data;

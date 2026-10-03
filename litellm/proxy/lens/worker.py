@@ -8,11 +8,57 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .analysis import analyze_sample
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 
 logger: Final = logging.getLogger("litellm.lens.worker")
+
+
+class ClaimedJobIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    id: str
+
+
+class ClaimIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    lens_id: str
+    job: ClaimedJobIdentity
+
+
+def failure_message(error: Exception) -> str:
+    if isinstance(error, (OSError, sqlite3.Error)):
+        return "Worker temporary storage failed. Increase its capacity or reduce analysis parallelism."
+    if isinstance(error, httpx.TimeoutException):
+        return "The worker timed out waiting for the proxy. Check proxy availability and model response times."
+    if isinstance(error, httpx.TransportError):
+        return "The worker could not connect to the proxy. Check the proxy URL, network access, and TLS configuration."
+    if isinstance(error, httpx.HTTPStatusError):
+        path: Final = error.request.url.path
+        action: Final = (
+            "Model request"
+            if path.endswith("/model")
+            else "Reading trace data"
+            if path.endswith(("/sample", "/content"))
+            else "Saving results"
+            if path.endswith("/result")
+            else "Worker request"
+        )
+        status: Final = error.response.status_code
+        guidance: Final = MappingProxyType(
+            {
+                400: "Check the configured model and whether the worker's billing key is enabled.",
+                401: "Check the worker credential and its assigned billing key.",
+                402: "Check the investigation's monthly limit and the worker key's remaining budget.",
+                403: "Check the worker key's model permissions and access restrictions.",
+                404: "Check that the proxy and worker versions match and the requested model is configured.",
+                409: "This worker no longer owns the run. Check whether it was cancelled or claimed again.",
+                429: "The request was rate limited. Retry later or check the worker key's rate limits.",
+            }
+        ).get(status, "Check proxy and model availability, then retry the investigation.")
+        return f"{action} failed (HTTP {status}). {guidance}"
+    return "The worker could not read an analysis response. Check structured JSON support and matching proxy/worker versions."
 
 
 class LensWorker:
@@ -40,9 +86,24 @@ class LensWorker:
     async def run_once(self) -> bool:
         response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 2}))
         response.raise_for_status()
-        if response.json() is None:
+        payload: Final = response.json()
+        if payload is None:
             return False
-        claim: Final = Claim.model_validate(response.json())
+        try:
+            claim: Final = Claim.model_validate(payload)
+        except ValidationError:
+            identity: Final = ClaimIdentity.model_validate(payload)
+            failure: Final = await self.client.post(
+                f"/lens/worker/{identity.lens_id}/{identity.job.id}/result",
+                json=Result(
+                    coverage=Coverage(),
+                    error="The worker could not read this investigation. Update the worker to match the gateway, then retry.",
+                ).model_dump(),
+            )
+            if failure.status_code != 409:
+                failure.raise_for_status()
+            logger.warning("Worker could not read a claimed investigation; reported a version compatibility failure")
+            return True
         prefix: Final = f"/lens/worker/{claim.lens_id}/{claim.job.id}"
 
         async def model(body: ModelRequest) -> ModelResult:
@@ -82,14 +143,7 @@ class LensWorker:
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
         except (httpx.HTTPError, ValueError, OSError, sqlite3.Error) as exc:
-            status: Final = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-            message: Final = (
-                "Worker temporary storage failed. Increase its capacity or reduce analysis parallelism."
-                if isinstance(exc, (OSError, sqlite3.Error))
-                else "Monthly budget reached"
-                if status == 402
-                else "Analysis interrupted. Check worker connectivity, model configuration, and trace storage."
-            )
+            message: Final = failure_message(exc)
             logger.warning("Analysis %s interrupted (%s)", claim.job.id, type(exc).__name__)
             failed: Final = await self.client.post(
                 prefix + "/result", json=Result(coverage=Coverage(), error=message).model_dump()

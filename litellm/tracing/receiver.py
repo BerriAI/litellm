@@ -13,21 +13,15 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 """
 
 import asyncio
-import os
 from collections.abc import AsyncIterable, Callable, Mapping
 from io import BytesIO
 from threading import BoundedSemaphore
 from types import MappingProxyType
 from typing import Final
 
-from litellm.constants import (
-    AGENT_TRACING_RETENTION_DAYS,
-    AGENT_TRACING_SPEND_LOG_RETENTION_DAYS,
-    OTLP_MAX_BODY_BYTES,
-    OTLP_MAX_CONCURRENT_INGESTS,
-)
-from litellm.integrations.clickhouse.schema import ensure_schema
+from litellm.constants import OTLP_MAX_BODY_BYTES, OTLP_MAX_CONCURRENT_INGESTS
 from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.tracing.config import trace_storage_config
 from litellm.tracing.decode import OTLPPayloadTooLargeError, decode_otlp
 from litellm.tracing.store import TraceStore
 from litellm.tracing.types import (
@@ -51,10 +45,11 @@ class TracingOverloadedError(RuntimeError):
 class Tenant:
     """Who sent the spans. Always taken from auth, never from span attributes."""
 
-    def __init__(self, team_id: str, api_key_hash: str, org_id: str = "") -> None:
+    def __init__(self, team_id: str, api_key_hash: str, org_id: str = "", user_id: str = "") -> None:
         self.team_id = team_id
         self.api_key_hash = api_key_hash
         self.org_id = org_id
+        self.user_id = user_id
 
     def stamp(self, row: SpanRow) -> SpanRow:
         return self.stamp_rows((row,))[0]
@@ -69,6 +64,7 @@ class Tenant:
                         "litellm.team_id": self.team_id,
                         "litellm.api_key_hash": self.api_key_hash,
                         "litellm.org_id": self.org_id,
+                        "litellm.user_id": self.user_id,
                     }
                 )
                 for identity, attributes in resources.items()
@@ -81,6 +77,7 @@ class Tenant:
             **row,
             "TeamId": self.team_id,
             "ApiKeyHash": self.api_key_hash,
+            "UserId": self.user_id,
             "ResourceAttributes": resource,
         }
         return stamped
@@ -103,22 +100,14 @@ class TraceReceiver:
 
     @classmethod
     def from_env(cls) -> "TraceReceiver":
-        return cls(
-            store=TraceStore(
-                ClickHouseStorage(
-                    database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
-                    url=os.environ["CLICKHOUSE_URL"],
-                    reader_url=os.environ["CLICKHOUSE_READER_URL"],
-                )
-            )
-        )
+        return cls.from_settings({})
+
+    @classmethod
+    def from_settings(cls, settings: Mapping[str, object]) -> "TraceReceiver":
+        return cls(store=TraceStore(ClickHouseStorage(trace_storage_config(settings))))
 
     async def start(self) -> None:
-        await ensure_schema(
-            self.store.storage,
-            trace_retention_days=AGENT_TRACING_RETENTION_DAYS,
-            spend_log_retention_days=AGENT_TRACING_SPEND_LOG_RETENTION_DAYS,
-        )
+        await self.store.storage.ensure_schema()
 
     async def ingest(
         self,

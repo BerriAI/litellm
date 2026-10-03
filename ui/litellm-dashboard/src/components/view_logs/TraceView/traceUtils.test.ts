@@ -50,6 +50,7 @@ const span = (overrides: SpanOverrides): Span => ({
   input_tokens: 0,
   output_tokens: 0,
   litellm_request_id: null,
+  spend: null,
   ...overrides,
 });
 
@@ -285,6 +286,19 @@ describe("payload helpers", () => {
     const image = JSON.stringify([{ type: "image_url", image_url: { url: "https://x.test/a.png" } }]);
     expect(messageText(image)).toBe(image);
     expect(messageText("[not json")).toBe("[not json");
+  });
+
+  it("reads GenAI message parts and native content arrays without crashing previews", () => {
+    const question = "What is an agent trace?";
+    const parts = [{ type: "text", content: question }];
+    const input = JSON.stringify([{ role: "user", parts }]);
+    expect(parseMessages(input)).toEqual([{ role: "user", parts, content: question }]);
+    expect(previewText(input)).toBe(question);
+    expect(
+      parseMessages(JSON.stringify({ role: "assistant", content: [{ type: "text", text: "An execution record" }] })),
+    ).toEqual([{ role: "assistant", content: "An execution record" }]);
+    expect(parseMessages('[{"role":"assistant","tool_calls":[]}]')).toBeNull();
+    expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
   });
 });
 
