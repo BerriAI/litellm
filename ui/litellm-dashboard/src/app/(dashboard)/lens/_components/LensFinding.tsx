@@ -52,7 +52,7 @@ export function LensFinding({
             </SheetHeader>
             <div className="space-y-6 p-4">
               {finding.brief ? (
-                <LensIssueBrief brief={finding.brief} />
+                <LensIssueBrief title={finding.title} brief={finding.brief} />
               ) : (
                 <>
                   <div>
