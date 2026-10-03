@@ -731,7 +731,7 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 
 
 class AnthropicThinkingParam(TypedDict, total=False):
-    type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
+    type: ReadOnly[Literal["enabled", "adaptive", "disabled", "between_tools"]]
     budget_tokens: int
     display: ReadOnly[Literal["summarized", "omitted", "updates"]]
 

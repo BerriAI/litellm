@@ -990,6 +990,9 @@
         "supports_audio_output": {
           "type": "boolean"
         },
+        "supports_between_tools_thinking": {
+          "type": "boolean"
+        },
         "supports_computer_use": {
           "type": "boolean"
         },

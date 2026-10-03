@@ -2504,3 +2504,56 @@ def test_tool_changes_beta_requires_system_tool_reference(role: str, content: ob
     )
 
     assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+@pytest.mark.parametrize("effort", (None, "low", "medium", "high"))
+def test_maybe_drop_disabled_thinking_remaps_sonnet_5_5_to_between_tools(
+    local_model_cost_map: None, effort: str | None
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: Final[dict[str, object]] = {"thinking": {"type": "disabled"}}
+    if effort is not None:
+        optional_params["output_config"] = {"effort": effort}
+
+    AnthropicModelInfo.maybe_drop_disabled_thinking(
+        model="claude-sonnet-5-5",
+        optional_params=optional_params,
+        custom_llm_provider="anthropic",
+    )
+
+    assert optional_params["thinking"] == {"type": "between_tools"}
+
+
+@pytest.mark.parametrize("effort", ("xhigh", "max"))
+def test_maybe_drop_disabled_thinking_drops_for_sonnet_5_5_at_rejecting_effort(
+    local_model_cost_map: None, effort: str
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: Final[dict[str, object]] = {
+        "thinking": {"type": "disabled"},
+        "output_config": {"effort": effort},
+    }
+
+    AnthropicModelInfo.maybe_drop_disabled_thinking(
+        model="claude-sonnet-5-5",
+        optional_params=optional_params,
+        custom_llm_provider="anthropic",
+    )
+
+    assert "thinking" not in optional_params
+
+
+def test_maybe_drop_disabled_thinking_still_drops_for_opus_5_5(local_model_cost_map: None) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    optional_params: Final[dict[str, object]] = {"thinking": {"type": "disabled"}}
+
+    AnthropicModelInfo.maybe_drop_disabled_thinking(
+        model="claude-opus-5-5",
+        optional_params=optional_params,
+        custom_llm_provider="anthropic",
+    )
+
+    assert "thinking" not in optional_params
