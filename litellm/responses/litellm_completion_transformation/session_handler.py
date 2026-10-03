@@ -272,7 +272,10 @@ class ResponsesSessionHandler:
 
         SQL query
 
-        SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
+        SELECT session_id, api_key FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id AND api_key = api_key
+
+        Only rows written under the same API key as the referenced response are returned: the session id can be
+        caller supplied, so matching on it alone would let a caller replay another key's history.
 
         A just-finished turn gets a short second chance: the worker that served it may
         still be writing its spend log when the follow-up arrives, and an empty result
@@ -294,13 +297,18 @@ class ResponsesSessionHandler:
 
         query: Final = """
             WITH matching_session AS (
-                SELECT session_id
+                SELECT session_id, api_key
                 FROM "LiteLLM_SpendLogs"
                 WHERE request_id = $1
             )
             SELECT *
-            FROM "LiteLLM_SpendLogs"
-            WHERE session_id IN (SELECT session_id FROM matching_session)
+            FROM "LiteLLM_SpendLogs" AS logs
+            WHERE EXISTS (
+                SELECT 1
+                FROM matching_session
+                WHERE matching_session.session_id = logs.session_id
+                  AND matching_session.api_key = logs.api_key
+            )
             ORDER BY "endTime" ASC;
         """
 
