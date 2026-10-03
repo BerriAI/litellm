@@ -64,7 +64,9 @@ export const systemOneRequestSchema = z
       questions: z
         .record(z.string(), questionSchema, {
           error: (iss) =>
-            iss.input === undefined ? "Required property 'questions' is missing." : "Questions must be a non-empty object.",
+            iss.input === undefined
+              ? "Required property 'questions' is missing."
+              : "Questions must be a non-empty object.",
         })
         .refine((questions) => Object.keys(questions).length > 0, "At least one question is required."),
     },
@@ -98,7 +100,10 @@ const tokenCount = z.number().finite().nonnegative();
 
 export const systemOneResponseSchema = z.looseObject({
   model: nonEmptyString("Model must be a non-empty string.").nullish(),
-  answers: z.record(z.string(), z.discriminatedUnion("type", [noulAnswerSchema, choiceAnswerSchema, scoreAnswerSchema])),
+  answers: z.record(
+    z.string(),
+    z.discriminatedUnion("type", [noulAnswerSchema, choiceAnswerSchema, scoreAnswerSchema]),
+  ),
   usage: z.object({ input_tokens: tokenCount, output_tokens: tokenCount }).optional(),
 });
 

@@ -30,7 +30,9 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/i, "Use the key hash from a lookup
 const optional = <Schema extends z.ZodType<unknown>>(schema: Schema) => schema.nullable();
 type NullsStripped<T> = { [K in keyof T]: Exclude<T[K], null> };
 const stripNulls = <T extends Record<string, unknown>>(args: T): NullsStripped<T> =>
-  Object.fromEntries(Object.entries(args).map(([key, value]) => [key, value === null ? undefined : value])) as NullsStripped<T>;
+  Object.fromEntries(
+    Object.entries(args).map(([key, value]) => [key, value === null ? undefined : value]),
+  ) as NullsStripped<T>;
 const optionalText = optional(text);
 const amount = optional(z.number().finite().nonnegative());
 const limit = optional(z.number().int().nonnegative());
