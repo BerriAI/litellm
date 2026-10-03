@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
@@ -33,7 +34,12 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
 )
-from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.guardrail_registry import (
+    GuardrailRegistry,
+    contains_encrypted_marker,
+    decrypt_guardrail_litellm_params,
+    encrypt_guardrail_litellm_params,
+)
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.prisma_protocols import TableActions
@@ -79,6 +85,16 @@ GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
     return mapping
+
+
+def _reject_encrypted_litellm_params(litellm_params: object) -> None:
+    """Raise 400 if a client-supplied litellm_params value carries the encrypted-value prefix."""
+    params: Final = litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else litellm_params
+    if contains_encrypted_marker(params):
+        raise HTTPException(
+            status_code=400,
+            detail=f"litellm_params values must not start with {CALLBACK_VAR_ENCRYPTED_PREFIX!r}",
+        )
 
 
 def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
@@ -397,6 +413,8 @@ async def create_guardrail(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    _reject_encrypted_litellm_params(request.guardrail.get("litellm_params"))
+
     try:
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(guardrail=request.guardrail, prisma_client=prisma_client)
 
@@ -506,6 +524,8 @@ async def update_guardrail(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    _reject_encrypted_litellm_params(request.guardrail.get("litellm_params"))
 
     try:
         # Check if guardrail exists
@@ -731,6 +751,7 @@ async def register_guardrail(
             )
 
     params: Final = request.get_litellm_params_dict()
+    _reject_encrypted_litellm_params(params)
     if params.get("guardrail") != GENERIC_GUARDRAIL_API:
         raise HTTPException(
             status_code=400,
@@ -774,7 +795,7 @@ async def register_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
     now: Final = datetime.now(timezone.utc)
-    litellm_params_str: Final = safe_dumps(params)
+    litellm_params_str: Final = safe_dumps(encrypt_guardrail_litellm_params(params))
     guardrail_info: Final = dict(request.guardrail_info or {})
     guardrail_info["submitted_by_user_id"] = user_api_key_dict.user_id
     guardrail_info["submitted_by_email"] = user_api_key_dict.user_email
@@ -848,7 +869,7 @@ def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissi
 
     guardrail_info: Final = _parse_json_field(row.guardrail_info) or {}
     team_guardrail: Final = row.team_id is not None
-    raw_params: Final = _parse_json_field(row.litellm_params) or {}
+    raw_params: Final = decrypt_guardrail_litellm_params(_parse_json_field(row.litellm_params) or {})
     masked_params: Final = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
     return GuardrailSubmissionItem(
         guardrail_id=row.guardrail_id,
@@ -1027,13 +1048,21 @@ async def approve_guardrail_submission(
                 detail=f"Guardrail is not pending review (status={row.status})",
             )
 
+        litellm_params: Final = _parse_json_field(row.litellm_params)
+        decrypted_params: Final = decrypt_guardrail_litellm_params(litellm_params or {})
+        if contains_encrypted_marker(decrypted_params):
+            raise HTTPException(
+                status_code=409,
+                detail="Guardrail litellm_params do not decrypt with the current key. "
+                "Restart the proxy if the master key was rotated, then approve again.",
+            )
+
         now: Final = datetime.now(timezone.utc)
         await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
         )
 
-        litellm_params: Final = _parse_json_field(row.litellm_params)
         guardrail_info: Final = _parse_json_field(row.guardrail_info)
         if not litellm_params:
             raise HTTPException(
@@ -1043,7 +1072,7 @@ async def approve_guardrail_submission(
         guardrail_dict: Final = {
             "guardrail_id": row.guardrail_id,
             "guardrail_name": row.guardrail_name,
-            "litellm_params": litellm_params,
+            "litellm_params": decrypted_params,
             "guardrail_info": guardrail_info or {},
             "team_id": row.team_id,
         }
@@ -1190,6 +1219,8 @@ async def patch_guardrail(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    _reject_encrypted_litellm_params(request.litellm_params)
+
     try:
         # Check if guardrail exists and get current data
         existing_guardrail: Final = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
@@ -1266,7 +1297,7 @@ async def patch_guardrail(
                     litellm_params=LitellmParams(**existing_litellm_params),
                     guardrail_info=existing_guardrail.get(
                         "guardrail_info",
-                        {},  # mutable-ok: Guardrail's own constructor takes a plain dict
+                        {},
                     ),
                 ),
                 prisma_client=prisma_client,

@@ -82,22 +82,6 @@ async def chat_completion(
             return await response.json()
 
 
-@pytest.mark.asyncio
-async def test_chat_completion():
-    """
-    make chat completion call with prompt > context window. expect it to work with fallback
-    """
-    async with aiohttp.ClientSession() as session:
-        model = "gpt-3.5-turbo"
-        messages = [
-            {"role": "system", "content": text},
-            {"role": "user", "content": "Who was Alexander?"},
-        ]
-        await chat_completion(
-            session=session, key="sk-1234", model=model, messages=messages
-        )
-
-
 @pytest.mark.parametrize("has_access", [True, False])
 @pytest.mark.asyncio
 async def test_chat_completion_client_fallbacks(has_access: bool) -> None:

@@ -22,6 +22,8 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-traces.workspace = true
+litellm-traces-clickhouse.workspace = true
+litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
@@ -51,6 +53,7 @@ litellm-llms-types.workspace = true
 litellm-host-python.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
+prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }
@@ -72,7 +75,7 @@ futures-util.workspace = true
 rstest.workspace = true
 sha2.workspace = true
 tokio-tungstenite.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true
 aws-sdk-secretsmanager = "1.117.0"
 
 [[bench]]
