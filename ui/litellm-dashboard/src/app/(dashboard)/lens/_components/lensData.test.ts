@@ -6,6 +6,7 @@ import {
   analysisProgress,
   normalizeFilters,
   sortedFindings,
+  briefMarkdown,
   type Finding,
   type Job,
 } from "./lensData";
@@ -165,6 +166,28 @@ describe("Lens selection and findings", () => {
     };
     const high: Finding = { ...base, id: "high", priority: "high", last_seen: "2026-09-30T11:00:00Z" };
     expect(sortedFindings([base, high]).map((f) => f.id)).toEqual(["high", "low"]);
+  });
+  it("turns an issue brief into a pasteable markdown document", () => {
+    expect(
+      briefMarkdown("PRs were never opened", {
+        problem: "The workspace was not a Git repository.",
+        user_goal: "Open a PR fixing a typo",
+        what_happened: 'Git returned "fatal: not a git repository"',
+        test_cases: [
+          { input: "Fix the typo and open a PR", expected: "A PR URL is returned" },
+          { input: "Rename greet", expected: "The rename is committed" },
+        ],
+      }),
+    ).toBe(
+      [
+        "# PRs were never opened",
+        "## Problem\nThe workspace was not a Git repository.",
+        "## User goal\nOpen a PR fixing a typo",
+        '## What happened\nGit returned "fatal: not a git repository"',
+        "## Test cases\n1. Input: Fix the typo and open a PR\n   Expect: A PR URL is returned\n" +
+          "2. Input: Rename greet\n   Expect: The rename is committed",
+      ].join("\n\n"),
+    );
   });
 });
 
