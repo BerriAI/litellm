@@ -9165,3 +9165,228 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("evaluation_spend_cache")
+@pytest.mark.parametrize("dispatch", ("cache", "success", "failure"))
+async def test_queued_evaluation_callbacks_keep_their_receipt_after_logger_reuse(
+    monkeypatch: pytest.MonkeyPatch, dispatch: Literal["cache", "success", "failure"]
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import Queue
+    from threading import Event
+
+    from pydantic import TypeAdapter
+
+    from litellm.integrations.s3 import S3Logger
+    from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
+    from litellm.litellm_core_utils.internal_call_metadata import EvaluationBillingOwner, evaluation_billing_context
+    from litellm.types.utils import Usage
+
+    receipts: Final = Queue[Mapping[str, object]]()
+    payload: Final = TypeAdapter(Mapping[str, object])
+
+    def upload(**request: object) -> None:
+        body: Final = request["Body"]
+        assert isinstance(body, str)
+        receipts.put_nowait(payload.validate_json(body))
+
+    def failure(kwargs: Mapping[str, object], response: object, start: object, end: object) -> None:
+        receipts.put_nowait(payload.validate_python(kwargs["standard_logging_object"]))
+
+    with patch("boto3.client", return_value=MagicMock(put_object=upload)):
+        sink: Final = S3Logger(s3_bucket_name="evaluation-receipts")
+    monkeypatch.setattr(litellm_logging, "s3Logger", sink)
+    monkeypatch.setattr(litellm, "success_callback", ["s3"])
+    monkeypatch.setattr(litellm, "failure_callback", [failure])
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    result: Final = ModelResponse(
+        model="openai/evaluation-receipt-model", usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+    )
+    with evaluation_billing_context(EvaluationBillingOwner("creator")):
+        logger: Final = LitellmLogging(
+            model="openai/evaluation-receipt-model",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=False,
+            call_type="acompletion",
+            start_time=now,
+            litellm_call_id="first-call",
+            function_id="first-call",
+        )
+    logger.update_environment_variables(
+        litellm_params={"acompletion": True, "metadata": {"model_group": "first-group"}}, optional_params={}
+    )
+    logger.record_partial_usage_for_failure(Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2), 0.3)
+    release: Final = Event()
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        worker.submit(release.wait)
+        monkeypatch.setattr(litellm_logging, "executor", worker)
+        monkeypatch.setattr(thread_pool_executor, "executor", worker)
+        try:
+            if dispatch == "cache":
+                logger.handle_sync_success_callbacks_for_async_calls(result, now, now, cache_hit=True)
+            elif dispatch == "success":
+                await logger.dispatch_success_handlers(result, start_time=now, end_time=now, cache_hit=False)
+            else:
+                await logger.dispatch_failure_handlers(RuntimeError("first failure"), "first failure")
+            later_params: Final = {"acompletion": True, "metadata": {"model_group": "later-group"}}
+            later: Final = {
+                **logger.model_call_details,
+                "model": "later-model",
+                "response_cost": 9.0,
+                "cache_hit": False,
+                "exception": RuntimeError("later failure"),
+                "litellm_params": later_params,
+            }
+            logger.model_call_details = later
+            logger.model = "later-model"
+            logger.litellm_params = later_params
+            untouched: Final = later.copy()
+        finally:
+            release.set()
+    assert receipts.qsize() == 1
+    receipt: Final = receipts.get_nowait()
+    assert receipt["model_group"] == "first-group"
+    assert receipt["response_cost"] == pytest.approx(0.0 if dispatch == "cache" else 0.3)
+    assert receipt["cache_hit"] is (dispatch == "cache")
+    assert payload.validate_python(receipt["metadata"])["user_api_key_user_id"] == "creator"
+    assert receipt["error_str"] == ("first failure" if dispatch == "failure" else None)
+    assert logger.model_call_details == untouched
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("evaluation_spend_cache")
+@pytest.mark.parametrize("api", ("chat", "messages"))
+async def test_deferred_evaluation_receipts_preserve_routing_metadata_on_real_router_reuse(
+    monkeypatch: pytest.MonkeyPatch, api: Literal["chat", "messages"]
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import Queue
+    from threading import Event
+
+    import respx
+    from pydantic import TypeAdapter
+
+    from litellm.integrations.s3 import S3Logger
+    from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
+    from litellm.litellm_core_utils.internal_call_metadata import EvaluationBillingOwner, evaluation_billing_context
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.proxy import proxy_server
+    from litellm.types.utils import Usage
+
+    sync_receipts: Final = Queue[Mapping[str, object]]()
+    async_receipts: Final = asyncio.Queue[Mapping[str, object]]()
+    payload: Final = TypeAdapter(Mapping[str, object])
+
+    def upload(**request: object) -> None:
+        body: Final = request["Body"]
+        assert isinstance(body, str)
+        sync_receipts.put_nowait(payload.validate_json(body))
+
+    async def capture(kwargs: Mapping[str, object], response: object, start: object, end: object) -> None:
+        async_receipts.put_nowait(payload.validate_python(kwargs["standard_logging_object"]))
+
+    with patch("boto3.client", return_value=MagicMock(put_object=upload)):
+        sink: Final = S3Logger(s3_bucket_name="evaluation-receipts")
+    monkeypatch.setattr(litellm_logging, "s3Logger", sink)
+    monkeypatch.setattr(litellm, "success_callback", ["s3"])
+    model: Final = "hosted_vllm/evaluation-receipt"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "max_input_tokens": 1000,
+            "max_output_tokens": 1000,
+            "litellm_provider": "hosted_vllm",
+            "mode": "chat",
+        },
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "test",
+                    "api_base": "https://evaluation.invalid/v1",
+                    "input_cost_per_token": input_cost,
+                    "output_cost_per_token": output_cost,
+                },
+                "model_info": {"id": group + "-id"},
+            }
+            for group, input_cost, output_cost in (("first-group", 0.001, 0.002), ("later-group", 0.003, 0.004))
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    create: Final = router.acompletion if api == "chat" else router.aanthropic_messages
+    metadata: Final = {"user_api_key_user_id": "caller", "user_api_key_team_id": "caller-team"}
+    release: Final = Event()
+    with (
+        respx.mock(assert_all_called=True) as transport,
+        evaluation_billing_context(EvaluationBillingOwner("creator", max_budget=1)),
+        ThreadPoolExecutor(max_workers=1) as worker,
+    ):
+        worker.submit(release.wait)
+        monkeypatch.setattr(litellm_logging, "executor", worker)
+        monkeypatch.setattr(thread_pool_executor, "executor", worker)
+        upstream: Final = transport.post("https://evaluation.invalid/v1/chat/completions").respond(
+            200,
+            json=ModelResponse(
+                model="evaluation-receipt",
+                choices=[{"message": {"role": "assistant", "content": "ok"}}],
+                usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+            ).model_dump(),
+        )
+        logger: Final = LitellmLogging(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="acompletion" if api == "chat" else "anthropic_messages",
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            litellm_call_id="reused-evaluation",
+            function_id="test",
+            dynamic_async_success_callbacks=[capture],
+        )
+        logger._defer_async_logging = True
+        request: Final = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 10,
+            "metadata" if api == "chat" else "litellm_metadata": metadata,
+            "litellm_logging_obj": logger,
+            "fallbacks": [],
+        }
+        try:
+            await create(model="first-group", **request)
+            first: Final = logger._enqueue_deferred_logging
+            assert first is not None
+            logger._enqueue_deferred_logging = None
+            await create(model="later-group", **request)
+            second: Final = logger._enqueue_deferred_logging
+            assert second is not None
+            first()
+            second()
+            received: Final = (
+                await asyncio.wait_for(async_receipts.get(), 10),
+                await asyncio.wait_for(async_receipts.get(), 10),
+            )
+            await GLOBAL_LOGGING_WORKER.flush()
+        finally:
+            release.set()
+    assert upstream.call_count == 2 and async_receipts.empty() and sync_receipts.qsize() == 2
+    for receipts in (received, (sync_receipts.get_nowait(), sync_receipts.get_nowait())):
+        assert {receipt["model_group"]: receipt["model_id"] for receipt in receipts} == {
+            "first-group": "first-group-id",
+            "later-group": "later-group-id",
+        }
+        assert {receipt["model_group"]: receipt["response_cost"] for receipt in receipts} == pytest.approx(
+            {"first-group": 10 * 0.001 + 0.002, "later-group": 10 * 0.003 + 0.004}
+        )
+        for receipt in receipts:
+            assert payload.validate_python(receipt["metadata"])["user_api_key_user_id"] == "creator"
+            assert payload.validate_python(receipt["metadata"])["user_api_key_team_id"] is None
+    assert metadata["model_group"] == "later-group"
+    assert metadata["user_api_key_user_id"] == "caller" and metadata["user_api_key_team_id"] == "caller-team"

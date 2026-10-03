@@ -1,12 +1,15 @@
 """Unit tests for the shared LLM-judge primitives: verdict parsing, router resolution, dispatch."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.llm_judge import (
+    default_router_provider,
     extract_text_from_content,
     judge_acompletion,
     judge_target,
@@ -104,6 +107,30 @@ async def test_judge_acompletion_falls_back_to_sdk_for_unconfigured_model(monkey
     assert sdk.call_args.kwargs["model"] == "anthropic/claude-sonnet-5"
     assert sdk.call_args.kwargs["num_retries"] == 0
     assert sdk.call_args.kwargs["drop_params"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("evaluation_spend_cache")
+async def test_sdk_judge_failure_does_not_inherit_a_global_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/judge-fallback"])
+    with respx.mock(assert_all_called=False) as transport:
+        primary: Final = transport.post("https://judge.test/v1/chat/completions", json__model="judge-primary").respond(
+            400, json={"error": {"message": "judge rejected", "type": "invalid_request_error"}}
+        )
+        fallback: Final = transport.post(
+            "https://judge.test/v1/chat/completions", json__model="judge-fallback"
+        ).respond(200, json=litellm.ModelResponse().model_dump())
+        with pytest.raises(litellm.BadRequestError, match="judge rejected"):
+            await judge_acompletion(
+                default_router_provider(),
+                "openai/judge-primary",
+                [{"role": "user", "content": "judge this"}],
+                api_key="test",
+                api_base="https://judge.test/v1",
+                max_tokens=10,
+            )
+        assert primary.call_count == 1
+        assert not fallback.called
 
 
 @pytest.mark.parametrize(

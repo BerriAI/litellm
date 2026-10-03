@@ -118,7 +118,7 @@ async def judge_acompletion(
 ) -> ModelResponse:
     """Dispatch a judge call through the proxy's router when the judge model is a
     configured deployment (DB-stored credentials work), through the SDK for
-    provider-qualified public names. The router path never retries or falls back:
+    provider-qualified public names. Judge calls never retry or fall back:
     a failed judge call is the caller's counted failure, not a spend multiplier.
     Sampling preferences are advisory: models that removed sampling params (e.g.
     claude-sonnet-5) drop them instead of rejecting the judge call.
@@ -135,4 +135,6 @@ async def judge_acompletion(
             drop_params=True,
             **params,
         )
-    return await litellm.acompletion(model=judge_model, messages=messages, num_retries=0, drop_params=True, **params)
+    return await litellm.acompletion(
+        model=judge_model, messages=messages, num_retries=0, fallbacks=[], drop_params=True, **params
+    )

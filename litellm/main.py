@@ -641,9 +641,11 @@ async def acompletion(
             api_base=kwargs.get("api_base") or base_url,
         )
 
-    fallbacks = fallbacks or litellm.model_fallbacks
-    if fallbacks is not None:
-        response = await async_completion_with_fallbacks(**completion_kwargs, kwargs={"fallbacks": fallbacks, **kwargs})
+    resolved_fallbacks: Final = litellm.model_fallbacks if fallbacks is None else fallbacks
+    if resolved_fallbacks:
+        response = await async_completion_with_fallbacks(
+            **completion_kwargs, kwargs={**kwargs, "fallbacks": resolved_fallbacks}
+        )
         if response is None:
             raise Exception(
                 "No response from fallbacks. Got none. Turn on `litellm.set_verbose=True` to see more details."
@@ -5458,10 +5460,10 @@ def completion(
         elif num_retries is not None:
             max_retries = num_retries
         logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
-        fallbacks = fallbacks or litellm.model_fallbacks
-        if fallbacks is not None:
+        resolved_fallbacks: Final = litellm.model_fallbacks if fallbacks is None else fallbacks
+        if resolved_fallbacks:
             return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
-                **args
+                **{**args, "kwargs": {**kwargs, "fallbacks": resolved_fallbacks}}
             )
         if model_list is not None:
             deployments: Final = [m["litellm_params"] for m in model_list if m["model_name"] == model]

@@ -11,13 +11,14 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 from httpx import Response
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
 from litellm import _custom_logger_compatible_callbacks_literal
@@ -79,8 +80,13 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
+    EVALUATION_BILLING_OWNER_KEY,
+    EVALUATION_BUDGET_RESERVATION_KEY,
     MODEL_ACCESS_GROUP_METADATA_KEY,
+    EvaluationBillingOwner,
+    get_evaluation_billing_owner,
     is_unbilled_non_inference_call,
+    project_evaluation_billing_kwargs,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     cost_breakdown_with_guardrail,
@@ -236,6 +242,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
     from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
     from litellm.proxy.hooks.autorouter_baseline_cache import BaselineCacheContext, CapturedBaselineObservation
+    from litellm.proxy.spend_tracking.evaluation_budget import EvaluationAttempt
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -553,6 +560,22 @@ def _timestamp_seconds(moment: object) -> float | None:
     return None
 
 
+@dataclass(slots=True)
+class EvaluationBudgetInvocation:
+    reservation: "EvaluationAttempt | None" = None
+
+
+def evaluation_logging_snapshot(logging_obj: "Logging") -> "Logging":
+    if not isinstance(logging_obj.evaluation_billing_owner, EvaluationBillingOwner):
+        return logging_obj
+    receipt: Final = copy.copy(logging_obj)
+    receipt.model_call_details.update(project_evaluation_billing_kwargs(receipt.model_call_details))
+    receipt.litellm_params = TypeAdapter(dict[str, object]).validate_python(
+        receipt.model_call_details["litellm_params"]
+    )
+    return receipt
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -618,6 +641,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
+        self.evaluation_billing_owner: Final[EvaluationBillingOwner | None] = get_evaluation_billing_owner()
+        self.evaluation_budget_reservation: EvaluationAttempt | None = None
+        self.evaluation_budget_invocation: EvaluationBudgetInvocation | None = None
 
         # Capture the pre-call *value* (not a contextvars.Token) so restoration works
         # even if this attempt's own logging ends up dispatched onto a different
@@ -714,6 +740,8 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_params": litellm_params,
             "applied_guardrails": applied_guardrails,
             "model": model,
+            EVALUATION_BILLING_OWNER_KEY: self.evaluation_billing_owner,
+            EVALUATION_BUDGET_RESERVATION_KEY: self.evaluation_budget_reservation,
         }
 
         # Set by proxy request handlers to defer spend-log fire until after
@@ -945,6 +973,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
                 **self.optional_params,
                 **additional_params,
+                EVALUATION_BILLING_OWNER_KEY: self.evaluation_billing_owner,
+                EVALUATION_BUDGET_RESERVATION_KEY: self.evaluation_budget_reservation,
             }
         )
 
@@ -2197,7 +2227,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return
 
         executor.submit(
-            self.success_handler,
+            evaluation_logging_snapshot(self).success_handler,
             result,
             start_time=start_time,
             end_time=end_time,
@@ -2215,6 +2245,22 @@ class Logging(LiteLLMLoggingBaseClass):
         usage: Final = getattr(assembled, "usage", None)
         if isinstance(usage, Usage):
             self.record_partial_usage_for_failure(usage, self._response_cost_calculator(result=assembled) or 0.0)
+
+    def recover_failure_cost(self, result: object) -> float:
+        if isinstance(result, ModelResponse):
+            self.record_assembled_response_for_failure(result)
+        elif isinstance(result, ResponsesAPIResponse):
+            self.record_assembled_response_for_failure(self._translate_responses_api_response_to_model_response(result))
+            self.model_call_details["response_cost"] = self._response_cost_calculator(result=result)
+        elif result is not None and self.call_type == CallTypes.anthropic_messages.value:
+            self.record_assembled_response_for_failure(self._handle_anthropic_messages_response_logging(result))
+        return TypeAdapter(float).validate_python(self.model_call_details.get("response_cost") or 0.0)
+
+    async def _settle_evaluation_budget(self) -> None:
+        if self.evaluation_budget_reservation is not None:
+            await self.evaluation_budget_reservation.settle(
+                TypeAdapter(float).validate_python(self.model_call_details.get("response_cost") or 0.0)
+            )
 
     async def dispatch_failure_handlers(
         self,
@@ -2244,7 +2290,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_failure_handler(exception, traceback_exception)
         finally:
             if self._should_run_sync_failure_callbacks_for_async_calls():
-                executor.submit(self.failure_handler, exception, traceback_exception)
+                executor.submit(evaluation_logging_snapshot(self).failure_handler, exception, traceback_exception)
 
     def should_run_logging(
         self,
@@ -2505,6 +2551,8 @@ class Logging(LiteLLMLoggingBaseClass):
         standard_logging_object: StandardLoggingPayload | None = None,
         build_logging_payload: bool = True,
     ):
+        if self.evaluation_billing_owner is not None:
+            self.model_call_details.update(project_evaluation_billing_kwargs(self.model_call_details))
         try:
             if start_time is None:
                 start_time = self.start_time
@@ -3395,6 +3443,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 # print standard logging payload
                 if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
                     emit_standard_logging_payload(standard_logging_payload)
+        if not self.stream or "async_complete_streaming_response" in self.model_call_details:
+            await self._settle_evaluation_budget()
+
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -3605,6 +3656,8 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.debug("Error in _handle_callback_failure: %s", e)
 
     def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
+        if self.evaluation_billing_owner is not None and hasattr(self, "model_call_details"):
+            self.model_call_details.update(project_evaluation_billing_kwargs(self.model_call_details))
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
@@ -3638,6 +3691,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details.setdefault("litellm_params", {})
             metadata: Final = self.model_call_details["litellm_params"].get("metadata", {}) or {}
             metadata.update(exception.headers)
+
+        if self.evaluation_billing_owner is not None:
+            self.model_call_details.update(project_evaluation_billing_kwargs(self.model_call_details))
 
         ## STANDARDIZED LOGGING PAYLOAD
 
@@ -3920,6 +3976,7 @@ class Logging(LiteLLMLoggingBaseClass):
             start_time=start_time,
             end_time=end_time,
         )
+        await self._settle_evaluation_budget()
 
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
@@ -4002,7 +4059,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return
 
         executor.submit(
-            self.success_handler,
+            evaluation_logging_snapshot(self).success_handler,
             result,
             start_time,
             end_time,
@@ -6537,8 +6594,12 @@ def get_standard_logging_object_payload(
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")
 
-        request_tags: Final = StandardLoggingPayloadSetup._get_request_tags(
-            litellm_params=litellm_params, proxy_server_request=proxy_server_request
+        request_tags: Final = (
+            []
+            if logging_obj.evaluation_billing_owner is not None
+            else StandardLoggingPayloadSetup._get_request_tags(
+                litellm_params=litellm_params, proxy_server_request=proxy_server_request
+            )
         )
         request_model_access_groups: Final = request_model_access_groups_from_litellm_params(litellm_params)
 

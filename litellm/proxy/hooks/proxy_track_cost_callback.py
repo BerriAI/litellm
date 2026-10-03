@@ -4,6 +4,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
@@ -15,7 +17,14 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.internal_call_metadata import (
+    EVALUATION_BILLING_OWNER_KEY,
+    EVALUATION_BUDGET_RESERVATION_KEY,
+    get_evaluation_billing_owner,
+    get_evaluation_billing_owner_from_kwargs,
+    project_evaluation_billing_kwargs,
+)
+from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
@@ -273,19 +282,34 @@ class _ProxyDBLogger(CustomLogger):
         recovered_response_cost: Final = recovered_stream_cost + guardrail_information_cost(
             existing_metadata.get("standard_logging_guardrail_information")
         )
+        logger: Final = _litellm_logging_obj if isinstance(_litellm_logging_obj, Logging) else None
+        request_receipt: Final = TypeAdapter(dict[str, object]).validate_python(request_data)
+        owner: Final = (
+            get_evaluation_billing_owner_from_kwargs(request_receipt)
+            or (logger.evaluation_billing_owner if logger is not None else None)
+            or get_evaluation_billing_owner()
+        )
+        billing_auth: Final = UserAPIKeyAuth(user_id=owner.user_id) if owner is not None else user_api_key_dict
+        receipt: Final = project_evaluation_billing_kwargs(
+            {
+                **request_receipt,
+                EVALUATION_BILLING_OWNER_KEY: owner,
+                EVALUATION_BUDGET_RESERVATION_KEY: logger.evaluation_budget_reservation if logger is not None else None,
+            }
+        )
 
         await self._spend_writer().update_database(
-            token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+            token=LiteLLMProxyRequestSetup.get_logged_api_key(billing_auth),
             response_cost=recovered_response_cost,
-            user_id=user_api_key_dict.user_id,
-            end_user_id=user_api_key_dict.end_user_id,
-            team_id=user_api_key_dict.team_id,
-            kwargs=request_data,
+            user_id=billing_auth.user_id,
+            end_user_id=billing_auth.end_user_id,
+            team_id=billing_auth.team_id,
+            kwargs=receipt,
             completion_response=original_exception,
             start_time=actual_start_time,
             end_time=datetime.now(),
-            org_id=user_api_key_dict.org_id,
-            project_id=user_api_key_dict.project_id,
+            org_id=billing_auth.org_id,
+            project_id=billing_auth.project_id,
         )
 
     async def _PROXY_track_cost_callback(
