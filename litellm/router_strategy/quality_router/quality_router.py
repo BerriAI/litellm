@@ -24,6 +24,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
 )
+from litellm.router_strategy.savings_baseline import (
+    conversation_is_continuing,
+    resolve_baseline,
+)
 from litellm.types.utils import StandardLoggingRoutingDecision
 
 from .config import QualityRouterConfig, RoutingPreferences
@@ -319,6 +323,14 @@ class QualityRouter(CustomLogger):
         if isinstance(metadata, dict):
             metadata["quality_router_decision"] = decision
 
+    def _add_savings_fields(self, decision: StandardLoggingRoutingDecision) -> None:
+        baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
+        if baseline is None:
+            return
+        decision["savings_baseline_model"] = baseline.model
+        if baseline.deployment_id is not None:
+            decision["savings_baseline_deployment_id"] = baseline.deployment_id
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -333,6 +345,8 @@ class QualityRouter(CustomLogger):
         if messages is None or len(messages) == 0:
             verbose_router_logger.debug("QualityRouter: No messages provided, skipping routing")
             return None
+
+        conversation_continuing: Final = conversation_is_continuing(messages)
 
         # Extract last user message and last system prompt — same rules as
         # ComplexityRouter.async_pre_routing_hook.
@@ -357,15 +371,18 @@ class QualityRouter(CustomLogger):
             verbose_router_logger.debug("QualityRouter: No user message found, routing to default model")
             if not self.config.default_model:
                 raise ValueError("QualityRouter: no user message and no default_model configured")
+            default_routing_decision: Final = StandardLoggingRoutingDecision(
+                router_model_name=self.model_name,
+                router_type="quality",
+                routed_model=self.config.default_model,
+                cause="default_fallback",
+                conversation_continuing=conversation_continuing,
+            )
+            self._add_savings_fields(default_routing_decision)
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
-                routing_decision=StandardLoggingRoutingDecision(
-                    router_model_name=self.model_name,
-                    router_type="quality",
-                    routed_model=self.config.default_model,
-                    cause="default_fallback",
-                ),
+                routing_decision=default_routing_decision,
             )
 
         # Try keyword override first — it short-circuits complexity classification.
@@ -388,22 +405,25 @@ class QualityRouter(CustomLogger):
                     "matched_keyword": matched_keyword,
                     "quality_tier": self._model_quality.get(routed_model),
                     "complexity_tier": None,
+                    "conversation_continuing": conversation_continuing,
                 },
             )
-            routing_decision: Final = StandardLoggingRoutingDecision(
+            keyword_routing_decision: Final = StandardLoggingRoutingDecision(
                 router_model_name=self.model_name,
                 router_type="quality",
                 routed_model=routed_model,
                 cause="keyword",
                 matched_keyword=matched_keyword,
+                conversation_continuing=conversation_continuing,
             )
+            self._add_savings_fields(keyword_routing_decision)
             keyword_quality_tier: Final = self._model_quality.get(routed_model)
             if keyword_quality_tier is not None:
-                routing_decision["tier"] = str(keyword_quality_tier)
+                keyword_routing_decision["tier"] = str(keyword_quality_tier)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages,
-                routing_decision=routing_decision,
+                routing_decision=keyword_routing_decision,
             )
 
         # No keyword match → complexity classification flow.
@@ -434,19 +454,23 @@ class QualityRouter(CustomLogger):
                 "matched_keyword": None,
                 "quality_tier": int(quality_tier),
                 "complexity_tier": complexity_name,
+                "conversation_continuing": conversation_continuing,
             },
         )
 
+        quality_routing_decision: Final = StandardLoggingRoutingDecision(
+            router_model_name=self.model_name,
+            router_type="quality",
+            routed_model=routed_model,
+            cause="quality_tier",
+            tier=str(int(quality_tier)),
+            score=score,
+            signals=list(signals),  # mutable-ok: routing decision metadata uses a JSON list
+            conversation_continuing=conversation_continuing,
+        )
+        self._add_savings_fields(quality_routing_decision)
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,
-            routing_decision=StandardLoggingRoutingDecision(
-                router_model_name=self.model_name,
-                router_type="quality",
-                routed_model=routed_model,
-                cause="quality_tier",
-                tier=str(int(quality_tier)),
-                score=score,
-                signals=list(signals),
-            ),
+            routing_decision=quality_routing_decision,
         )
