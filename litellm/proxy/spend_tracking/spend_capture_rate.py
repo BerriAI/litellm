@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
@@ -27,6 +28,7 @@ from litellm.llms.openai.organization_costs import (
     fetch_openai_daily_costs,
     provider_billing_get,
 )
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.proxy.spend_capture_rate import (
     CaptureRateDay,
@@ -42,7 +44,7 @@ if TYPE_CHECKING:
 
 OPENAI_BILLED_LITELLM_PROVIDERS: Final = ("openai", "text-completion-openai")
 
-CaptureRatePublisher: TypeAlias = Callable[[SpendCaptureProvider, float | None], None]  # mutable-ok: Callable params
+CaptureRatePublisher: TypeAlias = Callable[[SpendCaptureProvider, float | None], None]
 
 _CAPTURED_SPEND_BY_DAY_SQL: Final = """
     SELECT date, COALESCE(SUM(spend), 0)::float AS spend
@@ -290,6 +292,7 @@ async def _claims_alert_window(pod_lock_manager: "PodLockManager | None") -> boo
     return acquired or not await _lock_is_held(pod_lock_manager, redis_cache)
 
 
+@with_service_target(POD_LOCK_TARGET)
 async def _lock_is_held(pod_lock_manager: "PodLockManager", redis_cache: "RedisCache") -> bool:
     try:
         return bool(

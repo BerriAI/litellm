@@ -144,7 +144,7 @@ impl NativeCacheHandle {
         self.check_process()?;
         let request = request(key, None)?;
         let backend = self.backend.clone();
-        crate::logger::run_async(
+        crate::execution::run_async(
             py,
             async move { backend.async_lookup(&request, super::request::now()).await },
             cache_error,
@@ -163,7 +163,7 @@ impl NativeCacheHandle {
         let request = request(key, ttl)?;
         let value: Value = from_py(value)?;
         let backend = self.backend.clone();
-        crate::logger::run_async(
+        crate::execution::run_async(
             py,
             async move {
                 backend
@@ -188,7 +188,7 @@ impl NativeCacheHandle {
             .map(|(key, value)| Ok((request(key, ttl)?, value)))
             .collect::<PyResult<Vec<_>>>()?;
         let backend = self.backend.clone();
-        crate::logger::run_async(
+        crate::execution::run_async(
             py,
             async move {
                 backend
@@ -202,19 +202,19 @@ impl NativeCacheHandle {
     fn flush(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         self.check_process()?;
         let backend = self.backend.clone();
-        crate::logger::run_sync(py, async move { backend.async_flush().await }, cache_error)
+        crate::execution::run_sync(py, async move { backend.async_flush().await }, cache_error)
     }
 
     fn async_flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
         let backend = self.backend.clone();
-        crate::logger::run_async(py, async move { backend.async_flush().await }, cache_error)
+        crate::execution::run_async(py, async move { backend.async_flush().await }, cache_error)
     }
 
     fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
         let storage = self.storage.clone();
-        crate::logger::run_async(
+        crate::execution::run_async(
             py,
             async move {
                 match storage {
@@ -229,7 +229,7 @@ impl NativeCacheHandle {
     fn disconnect<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
         let storage = self.storage.clone();
-        crate::logger::run_async(
+        crate::execution::run_async(
             py,
             async move {
                 match storage {
@@ -244,7 +244,7 @@ impl NativeCacheHandle {
     fn delete<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
         let storage = self.storage.clone();
-        crate::logger::run_async(
+        crate::execution::run_async(
             py,
             async move {
                 for key in keys {
@@ -330,15 +330,17 @@ pub(in crate::cache) fn configured(
     Ok((
         Some(cache.service.clone()),
         litellm_cache_response::CacheOptions {
-            caching: kwargs
-                .get_item("caching")?
-                .filter(|value| !value.is_none())
-                .map(|value| value.extract())
-                .transpose()?,
-            no_cache: boolean("no-cache")?,
-            no_store: boolean("no-store")?,
-            ttl: seconds("ttl")?,
-            max_age: seconds("s-max-age")?.or(seconds("s-maxage")?),
+            policy: litellm_cache_response::CachePolicy {
+                caching: kwargs
+                    .get_item("caching")?
+                    .filter(|value| !value.is_none())
+                    .map(|value| value.extract())
+                    .transpose()?,
+                no_cache: boolean("no-cache")?,
+                no_store: boolean("no-store")?,
+                ttl: seconds("ttl")?,
+                max_age: seconds("s-max-age")?.or(seconds("s-maxage")?),
+            },
             scope: litellm_cache_response::CacheScope::Shared,
         },
     ))

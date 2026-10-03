@@ -523,6 +523,39 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
 @pytest.mark.parametrize(
     "model",
     [
+        "us.openai.gpt-5.6-luna",
+        "bedrock/converse/global.openai.gpt-5.6-terra",
+        "us.openai.gpt-6-astra",
+    ],
+)
+def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(model, local_model_cost_map):
+    config = AmazonConverseConfig()
+    assert litellm.utils.is_explicitly_disabled_factory(
+        model=model, custom_llm_provider="bedrock_converse", key="supports_minimal_reasoning_effort"
+    )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="minimal"):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "minimal"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    _, additional_request_params, _, _ = config._prepare_request_params(optional_params, model)
+    assert "reasoning" not in additional_request_params
+    assert "thinking" not in additional_request_params
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
         "us.openai.gpt-5.6-sol",
         "bedrock/converse/global.openai.gpt-5.6-luna",
         "us.openai.gpt-6-astra",
@@ -635,6 +668,142 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
 
     additional = result.get("additionalModelRequestFields", {})
     assert additional.get("output_config") == {"effort": "high"}
+
+
+_ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
+_ARTIFACT_DATA_INPUT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "collection": {"type": "string", "pattern": _ARTIFACT_DATA_ID_PATTERN, "description": "Collection"},
+        "doc_id": {"type": "string", "pattern": _ARTIFACT_DATA_ID_PATTERN},
+        "writes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"doc_id": {"type": "string", "pattern": _ARTIFACT_DATA_ID_PATTERN}},
+            },
+        },
+        "limit": {"type": "integer", "minimum": 1},
+    },
+    "required": ["collection"],
+}
+_ARTIFACT_DATA_ANTHROPIC_TOOL: Final = {
+    "name": "ArtifactData",
+    "description": "Read a shared database",
+    "input_schema": _ARTIFACT_DATA_INPUT_SCHEMA,
+}
+_ARTIFACT_DATA_OPENAI_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "ArtifactData",
+        "description": "Read a shared database",
+        "parameters": _ARTIFACT_DATA_INPUT_SCHEMA,
+    },
+}
+_LOOKAROUND_FREE_PROPERTIES: Final = {
+    "collection": {"type": "string", "description": "Collection"},
+    "doc_id": {"type": "string"},
+    "writes": {"type": "array", "items": {"type": "object", "properties": {"doc_id": {"type": "string"}}}},
+    "limit": {"type": "integer", "minimum": 1},
+}
+
+
+def _converse_tools(model, tools, litellm_params=None):
+    request = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"tools": copy.deepcopy(tools)},
+        litellm_params=litellm_params or {},
+        headers={},
+    )
+    return request["toolConfig"]["tools"]
+
+
+def _tool_schema_properties(model, tool, litellm_params=None):
+    return _converse_tools(model, [tool], litellm_params)[0]["toolSpec"]["inputSchema"]["json"]["properties"]
+
+
+@pytest.mark.parametrize(
+    "tool", [_ARTIFACT_DATA_ANTHROPIC_TOOL, _ARTIFACT_DATA_OPENAI_TOOL], ids=["anthropic-shape", "openai-shape"]
+)
+@pytest.mark.parametrize(
+    "model",
+    [
+        "global.moonshotai.kimi-k3",
+        "us.moonshotai.kimi-k3",
+        "moonshotai.kimi-k3",
+        "us-east-1/us.moonshotai.kimi-k3",
+        "us.xai.grok-4.6",
+        "us-gov.xai.grok-4.6",
+        "global.xai.grok-4.7",
+        "xai.grok-4.7",
+    ],
+)
+def test_transform_request_drops_lookaround_regex_for_models_the_cost_map_flags(tool, model):
+    """Kimi K3 and Grok 4.6/4.7 refuse the whole request over a lookaround in a tool schema regex."""
+    tools = _converse_tools(model, [tool])
+
+    json_schema = tools[0]["toolSpec"]["inputSchema"]["json"]
+    assert json_schema["properties"] == _LOOKAROUND_FREE_PROPERTIES
+    assert json_schema["required"] == ["collection"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.anthropic.claude-sonnet-4-6",
+        "us.amazon.nova-pro-v1:0",
+        "us.meta.llama4-maverick-17b-instruct-v1:0",
+        "us.openai.gpt-5.6-sol",
+    ],
+)
+def test_transform_request_keeps_lookaround_regex_for_models_that_accept_it(model):
+    assert _tool_schema_properties(model, _ARTIFACT_DATA_ANTHROPIC_TOOL) == _ARTIFACT_DATA_INPUT_SCHEMA["properties"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.amazon.nova-lite-v1:0",
+        "us.moonshotai.kimi-k4",
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+    ],
+)
+def test_transform_request_drops_lookaround_regex_when_the_deployment_model_info_opts_in(model):
+    """A deployment's ``model_info`` flag covers a model the cost map does not know, an inference profile included."""
+    properties = _tool_schema_properties(
+        model, _ARTIFACT_DATA_ANTHROPIC_TOOL, {"model_info": {"supports_regex_lookaround": False}}
+    )
+
+    assert properties == _LOOKAROUND_FREE_PROPERTIES
+
+
+def test_transform_request_keeps_lookaround_regex_when_the_deployment_model_info_opts_out():
+    properties = _tool_schema_properties(
+        "global.moonshotai.kimi-k3", _ARTIFACT_DATA_ANTHROPIC_TOOL, {"model_info": {"supports_regex_lookaround": True}}
+    )
+
+    assert properties["doc_id"]["pattern"] == _ARTIFACT_DATA_ID_PATTERN
+
+
+def test_transform_request_resolves_an_inference_profile_through_its_base_model():
+    properties = _tool_schema_properties(
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        _ARTIFACT_DATA_ANTHROPIC_TOOL,
+        {"base_model": "bedrock/global.moonshotai.kimi-k3"},
+    )
+
+    assert properties == _LOOKAROUND_FREE_PROPERTIES
+
+
+def test_transform_request_drops_lookaround_regex_around_pre_formatted_tool_blocks():
+    """Blocks that arrive already in Bedrock shape, like Nova's grounding ``systemTool``, pass through as sent."""
+    grounding: Final = {"systemTool": {"name": "nova_grounding"}}
+
+    tools = _converse_tools("global.moonshotai.kimi-k3", [_ARTIFACT_DATA_OPENAI_TOOL, grounding])
+
+    assert tools[0]["toolSpec"]["inputSchema"]["json"]["properties"] == _LOOKAROUND_FREE_PROPERTIES
+    assert tools[1] == grounding
 
 
 def test_reasoning_effort_requests_summarized_display_converse():
@@ -5600,15 +5769,20 @@ def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
         pytest.param("global.openai.gpt-6-astra", False, id="openai-family-implicit-caching-only"),
         pytest.param("openai.gpt-oss-120b-1:0", False, id="openai-gpt-oss"),
         pytest.param("us.openai.gpt-99-unmapped", False, id="unmapped-openai-family-still-suppressed"),
+        pytest.param("us.moonshotai.kimi-k3", False, id="kimi-k3-prices-cached-tokens-but-rejects-cachepoint"),
+        pytest.param("global.moonshotai.kimi-k3", False, id="kimi-k3-global-profile"),
+        pytest.param("us-east-1/us.moonshotai.kimi-k3", False, id="kimi-k3-regional-route-resolves-through-profile"),
     ],
 )
 def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model, expects_cache_points, monkeypatch):
     """Bedrock rejects cachePoint blocks for models without prompt caching support
-    ("You invoked an unsupported model or your request did not allow prompt caching"),
-    and clients like Claude Code attach cache_control to every request, so a map-known
-    model without the capability must not receive them. Unmapped ids (application
-    inference profile ARNs, models newer than the map) keep emitting so existing
-    caching setups never silently degrade."""
+    ("You invoked an unsupported model or your request did not allow prompt caching")
+    and for models that price cached tokens yet take the marker only on their native
+    endpoints ("This model doesn't support the cachePoint field", Kimi K3), and clients
+    like Claude Code attach cache_control to every request, so a map-known model without
+    the capability must not receive them on system, message, or tool blocks. Unmapped ids
+    (application inference profile ARNs, models newer than the map) keep emitting so
+    existing caching setups never silently degrade."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -5618,14 +5792,25 @@ def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model,
             {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]},
             {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
         ],
-        optional_params={},
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        },
         litellm_params={},
         headers={},
     )
 
-    assert ("cachePoint" in json.dumps(body)) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["system"])) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["messages"])) is expects_cache_points
+    assert ("cachePoint" in json.dumps(body["toolConfig"])) is expects_cache_points
     assert body["system"][0]["text"] == "sys"
     assert body["messages"][0]["content"][0]["text"] == "hi"
+    assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
 
 
 def test_tool_config_cachepoint_not_placed_or_credited_for_model_without_prompt_caching(monkeypatch):
@@ -7767,6 +7952,17 @@ def test_mid_conversation_system_entry_without_text_is_dropped(empty_content):
     out_messages, system_blocks = config._transform_system_message(messages)
     assert system_blocks == []
     assert out_messages == [{"role": "user", "content": "hi"}, {"role": "user", "content": "done"}]
+
+
+def test_system_entry_without_content_key_transforms_like_an_empty_one():
+    config = AmazonConverseConfig()
+    leading_without_key = [{"role": "system"}, {"role": "user", "content": "hi"}]
+    leading_empty = [{"role": "system", "content": ""}, {"role": "user", "content": "hi"}]
+    assert config._transform_system_message(leading_without_key) == config._transform_system_message(leading_empty)
+    assert config._transform_system_message(leading_without_key) == ([{"role": "user", "content": "hi"}], [])
+    mid_without_key = [{"role": "user", "content": "hi"}, {"role": "system"}, {"role": "user", "content": "done"}]
+    mid_empty = [{"role": "user", "content": "hi"}, {"role": "system", "content": ""}, {"role": "user", "content": "done"}]
+    assert config._transform_system_message(mid_without_key) == config._transform_system_message(mid_empty)
 
 
 def _thinking_reply(text: str) -> dict:

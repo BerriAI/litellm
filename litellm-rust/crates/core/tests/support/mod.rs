@@ -44,11 +44,11 @@ pub fn provider_http(
 
 pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_core::messages::MessagesRoute {
     let resources = resources();
-    litellm_core::messages::MessagesRoute::builder()
-        .with_http(provider_http(&resources, &http_config()))
-        .with_auth(resources.auth)
-        .with_secrets(secrets)
-        .build()
+    litellm_core::messages::MessagesRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        secrets,
+    )
 }
 
 pub fn chat_completions_route() -> litellm_core::chat_completions::ChatCompletionsRoute {
