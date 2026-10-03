@@ -240,7 +240,11 @@ class UISettings(BaseModel):
 
     disable_model_add_for_internal_users: bool = Field(
         default=False,
-        description="If true, internal users cannot add models from the UI",
+        description=(
+            "If true, internal users cannot create models or auto routers through the UI or API, "
+            "including team admins and members with auto-router management permission. "
+            "Proxy admins are exempt. Editing and deleting existing models are unchanged."
+        ),
     )
 
     disable_team_admin_delete_team_user: bool = Field(
@@ -1706,6 +1710,22 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
 
 
 _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+async def model_creation_disabled_for_internal_users(prisma_client: object) -> bool:
+    from litellm.proxy.proxy_server import proxy_config
+
+    setting: Final = "disable_model_add_for_internal_users"
+    if setting in proxy_config.settings:
+        return UISettings.model_validate({setting: proxy_config.settings[setting]}).disable_model_add_for_internal_users
+    db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client, use_writer=True)).find_unique(
+        where={"id": "ui_settings"}
+    )
+    stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+    settings: Final = (
+        UISettings.model_validate_json(stored) if isinstance(stored, str) else UISettings.model_validate(stored)
+    )
+    return settings.disable_model_add_for_internal_users
 
 
 def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
