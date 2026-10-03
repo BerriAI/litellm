@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { usePassThroughDetailTab } from "./PassThroughSettings/passThroughDetailRouting";
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"] as const;
 const HTTP_METHOD_OPTIONS = HTTP_METHODS.map((method) => ({ label: method, value: method }));
@@ -143,6 +144,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
   onEndpointUpdated,
 }) => {
   const [endpointData, setEndpointData] = useState<PassThroughEndpoint | null>(initialEndpointData);
+  const [detailTab, setDetailTab] = usePassThroughDetailTab(isAdmin);
   const [loading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [guardrails, setGuardrails] = useState<
@@ -247,7 +249,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs value={detailTab} onValueChange={setDetailTab}>
         <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
