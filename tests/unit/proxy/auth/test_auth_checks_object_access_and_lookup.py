@@ -2276,6 +2276,78 @@ async def test_deny_by_default_reads_requested_vector_stores_without_a_registry(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "key_vector_stores", "denied_by"),
+    [
+        ({"tools": [1]}, None, None),
+        ({"tools": 1}, None, None),
+        ({"tools": [{"type": "file_search", "vector_store_ids": None}]}, None, None),
+        ({"tools": [1, {"type": "file_search", "vector_store_ids": ["KBSTOREA"]}]}, ["KBSTOREA"], None),
+        ({"tools": [1, {"type": "file_search", "vector_store_ids": ["KBSTOREA"]}]}, ["KBSTOREB"], _KEY_DENIED),
+    ],
+    ids=["int-tool", "non-list-tools", "null-tool-ids", "int-tool-beside-granted", "int-tool-beside-ungranted"],
+)
+async def test_deny_by_default_ignores_tools_that_name_no_vector_store(
+    request_body: Mapping[str, object], key_vector_stores: list[str] | None, denied_by: ProxyErrorTypes | None
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": True},
+            _virtual_key(object_permission_id=None if key_vector_stores is None else "key-permission"),
+            None if key_vector_stores is None else SimpleNamespace(vector_stores=key_vector_stores),
+            request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", **request_body},
+        ),
+        denied_by,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"tools": [{"type": "file_search", "vector_store_ids": "KBSTOREA"}]},
+        {"tools": [{"type": "file_search", "vector_store_ids": [1]}]},
+        {"vector_store_ids": "KBSTOREA"},
+    ],
+    ids=["string-tool-ids", "int-tool-id", "string-top-level-ids"],
+)
+async def test_deny_by_default_rejects_malformed_vector_store_ids_as_bad_request(request_body: Mapping[str, object]):
+    with pytest.raises(ProxyException) as exc_info:
+        await _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": True},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=["KBSTOREA"]),
+            request_body={"model": "gpt-4o-mini", "input": "what is in this KB?", **request_body},
+        )
+    assert (exc_info.value.type, exc_info.value.param, exc_info.value.code) == (
+        "invalid_request_error",
+        "vector_store_ids",
+        "400",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_body", "denied_by"),
+    [
+        ({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}, None),
+        (None, _KEY_DENIED),
+    ],
+    ids=["no-vector-store", "ungranted-vector-store"],
+)
+@pytest.mark.parametrize("flag_value", [None, "enabled"], ids=["null", "string"])
+async def test_invalid_deny_by_default_value_only_denies_vector_store_requests(
+    flag_value: object, request_body: Mapping[str, object] | None, denied_by: ProxyErrorTypes | None
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": flag_value}, _virtual_key(), None, request_body=request_body
+        ),
+        denied_by,
+    )
+
+
+@pytest.mark.asyncio
 async def test_keyless_user_grant_is_read_through_the_object_permission_cache():
     cache: Final = UserApiKeyCache(default_in_memory_ttl=60)
     await cache.async_set_cache(
