@@ -6,16 +6,16 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 import litellm
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm import Router
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import (
     list_agents,
     run_settings,
     run_window,
     user_scope,
+    validate_model,
     watchable,
     watching,
-    validate_model,
     worker_supports_model,
 )
 from litellm.proxy.lens.models import Lens, LensSettings, RunRequest, Scope
@@ -159,13 +159,17 @@ def test_invalid_explicit_execution_ids_are_rejected(identity: str) -> None:
     assert error.value.status_code == 422
 
 
+@pytest.mark.parametrize("protocol_version", (1, 2, 3))
 @pytest.mark.asyncio
-async def test_incompatible_worker_is_rejected_before_claiming_work() -> None:
+async def test_incompatible_worker_is_rejected_before_claiming_work(
+    protocol_version: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.lens.endpoints import claim
     from tests.unit.proxy.lens.test_state import worker
 
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
     with pytest.raises(HTTPException) as error:
-        await claim(worker(), protocol_version=1)
+        await claim(worker(), protocol_version=protocol_version)
     assert error.value.status_code == 409
     assert "Upgrade" in error.value.detail
 
@@ -291,3 +295,38 @@ async def test_preview_reports_calendar_overflow_as_a_validation_error() -> None
         await preview_sample(body, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), None)
     assert error.value.status_code == 422
     assert "supported calendar range" in error.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worker_release", ("", "v1.2.2", "branch-main-old"))
+async def test_different_release_is_rejected_before_accessing_jobs(
+    monkeypatch: pytest.MonkeyPatch, worker_release: str
+) -> None:
+    from litellm.proxy.lens.endpoints import claim
+    from litellm.proxy.lens.release import PROTOCOL_VERSION
+    from tests.unit.proxy.lens.test_state import worker
+
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
+    monkeypatch.delenv("LENS_WORKER_IMAGE", raising=False)
+    with pytest.raises(HTTPException) as error:
+        await claim(worker(), protocol_version=PROTOCOL_VERSION, worker_release=worker_release)
+    assert error.value.status_code == 409
+    assert "ghcr.io/berriai/litellm-lens-worker:v1.2.3" in error.value.detail
+
+
+@pytest.mark.asyncio
+async def test_unknown_gateway_release_refuses_registration_and_claims(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.lens.endpoints import WorkerName, claim, register_worker
+    from litellm.proxy.lens.release import PROTOCOL_VERSION
+    from tests.unit.proxy.lens.test_state import worker
+
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "")
+    monkeypatch.setenv("LENS_WORKER_IMAGE", "registry.example/lens-worker:old")
+    with pytest.raises(HTTPException) as registration_error:
+        await register_worker(WorkerName(analysis_key_id="a" * 64), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+    assert registration_error.value.status_code == 503
+    assert "LITELLM_RELEASE_TAG" in registration_error.value.detail
+    with pytest.raises(HTTPException) as claim_error:
+        await claim(worker(), protocol_version=PROTOCOL_VERSION, worker_release="")
+    assert claim_error.value.status_code == 503
+    assert claim_error.value.detail == registration_error.value.detail

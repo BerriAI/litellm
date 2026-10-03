@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "lens_dev.sh"
@@ -121,6 +122,19 @@ def test_proxy_env_drops_inherited_redis_and_base_urls(tmp_path):
 def test_proxy_env_permits_the_weak_key_only_when_chosen(tmp_path):
     proc = _run(tmp_path, 'master_key=sk-1234; proxy_env ""; env')
     assert "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true" in proc.stdout
+
+
+def test_source_development_overrides_an_inherited_release_with_its_own_commit(tmp_path: Path) -> None:
+    proc: Final = _run(
+        tmp_path,
+        'proxy_env "export LITELLM_RELEASE_TAG=v0.0.0-old"; '
+        'test "$LITELLM_RELEASE_TAG" = "sha-$(git -C "$repo_root" rev-parse HEAD)"; '
+        'printf "%s" "$LENS_WORKER_IMAGE"',
+        LITELLM_RELEASE_TAG="v0.0.0-old",
+        LENS_WORKER_IMAGE="registry.example/lens-worker:old",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "litellm-lens-worker:local"
 
 
 def test_external_database_url_never_starts_compose_postgres(tmp_path):

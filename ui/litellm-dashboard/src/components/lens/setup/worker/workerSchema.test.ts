@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateWorkerAddress, analysisAccessSchema, workerFormSchema } from "./workerSchema";
-import { workerSetupCommand, LENS_WORKER_IMAGE } from "./workerCommand";
+import { workerSetupCommand } from "./workerCommand";
 
 const workerDefaults = {
   useExisting: false,
@@ -26,14 +26,13 @@ describe("worker setup", () => {
   });
 
   it("quotes apostrophes literally and retains the pinned image and runtime restrictions", () => {
-    const command = workerSetupCommand("https://gateway.example/proxy?name=it's", "token'quoted");
+    const image = "registry.example/lens-worker:v1.2.3-rc.4";
+    const command = workerSetupCommand("https://gateway.example/proxy?name=it's", "token'quoted", image);
     expect(command).toContain("'LITELLM_URL=https://gateway.example/proxy?name=it'\\''s'");
     expect(command).toContain("'LENS_WORKER_TOKEN=token'\\''quoted'");
     expect(command).toContain("--read-only --cap-drop ALL");
-    expect(command).toContain(
-      "--security-opt no-new-privileges --platform linux/amd64 --add-host host.docker.internal:host-gateway",
-    );
-    expect(command.split("\n").at(-1)?.trim()).toBe(LENS_WORKER_IMAGE);
+    expect(command).toContain("--security-opt no-new-privileges --add-host host.docker.internal:host-gateway");
+    expect(command.split("\n").at(-1)?.trim()).toBe(`'${image}'`);
   });
 });
 

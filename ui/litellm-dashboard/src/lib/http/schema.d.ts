@@ -50091,6 +50091,8 @@ export interface components {
         };
         /** WorkerCreated */
         WorkerCreated: {
+            /** Image */
+            image: string;
             /** Token */
             token: string;
             worker: components["schemas"]["Worker"];
@@ -62899,6 +62901,7 @@ export interface operations {
         parameters: {
             query?: {
                 protocol_version?: number;
+                worker_release?: string;
             };
             header?: never;
             path?: never;

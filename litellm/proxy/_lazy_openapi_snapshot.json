@@ -34885,6 +34885,10 @@
         "WorkerCreated": {
           "additionalProperties": false,
           "properties": {
+            "image": {
+              "title": "Image",
+              "type": "string"
+            },
             "token": {
               "title": "Token",
               "type": "string"
@@ -34894,6 +34898,7 @@
             }
           },
           "required": [
+            "image",
             "worker",
             "token"
           ],

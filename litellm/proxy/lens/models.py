@@ -252,6 +252,7 @@ class Worker(Record):
 
 
 class WorkerCreated(Record):
+    image: str
     worker: Worker
     token: str
 

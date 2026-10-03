@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .analysis import AnalysisResponseError, analyze_sample, validation_details
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
+from .release import PROTOCOL_VERSION, release_tag
 
 logger: Final = logging.getLogger("litellm.lens.worker")
 
@@ -120,8 +121,26 @@ class LensWorker:
             await self.sleep(2**attempt)
             return await self.model_request(path, body, attempt + 1)
 
+    async def report_unreadable_claim(self, identity: ClaimIdentity) -> None:
+        failure: Final = await self.client.post(
+            f"/lens/worker/{identity.lens_id}/{identity.job.id}/result",
+            json=Result(
+                coverage=Coverage(),
+                error="The worker could not read this investigation. Update the worker to match the gateway, then retry.",
+            ).model_dump(),
+        )
+        if failure.status_code != 409:
+            failure.raise_for_status()
+        logger.warning("Worker could not read a claimed investigation; reported a version compatibility failure")
+
     async def run_once(self) -> bool:
-        response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 3}))
+        response: Final = await self.client.post(
+            "/lens/worker/claim",
+            params=MappingProxyType({"protocol_version": str(PROTOCOL_VERSION), "worker_release": release_tag()}),
+        )
+        if response.status_code == 409:
+            logger.warning("Lens worker cannot claim work: %s", response.text)
+            return False
         response.raise_for_status()
         payload: Final = response.json()
         if payload is None:
@@ -129,17 +148,7 @@ class LensWorker:
         try:
             claim: Final = Claim.model_validate(payload)
         except ValidationError:
-            identity: Final = ClaimIdentity.model_validate(payload)
-            failure: Final = await self.client.post(
-                f"/lens/worker/{identity.lens_id}/{identity.job.id}/result",
-                json=Result(
-                    coverage=Coverage(),
-                    error="The worker could not read this investigation. Update the worker to match the gateway, then retry.",
-                ).model_dump(),
-            )
-            if failure.status_code != 409:
-                failure.raise_for_status()
-            logger.warning("Worker could not read a claimed investigation; reported a version compatibility failure")
+            await self.report_unreadable_claim(ClaimIdentity.model_validate(payload))
             return True
         prefix: Final = f"/lens/worker/{claim.lens_id}/{claim.job.id}"
 

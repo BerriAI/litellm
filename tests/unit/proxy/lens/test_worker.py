@@ -417,3 +417,22 @@ async def test_transient_heartbeat_failure_recovers_without_cancelling_analysis(
     assert result.error == ""
     assert result.coverage.screened == 1 and result.coverage.unassessable == 0
     assert attempts.qsize() == 2 and saved.empty()
+
+
+@pytest.mark.asyncio
+async def test_worker_announces_release_and_waits_on_incompatible_gateway(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy.lens.release import PROTOCOL_VERSION
+
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/lens/worker/claim"
+        assert request.url.params["protocol_version"] == str(PROTOCOL_VERSION)
+        assert request.url.params["worker_release"] == "v1.2.3"
+        return httpx.Response(409, json={"detail": "Upgrade the Lens worker to v1.2.4"})
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert not await LensWorker(client).run_once()
+    assert "Upgrade the Lens worker to v1.2.4" in caplog.text
