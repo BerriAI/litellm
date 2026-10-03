@@ -1,0 +1,20 @@
+id: no-format-in-error-variant
+valid:
+  - |
+    fn f(route: &str) -> Result<(), Error> {
+        let msg = format!("bad route: {route}");
+        Err(Error::InvalidProvider(msg))
+    }
+  - |
+    fn f() -> String {
+        format!("just a string")
+    }
+invalid:
+  - |
+    fn f(route: &str) -> Result<(), Error> {
+        Err(Error::InvalidProvider(format!("bad route: {route}")))
+    }
+  - |
+    fn f(name: &str) -> PyResult<()> {
+        Err(PyValueError::new_err(format!("missing argument: {name}")))
+    }

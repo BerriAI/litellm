@@ -1,0 +1,12 @@
+id: no-format-in-error-variant
+language: rust
+severity: warning
+message: >-
+  Don't build an error variant straight from a format!() call; rustfmt wraps it into an
+  unreadable multi-line call. Bind the message to a local first, e.g.
+  `let msg = format!(...); $PATH::$VARIANT(msg)`.
+rule:
+  pattern: $PATH::$VARIANT(format!($$$ARGS))
+constraints:
+  PATH:
+    regex: 'Error$'
