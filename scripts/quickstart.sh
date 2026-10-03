@@ -212,22 +212,43 @@ migrate_env() {
   fi
   normalize_bind=0
   if grep -q '^LITELLM_BIND=.*:$' .env; then normalize_bind=1; fi
+
+  envfile=.env
+  symlink_hops=0
+  while [ -L "$envfile" ]; do
+    if [ "$symlink_hops" -ge 40 ]; then
+      echo "$DIR/.env is a symlink loop." >&2
+      return 1
+    fi
+    if ! link="$(readlink "$envfile")"; then
+      echo "Could not resolve the $DIR/.env symlink." >&2
+      return 1
+    fi
+    case "$link" in
+      /*) envfile=$link ;;
+      *) envfile="$(dirname "$envfile")/$link" ;;
+    esac
+    symlink_hops=$((symlink_hops + 1))
+  done
   if [ "$rename_password" = 0 ] && [ "$normalize_bind" = 0 ]; then return 0; fi
 
-  temp="$(umask 077; mktemp "$DIR/.env.XXXXXX")"
+  if ! temp="$(umask 077; mktemp "$(dirname "$envfile")/.env.XXXXXX")"; then
+    echo "Cannot create a temporary file in $(dirname "$envfile"); check that it is writable." >&2
+    return 1
+  fi
   if ! (umask 077; awk -v rename_password="$rename_password" '
     rename_password && /^POSTGRES_PASSWORD=/ { sub(/^POSTGRES_PASSWORD=/, "LITELLM_POSTGRES_PASSWORD=") }
     /^LITELLM_BIND=/ { sub(/:$/, "") }
     { print }
-  ' .env >"$temp"); then
+  ' "$envfile" >"$temp"); then
     rm -f "$temp"
     return 1
   fi
-  if ! cat "$temp" >.env; then
+  if ! mv "$temp" "$envfile"; then
     rm -f "$temp"
+    echo "Could not atomically update $DIR/.env." >&2
     return 1
   fi
-  rm -f "$temp"
   echo "Updated $DIR/.env to the current variable names."
 }
 
