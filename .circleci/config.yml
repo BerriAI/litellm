@@ -533,11 +533,10 @@ jobs:
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       - save_cargo_target
       - run:
-          name: Run prisma ./docker/entrypoint.sh
+          name: Run prisma migrations
           command: |
             set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
+            uv run --no-sync python litellm/proxy/prisma_migration.py
             set -e
       # Run pytest and generate JUnit XML report
       - run:
@@ -607,11 +606,10 @@ jobs:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
-          name: Run prisma ./docker/entrypoint.sh
+          name: Run prisma migrations
           command: |
             set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
+            uv run --no-sync python litellm/proxy/prisma_migration.py
             set -e
       # Run pytest and generate JUnit XML report
       - run:
@@ -682,11 +680,10 @@ jobs:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
-          name: Run prisma ./docker/entrypoint.sh
+          name: Run prisma migrations
           command: |
             set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
+            uv run --no-sync python litellm/proxy/prisma_migration.py
             set -e
 
       # Run pytest and generate JUnit XML report
@@ -2368,16 +2365,18 @@ jobs:
           path: test-results
 
   proxy_build_from_pip_tests:
-    # Change from docker to machine executor
+    # Validates the published PyPI artifact, not the checked-out source tree: the
+    # proxy is pip-installed from PyPI into its own venv and booted on the runner
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
+    environment:
+      LITELLM_PIP_VERSION: "1.83.0"
     steps:
       - checkout
       - skip_if_unrelated_changes
       - setup_google_dns
-      # Remove Docker CLI installation since it's already available in machine executor
       - install_uv
       - install_rust
       - run:
@@ -2385,47 +2384,53 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - run:
-          name: Build Docker image
+          name: Install the published litellm proxy from PyPI into its own venv
           command: |
-            docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
+            uv venv --python 3.13 /tmp/litellm-pip
+            uv pip install --python /tmp/litellm-pip/bin/python \
+              "litellm[proxy,proxy-runtime]==${LITELLM_PIP_VERSION}" \
+              "google-cloud-aiplatform==1.133.0" \
+              "google-genai==1.37.0" \
+              "anthropic[vertex]==0.84.0" \
+              "grpcio==1.78.0" \
+              "prometheus-client==0.20.0" \
+              "langfuse==2.59.7" \
+              "opentelemetry-api==1.28.0" \
+              "opentelemetry-sdk==1.28.0" \
+              "opentelemetry-exporter-otlp==1.28.0" \
+              "ddtrace==4.11.0" \
+              "sentry-sdk==2.21.0" \
+              "mangum==0.17.0" \
+              "azure-ai-contentsafety==1.0.0" \
+              "azure-storage-file-datalake==12.20.0" \
+              "pypdf==6.7.5" \
+              "llm-sandbox==0.3.31" \
+              "detect-secrets==1.5.0" \
+              "prisma==0.11.0" \
+              "openai==2.24.0"
+            /tmp/litellm-pip/bin/python -c "import litellm, sys; print('litellm', litellm.__version__ if hasattr(litellm, '__version__') else '', sys.version)"
       - start_postgres
       - start_fake_openai_endpoint
       - run:
-          name: Run Docker container
+          name: Run the published proxy
           # intentionally give bad redis credentials here
           # the OTEL test - should get this as a trace
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e REDIS_HOST=$REDIS_HOST \
-              -e REDIS_PASSWORD=$REDIS_PASSWORD \
-              -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              -e OTEL_EXPORTER="in_memory" \
-              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-              -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e COHERE_API_KEY=$COHERE_API_KEY \
-              -e USE_DDTRACE=True \
-              -e DD_API_KEY=$DD_API_KEY \
-              -e DD_SITE=$DD_SITE \
-              -e GCS_FLUSH_INTERVAL="1" \
-              -e LITELLM_LOG=ERROR \
-              --add-host host.docker.internal:host-gateway \
-              --name my-app \
-              -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
-              my-app:latest \
-              --config /app/config.yaml \
-              --port 4000
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
           background: true
+          command: |
+            export LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true
+            export DATABASE_URL=postgresql://postgres:postgres@localhost:5432/circle_test
+            export LITELLM_MASTER_KEY="sk-1234"
+            export LITELLM_LICENSE="bad-license"
+            export FAKE_OPENAI_API_BASE=http://localhost:8190
+            export OTEL_EXPORTER="in_memory"
+            export USE_DDTRACE=True
+            export DD_TRACE_OPENAI_ENABLED="False"
+            export GCS_FLUSH_INTERVAL="1"
+            export LITELLM_LOG=ERROR
+            cd /tmp/litellm-pip
+            exec /tmp/litellm-pip/bin/ddtrace-run /tmp/litellm-pip/bin/litellm \
+              --config ~/project/tests/basic_proxy_startup_tests/build_from_pip_config.yaml \
+              --port 4000 2>&1 | tee /tmp/litellm-pip.log
       - wait_for_service:
           url: http://localhost:4000
           timeout: "300"
@@ -2441,14 +2446,15 @@ jobs:
                 --junitxml=test-results/junit-2.xml \
                 --durations=5"
           no_output_timeout: 15m
-            # Clean up first container
       - store_test_results:
           path: test-results
       - run:
-          name: Stop and remove first container
+          name: Proxy log
+          command: cat /tmp/litellm-pip.log || true
+          when: always
+      - run:
+          name: Stop postgres
           command: |
-            docker stop my-app || true
-            docker rm my-app || true
             docker stop postgres-db || true
             docker rm postgres-db || true
           when: always
@@ -2969,7 +2975,7 @@ jobs:
               docker build \
                 --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
                 -t litellm-docker-database:ci \
-                -f docker/Dockerfile.database .
+                -f Dockerfile .
             fi
             python3 .circleci/scripts/run_migration_tests.py record-image
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Daily Claude Code compatibility-matrix populator.
 #
-# Runs daily as the Render cron job `litellm-compat-matrix`, built from
-# the Dockerfile in this directory (see README.md). The flow is:
+# Runs daily as the Render cron job `litellm-compat-matrix` (see
+# README.md for the image it runs in). The flow is:
 #
 #   1. Resolve the latest LiteLLM final release tag from the GitHub
 #      Releases API.

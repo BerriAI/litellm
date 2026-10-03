@@ -7,7 +7,6 @@ tests
 .devcontainer
 *.tgz
 log.txt
-docker/Dockerfile.*
 
 # Claude Flow generated files (must be excluded from Docker build)
 .claude/

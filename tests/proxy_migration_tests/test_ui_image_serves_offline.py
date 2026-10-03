@@ -1,7 +1,7 @@
-"""Image-level regression net for arbitrary-uid boot of the UI image.
+"""Image-level regression net for arbitrary-uid boot of the `ui` component.
 
 OpenShift ``restricted-v2`` ignores the image ``USER`` and assigns an
-arbitrary uid in GID 0. The stock nginx base expects to start as root, so
+arbitrary uid in GID 0. A stock nginx install expects to start as root, so
 its cache (``/var/cache/nginx``) and pid (``/run``) paths are root-owned
 755 and the master process dies at startup with
 ``mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)``.
@@ -63,7 +63,7 @@ def ui_container() -> Iterator[tuple[str, str]]:
             "run", "-d", "--name", container, "--network", network,
             "--user", ARBITRARY_UID,
             "--read-only", "--tmpfs", "/tmp",
-            IMAGE,
+            IMAGE, "ui",
         )
         yield network, container
     finally:

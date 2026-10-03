@@ -5,5 +5,5 @@ model_list:
       api_key: fake-key
       api_base: os.environ/FAKE_OPENAI_API_BASE
 
-general_settings:    
+general_settings:
     alerting: ["slack"]
