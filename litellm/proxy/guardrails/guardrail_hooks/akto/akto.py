@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from collections import Counter
 from collections.abc import Awaitable, Mapping
 from datetime import datetime
 from itertools import product
@@ -39,7 +40,7 @@ from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import AktoGuardrailConfigModelOptionalParams
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
-from .attachments import request_attachments, without_attachment_content
+from .akto_attachments import request_attachments, without_attachment_content
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -70,7 +71,7 @@ AKTO_CONNECTOR_NAME: Final = "litellm"
 DEFAULT_STREAMING_SAMPLING_RATE: Final = 5
 DEFAULT_GUARDRAIL_TIMEOUT: Final = 5
 DEFAULT_FILE_GUARDRAIL_TIMEOUT: Final = 10
-DEFAULT_CONTEXT_SOURCE: Final = "ENDPOINT"
+DEFAULT_CONTEXT_SOURCE: Final = "AGENTIC"
 DEFAULT_REQUEST_PATH: Final = "/v1/chat/completions"
 MCP_PATH: Final = "/mcp"
 MCP_TOOL_PREFIX: Final = "mcp"
@@ -178,11 +179,14 @@ def masked_texts(texts: tuple[str, ...], sent: object, modified_payload: object)
     masked_leaves: Final = payload_string_leaves(modified_payload)
     if sent_leaves is None or masked_leaves is None or sent_leaves.keys() != masked_leaves.keys():
         return None
-    changed: Final = frozenset(
-        (sent_leaves[path], masked_leaves[path]) for path in sent_leaves if sent_leaves[path] != masked_leaves[path]
-    )
+    changed_paths: Final = tuple(path for path in sent_leaves if sent_leaves[path] != masked_leaves[path])
+    changed: Final = frozenset((sent_leaves[path], masked_leaves[path]) for path in changed_paths)
     changes: Final = MappingProxyType(dict(changed))
-    if not changes or len(changes) != len(changed) or not changes.keys() <= frozenset(texts):
+    if (
+        not changes
+        or len(changes) != len(changed)
+        or not Counter(sent_leaves[path] for path in changed_paths) <= Counter(texts)
+    ):
         return None
     return tuple(changes.get(text, text) for text in texts)
 
@@ -601,8 +605,10 @@ class AktoGuardrail(CustomGuardrail):
 
     @staticmethod
     def is_mcp_call(request_data: Mapping[str, object], logging_obj: "LiteLLMLoggingObj | None" = None) -> bool:
-        call_type: Final = getattr(logging_obj, "call_type", None) or request_data.get("call_type")
-        return call_type == CallTypes.call_mcp_tool.value or "mcp_tool_name" in request_data
+        """The logger decides when there is one, since clients can put MCP keys in a request body."""
+        if logging_obj is not None:
+            return logging_obj.call_type == CallTypes.call_mcp_tool.value
+        return request_data.get("call_type") == CallTypes.call_mcp_tool.value or "mcp_tool_name" in request_data
 
     @staticmethod
     def mcp_tool_call(request_data: Mapping[str, object]) -> tuple[str, str, Mapping[str, object]]:

@@ -53,7 +53,7 @@ class AktoConfigModel(GuardrailConfigModel[AktoGuardrailConfigModelOptionalParam
 
     context_source: Literal["ENDPOINT", "AGENTIC"] | None = Field(
         default=None,
-        description="Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: ENDPOINT.",
+        description="Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.",
     )
 
     akto_metadata: dict | None = Field(  # mutable-ok: UI type derivation maps dict to "object"

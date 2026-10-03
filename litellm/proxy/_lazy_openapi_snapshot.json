@@ -12814,6 +12814,19 @@
               ],
               "title": "Akto Base Url"
             },
+            "akto_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). Example: {\"policy_name\": \"PII Strict, Secrets\"}.",
+              "title": "Akto Metadata"
+            },
             "akto_vxlan_id": {
               "anyOf": [
                 {
@@ -13352,6 +13365,22 @@
               "description": "Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
               "title": "Content Moderation Check"
             },
+            "context_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ENDPOINT",
+                    "AGENTIC"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.",
+              "title": "Context Source"
+            },
             "contextual_grounding_from_messages": {
               "default": false,
               "description": "ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.",
@@ -13563,6 +13592,19 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_guardrail_timeout": {
+              "anyOf": [
+                {
+                  "minimum": 1.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
+              "title": "File Guardrail Timeout"
+            },
             "gateway_name": {
               "anyOf": [
                 {
@@ -13647,6 +13689,7 @@
             "guardrail_timeout": {
               "anyOf": [
                 {
+                  "minimum": 1.0,
                   "type": "integer"
                 },
                 {
