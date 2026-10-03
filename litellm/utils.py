@@ -10234,10 +10234,11 @@ def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
 class _ExtraBodyReasoningEffort(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    reasoning_effort: str | None = None
+    reasoning_effort: str | dict[str, object] | None = None
+    reasoning: dict[str, object] | None = None
 
 
-def peek_extra_body_reasoning_effort(optional_params: Mapping[str, object]) -> str | None:
+def peek_extra_body_reasoning_effort(optional_params: Mapping[str, object]) -> str | Mapping[str, object] | None:
     extra_body: Final = optional_params.get("extra_body")
     if not isinstance(extra_body, dict):
         return None
@@ -10245,7 +10246,7 @@ def peek_extra_body_reasoning_effort(optional_params: Mapping[str, object]) -> s
         parsed: Final = _ExtraBodyReasoningEffort.model_validate(extra_body)
     except ValidationError:
         return None
-    return parsed.reasoning_effort
+    return parsed.reasoning_effort if parsed.reasoning_effort is not None else parsed.reasoning
 
 
 def strip_reasoning_summary_aliases_from_optional_params(

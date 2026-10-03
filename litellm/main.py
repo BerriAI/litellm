@@ -1089,7 +1089,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
-    extra_body_reasoning_effort: str | None = None,
+    extra_body_reasoning_effort: str | Mapping[str, object] | None = None,
 ) -> tuple[dict, str]:
     model_info: dict[str, object] = {}
 
@@ -1194,12 +1194,22 @@ def responses_api_bridge_check(
             )
         )
     )
+    chat_rejects_extra_body_reasoning_object: Final = (
+        has_function_tool
+        and isinstance(extra_body_reasoning_effort, Mapping)
+        and on_constraint_enforcing_endpoint
+        and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+    )
     if (
         (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and ((reasoning_effort is not None and reasoning_summary is not None) or chat_rejects_function_tools)
+        and (
+            (reasoning_effort is not None and reasoning_summary is not None)
+            or chat_rejects_function_tools
+            or chat_rejects_extra_body_reasoning_object
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
