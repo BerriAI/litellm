@@ -801,33 +801,6 @@ async def update_project(
             **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
         }
 
-        if data.team_id is not None:
-            current_project_record: Final = await _writer_project_table(prisma_client).find_unique(
-                where={"project_id": data.project_id}
-            )
-            current_project: Final = (
-                LiteLLM_ProjectTable.model_validate(record_to_dict(current_project_record))
-                if current_project_record is not None
-                else None
-            )
-            if current_project is not None and data.team_id != current_project.team_id:
-                mismatched_key_count: Final = await prisma_client.writer_db.litellm_verificationtoken.count(
-                    where={
-                        "project_id": data.project_id,
-                        "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
-                    }
-                )
-                if mismatched_key_count > 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": (
-                                f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
-                                f"team {data.team_id}. Detach or delete them before moving the project."
-                            )
-                        },
-                    )
-
         if budget_updates and existing_project.budget_id:
             # Update existing budget
             await _budget_table(prisma_client).update(
@@ -869,6 +842,33 @@ async def update_project(
 
         # Remove budget fields (following organization_endpoints.py pattern)
         update_data = _remove_budget_fields_from_project_data(update_data)
+
+        if data.team_id is not None:
+            current_project_record: Final = await _writer_project_table(prisma_client).find_unique(
+                where={"project_id": data.project_id}
+            )
+            current_project: Final = (
+                LiteLLM_ProjectTable.model_validate(record_to_dict(current_project_record))
+                if current_project_record is not None
+                else None
+            )
+            if current_project is not None and data.team_id != current_project.team_id:
+                mismatched_key_count: Final = await prisma_client.writer_db.litellm_verificationtoken.count(
+                    where={
+                        "project_id": data.project_id,
+                        "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
+                    }
+                )
+                if mismatched_key_count > 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": (
+                                f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
+                                f"team {data.team_id}. Detach or delete them before moving the project."
+                            )
+                        },
+                    )
 
         # Update project
         updated_project: Final = await _project_table(prisma_client).update(

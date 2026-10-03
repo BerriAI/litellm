@@ -20637,6 +20637,73 @@ async def test_key_generation_budget_ceiling_precedes_project_ownership(
     assert error.value.detail == {"error": "max_budget (10.0) cannot exceed the caller's own max_budget (5.0)."}
 
 
+@pytest.mark.asyncio
+async def test_key_generation_organization_membership_error_precedes_project_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_api_key_cache: Final = await _cache_with_project(
+        _OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM
+    )
+    mock_prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
+    mock_prisma_client.db.litellm_usertable = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="key-owner", organization_memberships=[])
+    )
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+
+    with pytest.raises(HTTPException) as error:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                project_id=_OWNED_PROJECT,
+                organization_id="org-not-member",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-user",
+                user_id="key-owner",
+                is_session_token=True,
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert error.value.status_code == 403
+    assert error.value.detail == "Caller is not a member of organization_id=org-not-member"
+
+
+@pytest.mark.asyncio
+async def test_key_generation_duplicate_alias_error_precedes_project_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_alias: Final = "duplicate-alias"
+    user_api_key_cache: Final = await _cache_with_project(
+        _OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM
+    )
+    mock_prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
+    mock_prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token="existing-token", key_alias=key_alias)
+    )
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+
+    with pytest.raises(ProxyException) as error:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                project_id=_OWNED_PROJECT,
+                team_id=_OWNERSHIP_KEY_TEAM,
+                key_alias=key_alias,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message == (
+        f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required."
+    )
+    mock_prisma_client.insert_data.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("key_team_id", "expected_status"),
     [(_OWNERSHIP_PROJECT_TEAM, 200), (_OWNERSHIP_KEY_TEAM, 400)],
@@ -21191,18 +21258,19 @@ async def test_regenerate_output_estimate_admin_error_precedes_project_ownership
 
 
 @pytest.mark.asyncio
-async def test_key_project_team_validation_uses_project_missing_404() -> None:
+async def test_key_project_team_validation_allows_missing_project() -> None:
     prisma_client: Final = MagicMock()
     prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
 
-    with pytest.raises(HTTPException) as error:
-        await _check_key_project_team(
-            project_id=_OWNED_PROJECT,
-            key_team_id="team-a",
-            prisma_client=prisma_client,
-        )
+    await _check_key_project_team(
+        project_id=_OWNED_PROJECT,
+        key_team_id="team-a",
+        prisma_client=prisma_client,
+    )
 
-    assert error.value.status_code == 404
+    prisma_client.writer_db.litellm_projecttable.find_unique.assert_awaited_once_with(
+        where={"project_id": _OWNED_PROJECT}
+    )
 
 
 @pytest.mark.asyncio

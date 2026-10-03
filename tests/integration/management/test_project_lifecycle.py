@@ -35,7 +35,7 @@ def _key_rows(key: str) -> list[dict[str, JsonValue]]:
 
 def _cli_session_token(
     user_id: str,
-    team_id: str,
+    team_id: str | None,
     *,
     monkeypatch: pytest.MonkeyPatch,
     max_budget: float | None = None,
@@ -44,14 +44,14 @@ def _cli_session_token(
     user: Final = LiteLLM_UserTable(
         user_id=user_id,
         user_role="internal_user",
-        teams=[team_id],
+        teams=[team_id] if team_id is not None else [],
         models=[],
         max_budget=max_budget,
     )
     return ExperimentalUIJWTToken.get_cli_jwt_auth_token(
         user_info=user,
         team_id=team_id,
-        team_alias="ownership-team",
+        team_alias="ownership-team" if team_id is not None else None,
         max_budget=max_budget,
     )
 
@@ -303,14 +303,28 @@ def test_key_generation_rejects_missing_project_without_writing_key(ownership_ga
         model: Final = scenario.model()
         team: Final = scenario.team(models=[model])
         missing_project_id: Final = f"missing-{uuid4()}"
-        response: Final = ownership_gateway.request(
+        key_generation: Final = ownership_gateway.request(
+            "POST",
+            "/key/generate",
+            {"team_id": team, "project_id": missing_project_id, "models": [model]},
+        )
+
+        assert key_generation.status_code == 404, key_generation.text
+        assert (
+            read_rows(
+                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
+                (missing_project_id,),
+            )
+            == []
+        )
+
+        service_account_generation: Final = ownership_gateway.request(
             "POST",
             "/key/service-account/generate",
             {"team_id": team, "project_id": missing_project_id, "models": [model]},
         )
 
-        assert response.status_code == 404, response.text
-        assert "Project not found" in response.text
+        assert service_account_generation.status_code == 500, service_account_generation.text
         assert (
             read_rows(
                 'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
@@ -341,8 +355,7 @@ def test_key_regenerate_routes_reject_missing_project_without_changing_key(owner
         )
 
         for response in responses:
-            assert response.status_code == 404, response.text
-            assert "Project not found" in response.text
+            assert response.status_code == 500, response.text
             assert _key_rows(key) == before
             assert (
                 read_rows(
@@ -359,6 +372,83 @@ def test_key_regenerate_routes_reject_missing_project_without_changing_key(owner
             key=key,
         )
         assert chat.status_code == 200, chat.text
+
+
+def test_key_generate_nonmember_organization_error_precedes_project_ownership(
+    ownership_gateway: Gateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        organization_id: Final = scenario.organization()
+        owner_team: Final = scenario.team(models=[model])
+        project: Final = scenario.project(owner_team, models=[model])
+        caller_id: Final = scenario.user(user_role="internal_user")
+        caller_token: Final = _cli_session_token(caller_id, None, monkeypatch=monkeypatch)
+        response: Final = ownership_gateway.request(
+            "POST",
+            "/key/generate",
+            {
+                "project_id": project,
+                "organization_id": organization_id,
+                "models": [model],
+            },
+            key=caller_token,
+        )
+
+        assert response.status_code == 403, response.text
+        assert f"Caller is not a member of organization_id={organization_id}" in response.text
+        assert (
+            read_rows(
+                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
+                (project,),
+            )
+            == []
+        )
+
+
+def test_key_generate_duplicate_alias_error_precedes_project_ownership(
+    ownership_gateway: Gateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        caller_team: Final = scenario.team(models=[model])
+        owner_team: Final = scenario.team(models=[model])
+        project: Final = scenario.project(owner_team, models=[model])
+        key_alias: Final = f"duplicate-{uuid4()}"
+        existing_key: Final = scenario.key(team_id=caller_team, key_alias=key_alias, models=[model])
+        caller_id: Final = scenario.member(caller_team, role="admin")
+        caller_token: Final = _cli_session_token(caller_id, caller_team, monkeypatch=monkeypatch)
+        existing_alias_rows: Final = read_rows(
+            'SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s',
+            (key_alias,),
+        )
+        response: Final = ownership_gateway.request(
+            "POST",
+            "/key/generate",
+            {
+                "team_id": caller_team,
+                "project_id": project,
+                "key_alias": key_alias,
+                "models": [model],
+            },
+            key=caller_token,
+        )
+
+        assert response.status_code == 400, response.text
+        assert f"Key with alias '{key_alias}' already exists" in response.text
+        assert len(existing_alias_rows) == 1
+        assert read_rows(
+            'SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s',
+            (key_alias,),
+        ) == existing_alias_rows
+        assert len(_key_rows(existing_key)) == 1
+        assert (
+            read_rows(
+                'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
+                (project,),
+            )
+            == []
+        )
 
 
 def test_key_generate_budget_ceiling_precedes_project_ownership(

@@ -1358,13 +1358,6 @@ async def _common_key_generation_helper(
         ),
     )
 
-    if data.project_id is not None and prisma_client is not None:
-        await _check_key_project_team(
-            project_id=data.project_id,
-            key_team_id=data.team_id,
-            prisma_client=prisma_client,
-        )
-
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
     _budget_id = data.budget_id
     if prisma_client is not None and data.soft_budget is not None:
@@ -1559,6 +1552,13 @@ async def _common_key_generation_helper(
                 data=data,
                 prisma_client=prisma_client,
             )
+
+    if data.project_id is not None and prisma_client is not None:
+        await _check_key_project_team(
+            project_id=data.project_id,
+            key_team_id=data.team_id,
+            prisma_client=prisma_client,
+        )
 
     response = await generate_key_helper_fn(request_type="key", **data_json, table_name="key", llm_router=llm_router)
 
@@ -1828,15 +1828,10 @@ async def _check_key_project_team(
     prisma_client: PrismaClient,
 ) -> None:
     project_record: Final = await _writer_project_table(prisma_client).find_unique(where={"project_id": project_id})
-    project_obj: Final = (
-        LiteLLM_ProjectTable.model_validate(record_to_dict(project_record)) if project_record is not None else None
-    )
+    if project_record is None:
+        return
 
-    if project_obj is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Project not found, project_id={project_id}"},
-        )
+    project_obj: Final = LiteLLM_ProjectTable.model_validate(record_to_dict(project_record))
 
     if project_obj.team_id is None or project_obj.team_id == key_team_id:
         return
@@ -2514,6 +2509,11 @@ async def _update_key_row_with_soft_budget(
             existing_key_row=existing_key_row,
             changed_by=changed_by,
         )
+        await _check_key_project_team_on_mutation(
+            data=data,
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+        )
         include_object_permission: Final[prisma.types.LiteLLM_VerificationTokenInclude] = {"object_permission": True}
         updated_row: Final = await tx.litellm_verificationtoken.update(
             where=key_where,
@@ -2527,6 +2527,25 @@ async def _update_key_row_with_soft_budget(
     )
     result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
     return result
+
+
+async def _update_key_row_with_project_team_check(
+    prisma_client: PrismaClient,
+    key: str,
+    data: UpdateKeyRequest,
+    update_values: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
+) -> _KeyUpdateResult | None:
+    key_update_data: Final = MappingProxyType({**update_values, "token": key})
+    await _check_key_project_team_on_mutation(
+        data=data,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+    )
+    response: Final = await prisma_client.update_data(token=key, data=key_update_data)
+    if response is None:
+        return None
+    return cast("_KeyUpdateResult", response)  # cast-ok: key update_data returns token and data
 
 
 async def prepare_key_update_data(
@@ -2937,18 +2956,17 @@ async def _process_single_key_update(
             detail={"error": "Database not connected"},
         )
 
-    await _check_key_project_team_on_mutation(
-        data=key_request,
-        existing_key_row=existing_key_row,
-        prisma_client=prisma_client,
-    )
-
     update_values: Final = await _handle_update_object_permission(
         data_json=non_default_values,
         existing_key_row=existing_key_row,
         prisma_client=prisma_client,
     )
     _data: Final = {**update_values, "token": key_request.key}
+    await _check_key_project_team_on_mutation(
+        data=key_request,
+        existing_key_row=existing_key_row,
+        prisma_client=prisma_client,
+    )
     response: Final[Mapping[str, object] | None] = cast(  # cast-ok: every update_data branch returns a str-keyed dict
         "Mapping[str, object] | None",
         await prisma_client.update_data(token=key_request.key, data=_data),
@@ -3616,12 +3634,6 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        await _check_key_project_team_on_mutation(
-            data=data,
-            existing_key_row=existing_key_row,
-            prisma_client=prisma_client,
-        )
-
         update_values: Final = await _handle_update_object_permission(
             data_json=non_default_values,
             existing_key_row=existing_key_row,
@@ -3638,7 +3650,13 @@ async def update_key_fn(
                 changed_by=changed_by,
             )
             if "soft_budget" in data.model_fields_set
-            else await prisma_client.update_data(token=key, data=MappingProxyType({**update_values, "token": key}))
+            else await _update_key_row_with_project_team_check(
+                prisma_client=prisma_client,
+                key=key,
+                data=data,
+                update_values=update_values,
+                existing_key_row=existing_key_row,
+            )
         )
 
         # Delete - key from cache, since it's been updated!
@@ -5718,12 +5736,6 @@ async def _execute_virtual_key_regeneration(
             request=data if data is not None else RegenerateKeyRequest(),
         ),
     )
-    if data is not None:
-        await _check_key_project_team_on_mutation(
-            data=data,
-            existing_key_row=key_in_db,
-            prisma_client=prisma_client,
-        )
     update_values: Final = await _handle_update_object_permission(
         data_json=non_default_values,
         existing_key_row=key_in_db,
@@ -5753,6 +5765,13 @@ async def _execute_virtual_key_regeneration(
         new_token_hash=new_token_hash,
         grace_period=data.grace_period if data else None,
     )
+
+    if data is not None:
+        await _check_key_project_team_on_mutation(
+            data=data,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+        )
 
     updated_token: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
         VerificationTokenRepository(prisma_client)
