@@ -869,8 +869,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for ar in reversed(sorted_forward):
             start = ar["start"]
             end = ar["end"]
-            entity_type = ar["entity_type"]
-            value = text[start:end]
+            # Annotated because the analyzer result is an untyped mapping: both now
+            # reach _stable_token_suffix as call arguments, where an Any counts.
+            entity_type: str = ar["entity_type"]
+            value: str = text[start:end]
             suffix = (
                 self._stable_token_suffix(entity_type, value)
                 if self.presidio_stable_tokens
