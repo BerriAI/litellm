@@ -9,11 +9,19 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, TypeAlias
 
 import click
 import requests
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
+
+from litellm.proxy.common_utils.codex_model_catalog import (
+    CODEX_BASE_INSTRUCTIONS_PATH,
+    CodexCatalogRow,
+    CodexStockCatalog,
+    CodexStockModel,
+    codex_models_response_json,
+)
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script
@@ -68,7 +76,6 @@ _HIDDEN_AGENTS: Final = frozenset({"pi"})
 CODEX_PROXY_PROVIDER: Final = "litellm"
 CODEX_HOME_ENV: Final = "CODEX_HOME"
 CODEX_MODEL_CATALOG_FILENAME: Final = "litellm-models.json"
-_CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
 _CODEX_PREFLIGHT_TIMEOUT_SECONDS: Final = 10.0
 
 
@@ -390,96 +397,8 @@ def opencode_model_sync_env(
     return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing)})
 
 
-class _CodexTruncationPolicy(BaseModel):
-    mode: Literal["bytes"] = "bytes"
-    limit: int = 10_000
-
-
-class _CodexModel(BaseModel):
-    """One `ModelInfo` entry of a Codex model catalog for a model the installed Codex does not know.
-
-    Every field that some Codex release since `model_catalog_json` appeared
-    (0.105.0) deserializes without a default is spelled out here, so one catalog
-    parses on all of them; the values match the fallback metadata Codex uses for
-    a model slug it does not know, so picking such a proxy model behaves the
-    same as `codex -m` did.
-    """
-
-    slug: str
-    display_name: str
-    description: None = None
-    supported_reasoning_levels: tuple[()] = ()
-    shell_type: Literal["unified_exec"] = "unified_exec"
-    visibility: Literal["list"] = "list"
-    supported_in_api: Literal[True] = True
-    priority: int
-    availability_nux: None = None
-    upgrade: None = None
-    support_verbosity: Literal[False] = False
-    supports_reasoning_summaries: Literal[False] = False
-    supports_parallel_tool_calls: Literal[False] = False
-    default_verbosity: None = None
-    apply_patch_tool_type: None = None
-    truncation_policy: _CodexTruncationPolicy = _CodexTruncationPolicy()
-    experimental_supported_tools: tuple[()] = ()
-    context_window: int | None
-    base_instructions: str
-
-
-class _StockCodexUpgrade(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    model: str
-
-
-class _StockCodexModel(BaseModel):
-    """One `ModelInfo` entry as the installed Codex prints it from `codex debug models`.
-
-    Only the fields the sync rewrites are named; everything else that release
-    knows about the model (its reasoning levels, prompt, tool support) rides
-    along untouched, whatever the release's schema.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    slug: str
-    priority: int
-    visibility: str
-    supported_in_api: bool = True
-    upgrade: _StockCodexUpgrade | None = None
-
-
-class _StockCodexCatalog(BaseModel):
-    models: tuple[_StockCodexModel, ...]
-
-
-class _CodexCatalog(BaseModel):
-    models: tuple[_CodexModel | _StockCodexModel, ...]
-
-
-def _codex_catalog_entry(
-    priority: int,
-    listed: ListedModel,
-    stock: _StockCodexModel | None,
-    served: frozenset[str],
-    instructions: str,
-) -> _CodexModel | _StockCodexModel:
-    if stock is None:
-        return _CodexModel(
-            slug=listed.id,
-            display_name=listed.id,
-            priority=priority,
-            context_window=listed.max_input_tokens,
-            base_instructions=instructions,
-        )
-    upgrade: Final = stock.upgrade if stock.upgrade is not None and stock.upgrade.model in served else None
-    return stock.model_copy(
-        update={"priority": priority, "visibility": "list", "supported_in_api": True, "upgrade": upgrade}
-    )
-
-
 def codex_model_catalog(
-    models: Sequence[ListedModel], stock: Sequence[_StockCodexModel], instructions: str
+    models: Sequence[ListedModel], stock: Sequence[CodexStockModel], instructions: str
 ) -> str | None:
     """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
 
@@ -490,19 +409,14 @@ def codex_model_catalog(
     Codex hides it or keeps it off the API, and keeps Codex's upgrade nudge only
     when the model it points at is served too. A model Codex does not know gets the fallback
     entry, with the same base instructions Codex itself uses so the agent never
-    runs without a system prompt.
+    runs without a system prompt. The catalog is the one `/v1/models?client_version=...`
+    serves, built from the installed Codex's own entries instead of the proxy's vendored ones.
     """
-    chat_models: Final = _chat_models(models)
-    if not chat_models:
-        return None
-    served: Final = frozenset(m.id for m in chat_models)
-    known: Final = MappingProxyType({m.slug: m for m in stock})
-    catalog: Final = _CodexCatalog(
-        models=tuple(
-            _codex_catalog_entry(index, m, known.get(m.id), served, instructions) for index, m in enumerate(chat_models)
-        )
+    rows: Final = tuple(CodexCatalogRow(id=m.id, mode=m.mode, max_input_tokens=m.max_input_tokens) for m in models)
+    body: Final = codex_models_response_json(
+        rows, stock=MappingProxyType({m.slug: m for m in stock}), instructions=instructions, byte_limit=None
     )
-    return catalog.model_dump_json()
+    return body.json if body.listed else None
 
 
 def codex_model_catalog_path(env: Mapping[str, str], *, home: Callable[[], Path] = Path.home) -> Path:
@@ -558,12 +472,12 @@ def _codex_debug_models(
 
 def _stock_codex_models(
     binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
-) -> tuple[_StockCodexModel, ...] | ModelSyncSkipped:
+) -> tuple[CodexStockModel, ...] | ModelSyncSkipped:
     printed: Final = _codex_debug_models(binary, (), env, run=run)
     if isinstance(printed, ModelSyncSkipped):
         return printed
     try:
-        return _StockCodexCatalog.model_validate_json(printed).models
+        return CodexStockCatalog.model_validate_json(printed).models
     except ValidationError as e:
         name: Final = os.path.basename(binary)
         return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
@@ -578,7 +492,7 @@ def codex_model_sync_args(
     get: Callable[..., requests.Response] = requests.get,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
     home: Callable[[], Path] = Path.home,
-    instructions_path: Path = _CODEX_BASE_INSTRUCTIONS_PATH,
+    instructions_path: Path = CODEX_BASE_INSTRUCTIONS_PATH,
 ) -> ModelSyncArgs | ModelSyncSkipped:
     """`-c model_catalog_json=...` pointing Codex at the proxy's model list, or why it was skipped.
 
