@@ -1930,6 +1930,10 @@ class CustomStreamWrapper:
             else:
                 self.sent_last_chunk = True
                 processed_chunk: Final = self.finish_reason_handler()
+                # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
+                # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
+                if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+                    self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
                     processed_chunk._hidden_params["usage"] = usage
@@ -2194,6 +2198,10 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
+            # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
+            if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
+                self.chunks.append(processed_chunk)
             if self.stream_options is None:
                 usage: Final = calculate_total_usage(chunks=self.chunks)
                 processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
