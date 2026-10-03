@@ -708,6 +708,23 @@ class TestSpendLogsPartitionDetectionMissingPsycopg:
             "psycopg is not installed" in record.message for record in caplog.records
         )
 
+    def test_missing_libpq_warning_names_the_libpq_error(self, monkeypatch, caplog):
+        class NoLibpq:
+            @staticmethod
+            def find_spec(name, path=None, target=None):
+                if name == "psycopg":
+                    raise ImportError("no pq wrapper available.\nAttempts made:\n- couldn't import psycopg 'python'")
+
+        for name in [m for m in sys.modules if m == "psycopg" or m.startswith("psycopg.")]:
+            monkeypatch.delitem(sys.modules, name)
+        monkeypatch.setattr(sys, "meta_path", [NoLibpq(), *sys.meta_path])
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            assert ProxyExtrasDBManager.spend_logs_is_partitioned() is False
+        warning: Final = next(r.getMessage() for r in caplog.records if "partition check" in r.getMessage())
+        assert "no pq wrapper available" in warning
+        assert "libpq" in warning
+
 
 _ATTEMPT_BUDGET = 4
 _P3009_MIGRATION_NAME = "20260415120000_health_check_latest_per_model_index"
