@@ -19,19 +19,23 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 
 
-from litellm.proxy._types import PassThroughGenericEndpoint
+from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException
 from litellm.proxy.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _register_pass_through_endpoint,
 )
+from litellm.proxy.proxy_server import openai_exception_handler
 
 
 def test_passthrough_auth_defaults_to_true():
@@ -57,26 +61,28 @@ def test_passthrough_auth_can_still_be_explicitly_disabled():
 
 
 @pytest.mark.asyncio
-async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
-    # Regression: setting ``auth: true`` used to raise at startup
-    # unless ``premium_user`` was True, leaving OSS with no safe
-    # configuration.
-    app = MagicMock(spec=FastAPI)
-    visited: set = set()
+async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch: pytest.MonkeyPatch) -> None:
+    app: Final = FastAPI(exception_handlers={ProxyException: openai_exception_handler})
+    visited: Final[set[str]] = set()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-passthrough-test")
 
-    endpoint = PassThroughGenericEndpoint(
+    endpoint: Final = PassThroughGenericEndpoint(
         path="/forwarder",
         target="https://example.com",
         auth=True,
     )
 
-    # Should not raise; OSS premium_user=False is allowed to use auth=True.
     await _register_pass_through_endpoint(
         endpoint=endpoint,
         app=app,
         premium_user=False,
         visited_endpoints=visited,
     )
+    assert [route.path for route in app.routes if isinstance(route, APIRoute)] == ["/forwarder"]
+    with TestClient(app) as client:
+        response: Final = client.get(endpoint.path)
+    assert response.status_code == 401, response.text
+    assert response.json()["error"]["type"] == "auth_error"
 
 
 @pytest.mark.asyncio
