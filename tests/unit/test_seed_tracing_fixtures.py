@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
@@ -9,19 +10,25 @@ from prisma import Json
 from pydantic import InstanceOf, TypeAdapter
 
 from litellm.rust_bridge.trace.storage import span_rows
+from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
     JSON,
     SPEND_FIXTURE,
     SPEND_ROWS,
     TRACE_FIXTURES,
+    fixture_capture,
     fixture_replays,
     postgres_row,
     rebase,
     rebase_spend,
+    response_ids,
+    response_pattern,
     seed_id,
+    spend_fixtures,
     timestamps,
 )
 
+CALL_KEYS: Final = TypeAdapter(tuple[str, ...])
 DATETIMES: Final = TypeAdapter(tuple[datetime, datetime])
 SPAN_IDENTITY: Final = TypeAdapter(tuple[str, str, str, int])
 JSON_FIELDS: Final[TypeAdapter[tuple[Json, Json, Json]]] = TypeAdapter(
@@ -154,3 +161,34 @@ def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
         assert JSON.validate_python(getattr(messages, "data")) == JSON.validate_json(spend["messages"])
         assert JSON.validate_python(getattr(response, "data")) == JSON.validate_json(spend["response"])
         assert JSON.validate_python(getattr(proxy_request, "data")) is None
+
+
+@pytest.mark.requires_rust_extension
+@pytest.mark.parametrize("name,spends", tuple(item for item in spend_fixtures() if item[0] != "deeplite_swarm"))
+def test_captured_spend_replay_preserves_real_cost_and_call_identity(
+    name: str, spends: tuple[SpendLogRecord, ...]
+) -> None:
+    export: Final = JSON.validate_json((TRACE_FIXTURES / f"{name}.json").read_bytes())
+    pattern: Final = response_pattern(spends)
+    offset_ms: Final = 1123
+    namespace: Final = f"captured-{name}"
+    shifted: Final = rebase(export, offset_ms * 1_000_000, namespace, pattern)
+    spans: Final = span_rows(json.dumps(shifted).encode(), "application/json")
+    replayed: Final = rebase_spend(spends, offset_ms, namespace, pattern)
+    keys: Final = frozenset(chain.from_iterable(CALL_KEYS.validate_python(span["CallKeys"]) for span in spans))
+    capture: Final = fixture_capture(name, replayed[0])
+
+    assert capture.trace_id in frozenset(span["TraceId"] for span in spans)
+    for before, after in zip(spends, replayed, strict=True):
+        assert after["spend"] == before["spend"]
+        assert (after["prompt_tokens"], after["completion_tokens"], after["total_tokens"]) == (
+            before["prompt_tokens"],
+            before["completion_tokens"],
+            before["total_tokens"],
+        )
+        assert after["request_id"] != before["request_id"]
+        assert after["start_time"] == before["start_time"] + offset_ms
+        assert after["end_time"] == before["end_time"] + offset_ms
+        assert bool(frozenset(f"provider_response:{identity}" for identity in response_ids((after,))) & keys) is (
+            capture.spend_linked
+        )

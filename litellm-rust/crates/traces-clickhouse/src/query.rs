@@ -279,8 +279,8 @@ struct Relationship {
 const RELATIONSHIPS: [Relationship; 1] = [Relationship {
     left: "otel_traces.LiteLLMRequestId",
     right: "spend_logs.response_id",
-    additional_predicates: "otel_traces.TeamId = spend_logs.team_id AND (otel_traces.TeamId != '' OR (otel_traces.UserId != '' AND otel_traces.UserId = spend_logs.user) OR (otel_traces.ApiKeyHash != '' AND otel_traces.ApiKeyHash = spend_logs.api_key))",
-    meaning: "The normalized ID is the response ID, not request_id. Cached requests can share response_id; joins may return multiple spend rows",
+    additional_predicates: "otel_traces.TeamId = spend_logs.team_id AND ((otel_traces.UserId != '' AND otel_traces.UserId = spend_logs.user) OR (otel_traces.ApiKeyHash != '' AND otel_traces.ApiKeyHash = spend_logs.api_key))",
+    meaning: "LiteLLMRequestId contains the first normalized request or provider response ID. This relationship matches response IDs only; CallKeys retains all typed identifiers. Cached requests can share response_id; joins may return multiple spend rows",
 }];
 
 #[macro_rules_attribute::apply(response_type)]
@@ -296,9 +296,9 @@ pub struct QueryHelp {
     attributes: Vec<AttributeCatalog>,
     relationships: &'static [Relationship],
     #[cfg_attr(feature = "schema", schemars(with = "Vec<guide::Example>"))]
-    examples: [guide::Example; 5],
+    examples: [guide::Example; 9],
     #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
-    gotchas: [String; 11],
+    gotchas: [String; 13],
     guide: String,
 }
 

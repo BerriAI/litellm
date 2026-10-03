@@ -24,13 +24,13 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "1c70e85e-ad1a-4c3a-8557-69e32397d09c"
+              "stringValue": "75522799-6b4e-4d3c-8fea-48e93bb7bff3"
             }
           },
           {
             "key": "service.name",
             "value": {
-              "stringValue": "lens-strands-simple"
+              "stringValue": "strands-simple"
             }
           },
           {
@@ -48,18 +48,18 @@
           },
           "spans": [
             {
-              "traceId": "15ee214e49410407fdf898c7e6856ee3",
-              "spanId": "573b6b831e8a1868",
-              "parentSpanId": "dfa3c206807a6a2c",
+              "traceId": "5afc8d017bfcdf56f0be86ad343f713f",
+              "spanId": "834876741d8e93ed",
+              "parentSpanId": "096b2d49390ffd61",
               "name": "chat",
               "kind": 1,
-              "startTimeUnixNano": "1790998090117183000",
-              "endTimeUnixNano": "1790998092252752000",
+              "startTimeUnixNano": "1791012992659355096",
+              "endTimeUnixNano": "1791012995125157327",
               "attributes": [
                 {
                   "key": "gen_ai.event.start_time",
                   "value": {
-                    "stringValue": "2026-10-03T03:28:10.117184+00:00"
+                    "stringValue": "2026-10-03T07:36:32.659356+00:00"
                   }
                 },
                 {
@@ -83,25 +83,25 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EUkhucKV44lL6Mb9AolIjjDge2qHF"
+                    "stringValue": "chatcmpl-EUoaGl9d9qhhE1TSGyh8uIZzZdnZU"
                   }
                 },
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"An **agent trace** is a record of an AI agent’s run: what it received, the steps it took, any tools it called and their results, and the final outcome.\\n\\nTraces help developers understand and debug an agent’s behavior—for example, why it chose a particular tool or where a task failed. They typically record observable actions and events, not necessarily the model’s private internal reasoning.\"}], \"finish_reason\": \"end_turn\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent’s execution: the steps it took to handle a task, such as its reasoning or decisions, tool calls, responses from those tools, and any errors or retries.\\n\\nUnlike a chat transcript, which mainly shows messages, a trace can reveal the agent’s actions and how the task progressed. Traces are useful for debugging, evaluating performance, and understanding what happened during a run. The exact details recorded depend on the system.\"}],\"finish_reason\":\"end_turn\"}]"
                   }
                 },
                 {
                   "key": "gen_ai.event.end_time",
                   "value": {
-                    "stringValue": "2026-10-03T03:28:12.252694+00:00"
+                    "stringValue": "2026-10-03T07:36:35.125123+00:00"
                   }
                 },
                 {
@@ -119,25 +119,25 @@
                 {
                   "key": "gen_ai.usage.completion_tokens",
                   "value": {
-                    "intValue": "139"
+                    "intValue": "164"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "139"
+                    "intValue": "164"
                   }
                 },
                 {
                   "key": "gen_ai.usage.total_tokens",
                   "value": {
-                    "intValue": "248"
+                    "intValue": "273"
                   }
                 },
                 {
                   "key": "gen_ai.server.time_to_first_token",
                   "value": {
-                    "intValue": "1341"
+                    "intValue": "1340"
                   }
                 }
               ],
@@ -147,18 +147,18 @@
               "flags": 256
             },
             {
-              "traceId": "15ee214e49410407fdf898c7e6856ee3",
-              "spanId": "dfa3c206807a6a2c",
-              "parentSpanId": "2266956bbfcd6d2a",
+              "traceId": "5afc8d017bfcdf56f0be86ad343f713f",
+              "spanId": "096b2d49390ffd61",
+              "parentSpanId": "b0349b560f73a073",
               "name": "execute_event_loop_cycle",
               "kind": 1,
-              "startTimeUnixNano": "1790998090117071000",
-              "endTimeUnixNano": "1790998092253160000",
+              "startTimeUnixNano": "1791012992659255386",
+              "endTimeUnixNano": "1791012995125388413",
               "attributes": [
                 {
                   "key": "gen_ai.event.start_time",
                   "value": {
-                    "stringValue": "2026-10-03T03:28:10.117073+00:00"
+                    "stringValue": "2026-10-03T07:36:32.659256+00:00"
                   }
                 },
                 {
@@ -176,19 +176,19 @@
                 {
                   "key": "event_loop.cycle_id",
                   "value": {
-                    "stringValue": "1bd107bb-313d-4533-a3ac-ee2260a806aa"
+                    "stringValue": "70cc05bb-79e5-4357-a4e6-a8be2e70da9d"
                   }
                 },
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.event.end_time",
                   "value": {
-                    "stringValue": "2026-10-03T03:28:12.253152+00:00"
+                    "stringValue": "2026-10-03T07:36:35.125376+00:00"
                   }
                 }
               ],
@@ -198,17 +198,17 @@
               "flags": 256
             },
             {
-              "traceId": "15ee214e49410407fdf898c7e6856ee3",
-              "spanId": "2266956bbfcd6d2a",
+              "traceId": "5afc8d017bfcdf56f0be86ad343f713f",
+              "spanId": "b0349b560f73a073",
               "name": "invoke_agent research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1790998090116662000",
-              "endTimeUnixNano": "1790998092253330000",
+              "startTimeUnixNano": "1791012992659008009",
+              "endTimeUnixNano": "1791012995125532248",
               "attributes": [
                 {
                   "key": "gen_ai.event.start_time",
                   "value": {
-                    "stringValue": "2026-10-03T03:28:10.116670+00:00"
+                    "stringValue": "2026-10-03T07:36:32.659013+00:00"
                   }
                 },
                 {
@@ -238,19 +238,19 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is an agent trace?\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"An **agent trace** is a record of an AI agent’s run: what it received, the steps it took, any tools it called and their results, and the final outcome.\\n\\nTraces help developers understand and debug an agent’s behavior—for example, why it chose a particular tool or where a task failed. They typically record observable actions and events, not necessarily the model’s private internal reasoning.\\n\"}], \"finish_reason\": \"end_turn\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent’s execution: the steps it took to handle a task, such as its reasoning or decisions, tool calls, responses from those tools, and any errors or retries.\\n\\nUnlike a chat transcript, which mainly shows messages, a trace can reveal the agent’s actions and how the task progressed. Traces are useful for debugging, evaluating performance, and understanding what happened during a run. The exact details recorded depend on the system.\\n\"}],\"finish_reason\":\"end_turn\"}]"
                   }
                 },
                 {
                   "key": "gen_ai.event.end_time",
                   "value": {
-                    "stringValue": "2026-10-03T03:28:12.253321+00:00"
+                    "stringValue": "2026-10-03T07:36:35.125518+00:00"
                   }
                 },
                 {
@@ -262,7 +262,7 @@
                 {
                   "key": "gen_ai.usage.completion_tokens",
                   "value": {
-                    "intValue": "139"
+                    "intValue": "164"
                   }
                 },
                 {
@@ -274,13 +274,13 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "139"
+                    "intValue": "164"
                   }
                 },
                 {
                   "key": "gen_ai.usage.total_tokens",
                   "value": {
-                    "intValue": "248"
+                    "intValue": "273"
                   }
                 },
                 {

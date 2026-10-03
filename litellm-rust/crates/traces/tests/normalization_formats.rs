@@ -1,4 +1,4 @@
-use litellm_traces::{DecodedSpan, ObservationType, decode_otlp};
+use litellm_traces::{CallEvidence, CallKey, DecodedSpan, ObservationType, decode_otlp};
 use opentelemetry_proto::tonic::{
     collector::trace::v1::ExportTraceServiceRequest,
     common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value},
@@ -535,4 +535,32 @@ fn absent_normalized_identity_fields_stay_absent(span: Span) {
         decoded.normalized.calls,
         litellm_traces::CallEvidence::Unknown
     );
+}
+
+#[rstest]
+#[case::provider(json!({"id": "provider-response"}), Some("provider-response"))]
+#[case::llamaindex(json!({"message": {"role": "assistant", "content": "answer"}, "raw": {"id": "wrapped-response"}}), Some("wrapped-response"))]
+#[case::missing(json!({"raw": {"usage": {"total_tokens": 8}}}), None)]
+#[case::invalid(json!({"raw": {"id": 123}}), None)]
+fn openinference_provider_response_identity(
+    span: Span,
+    #[case] response: Value,
+    #[case] id: Option<&str>,
+) {
+    let decoded = decode(
+        span,
+        "openinference.instrumentation.llama_index",
+        &[
+            ("openinference.span.kind", "LLM"),
+            ("output.value", &response.to_string()),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let expected = id.map_or(CallEvidence::Unknown, |id| {
+        CallEvidence::Complete(std::collections::BTreeSet::from([
+            CallKey::ProviderResponse(id.to_owned()),
+        ]))
+    });
+    assert_eq!(decoded.normalized.calls, expected);
 }

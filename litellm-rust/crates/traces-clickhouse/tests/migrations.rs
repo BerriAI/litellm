@@ -1479,7 +1479,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
             "spend_logs",
             vec![serde_json::from_value(serde_json::json!({
                 "request_id": "request-1", "response_id": "response-1", "team_id": "team-1",
-                "api_key": "key-1", "metadata": metadata.to_string(), "spend": 0.25,
+                "api_key": "key-1", "trace_id": "trace-1", "metadata": metadata.to_string(), "spend": 0.25,
                 "start_time": timestamp / 1_000_000, "end_time": timestamp / 1_000_000 + 100
             }))?],
         )
@@ -1636,7 +1636,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         let values: serde_json::Value = serde_json::from_str(&body)?;
         assert_eq!(
             values["data"].as_array().ok_or("missing data")?.is_empty(),
-            !populated,
+            !populated || example["name"] == "LLM spans without a direct spend match",
             "{sql}"
         );
         if populated && example["name"] == "Traces correlated with LLM call metadata" {

@@ -24,13 +24,13 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "050dadf7-a724-4994-a1a7-ca445582e414"
+              "stringValue": "8c2476c2-9ca3-4f2c-bc30-4f4dac8d93b8"
             }
           },
           {
             "key": "service.name",
             "value": {
-              "stringValue": "lens-crewai-swarm"
+              "stringValue": "crewai-swarm"
             }
           },
           {
@@ -49,13 +49,13 @@
           },
           "spans": [
             {
-              "traceId": "463802c5cd1f0241ddd2c10c85182e0a",
-              "spanId": "64b861da6ab7a409",
-              "parentSpanId": "3ab98db2b8c07e8b",
+              "traceId": "b8a7f8bec585d3b0c2a3c5e9cb416554",
+              "spanId": "9f965976c72822b9",
+              "parentSpanId": "9e22f927e45d029e",
               "name": "ChatCompletion",
               "kind": 1,
-              "startTimeUnixNano": "1790997836450166000",
-              "endTimeUnixNano": "1790997841125021000",
+              "startTimeUnixNano": "1791012946905080545",
+              "endTimeUnixNano": "1791012951766326488",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -66,7 +66,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\": [{\"role\": \"system\", \"content\": \"You are research_agent. You coordinate a search specialist and a writer.\\nYour personal goal is: Plan how to answer questions and brief your team\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: Plan how to answer: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short research plan\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}], \"model\": \"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"messages\":[{\"role\":\"system\",\"content\":\"You are research_agent. You coordinate a search specialist and a writer.\\nYour personal goal is: Plan how to answer questions and brief your team\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: Plan how to answer: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short research plan\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}],\"model\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -78,7 +78,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"chatcmpl-EUkdoehIgh6Cyzgrs2GG0qYCm15CZ\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1790997836,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":375,\"prompt_tokens\":89,\"total_tokens\":464,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":230,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
+                    "stringValue": "{\"id\":\"chatcmpl-EUoZXB01KRbNWMloYJr6qaecpKcRi\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791012947,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":410,\"prompt_tokens\":89,\"total_tokens\":499,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":175,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
                   }
                 },
                 {
@@ -90,7 +90,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"model\": \"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"model\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -126,7 +126,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "464"
+                    "intValue": "499"
                   }
                 },
                 {
@@ -138,7 +138,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "375"
+                    "intValue": "410"
                   }
                 },
                 {
@@ -162,7 +162,7 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "230"
+                    "intValue": "175"
                   }
                 },
                 {
@@ -180,7 +180,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "**Research plan**\n\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering."
+                    "stringValue": "## Research plan: “What is an agent trace?”\n\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\n\n**Search specialist**\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\n- Flag any context-specific meanings rather than presenting one definition as universal.\n\n**Writer**\n- Lead with a direct definition.\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms."
                   }
                 },
                 {
@@ -202,7 +202,51 @@
               "flags": 256
             }
           ]
-        },
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "8c2476c2-9ca3-4f2c-bc30-4f4dac8d93b8"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "crewai-swarm"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
         {
           "scope": {
             "name": "openinference.instrumentation.crewai",
@@ -210,18 +254,18 @@
           },
           "spans": [
             {
-              "traceId": "463802c5cd1f0241ddd2c10c85182e0a",
-              "spanId": "3ab98db2b8c07e8b",
-              "parentSpanId": "9b2aafab7c65484d",
+              "traceId": "b8a7f8bec585d3b0c2a3c5e9cb416554",
+              "spanId": "9e22f927e45d029e",
+              "parentSpanId": "e2f4ae9d2ac26cc6",
               "name": "research_agent._execute_core",
               "kind": 1,
-              "startTimeUnixNano": "1790997836313071000",
-              "endTimeUnixNano": "1790997841133368000",
+              "startTimeUnixNano": "1791012946810557484",
+              "endTimeUnixNano": "1791012951782534947",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"agent\": {\"entity_type\": \"agent\", \"id\": \"db35a83c-512e-4668-8872-f1e2a5f863d7\", \"role\": \"research_agent\", \"goal\": \"Plan how to answer questions and brief your team\", \"backstory\": \"You coordinate a search specialist and a writer.\", \"cache\": true, \"verbose\": false, \"max_rpm\": null, \"allow_delegation\": false, \"tools\": [], \"max_iter\": 25, \"tool_failure_policy\": null, \"i18n\": {\"prompt_file\": null}, \"cache_handler\": null, \"tools_results\": [], \"max_tokens\": null, \"knowledge\": null, \"knowledge_sources\": null, \"knowledge_storage\": null, \"security_config\": {\"fingerprint\": {\"metadata\": {}}}, \"checkpoint\": null, \"adapted_agent\": false, \"knowledge_config\": null, \"apps\": null, \"mcps\": null, \"memory\": null, \"skills\": null, \"execution_context\": null, \"checkpoint_kickoff_event_id\": null, \"max_execution_time\": null, \"use_system_prompt\": true, \"system_template\": null, \"prompt_template\": null, \"response_template\": null, \"allow_code_execution\": false, \"respect_context_window\": true, \"max_retry_limit\": 2, \"multimodal\": false, \"inject_date\": false, \"date_format\": \"%Y-%m-%d\", \"code_execution_mode\": \"safe\", \"planning_config\": null, \"planning\": false, \"reasoning\": false, \"max_reasoning_attempts\": null, \"embedder\": null, \"agent_knowledge_context\": null, \"crew_knowledge_context\": null, \"knowledge_search_query\": null, \"from_repository\": null, \"guardrail_max_retries\": 3, \"a2a\": null, \"key\": \"d24ea2a79ed01f4be3a002930a15c6f1\"}, \"context\": \"\", \"tools\": []}"
+                    "stringValue": "{\"agent\":{\"entity_type\":\"agent\",\"id\":\"9dfd6db9-2460-4f0e-b2da-9c3107e6f9e0\",\"role\":\"research_agent\",\"goal\":\"Plan how to answer questions and brief your team\",\"backstory\":\"You coordinate a search specialist and a writer.\",\"cache\":true,\"verbose\":false,\"max_rpm\":null,\"allow_delegation\":false,\"tools\":[],\"max_iter\":25,\"tool_failure_policy\":null,\"i18n\":{\"prompt_file\":null},\"cache_handler\":null,\"tools_results\":[],\"max_tokens\":null,\"knowledge\":null,\"knowledge_sources\":null,\"knowledge_storage\":null,\"security_config\":{\"fingerprint\":{\"metadata\":{}}},\"checkpoint\":null,\"adapted_agent\":false,\"knowledge_config\":null,\"apps\":null,\"mcps\":null,\"memory\":null,\"skills\":null,\"execution_context\":null,\"checkpoint_kickoff_event_id\":null,\"max_execution_time\":null,\"use_system_prompt\":true,\"system_template\":null,\"prompt_template\":null,\"response_template\":null,\"allow_code_execution\":false,\"respect_context_window\":true,\"max_retry_limit\":2,\"multimodal\":false,\"inject_date\":false,\"date_format\":\"%Y-%m-%d\",\"code_execution_mode\":\"safe\",\"planning_config\":null,\"planning\":false,\"reasoning\":false,\"max_reasoning_attempts\":null,\"embedder\":null,\"agent_knowledge_context\":null,\"crew_knowledge_context\":null,\"knowledge_search_query\":null,\"from_repository\":null,\"guardrail_max_retries\":3,\"a2a\":null,\"key\":\"d24ea2a79ed01f4be3a002930a15c6f1\"},\"context\":\"\",\"tools\":[]}"
                   }
                 },
                 {
@@ -239,7 +283,7 @@
                 {
                   "key": "task_id",
                   "value": {
-                    "stringValue": "ddabd72b-cfb0-4ac1-a07f-499ba7376d30"
+                    "stringValue": "8d21ebd0-cbed-41ec-82f3-200835085942"
                   }
                 },
                 {
@@ -257,13 +301,13 @@
                 {
                   "key": "crew_id",
                   "value": {
-                    "stringValue": "d969fa40-9928-4dc7-bd94-fdd1bed0d6a4"
+                    "stringValue": "a019e469-be0c-47d9-ae99-9db1d3fdfeff"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"description\": \"Plan how to answer: What is an agent trace?\", \"name\": \"Plan how to answer: What is an agent trace?\", \"expected_output\": \"A short research plan\", \"summary\": \"Plan how to answer: What is an agent trace?...\", \"raw\": \"**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\", \"pydantic\": null, \"json_dict\": null, \"agent\": \"research_agent\", \"output_format\": \"raw\", \"messages\": [{\"role\": \"system\", \"content\": \"You are research_agent. You coordinate a search specialist and a writer.\\nYour personal goal is: Plan how to answer questions and brief your team\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: Plan how to answer: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short research plan\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}], \"tool_failures\": []}"
+                    "stringValue": "{\"description\":\"Plan how to answer: What is an agent trace?\",\"name\":\"Plan how to answer: What is an agent trace?\",\"expected_output\":\"A short research plan\",\"summary\":\"Plan how to answer: What is an agent trace?...\",\"raw\":\"## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"research_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are research_agent. You coordinate a search specialist and a writer.\\nYour personal goal is: Plan how to answer questions and brief your team\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: Plan how to answer: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short research plan\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}],\"tool_failures\":[]}"
                   }
                 },
                 {
@@ -312,13 +356,13 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "050dadf7-a724-4994-a1a7-ca445582e414"
+              "stringValue": "8c2476c2-9ca3-4f2c-bc30-4f4dac8d93b8"
             }
           },
           {
             "key": "service.name",
             "value": {
-              "stringValue": "lens-crewai-swarm"
+              "stringValue": "crewai-swarm"
             }
           },
           {
@@ -337,13 +381,13 @@
           },
           "spans": [
             {
-              "traceId": "463802c5cd1f0241ddd2c10c85182e0a",
-              "spanId": "a02181ab63cb9ac7",
-              "parentSpanId": "68d2da91af608920",
+              "traceId": "b8a7f8bec585d3b0c2a3c5e9cb416554",
+              "spanId": "6da03aa27c23e343",
+              "parentSpanId": "1c78077dcef2926e",
               "name": "ChatCompletion",
               "kind": 1,
-              "startTimeUnixNano": "1790997841140888000",
-              "endTimeUnixNano": "1790997847363755000",
+              "startTimeUnixNano": "1791012951801985565",
+              "endTimeUnixNano": "1791012963113836485",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -354,7 +398,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\": [{\"role\": \"system\", \"content\": \"You are search_agent. You find relevant technical facts.\\nYour personal goal is: Gather key facts for the research plan\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: Gather facts for: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A few key facts\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\\n\\nProvide your complete response:\"}], \"model\": \"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"messages\":[{\"role\":\"system\",\"content\":\"You are search_agent. You find relevant technical facts.\\nYour personal goal is: Gather key facts for the research plan\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: Gather facts for: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A few key facts\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\\n\\nProvide your complete response:\"}],\"model\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -366,7 +410,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"chatcmpl-EUkdtulvipEgGD6kc0c3fzvG4eGz8\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\\n\\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\\n\\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\\n\\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/).\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1790997841,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":623,\"prompt_tokens\":227,\"total_tokens\":850,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":385,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
+                    "stringValue": "{\"id\":\"chatcmpl-EUoZccUt0Y52TnnlUpU0TrUEqoOPU\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\\n\\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\\n\\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791012952,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":574,\"prompt_tokens\":317,\"total_tokens\":891,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":270,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
                   }
                 },
                 {
@@ -378,7 +422,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"model\": \"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"model\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -402,7 +446,7 @@
                 {
                   "key": "llm.input_messages.1.message.content",
                   "value": {
-                    "stringValue": "\nCurrent Task: Gather facts for: What is an agent trace?\n\nThis is the expected criteria for your final answer: A few key facts\nyou MUST return the actual complete content as the final answer, not a summary.\n\nThis is the context you're working with:\n**Research plan**\n\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\n\nProvide your complete response:"
+                    "stringValue": "\nCurrent Task: Gather facts for: What is an agent trace?\n\nThis is the expected criteria for your final answer: A few key facts\nyou MUST return the actual complete content as the final answer, not a summary.\n\nThis is the context you're working with:\n## Research plan: “What is an agent trace?”\n\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\n\n**Search specialist**\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\n- Flag any context-specific meanings rather than presenting one definition as universal.\n\n**Writer**\n- Lead with a direct definition.\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\n\nProvide your complete response:"
                   }
                 },
                 {
@@ -414,19 +458,19 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "850"
+                    "intValue": "891"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "227"
+                    "intValue": "317"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "623"
+                    "intValue": "574"
                   }
                 },
                 {
@@ -450,7 +494,7 @@
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "385"
+                    "intValue": "270"
                   }
                 },
                 {
@@ -468,7 +512,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\n\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\n\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\n\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/)."
+                    "stringValue": "An **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\n\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\n\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\n\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces)."
                   }
                 },
                 {
@@ -490,13 +534,13 @@
               "flags": 256
             },
             {
-              "traceId": "463802c5cd1f0241ddd2c10c85182e0a",
-              "spanId": "6a63873097af7d03",
-              "parentSpanId": "36321a1cbe91b27c",
+              "traceId": "b8a7f8bec585d3b0c2a3c5e9cb416554",
+              "spanId": "689f8c100e8b9e17",
+              "parentSpanId": "6b16ca637caaea43",
               "name": "ChatCompletion",
               "kind": 1,
-              "startTimeUnixNano": "1790997847378252000",
-              "endTimeUnixNano": "1790997849080722000",
+              "startTimeUnixNano": "1791012963151306790",
+              "endTimeUnixNano": "1791012965900051825",
               "attributes": [
                 {
                   "key": "llm.system",
@@ -507,7 +551,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"messages\": [{\"role\": \"system\", \"content\": \"You are writer_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly from the gathered facts\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\\n\\n----------\\n\\nAn **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\\n\\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\\n\\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\\n\\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/).\\n\\nProvide your complete response:\"}], \"model\": \"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"messages\":[{\"role\":\"system\",\"content\":\"You are writer_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly from the gathered facts\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\\n\\n----------\\n\\nAn **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\\n\\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\\n\\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\\n\\nProvide your complete response:\"}],\"model\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -519,7 +563,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"chatcmpl-EUkdze30twbC0jAV8LXxxoKbA7PXs\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of an agent’s execution. Depending on the tool, it may show the input, steps or events, tool calls and their results, and the final output. Traces help people inspect and debug an agent’s behavior; they are not necessarily a transcript of the model’s private reasoning.\\n\\n**Example:** A user asks about the weather in Paris. The trace shows the agent receiving the question, calling a weather tool, getting current conditions, and replying with the result.\\n\\nThe exact format varies across frameworks.\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1790997847,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":111,\"prompt_tokens\":451,\"total_tokens\":562,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
+                    "stringValue": "{\"id\":\"chatcmpl-EUoZnD3DNwSAaTDbPcn8EKZKsuMaP\",\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"An **agent trace** is a record of how an AI agent handled a task: the sequence of steps, such as model calls, tool use, handoffs, and results. The exact meaning can vary by platform.\\n\\nFor example, if an agent checks the weather, its trace might show the model call, the weather-tool call and its input and output, and the final reply, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. Unlike a conversation transcript, a trace focuses on execution and may include events the user never sees. It records captured activity—not necessarily the agent’s full or faithful internal reasoning—and may contain sensitive information.\\n\\nSources: [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"role\":\"assistant\",\"annotations\":[],\"provider_specific_fields\":{\"refusal\":null}},\"provider_specific_fields\":{}}],\"created\":1791012963,\"model\":\"openai/gpt-6-luna\",\"object\":\"chat.completion\",\"service_tier\":\"default\",\"usage\":{\"completion_tokens\":213,\"prompt_tokens\":607,\"total_tokens\":820,\"completion_tokens_details\":{\"accepted_prediction_tokens\":0,\"audio_tokens\":0,\"reasoning_tokens\":0,\"rejected_prediction_tokens\":0},\"prompt_tokens_details\":{\"audio_tokens\":0,\"cache_write_tokens\":0,\"cached_tokens\":0,\"cache_creation_tokens\":0}}}"
                   }
                 },
                 {
@@ -531,7 +575,7 @@
                 {
                   "key": "llm.invocation_parameters",
                   "value": {
-                    "stringValue": "{\"model\": \"openai/gpt-6-luna\"}"
+                    "stringValue": "{\"model\":\"openai/gpt-6-luna\"}"
                   }
                 },
                 {
@@ -555,7 +599,7 @@
                 {
                   "key": "llm.input_messages.1.message.content",
                   "value": {
-                    "stringValue": "\nCurrent Task: What is an agent trace?\n\nThis is the expected criteria for your final answer: A short answer\nyou MUST return the actual complete content as the final answer, not a summary.\n\nThis is the context you're working with:\n**Research plan**\n\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\n\n----------\n\nAn **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\n\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\n\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\n\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/).\n\nProvide your complete response:"
+                    "stringValue": "\nCurrent Task: What is an agent trace?\n\nThis is the expected criteria for your final answer: A short answer\nyou MUST return the actual complete content as the final answer, not a summary.\n\nThis is the context you're working with:\n## Research plan: “What is an agent trace?”\n\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\n\n**Search specialist**\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\n- Flag any context-specific meanings rather than presenting one definition as universal.\n\n**Writer**\n- Lead with a direct definition.\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\n\n----------\n\nAn **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\n\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\n\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\n\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\n\nProvide your complete response:"
                   }
                 },
                 {
@@ -567,19 +611,19 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "562"
+                    "intValue": "820"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "451"
+                    "intValue": "607"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "111"
+                    "intValue": "213"
                   }
                 },
                 {
@@ -621,7 +665,7 @@
                 {
                   "key": "llm.output_messages.0.message.content",
                   "value": {
-                    "stringValue": "An **agent trace** is a record of an agent’s execution. Depending on the tool, it may show the input, steps or events, tool calls and their results, and the final output. Traces help people inspect and debug an agent’s behavior; they are not necessarily a transcript of the model’s private reasoning.\n\n**Example:** A user asks about the weather in Paris. The trace shows the agent receiving the question, calling a weather tool, getting current conditions, and replying with the result.\n\nThe exact format varies across frameworks."
+                    "stringValue": "An **agent trace** is a record of how an AI agent handled a task: the sequence of steps, such as model calls, tool use, handoffs, and results. The exact meaning can vary by platform.\n\nFor example, if an agent checks the weather, its trace might show the model call, the weather-tool call and its input and output, and the final reply, along with timing or errors.\n\nTraces help people inspect, debug, and evaluate an agent’s behavior. Unlike a conversation transcript, a trace focuses on execution and may include events the user never sees. It records captured activity—not necessarily the agent’s full or faithful internal reasoning—and may contain sensitive information.\n\nSources: [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces)."
                   }
                 },
                 {
@@ -651,18 +695,18 @@
           },
           "spans": [
             {
-              "traceId": "463802c5cd1f0241ddd2c10c85182e0a",
-              "spanId": "68d2da91af608920",
-              "parentSpanId": "9b2aafab7c65484d",
+              "traceId": "b8a7f8bec585d3b0c2a3c5e9cb416554",
+              "spanId": "1c78077dcef2926e",
+              "parentSpanId": "e2f4ae9d2ac26cc6",
               "name": "search_agent._execute_core",
               "kind": 1,
-              "startTimeUnixNano": "1790997841135843000",
-              "endTimeUnixNano": "1790997847369049000",
+              "startTimeUnixNano": "1791012951798786616",
+              "endTimeUnixNano": "1791012963123330333",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"agent\": {\"entity_type\": \"agent\", \"id\": \"47b0e5a8-5a88-4992-8dce-11dac5ebb1bf\", \"role\": \"search_agent\", \"goal\": \"Gather key facts for the research plan\", \"backstory\": \"You find relevant technical facts.\", \"cache\": true, \"verbose\": false, \"max_rpm\": null, \"allow_delegation\": false, \"tools\": [], \"max_iter\": 25, \"tool_failure_policy\": null, \"i18n\": {\"prompt_file\": null}, \"cache_handler\": null, \"tools_results\": [], \"max_tokens\": null, \"knowledge\": null, \"knowledge_sources\": null, \"knowledge_storage\": null, \"security_config\": {\"fingerprint\": {\"metadata\": {}}}, \"checkpoint\": null, \"adapted_agent\": false, \"knowledge_config\": null, \"apps\": null, \"mcps\": null, \"memory\": null, \"skills\": null, \"execution_context\": null, \"checkpoint_kickoff_event_id\": null, \"max_execution_time\": null, \"use_system_prompt\": true, \"system_template\": null, \"prompt_template\": null, \"response_template\": null, \"allow_code_execution\": false, \"respect_context_window\": true, \"max_retry_limit\": 2, \"multimodal\": false, \"inject_date\": false, \"date_format\": \"%Y-%m-%d\", \"code_execution_mode\": \"safe\", \"planning_config\": null, \"planning\": false, \"reasoning\": false, \"max_reasoning_attempts\": null, \"embedder\": null, \"agent_knowledge_context\": null, \"crew_knowledge_context\": null, \"knowledge_search_query\": null, \"from_repository\": null, \"guardrail_max_retries\": 3, \"a2a\": null, \"key\": \"237163a35e2b9c58c91cea65a47d1d12\"}, \"context\": \"**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\", \"tools\": []}"
+                    "stringValue": "{\"agent\":{\"entity_type\":\"agent\",\"id\":\"1625a9d6-e3d2-421d-8698-57d46c7dc093\",\"role\":\"search_agent\",\"goal\":\"Gather key facts for the research plan\",\"backstory\":\"You find relevant technical facts.\",\"cache\":true,\"verbose\":false,\"max_rpm\":null,\"allow_delegation\":false,\"tools\":[],\"max_iter\":25,\"tool_failure_policy\":null,\"i18n\":{\"prompt_file\":null},\"cache_handler\":null,\"tools_results\":[],\"max_tokens\":null,\"knowledge\":null,\"knowledge_sources\":null,\"knowledge_storage\":null,\"security_config\":{\"fingerprint\":{\"metadata\":{}}},\"checkpoint\":null,\"adapted_agent\":false,\"knowledge_config\":null,\"apps\":null,\"mcps\":null,\"memory\":null,\"skills\":null,\"execution_context\":null,\"checkpoint_kickoff_event_id\":null,\"max_execution_time\":null,\"use_system_prompt\":true,\"system_template\":null,\"prompt_template\":null,\"response_template\":null,\"allow_code_execution\":false,\"respect_context_window\":true,\"max_retry_limit\":2,\"multimodal\":false,\"inject_date\":false,\"date_format\":\"%Y-%m-%d\",\"code_execution_mode\":\"safe\",\"planning_config\":null,\"planning\":false,\"reasoning\":false,\"max_reasoning_attempts\":null,\"embedder\":null,\"agent_knowledge_context\":null,\"crew_knowledge_context\":null,\"knowledge_search_query\":null,\"from_repository\":null,\"guardrail_max_retries\":3,\"a2a\":null,\"key\":\"237163a35e2b9c58c91cea65a47d1d12\"},\"context\":\"## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\",\"tools\":[]}"
                   }
                 },
                 {
@@ -680,7 +724,7 @@
                 {
                   "key": "task_id",
                   "value": {
-                    "stringValue": "b99d5e3b-4b58-4872-84b8-b441e5582807"
+                    "stringValue": "56430c84-bcff-4a7c-bf63-70e283e488dd"
                   }
                 },
                 {
@@ -698,7 +742,7 @@
                 {
                   "key": "crew_id",
                   "value": {
-                    "stringValue": "d969fa40-9928-4dc7-bd94-fdd1bed0d6a4"
+                    "stringValue": "a019e469-be0c-47d9-ae99-9db1d3fdfeff"
                   }
                 },
                 {
@@ -710,7 +754,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"description\": \"Gather facts for: What is an agent trace?\", \"name\": \"Gather facts for: What is an agent trace?\", \"expected_output\": \"A few key facts\", \"summary\": \"Gather facts for: What is an agent trace?...\", \"raw\": \"An **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\\n\\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\\n\\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\\n\\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/).\", \"pydantic\": null, \"json_dict\": null, \"agent\": \"search_agent\", \"output_format\": \"raw\", \"messages\": [{\"role\": \"system\", \"content\": \"You are search_agent. You find relevant technical facts.\\nYour personal goal is: Gather key facts for the research plan\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: Gather facts for: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A few key facts\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\\n\\nProvide your complete response:\"}], \"tool_failures\": []}"
+                    "stringValue": "{\"description\":\"Gather facts for: What is an agent trace?\",\"name\":\"Gather facts for: What is an agent trace?\",\"expected_output\":\"A few key facts\",\"summary\":\"Gather facts for: What is an agent trace?...\",\"raw\":\"An **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\\n\\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\\n\\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"search_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are search_agent. You find relevant technical facts.\\nYour personal goal is: Gather key facts for the research plan\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: Gather facts for: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A few key facts\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\\n\\nProvide your complete response:\"}],\"tool_failures\":[]}"
                   }
                 },
                 {
@@ -732,18 +776,18 @@
               "flags": 256
             },
             {
-              "traceId": "463802c5cd1f0241ddd2c10c85182e0a",
-              "spanId": "36321a1cbe91b27c",
-              "parentSpanId": "9b2aafab7c65484d",
+              "traceId": "b8a7f8bec585d3b0c2a3c5e9cb416554",
+              "spanId": "6b16ca637caaea43",
+              "parentSpanId": "e2f4ae9d2ac26cc6",
               "name": "writer_agent._execute_core",
               "kind": 1,
-              "startTimeUnixNano": "1790997847372734000",
-              "endTimeUnixNano": "1790997849085134000",
+              "startTimeUnixNano": "1791012963140755972",
+              "endTimeUnixNano": "1791012965910777019",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"agent\": {\"entity_type\": \"agent\", \"id\": \"f2ed418d-8028-487e-a5e9-d6a1a1055d2f\", \"role\": \"writer_agent\", \"goal\": \"Answer questions clearly from the gathered facts\", \"backstory\": \"You explain technical concepts.\", \"cache\": true, \"verbose\": false, \"max_rpm\": null, \"allow_delegation\": false, \"tools\": [], \"max_iter\": 25, \"tool_failure_policy\": null, \"i18n\": {\"prompt_file\": null}, \"cache_handler\": null, \"tools_results\": [], \"max_tokens\": null, \"knowledge\": null, \"knowledge_sources\": null, \"knowledge_storage\": null, \"security_config\": {\"fingerprint\": {\"metadata\": {}}}, \"checkpoint\": null, \"adapted_agent\": false, \"knowledge_config\": null, \"apps\": null, \"mcps\": null, \"memory\": null, \"skills\": null, \"execution_context\": null, \"checkpoint_kickoff_event_id\": null, \"max_execution_time\": null, \"use_system_prompt\": true, \"system_template\": null, \"prompt_template\": null, \"response_template\": null, \"allow_code_execution\": false, \"respect_context_window\": true, \"max_retry_limit\": 2, \"multimodal\": false, \"inject_date\": false, \"date_format\": \"%Y-%m-%d\", \"code_execution_mode\": \"safe\", \"planning_config\": null, \"planning\": false, \"reasoning\": false, \"max_reasoning_attempts\": null, \"embedder\": null, \"agent_knowledge_context\": null, \"crew_knowledge_context\": null, \"knowledge_search_query\": null, \"from_repository\": null, \"guardrail_max_retries\": 3, \"a2a\": null, \"key\": \"126c09767dcaf57383c56a9d79d88eb0\"}, \"context\": \"**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\\n\\n----------\\n\\nAn **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\\n\\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\\n\\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\\n\\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/).\", \"tools\": []}"
+                    "stringValue": "{\"agent\":{\"entity_type\":\"agent\",\"id\":\"7b749646-bc9e-49aa-a163-fe960cd9989c\",\"role\":\"writer_agent\",\"goal\":\"Answer questions clearly from the gathered facts\",\"backstory\":\"You explain technical concepts.\",\"cache\":true,\"verbose\":false,\"max_rpm\":null,\"allow_delegation\":false,\"tools\":[],\"max_iter\":25,\"tool_failure_policy\":null,\"i18n\":{\"prompt_file\":null},\"cache_handler\":null,\"tools_results\":[],\"max_tokens\":null,\"knowledge\":null,\"knowledge_sources\":null,\"knowledge_storage\":null,\"security_config\":{\"fingerprint\":{\"metadata\":{}}},\"checkpoint\":null,\"adapted_agent\":false,\"knowledge_config\":null,\"apps\":null,\"mcps\":null,\"memory\":null,\"skills\":null,\"execution_context\":null,\"checkpoint_kickoff_event_id\":null,\"max_execution_time\":null,\"use_system_prompt\":true,\"system_template\":null,\"prompt_template\":null,\"response_template\":null,\"allow_code_execution\":false,\"respect_context_window\":true,\"max_retry_limit\":2,\"multimodal\":false,\"inject_date\":false,\"date_format\":\"%Y-%m-%d\",\"code_execution_mode\":\"safe\",\"planning_config\":null,\"planning\":false,\"reasoning\":false,\"max_reasoning_attempts\":null,\"embedder\":null,\"agent_knowledge_context\":null,\"crew_knowledge_context\":null,\"knowledge_search_query\":null,\"from_repository\":null,\"guardrail_max_retries\":3,\"a2a\":null,\"key\":\"126c09767dcaf57383c56a9d79d88eb0\"},\"context\":\"## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\\n\\n----------\\n\\nAn **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\\n\\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\\n\\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"tools\":[]}"
                   }
                 },
                 {
@@ -761,7 +805,7 @@
                 {
                   "key": "task_id",
                   "value": {
-                    "stringValue": "5148c147-27c5-4d48-bcb5-1c4c49aa5665"
+                    "stringValue": "ee76d172-e196-4b72-9b5a-d5e230b2993d"
                   }
                 },
                 {
@@ -779,7 +823,7 @@
                 {
                   "key": "crew_id",
                   "value": {
-                    "stringValue": "d969fa40-9928-4dc7-bd94-fdd1bed0d6a4"
+                    "stringValue": "a019e469-be0c-47d9-ae99-9db1d3fdfeff"
                   }
                 },
                 {
@@ -791,7 +835,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"description\": \"What is an agent trace?\", \"name\": \"What is an agent trace?\", \"expected_output\": \"A short answer\", \"summary\": \"What is an agent trace?...\", \"raw\": \"An **agent trace** is a record of an agent’s execution. Depending on the tool, it may show the input, steps or events, tool calls and their results, and the final output. Traces help people inspect and debug an agent’s behavior; they are not necessarily a transcript of the model’s private reasoning.\\n\\n**Example:** A user asks about the weather in Paris. The trace shows the agent receiving the question, calling a weather tool, getting current conditions, and replying with the result.\\n\\nThe exact format varies across frameworks.\", \"pydantic\": null, \"json_dict\": null, \"agent\": \"writer_agent\", \"output_format\": \"raw\", \"messages\": [{\"role\": \"system\", \"content\": \"You are writer_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly from the gathered facts\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\\n\\n----------\\n\\nAn **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\\n\\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\\n\\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\\n\\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/).\\n\\nProvide your complete response:\"}], \"tool_failures\": []}"
+                    "stringValue": "{\"description\":\"What is an agent trace?\",\"name\":\"What is an agent trace?\",\"expected_output\":\"A short answer\",\"summary\":\"What is an agent trace?...\",\"raw\":\"An **agent trace** is a record of how an AI agent handled a task: the sequence of steps, such as model calls, tool use, handoffs, and results. The exact meaning can vary by platform.\\n\\nFor example, if an agent checks the weather, its trace might show the model call, the weather-tool call and its input and output, and the final reply, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. Unlike a conversation transcript, a trace focuses on execution and may include events the user never sees. It records captured activity—not necessarily the agent’s full or faithful internal reasoning—and may contain sensitive information.\\n\\nSources: [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"writer_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are writer_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly from the gathered facts\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\\n\\n----------\\n\\nAn **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\\n\\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\\n\\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\\n\\nProvide your complete response:\"}],\"tool_failures\":[]}"
                   }
                 },
                 {
@@ -813,17 +857,17 @@
               "flags": 256
             },
             {
-              "traceId": "463802c5cd1f0241ddd2c10c85182e0a",
-              "spanId": "9b2aafab7c65484d",
+              "traceId": "b8a7f8bec585d3b0c2a3c5e9cb416554",
+              "spanId": "e2f4ae9d2ac26cc6",
               "name": "research_crew.kickoff",
               "kind": 1,
-              "startTimeUnixNano": "1790997836297147000",
-              "endTimeUnixNano": "1790997849088453000",
+              "startTimeUnixNano": "1791012946781688518",
+              "endTimeUnixNano": "1791012965968619826",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"question\": \"What is an agent trace?\"}"
+                    "stringValue": "{\"question\":\"What is an agent trace?\"}"
                   }
                 },
                 {
@@ -841,31 +885,31 @@
                 {
                   "key": "crew_id",
                   "value": {
-                    "stringValue": "d969fa40-9928-4dc7-bd94-fdd1bed0d6a4"
+                    "stringValue": "a019e469-be0c-47d9-ae99-9db1d3fdfeff"
                   }
                 },
                 {
                   "key": "crew_inputs",
                   "value": {
-                    "stringValue": "{\"question\": \"What is an agent trace?\"}"
+                    "stringValue": "{\"question\":\"What is an agent trace?\"}"
                   }
                 },
                 {
                   "key": "crew_agents",
                   "value": {
-                    "stringValue": "[{\"key\": \"d24ea2a79ed01f4be3a002930a15c6f1\", \"id\": \"db35a83c-512e-4668-8872-f1e2a5f863d7\", \"role\": \"research_agent\", \"goal\": \"Plan how to answer questions and brief your team\", \"backstory\": \"You coordinate a search specialist and a writer.\", \"verbose?\": false, \"max_iter\": 25, \"max_rpm\": null, \"delegation_enabled\": false, \"tools_names\": []}, {\"key\": \"237163a35e2b9c58c91cea65a47d1d12\", \"id\": \"47b0e5a8-5a88-4992-8dce-11dac5ebb1bf\", \"role\": \"search_agent\", \"goal\": \"Gather key facts for the research plan\", \"backstory\": \"You find relevant technical facts.\", \"verbose?\": false, \"max_iter\": 25, \"max_rpm\": null, \"delegation_enabled\": false, \"tools_names\": []}, {\"key\": \"126c09767dcaf57383c56a9d79d88eb0\", \"id\": \"f2ed418d-8028-487e-a5e9-d6a1a1055d2f\", \"role\": \"writer_agent\", \"goal\": \"Answer questions clearly from the gathered facts\", \"backstory\": \"You explain technical concepts.\", \"verbose?\": false, \"max_iter\": 25, \"max_rpm\": null, \"delegation_enabled\": false, \"tools_names\": []}]"
+                    "stringValue": "[{\"key\":\"d24ea2a79ed01f4be3a002930a15c6f1\",\"id\":\"9dfd6db9-2460-4f0e-b2da-9c3107e6f9e0\",\"role\":\"research_agent\",\"goal\":\"Plan how to answer questions and brief your team\",\"backstory\":\"You coordinate a search specialist and a writer.\",\"verbose?\":false,\"max_iter\":25,\"max_rpm\":null,\"delegation_enabled\":false,\"tools_names\":[]},{\"key\":\"237163a35e2b9c58c91cea65a47d1d12\",\"id\":\"1625a9d6-e3d2-421d-8698-57d46c7dc093\",\"role\":\"search_agent\",\"goal\":\"Gather key facts for the research plan\",\"backstory\":\"You find relevant technical facts.\",\"verbose?\":false,\"max_iter\":25,\"max_rpm\":null,\"delegation_enabled\":false,\"tools_names\":[]},{\"key\":\"126c09767dcaf57383c56a9d79d88eb0\",\"id\":\"7b749646-bc9e-49aa-a163-fe960cd9989c\",\"role\":\"writer_agent\",\"goal\":\"Answer questions clearly from the gathered facts\",\"backstory\":\"You explain technical concepts.\",\"verbose?\":false,\"max_iter\":25,\"max_rpm\":null,\"delegation_enabled\":false,\"tools_names\":[]}]"
                   }
                 },
                 {
                   "key": "crew_tasks",
                   "value": {
-                    "stringValue": "[{\"id\": \"ddabd72b-cfb0-4ac1-a07f-499ba7376d30\", \"description\": \"Plan how to answer: {question}\", \"expected_output\": \"A short research plan\", \"async_execution?\": false, \"human_input?\": false, \"agent_role\": \"research_agent\", \"agent_key\": \"d24ea2a79ed01f4be3a002930a15c6f1\", \"context\": null, \"tools_names\": []}, {\"id\": \"b99d5e3b-4b58-4872-84b8-b441e5582807\", \"description\": \"Gather facts for: {question}\", \"expected_output\": \"A few key facts\", \"async_execution?\": false, \"human_input?\": false, \"agent_role\": \"search_agent\", \"agent_key\": \"237163a35e2b9c58c91cea65a47d1d12\", \"context\": null, \"tools_names\": []}, {\"id\": \"5148c147-27c5-4d48-bcb5-1c4c49aa5665\", \"description\": \"{question}\", \"expected_output\": \"A short answer\", \"async_execution?\": false, \"human_input?\": false, \"agent_role\": \"writer_agent\", \"agent_key\": \"126c09767dcaf57383c56a9d79d88eb0\", \"context\": null, \"tools_names\": []}]"
+                    "stringValue": "[{\"id\":\"8d21ebd0-cbed-41ec-82f3-200835085942\",\"description\":\"Plan how to answer: {question}\",\"expected_output\":\"A short research plan\",\"async_execution?\":false,\"human_input?\":false,\"agent_role\":\"research_agent\",\"agent_key\":\"d24ea2a79ed01f4be3a002930a15c6f1\",\"context\":null,\"tools_names\":[]},{\"id\":\"56430c84-bcff-4a7c-bf63-70e283e488dd\",\"description\":\"Gather facts for: {question}\",\"expected_output\":\"A few key facts\",\"async_execution?\":false,\"human_input?\":false,\"agent_role\":\"search_agent\",\"agent_key\":\"237163a35e2b9c58c91cea65a47d1d12\",\"context\":null,\"tools_names\":[]},{\"id\":\"ee76d172-e196-4b72-9b5a-d5e230b2993d\",\"description\":\"{question}\",\"expected_output\":\"A short answer\",\"async_execution?\":false,\"human_input?\":false,\"agent_role\":\"writer_agent\",\"agent_key\":\"126c09767dcaf57383c56a9d79d88eb0\",\"context\":null,\"tools_names\":[]}]"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"raw\": \"An **agent trace** is a record of an agent’s execution. Depending on the tool, it may show the input, steps or events, tool calls and their results, and the final output. Traces help people inspect and debug an agent’s behavior; they are not necessarily a transcript of the model’s private reasoning.\\n\\n**Example:** A user asks about the weather in Paris. The trace shows the agent receiving the question, calling a weather tool, getting current conditions, and replying with the result.\\n\\nThe exact format varies across frameworks.\", \"pydantic\": null, \"json_dict\": null, \"tasks_output\": [{\"description\": \"Plan how to answer: What is an agent trace?\", \"name\": \"Plan how to answer: What is an agent trace?\", \"expected_output\": \"A short research plan\", \"summary\": \"Plan how to answer: What is an agent trace?...\", \"raw\": \"**Research plan**\\n\\n1. Ask the search specialist to check reliable agent-development and observability documentation for how “agent trace” is used, noting any differences between frameworks.\\n2. Have the writer explain it in plain language: a record of an agent’s execution, typically including its inputs, steps or events, tool calls, results, and final output.\\n3. Clarify that a trace helps people inspect and debug an agent’s behavior; it is not necessarily a transcript of the model’s private reasoning.\\n4. Keep the final explanation brief and include a simple example, such as a trace showing an agent receiving a question, calling a search tool, receiving results, and answering.\", \"pydantic\": null, \"json_dict\": null, \"agent\": \"research_agent\", \"output_format\": \"raw\", \"messages\": [{\"role\": \"system\", \"content\": \"You are research_agent. You coordinate a search specialist and a writer.\\nYour personal goal is: Plan how to answer questions and brief your team\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: Plan how to answer: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short research plan\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}], \"tool_failures\": []}, {\"description\": \"Gather facts for: What is an agent trace?\", \"name\": \"Gather facts for: What is an agent trace?\", \"expected_output\": \"A few key facts\", \"summary\": \"Gather facts for: What is an agent trace?...\", \"raw\": \"An **agent trace** is a record of an agent’s execution. Depending on the framework and settings, it can show the input, steps or events, tool calls and their results, and the agent’s final output. Traces help people inspect and debug behavior. They record observable execution; they are **not necessarily a transcript of the model’s private reasoning**.\\n\\n**Example:** A user asks, “What’s the weather in Paris?” The trace shows the question arriving, the agent calling a weather tool, the tool returning current conditions, and the agent replying with the result.\\n\\nThe term varies across tools: LangSmith represents traces as related runs, OpenAI’s Agents SDK records workflow events such as tool calls and handoffs, and OpenTelemetry uses traces made up of spans to represent work across a system.\\n\\n**References:** [LangSmith observability concepts](https://docs.smith.langchain.com/observability/concepts), [OpenAI Agents SDK tracing](https://openai.github.io/openai-agents-python/tracing/), [OpenTelemetry traces](https://opentelemetry.io/docs/concepts/signals/traces/).\", \"pydantic\": null, \"json_dict\": null, \"agent\": \"search_agent\", \"output_format\": \"raw\", \"messages\": [{\"role\": \"system\", \"content\": \"You are search_agent. You find relevant technical facts.\\nYour personal goal is: Gather key facts for the research plan\"}, {\"role\": \"user\", \"content\": \"\\nCurrent Task: Gather facts for: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A few key facts\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n**Research plan**\\n\\n1. Ask the search specialis…"
+                    "stringValue": "{\"raw\":\"An **agent trace** is a record of how an AI agent handled a task: the sequence of steps, such as model calls, tool use, handoffs, and results. The exact meaning can vary by platform.\\n\\nFor example, if an agent checks the weather, its trace might show the model call, the weather-tool call and its input and output, and the final reply, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. Unlike a conversation transcript, a trace focuses on execution and may include events the user never sees. It records captured activity—not necessarily the agent’s full or faithful internal reasoning—and may contain sensitive information.\\n\\nSources: [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"pydantic\":null,\"json_dict\":null,\"tasks_output\":[{\"description\":\"Plan how to answer: What is an agent trace?\",\"name\":\"Plan how to answer: What is an agent trace?\",\"expected_output\":\"A short research plan\",\"summary\":\"Plan how to answer: What is an agent trace?...\",\"raw\":\"## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"research_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are research_agent. You coordinate a search specialist and a writer.\\nYour personal goal is: Plan how to answer questions and brief your team\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: Plan how to answer: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short research plan\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nProvide your complete response:\"}],\"tool_failures\":[]},{\"description\":\"Gather facts for: What is an agent trace?\",\"name\":\"Gather facts for: What is an agent trace?\",\"expected_output\":\"A few key facts\",\"summary\":\"Gather facts for: What is an agent trace?...\",\"raw\":\"An **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\\n\\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\\n\\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"search_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are search_agent. You find relevant technical facts.\\nYour personal goal is: Gather key facts for the research plan\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: Gather facts for: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A few key facts\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\\n\\nProvide your complete response:\"}],\"tool_failures\":[]},{\"description\":\"What is an agent trace?\",\"name\":\"What is an agent trace?\",\"expected_output\":\"A short answer\",\"summary\":\"What is an agent trace?...\",\"raw\":\"An **agent trace** is a record of how an AI agent handled a task: the sequence of steps, such as model calls, tool use, handoffs, and results. The exact meaning can vary by platform.\\n\\nFor example, if an agent checks the weather, its trace might show the model call, the weather-tool call and its input and output, and the final reply, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. Unlike a conversation transcript, a trace focuses on execution and may include events the user never sees. It records captured activity—not necessarily the agent’s full or faithful internal reasoning—and may contain sensitive information.\\n\\nSources: [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\",\"pydantic\":null,\"json_dict\":null,\"agent\":\"writer_agent\",\"output_format\":\"raw\",\"messages\":[{\"role\":\"system\",\"content\":\"You are writer_agent. You explain technical concepts.\\nYour personal goal is: Answer questions clearly from the gathered facts\"},{\"role\":\"user\",\"content\":\"\\nCurrent Task: What is an agent trace?\\n\\nThis is the expected criteria for your final answer: A short answer\\nyou MUST return the actual complete content as the final answer, not a summary.\\n\\nThis is the context you're working with:\\n## Research plan: “What is an agent trace?”\\n\\n**Goal:** Give a concise, plain-language explanation of an *agent trace* in AI systems, while noting that the term can vary by context.\\n\\n**Search specialist**\\n- Check authoritative documentation and technical sources for how “agent trace” is used in AI agents and observability.\\n- Look for what a trace commonly records: the agent’s steps, tool calls, inputs and outputs, intermediate decisions, and timing or errors.\\n- Verify how a trace differs from a single log entry or a full conversation, and whether traces can include sensitive information.\\n- Flag any context-specific meanings rather than presenting one definition as universal.\\n\\n**Writer**\\n- Lead with a direct definition.\\n- Explain the concept with a simple example, such as an agent receiving a request, searching with a tool, and returning an answer.\\n- Clarify that traces help people inspect, debug, and evaluate an agent’s behavior, but are records of activity—not necessarily a complete or faithful account of the agent’s internal reasoning.\\n- Keep the response brief and qualify the definition if sources show that usage differs across platforms.\\n\\n----------\\n\\nAn **agent trace** is a record of how an AI agent handled a task: the sequence of steps involved, such as model calls, tool use, handoffs, and results. The term varies by platform. For example, OpenAI’s Agents SDK describes traces as records of workflow events, while OpenTelemetry represents traces as related spans—individual units of work—that can be nested.\\n\\n**Example:** A user asks for the weather; the agent calls a weather tool, receives its result, and replies. A trace might show the model call, the tool call and its input and output, and the final response, along with timing or errors.\\n\\nTraces help people inspect, debug, and evaluate an agent’s behavior. They are not the same as a single log entry or a conversation transcript: a trace focuses on execution, and may include events not shown in the conversation. A trace is also not necessarily a complete or faithful account of the agent’s internal reasoning; it records activity and information the system captures. Depending on configuration, it may contain sensitive inputs or outputs, so traces should be handled accordingly.\\n\\n**Sources:** [OpenAI Agents SDK — Tracing](https://openai.github.io/openai-agents-python/tracing/); [OpenTelemetry — Traces](https://opentelemetry.io/docs/concepts/signals/traces/); [LangSmith — Tracing](https://docs.smith.langchain.com/observability/concepts#traces).\\n\\nProvide your complete response:\"}],\"tool_failures\":[]}],\"token_usage\":{\"total_tokens\":6630,\"prompt_tokens\":3039,\"cached_prompt_tokens\":0,\"completion_tokens\":3591,\"reasoning_tokens\":1335,\"cache_creation_tokens\":0,\"successful_requests\":9}}"
                   }
                 },
                 {

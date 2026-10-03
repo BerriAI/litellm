@@ -114,6 +114,8 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 #[case::claude_agent_sdk_export(include_bytes!("fixtures/claude_agent_sdk_export.json"))]
 #[case::claude_agent_sdk_simple(include_bytes!("fixtures/claude_agent_sdk_simple.json"))]
 #[case::claude_agent_sdk_swarm(include_bytes!("fixtures/claude_agent_sdk_swarm.json"))]
+#[case::claude_missing_id_simple(include_bytes!("fixtures/claude_agent_sdk_missing_request_id_simple.json"))]
+#[case::claude_missing_id_swarm(include_bytes!("fixtures/claude_agent_sdk_missing_request_id_swarm.json"))]
 #[case::crewai_simple(include_bytes!("fixtures/crewai_simple.json"))]
 #[case::crewai_swarm(include_bytes!("fixtures/crewai_swarm.json"))]
 #[case::deepagents_simple(include_bytes!("fixtures/deepagents_simple.json"))]
@@ -199,6 +201,32 @@ fn fixture_sdk_roles(
             span.normalized.wrapper_candidate, wrapper_candidate,
             "{}",
             span.span_id
+        );
+    }
+}
+
+#[rstest]
+#[case::simple(include_bytes!("fixtures/llamaindex_simple.json"))]
+#[case::swarm(include_bytes!("fixtures/llamaindex_swarm.json"))]
+fn llamaindex_wrapped_responses_keep_provider_call_keys(#[case] body: &[u8]) {
+    let spans = decode_otlp(body, Some("application/json")).unwrap();
+    let responses: Vec<_> = spans
+        .iter()
+        .filter_map(|span| {
+            let response: Value =
+                serde_json::from_str(span.attributes.get("output.value")?).ok()?;
+            let id = response.get("raw")?.get("id")?.as_str()?.to_owned();
+            Some((span, id))
+        })
+        .collect();
+    assert!(!responses.is_empty());
+    for (span, id) in responses {
+        assert!(
+            span.normalized
+                .calls
+                .key_set()
+                .unwrap()
+                .contains(&litellm_traces::CallKey::ProviderResponse(id))
         );
     }
 }

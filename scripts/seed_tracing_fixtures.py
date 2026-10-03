@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import binascii
 import hashlib
 import json
 import math
@@ -10,7 +11,9 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from uuid import uuid4
 
@@ -29,6 +32,7 @@ TRACE_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces/tests/fixtures"
 SPEND_FIXTURE: Final = (
     REPO_ROOT / "litellm-rust/crates/traces-clickhouse/tests/fixtures/deeplite_swarm_spend_logs.jsonl"
 )
+SPEND_FIXTURES: Final = SPEND_FIXTURE.parent
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 SPEND_ROWS: Final = TypeAdapter(tuple[SpendLogRecord, ...])
@@ -45,12 +49,61 @@ class TenantIdentity(BaseModel):
     user: str
 
 
+class FixtureCapture(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    name: str
+    trace_id: str
+    spend_linked: bool
+
+
 @dataclass(frozen=True, slots=True)
 class FixtureReplay:
     name: str
     export: JsonValue
     offset_ms: int
     namespace: str
+
+
+def spend_fixtures(directory: Path = SPEND_FIXTURES) -> tuple[tuple[str, tuple[SpendLogRecord, ...]], ...]:
+    return tuple(
+        (
+            path.stem.removesuffix("_spend_logs"),
+            SPEND_ROWS.validate_python(tuple(json.loads(line) for line in path.read_text().splitlines())),
+        )
+        for path in sorted(directory.glob("*_spend_logs.jsonl"))
+    )
+
+
+def managed_response(value: str) -> str | None:
+    if not value.startswith("resp_"):
+        return None
+    try:
+        decoded: Final = base64.b64decode(value[5:], validate=True).decode()
+    except (binascii.Error, UnicodeDecodeError):
+        return None
+    return decoded if "response_id:" in decoded else None
+
+
+def response_ids(rows: tuple[SpendLogRecord, ...]) -> Iterator[str]:
+    for row in rows:
+        yield row["request_id"]
+        yield row["response_id"]
+        if (decoded := managed_response(row["response_id"])) is not None:
+            if (upstream := re.search(r"response_id:([^;]+)", decoded)) is not None:
+                yield upstream.group(1)
+
+
+def response_pattern(rows: tuple[SpendLogRecord, ...]) -> re.Pattern[str]:
+    identities: Final = sorted(frozenset(filter(None, response_ids(rows))), key=len, reverse=True)
+    return re.compile("|".join(re.escape(identity) for identity in identities) or r"(?!)")
+
+
+def rebased_response(value: str, namespace: str, pattern: re.Pattern[str]) -> str:
+    decoded: Final = managed_response(value)
+    if decoded is None:
+        return f"seed-{namespace}-{value}"
+    payload: Final = pattern.sub(lambda match: f"seed-{namespace}-{match.group()}", decoded)
+    return "resp_" + base64.b64encode(payload.encode()).decode()
 
 
 def fixture_replays(
@@ -100,11 +153,13 @@ def rebase(
     if field in NANOSECOND_FIELDS and isinstance(value, (str, int)):
         return str(int(value) + offset_ns) if int(value) else value
     if isinstance(value, str):
+        if field == "metadata":
+            return json.dumps(rebase(JSON.validate_json(value), offset_ns, namespace, response_pattern))
         if field == "bytesValue":
             return base64.b64encode(
                 re.sub(
                     response_pattern.pattern.encode(),
-                    lambda match: f"seed-{namespace}-".encode() + match.group(),
+                    lambda match: rebased_response(match.group().decode(), namespace, response_pattern).encode(),
                     base64.b64decode(value),
                 )
             ).decode()
@@ -112,7 +167,7 @@ def rebase(
             return seed_id(value, namespace, 32)
         if field in SPAN_ID_FIELDS:
             return seed_id(value, namespace, 16)
-        return response_pattern.sub(lambda match: f"seed-{namespace}-{match.group()}", value)
+        return response_pattern.sub(lambda match: rebased_response(match.group(), namespace, response_pattern), value)
     if isinstance(value, list):
         return [rebase(item, offset_ns, namespace, response_pattern) for item in value]
     if isinstance(value, dict):
@@ -167,14 +222,21 @@ def postgres_row(row: SpendLogRecord) -> LiteLLM_SpendLogsCreateWithoutRelations
 
 
 async def seed() -> int:
-    spends: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    fixtures: Final = spend_fixtures()
+    spends: Final = tuple(chain.from_iterable(rows for _, rows in fixtures))
+    by_name: Final = MappingProxyType(dict(fixtures))
     namespace: Final = uuid4().hex
-    response_pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
-    replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, namespace, response_pattern)
-    swarm: Final = next(replay for replay in replays if replay.name == "deeplite_swarm")
-    rebased_spends: Final = rebase_spend(spends, swarm.offset_ms, swarm.namespace, response_pattern)
+    pattern: Final = response_pattern(spends)
+    replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, namespace, pattern)
+    paired: Final = tuple(
+        (
+            replay.name,
+            rebase_spend(by_name[replay.name], replay.offset_ms, replay.namespace, pattern),
+        )
+        for replay in replays
+        if replay.name in by_name
+    )
+    rebased_spends: Final = tuple(chain.from_iterable(rows for _, rows in paired))
     master_key: Final = os.environ["LITELLM_MASTER_KEY"]
     proxy_url: Final = os.environ.get("PROXY_BASE_URL", "http://127.0.0.1:4002")
     async with httpx.AsyncClient(
@@ -187,7 +249,7 @@ async def seed() -> int:
                 )
             ).raise_for_status()
         storage: Final = ClickHouseStorage(trace_storage_config({}))
-        trace_id: Final = rebased_spends[0]["trace_id"]
+        trace_id: Final = next(row["trace_id"] for row in rebased_spends if row["trace_id"])
         identity: Final = await storage.query_sql(
             "SELECT DISTINCT TeamId AS team_id, ApiKeyHash AS api_key, UserId AS user "
             f"FROM otel_traces WHERE TraceId = '{trace_id}'",
@@ -201,28 +263,48 @@ async def seed() -> int:
         await storage.insert_rows("spend_logs", stamped_spends)
         async with Prisma() as database:
             await database.litellm_spendlogs.create_many(data=[postgres_row(row) for row in stamped_spends])
-        detail: Final = await client.get(f"/v1/traces/{trace_id}")
-        detail.raise_for_status()
-        trace: Final = TRACE.validate_json(detail.content)
-        expected_spend: Final = sum(row["spend"] for row in rebased_spends)
+        verified: Final = tuple(await asyncio.gather(*(verify_capture(client, name, rows) for name, rows in paired)))
         sys.stdout.write(
             json.dumps(
                 {
-                    "fixture": "deeplite_swarm",
                     "trace_fixtures": tuple(replay.name for replay in replays),
                     "spend_rows": len(stamped_spends),
-                    "synthetic_spend": True,
-                    "summary": trace["summary"],
+                    "captures": verified,
                 },
                 indent=2,
             )
             + "\n"
         )
-        return (
-            0
-            if trace["summary"]["spend"] is not None and math.isclose(trace["summary"]["spend"], expected_spend)
-            else 1
-        )
+        return 0 if all(capture["verified"] for capture in verified) else 1
+
+
+def fixture_capture(name: str, row: SpendLogRecord) -> FixtureCapture:
+    metadata: Final = JSON_OBJECT.validate_json(row["metadata"])
+    capture: Final = metadata.get("fixture_capture")
+    return (
+        FixtureCapture.model_validate(capture)
+        if capture is not None
+        else FixtureCapture(name=name, trace_id=row["trace_id"], spend_linked=True)
+    )
+
+
+async def verify_capture(
+    client: httpx.AsyncClient, name: str, rows: tuple[SpendLogRecord, ...]
+) -> dict[str, JsonValue]:
+    capture: Final = fixture_capture(name, rows[0])
+    detail: Final = await client.get(f"/v1/traces/{capture.trace_id}")
+    detail.raise_for_status()
+    trace: Final = TRACE.validate_json(detail.content)
+    expected: Final = sum(row["spend"] or 0 for row in rows)
+    actual: Final = trace["summary"]["spend"]
+    return {
+        "fixture": name,
+        "trace_id": capture.trace_id,
+        "spend_rows": len(rows),
+        "recorded_spend": expected,
+        "trace_spend": actual,
+        "verified": math.isclose(actual, expected) if actual is not None else not capture.spend_linked,
+    }
 
 
 if __name__ == "__main__":

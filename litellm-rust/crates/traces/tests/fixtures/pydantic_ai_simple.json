@@ -24,13 +24,13 @@
           {
             "key": "service.instance.id",
             "value": {
-              "stringValue": "45543a3c-38db-4076-8daf-51a524866334"
+              "stringValue": "4fcc6fdf-bb26-4716-b9a0-0b0ac37a9e0f"
             }
           },
           {
             "key": "service.name",
             "value": {
-              "stringValue": "lens-pydantic-ai-simple"
+              "stringValue": "pydantic-ai-simple"
             }
           },
           {
@@ -49,13 +49,13 @@
           },
           "spans": [
             {
-              "traceId": "bc44f79e4691978960293aa2e133686a",
-              "spanId": "82a871002cd8763a",
-              "parentSpanId": "e85dbec42c7a4bf9",
+              "traceId": "7cc3e93f259ad31a906a564a9c2417c8",
+              "spanId": "aaf2942c7cf1704d",
+              "parentSpanId": "b0ff4929e310ba70",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1790998056851385000",
-              "endTimeUnixNano": "1790998060322029000",
+              "startTimeUnixNano": "1791012714817527952",
+              "endTimeUnixNano": "1791012718673878573",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -78,7 +78,7 @@
                 {
                   "key": "server.address",
                   "value": {
-                    "stringValue": "127.0.0.1"
+                    "stringValue": "host.docker.internal"
                   }
                 },
                 {
@@ -102,13 +102,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a0ffcd-8f82-72bd-a083-1ed89f99e212"
+                    "stringValue": "01a100ad-392b-750b-9c31-255f744ad43a"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "00000000-0000-0000-0000-000000000001"
+                    "stringValue": "01a100ad-392b-750b-9c31-2560ada06282"
                   }
                 },
                 {
@@ -126,7 +126,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a chronological record of what an AI agent did while completing a task. It may include the agent’s inputs and outputs, tool calls and their results, handoffs to other agents, timing, and errors.\\n\\nFor example, a trace for “find the weather and suggest what to wear” might show:\\n\\n1. User asks for a recommendation.\\n2. Agent calls a weather tool.\\n3. Tool returns the forecast.\\n4. Agent replies with a clothing suggestion.\\n\\nTraces help developers debug behavior, measure performance, and understand where a task went wrong. They generally record observable actions—not necessarily the model’s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent’s activity during a task. It can show the sequence of events, such as:\\n\\n1. The request or input the agent received  \\n2. The actions it took, including tool calls  \\n3. The results or observations it got back  \\n4. The final response or outcome  \\n\\nFor example: *“User asks for the weather → agent calls a weather service → receives the forecast → replies with it.”*\\n\\nTraces help people debug, evaluate, and understand an agent’s behavior. They don’t necessarily include the agent’s private reasoning; often they’re just a structured log of inputs, actions, and results.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {
@@ -144,7 +144,7 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "233"
+                    "intValue": "228"
                   }
                 },
                 {
@@ -162,7 +162,7 @@
                 {
                   "key": "gen_ai.usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "94"
+                    "intValue": "84"
                   }
                 },
                 {
@@ -180,13 +180,13 @@
                 {
                   "key": "operation.cost",
                   "value": {
-                    "doubleValue": 0.0001177
+                    "doubleValue": 0.0001152
                   }
                 },
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EUkhNUytmSkeoJJEGvxyLZbfxvqsO"
+                    "stringValue": "chatcmpl-EUoVnXwnEJ35Q9wg5reUDTwXBeUZ2"
                   }
                 },
                 {
@@ -206,12 +206,12 @@
               "flags": 256
             },
             {
-              "traceId": "bc44f79e4691978960293aa2e133686a",
-              "spanId": "e85dbec42c7a4bf9",
+              "traceId": "7cc3e93f259ad31a906a564a9c2417c8",
+              "spanId": "b0ff4929e310ba70",
               "name": "invoke_agent research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1790998056841769000",
-              "endTimeUnixNano": "1790998060323299000",
+              "startTimeUnixNano": "1791012714810870859",
+              "endTimeUnixNano": "1791012718674832747",
               "attributes": [
                 {
                   "key": "model_name",
@@ -234,13 +234,13 @@
                 {
                   "key": "gen_ai.agent.call.id",
                   "value": {
-                    "stringValue": "01a0ffcd-8f82-72bd-a083-1ed89f99e212"
+                    "stringValue": "01a100ad-392b-750b-9c31-255f744ad43a"
                   }
                 },
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "00000000-0000-0000-0000-000000000001"
+                    "stringValue": "01a100ad-392b-750b-9c31-2560ada06282"
                   }
                 },
                 {
@@ -258,7 +258,7 @@
                 {
                   "key": "final_result",
                   "value": {
-                    "stringValue": "An **agent trace** is a chronological record of what an AI agent did while completing a task. It may include the agent’s inputs and outputs, tool calls and their results, handoffs to other agents, timing, and errors.\n\nFor example, a trace for “find the weather and suggest what to wear” might show:\n\n1. User asks for a recommendation.\n2. Agent calls a weather tool.\n3. Tool returns the forecast.\n4. Agent replies with a clothing suggestion.\n\nTraces help developers debug behavior, measure performance, and understand where a task went wrong. They generally record observable actions—not necessarily the model’s private internal reasoning."
+                    "stringValue": "An **agent trace** is a record of an AI agent’s activity during a task. It can show the sequence of events, such as:\n\n1. The request or input the agent received  \n2. The actions it took, including tool calls  \n3. The results or observations it got back  \n4. The final response or outcome  \n\nFor example: *“User asks for the weather → agent calls a weather service → receives the forecast → replies with it.”*\n\nTraces help people debug, evaluate, and understand an agent’s behavior. They don’t necessarily include the agent’s private reasoning; often they’re just a structured log of inputs, actions, and results."
                   }
                 },
                 {
@@ -270,7 +270,7 @@
                 {
                   "key": "gen_ai.aggregated_usage.output_tokens",
                   "value": {
-                    "intValue": "233"
+                    "intValue": "228"
                   }
                 },
                 {
@@ -288,7 +288,7 @@
                 {
                   "key": "gen_ai.aggregated_usage.details.reasoning_tokens",
                   "value": {
-                    "intValue": "94"
+                    "intValue": "84"
                   }
                 },
                 {
@@ -300,7 +300,7 @@
                 {
                   "key": "pydantic_ai.all_messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a chronological record of what an AI agent did while completing a task. It may include the agent’s inputs and outputs, tool calls and their results, handoffs to other agents, timing, and errors.\\n\\nFor example, a trace for “find the weather and suggest what to wear” might show:\\n\\n1. User asks for a recommendation.\\n2. Agent calls a weather tool.\\n3. Tool returns the forecast.\\n4. Agent replies with a clothing suggestion.\\n\\nTraces help developers debug behavior, measure performance, and understand where a task went wrong. They generally record observable actions—not necessarily the model’s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent’s activity during a task. It can show the sequence of events, such as:\\n\\n1. The request or input the agent received  \\n2. The actions it took, including tool calls  \\n3. The results or observations it got back  \\n4. The final response or outcome  \\n\\nFor example: *“User asks for the weather → agent calls a weather service → receives the forecast → replies with it.”*\\n\\nTraces help people debug, evaluate, and understand an agent’s behavior. They don’t necessarily include the agent’s private reasoning; often they’re just a structured log of inputs, actions, and results.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 },
                 {

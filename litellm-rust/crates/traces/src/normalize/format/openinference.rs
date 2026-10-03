@@ -33,7 +33,11 @@ fn calls(output: &str) -> CallEvidence {
     let Ok(value) = serde_json::from_str::<Value>(output) else {
         return CallEvidence::Unknown;
     };
-    if let Some(id) = value.get("id").and_then(Value::as_str) {
+    if let Some(id) = value
+        .get("id")
+        .or_else(|| value.get("raw")?.get("id"))
+        .and_then(Value::as_str)
+    {
         return CallEvidence::complete(CallKey::ProviderResponse(id.to_owned()));
     }
     messages::langchain_result(&value).map_or(CallEvidence::Unknown, |result| result.calls)

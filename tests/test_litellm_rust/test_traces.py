@@ -1,23 +1,56 @@
 import base64
 import gzip
 import json
+import math
+import re
 import time
+from collections.abc import Iterator
+from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from pydantic import JsonValue
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage
-from litellm.rust_bridge.trace.generated.models import ActivityAvailability, LensAccessParams
+from litellm.rust_bridge.trace.generated.models import ActivityAvailability, LensAccessParams, TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
+from litellm.tracing.types import SpendLogRecord
+from scripts.seed_tracing_fixtures import (
+    TRACE,
+    TRACE_FIXTURES,
+    FixtureReplay,
+    fixture_capture,
+    fixture_replays,
+    rebase_spend,
+    response_pattern,
+    spend_fixtures,
+)
+from tests.test_litellm_rust.support.clickhouse import clickhouse_service
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
+QUERY_ROWS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+
+
+class CapturedSpendRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    request_id: str
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+
+
+class CapturedSpendQuery(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    data: tuple[CapturedSpendRow, ...]
 
 
 def _native_storage(database: str, url: str, retention_days: int = 14) -> NativeTraceStorage:
@@ -433,3 +466,186 @@ async def test_lens_read_uses_the_shared_native_query_and_returns_typed_rows(
     assert parameters["param_all_teams"] == ["0"]
     assert parameters["param_team"] == ["team-a"]
     assert parameters["param_key_hash"] == ["key-a"]
+
+
+@dataclass(frozen=True, slots=True)
+class SeededTraceAPI:
+    client: TestClient
+    storage: ClickHouseStorage
+    spends: tuple[SpendLogRecord, ...]
+    help: TraceQueryHelp
+
+    def query_example(self, name: str) -> tuple[dict[str, JsonValue], ...]:
+        example: Final = next(example for example in self.help.examples if example.name == name)
+        response: Final = self.client.post("/v1/traces/query", json={"sql": example.sql})
+        assert response.status_code == 200, response.text
+        return QUERY_ROWS.validate_python(response.json()["data"])
+
+
+@pytest.fixture
+def seeded_trace_api(clickhouse_url: str) -> Iterator[SeededTraceAPI]:
+    from scripts.seed_tracing_fixtures import (
+        SPEND_FIXTURE,
+        SPEND_ROWS,
+        TRACE_FIXTURES,
+        fixture_replays,
+        rebase_spend,
+    )
+
+    spends: Final = SPEND_ROWS.validate_python(
+        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
+    )
+    pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
+    replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, "query-api", pattern)
+    swarm: Final = next(replay for replay in replays if replay.name == "deeplite_swarm")
+    rebased: Final = rebase_spend(spends, swarm.offset_ms, swarm.namespace, pattern)
+    stamped: Final[tuple[SpendLogRecord, ...]] = tuple(
+        {**row, "team_id": "team-a", "api_key": "fixture-key", "user": "fixture-user"} for row in rebased
+    )
+    yield from _fixture_trace_api(clickhouse_url, replays, stamped)
+
+
+def _fixture_trace_api(
+    clickhouse_url: str, replays: tuple[FixtureReplay, ...], stamped: tuple[SpendLogRecord, ...]
+) -> Iterator[SeededTraceAPI]:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
+
+    storage: Final = ClickHouseStorage(TraceStorageConfig(clickhouse_url, "trace_test"))
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[provide_trace_query_secret] = lambda: "fixture-secret"
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, team_id="team-a", token="fixture-key", user_id="fixture-user"
+    )
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(storage)
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(storage.ensure_schema)
+        ingested: Final = tuple(client.post("/v1/traces", json=replay.export) for replay in replays)
+        for result in ingested:
+            assert result.status_code == 200, result.text
+        client.portal.call(storage.insert_rows, "spend_logs", stamped)
+        response: Final = client.get("/v1/traces/query/help")
+        assert response.status_code == 200, response.text
+        yield SeededTraceAPI(client, storage, stamped, TraceQueryHelp.model_validate(response.json()))
+
+
+def test_fixture_backed_help_examples_execute_through_query_api(seeded_trace_api: SeededTraceAPI) -> None:
+    api: Final = seeded_trace_api
+    assert {table.name for table in api.help.tables} == {"otel_traces", "spend_logs", "agent_traces_by_key"}
+    assert api.help.metadata.error is None
+    assert api.help.metadata.sampled_rows == len(api.spends)
+    assert any(field.path == ("synthetic_spend",) for field in api.help.metadata.fields)
+    for example in api.help.examples:
+        api.query_example(example.name)
+    records: Final = api.query_example("Recent spend records")
+    assert {str(row["request_id"]) for row in records} == {row["request_id"] for row in api.spends}
+    assert all(bool(row["synthetic_spend"]) for row in records)
+    total: Final = sum(row["spend"] or 0 for row in api.spends)
+    recorded: Final = api.query_example("Recorded spend by trace")
+    assert len(recorded) == 1
+    assert recorded[0]["trace_id"] == api.spends[0]["trace_id"]
+    assert int(str(recorded[0]["requests"])) == len(api.spends)
+    assert math.isclose(float(str(recorded[0]["recorded_spend"])), total)
+    detail: Final = api.client.get(f"/v1/traces/{api.spends[0]['trace_id']}")
+    assert detail.status_code == 200, detail.text
+    assert math.isclose(TRACE.validate_json(detail.content)["summary"]["spend"] or 0, total)
+    unmatched: Final = api.query_example("LLM spans without a direct spend match")
+    assert unmatched
+    assert all(row["TraceId"] != api.spends[0]["trace_id"] for row in unmatched)
+    unpriced: Final = api.client.get(f"/v1/traces/{unmatched[0]['TraceId']}")
+    assert unpriced.status_code == 200, unpriced.text
+    assert unpriced.json()["summary"]["spend"] is None
+
+
+@pytest.mark.parametrize("spend", (None, 0.0, 0.125), ids=("unknown", "free", "paid"))
+def test_query_model_totals_deduplicate_and_preserve_unknown_cost(
+    seeded_trace_api: SeededTraceAPI, spend: float | None
+) -> None:
+    api: Final = seeded_trace_api
+    original: Final = api.spends[0]
+    replacement: Final[SpendLogRecord] = {**original, "end_time": original["end_time"] + 1, "spend": spend}
+    assert api.client.portal is not None
+    api.client.portal.call(api.storage.insert_rows, "spend_logs", (replacement,))
+    totals: Final = api.query_example("Spend and tokens by model")
+    row: Final = next(row for row in totals if row["model"] == original["model"])
+    model_spends: Final = tuple(row for row in api.spends if row["model"] == original["model"])
+    assert int(str(row["requests"])) == len(model_spends)
+    assert int(str(row["input_tokens"])) == sum(row["prompt_tokens"] for row in model_spends)
+    assert int(str(row["output_tokens"])) == sum(row["completion_tokens"] for row in model_spends)
+    assert int(str(row["unknown_cost_requests"])) == int(spend is None)
+    if spend is None:
+        assert row["spend"] is None
+    else:
+        assert math.isclose(
+            float(str(row["spend"])), sum(row["spend"] or 0 for row in model_spends) - (original["spend"] or 0) + spend
+        )
+
+
+def test_query_correlation_requires_key_or_user_ownership_within_a_team(seeded_trace_api: SeededTraceAPI) -> None:
+    api: Final = seeded_trace_api
+    original: Final = api.spends[0]
+    unrelated: Final[SpendLogRecord] = {
+        **original,
+        "request_id": "unrelated-request",
+        "api_key": "other-key",
+        "user": "other-user",
+    }
+    assert api.client.portal is not None
+    api.client.portal.call(api.storage.insert_rows, "spend_logs", (unrelated,))
+    matches: Final = api.query_example("Traces correlated with LLM call metadata")
+    assert {str(row["request_id"]) for row in matches} == {row["request_id"] for row in api.spends}
+    assert all(row["request_id"] != unrelated["request_id"] for row in matches)
+
+
+@pytest.fixture(scope="module")
+def captured_trace_api() -> Iterator[SeededTraceAPI]:
+    captures: Final = spend_fixtures()
+    originals: Final = tuple(chain.from_iterable(rows for _, rows in captures))
+    pattern: Final = response_pattern(originals)
+    replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, "captured-api", pattern)
+    by_name: Final = MappingProxyType(dict(captures))
+    paired: Final = tuple(
+        rebase_spend(by_name[replay.name], replay.offset_ms, replay.namespace, pattern)
+        for replay in replays
+        if replay.name in by_name
+    )
+    stamped: Final[tuple[SpendLogRecord, ...]] = tuple(
+        {**row, "team_id": "team-a", "api_key": "fixture-key", "user": "fixture-user"}
+        for row in chain.from_iterable(paired)
+    )
+    with clickhouse_service() as url:
+        yield from _fixture_trace_api(url, replays, stamped)
+
+
+@pytest.mark.parametrize("name", tuple(name for name, _ in spend_fixtures() if name != "deeplite_swarm"))
+def test_captured_sdk_cost_survives_seeding_and_is_queryable(name: str, captured_trace_api: SeededTraceAPI) -> None:
+    api: Final = captured_trace_api
+    rows: Final = tuple(row for row in api.spends if fixture_capture("", row).name == name)
+    assert rows
+    capture: Final = fixture_capture(name, rows[0])
+    response: Final = api.client.get(f"/v1/traces/{capture.trace_id}")
+    assert response.status_code == 200, response.text
+    detail: Final = TRACE.validate_json(response.content)
+    original: Final = span_rows((TRACE_FIXTURES / f"{name}.json").read_bytes(), "application/json")
+    assert detail["summary"]["span_count"] == len(original)
+    if capture.spend_linked:
+        assert detail["summary"]["spend"] is not None
+        assert math.isclose(detail["summary"]["spend"], sum(row["spend"] or 0 for row in rows))
+    else:
+        assert detail["summary"]["spend"] is None
+    query: Final = api.client.post(
+        "/v1/traces/query",
+        json={
+            "sql": "SELECT request_id, spend, prompt_tokens, completion_tokens FROM spend_logs FINAL "
+            f"WHERE JSONExtractString(metadata, 'fixture_capture', 'name') = '{name}' LIMIT 100"
+        },
+    )
+    assert query.status_code == 200, query.text
+    records: Final = CapturedSpendQuery.model_validate_json(query.content).data
+    assert {row.request_id for row in records} == {row["request_id"] for row in rows}
+    assert math.isclose(sum(row.spend for row in records), sum(row["spend"] or 0 for row in rows))
+    assert sum(row.prompt_tokens for row in records) == sum(row["prompt_tokens"] for row in rows)
+    assert sum(row.completion_tokens for row in records) == sum(row["completion_tokens"] for row in rows)
