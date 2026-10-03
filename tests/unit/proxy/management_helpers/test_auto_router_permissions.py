@@ -142,6 +142,7 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"api_key": "sk-member"}, "api_key"),
         ({"api_base": "https://collector.invalid", "api_key": "sk-member"}, "api_key"),
         ({"api_base": "https://collector.invalid", "api_key": ""}, "opensource_classifier_config.api_key"),
+        ({"api_url": "https://collector.invalid/run", "api_key": "sk-member"}, "api_key"),
         ({"provider": "laya", "model": "english", "api_base": "https://collector.invalid"}, "api_base"),
         ({"provider": "laya", "model": "english", "api_key": "sk-member"}, "api_key"),
         ({"provider": "bespoke", "model": "nimble-latest", "api_base": "https://collector.invalid"}, "api_base"),

@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
+    AnyHttpUrl,
     BaseModel,
     ConfigDict,
     Field,
@@ -705,6 +706,10 @@ class OpenSourceClassifierConfig(BaseModel):
         default=None,
         description="Provider API base; defaults to the selected provider API_BASE environment variable",
     )
+    api_url: str | None = Field(
+        default=None,
+        description="Exact System One endpoint, posted to verbatim instead of {api_base}/v1/systemone",
+    )
     timeout_ms: int = Field(default=3000, ge=1)
     instructions: str | None = Field(
         default=None,
@@ -725,6 +730,13 @@ class OpenSourceClassifierConfig(BaseModel):
             raise ValueError("opensource_classifier_config.instructions must be non-empty; omit it to use the default")
         return value
 
+    @field_validator("api_url")
+    @classmethod
+    def _require_http_api_url(cls, value: str | None) -> str | None:
+        if value is not None:
+            _ = TypeAdapter(AnyHttpUrl).validate_python(value)
+        return value
+
     @field_validator("api_key")
     @classmethod
     def _reject_blank_api_key(cls, value: str | None) -> str | None:
@@ -736,6 +748,17 @@ class OpenSourceClassifierConfig(BaseModel):
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
+        if "api_url" in self.model_fields_set and self.api_url is None and self.api_key is not None:
+            raise ValueError(
+                "opensource_classifier_config.api_url resolved to nothing; refusing to send api_key to the default endpoint"
+            )
+        if self.api_url is not None and self.provider != "jev":
+            raise ValueError("opensource_classifier_config.api_url is only supported for provider 'jev'")
+        if self.api_url is not None and self.api_key is None:
+            raise ValueError(
+                "opensource_classifier_config.api_url requires opensource_classifier_config.api_key: "
+                "TYPESAFE_API_KEY is only sent to TYPESAFE_API_BASE or https://api.typesafe.ai"
+            )
         if self.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
@@ -763,7 +786,9 @@ class ComplexityRouterConfigWrite:
     def supplied_connection_fields(self) -> frozenset[str]:
         classifier: Final = self.submitted.get("opensource_classifier_config") if self.submitted is not None else None
         return frozenset(
-            field for field in ("api_base", "api_key") if isinstance(classifier, Mapping) and field in classifier
+            field
+            for field in ("api_base", "api_url", "api_key")
+            if isinstance(classifier, Mapping) and field in classifier
         )
 
 
@@ -799,14 +824,15 @@ def _resolve_normalized_complexity_router_config_write(
         else supplied
     )
     same_provider: Final = classifier.get("provider", "jev") == existing.get("provider", "jev")
-    same_base: Final = "api_base" not in classifier or (
-        classifier["api_base"] is not None and classifier["api_base"] == existing.get("api_base")
+    same_endpoint: Final = all(
+        field not in classifier or (classifier[field] is not None and classifier[field] == existing.get(field))
+        for field in ("api_base", "api_url")
     )
     transport: Final = MappingProxyType(
         {
             key: value
             for key, value in existing.items()
-            if same_provider and key in ("api_key", "api_base") and (key != "api_key" or same_base)
+            if same_provider and key in ("api_key", "api_base", "api_url") and (key != "api_key" or same_endpoint)
         }
     )
     return ComplexityRouterConfigWrite(

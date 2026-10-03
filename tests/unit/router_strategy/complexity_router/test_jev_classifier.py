@@ -9,6 +9,7 @@ from unittest.mock import create_autospec
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -17,7 +18,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
-from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, JevClassifierConfig
+from litellm.router_strategy.complexity_router.config import (
+    ComplexityRouterConfig,
+    JevClassifierConfig,
+    resolve_complexity_router_config_write,
+)
 from litellm.router_strategy.complexity_router.jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
     HttpJevClassifierClient,
@@ -84,7 +89,7 @@ async def test_jev_logging_failure_preserves_verdict_and_keeps_circuit_closed(
         "jev-logging-failure",
         litellm.Router(model_list=[]),
         {"classifier_type": "jev", "jev_classifier_config": {}, "tiers": {"SIMPLE": "cheap"}},
-        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test/v1/systemone", handler),
         derive_savings_baseline=False,
     )
     with caplog.at_level("WARNING", logger=verbose_router_logger.name):
@@ -121,7 +126,7 @@ async def test_jev_http_errors_do_not_dispatch_successful_usage(
             "answers": {"tier": _answer().model_dump()},
         },
     )
-    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test", handler)
+    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test/v1/systemone", handler)
     request: Final = build_jev_request(
         "choose a tier", None, "jev-accounting", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "cheap"}
     )
@@ -153,7 +158,7 @@ async def test_jev_invalid_usage_never_reaches_spend_callbacks(
             "answers": {"tier": _answer().model_dump()},
         },
     )
-    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test", handler)
+    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test/v1/systemone", handler)
     request: Final = build_jev_request(
         "choose a tier", None, "jev-accounting", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "cheap"}
     )
@@ -195,7 +200,7 @@ async def test_jev_accounts_once_with_parent_identity_even_when_the_verdict_fail
 
     handler: Final = AsyncHTTPHandler()
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
-    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test", handler)
+    provider: Final = HttpJevClassifierClient("test", "https://typesafe.test/v1/systemone", handler)
     router: Final = ComplexityRouter(
         "jev-router",
         litellm.Router(model_list=[]),
@@ -290,7 +295,7 @@ async def test_jev_uses_bounded_history_and_separates_operator_instructions(incl
             "classifier_context_budget_chars": 120,
             "classifier_context_include_assistant_turns": include_assistant,
         },
-        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test/v1/systemone", handler),
         derive_savings_baseline=False,
     )
     await router.aclassify(
@@ -353,7 +358,7 @@ async def test_jev_encrypted_task_skips_provider_without_disabling_plaintext_cla
             "deployment_affinity": False,
             **fallback,
         },
-        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test/v1/systemone", handler),
         derive_savings_baseline=False,
     )
     request: Final = {
@@ -414,7 +419,7 @@ async def test_jev_cancellation_propagates_without_opening_timeout_breaker() -> 
         "jev-cancellation",
         litellm.Router(model_list=[]),
         {"classifier_type": "jev", "jev_classifier_config": {}, "tiers": {"SIMPLE": "cheap"}},
-        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test/v1/systemone", handler),
         derive_savings_baseline=False,
     )
     with pytest.raises(asyncio.CancelledError):
@@ -570,6 +575,92 @@ def test_jev_api_base_without_its_own_key_is_rejected_so_the_environment_key_sta
     assert JevClassifierConfig(api_key="sk-own").api_base is None
 
 
+_CLEF_URL: Final = "https://api.cloudflare.test/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection", "endpoint"),
+    [
+        ({"api_base": "https://typesafe.test"}, "https://typesafe.test/v1/systemone"),
+        ({"api_url": _CLEF_URL}, _CLEF_URL),
+        ({"api_base": "https://typesafe.test", "api_url": _CLEF_URL}, _CLEF_URL),
+    ],
+)
+@pytest.mark.parametrize("enveloped", [False, True])
+async def test_jev_posts_to_api_url_verbatim_and_reads_enveloped_verdicts(
+    monkeypatch: pytest.MonkeyPatch, connection: Mapping[str, str], endpoint: str, enveloped: bool
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = ComplexityRouter(
+        "clef-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "jev",
+            "jev_classifier_config": {**connection, "api_key": "own-key", "model": "clef"},
+            "tiers": {"SIMPLE": "cheap", "COMPLEX": "capable"},
+        },
+        derive_savings_baseline=False,
+    )
+    verdict: Final = {"model": "clef", "answers": {"tier": _answer("COMPLEX").model_dump()}}
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(endpoint).respond(
+            200, json={"result": verdict, "success": True, "errors": [], "messages": []} if enveloped else verdict
+        )
+        outcome: Final = await router.aclassify("choose a tier")
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.label, outcome.jev_verdict.model) == ("COMPLEX", "clef")
+    sent: Final = route.calls.last.request
+    assert sent.headers["authorization"] == "Bearer own-key"
+    assert json.loads(sent.content)["model"] == "clef"
+
+
+@pytest.mark.parametrize(
+    ("classifier", "rejection"),
+    [
+        ({"api_url": _CLEF_URL}, r"api_url requires opensource_classifier_config\.api_key"),
+        ({"api_url": None, "api_key": "own-key"}, r"api_url resolved to nothing"),
+        ({"api_url": "not a url", "api_key": "own-key"}, r"api_url"),
+        ({"api_url": "ftp://clef.test/run", "api_key": "own-key"}, r"api_url"),
+        (
+            {"provider": "laya", "model": "english", "api_url": _CLEF_URL, "api_key": "own-key"},
+            r"api_url is only supported for provider 'jev'",
+        ),
+    ],
+)
+def test_jev_api_url_fails_closed_instead_of_falling_back_to_another_endpoint(
+    classifier: Mapping[str, object], rejection: str
+) -> None:
+    with pytest.raises(ValueError, match=rejection):
+        ComplexityRouterConfig.model_validate({"classifier_type": "jev", "jev_classifier_config": classifier})
+    assert JevClassifierConfig(api_url=None, api_key=None).api_url is None
+
+
+@pytest.mark.parametrize(
+    ("supplied", "keeps_stored_key"),
+    [
+        ({}, True),
+        ({"api_url": _CLEF_URL}, True),
+        ({"api_url": "https://collector.invalid/run"}, False),
+        ({"api_url": None}, False),
+    ],
+)
+def test_editing_api_url_never_carries_the_stored_key_to_a_new_endpoint(
+    supplied: Mapping[str, object], keeps_stored_key: bool
+) -> None:
+    write: Final = resolve_complexity_router_config_write(
+        {"classifier_type": "jev", "jev_classifier_config": {"model": "clef", **supplied}},
+        {"classifier_type": "jev", "jev_classifier_config": {"api_url": _CLEF_URL, "api_key": "stored-secret"}},
+    )
+    assert write.effective is not None
+    classifier: Final = TypeAdapter(Mapping[str, object]).validate_python(write.effective["opensource_classifier_config"])
+    assert classifier.get("api_key") == ("stored-secret" if keeps_stored_key else None)
+    assert write.supplied_connection_fields == frozenset(supplied)
+
+
 @pytest.mark.parametrize(
     ("probabilities", "confidence"),
     [
@@ -654,7 +745,7 @@ async def test_http_jev_classifier_client_posts_to_system_one() -> None:
 
     handler: Final = AsyncHTTPHandler()
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
-    client: Final = HttpJevClassifierClient("secret", "https://typesafe.test", handler)
+    client: Final = HttpJevClassifierClient("secret", "https://typesafe.test/v1/systemone", handler)
     request: Final = build_jev_request("Hello", None, "jev-latest", DEFAULT_JEV_INSTRUCTIONS, {"SIMPLE": "facts"})
     response: Final = await client.evaluate(request, 1.0)
 

@@ -119,6 +119,7 @@ from .jev_classifier import (
     JevVerdict,
     build_jev_request,
     jev_classifier_cost,
+    system_one_url,
 )
 from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
 from .stall_detector import detect_stalled_task
@@ -1316,7 +1317,7 @@ class ComplexityRouter(CustomLogger):
             connection: Final = oss_connection(config.provider, config.api_base, config.api_key)
             return HttpJevClassifierClient(
                 api_key=connection.api_key,
-                api_base=connection.api_base,
+                url=system_one_url(connection.api_base),
                 http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
                 provider=config.provider,
             )
@@ -1328,7 +1329,7 @@ class ComplexityRouter(CustomLogger):
         api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
         return HttpJevClassifierClient(
             api_key=api_key,
-            api_base=api_base,
+            url=config.api_url or system_one_url(api_base),
             http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
         )
 

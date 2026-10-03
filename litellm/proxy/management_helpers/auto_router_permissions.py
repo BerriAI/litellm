@@ -78,6 +78,7 @@ class _MemberOpenSourceClassifierConfig(BaseModel):
     model: str
     api_key: None = None
     api_base: None = None
+    api_url: None = None
     timeout_ms: int
     instructions: str | None = None
     circuit_breaker_enabled: bool
