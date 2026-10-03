@@ -283,7 +283,9 @@ function PeopleTable({
           </TableBody>
         </Table>
         {people.length === 0 && (
-          <div className="p-10 text-center text-sm text-muted-foreground">No engineers match “{query}”</div>
+          <div className="p-10 text-center text-sm text-muted-foreground">
+            {query ? `No engineers match “${query}”` : "Link accounts to see your engineers"}
+          </div>
         )}
       </div>
       <p className="text-xs text-muted-foreground">
@@ -487,7 +489,7 @@ function Report({
           </Button>
         )}
       </div>
-      <Tabs defaultValue="people" className="gap-5">
+      <Tabs defaultValue={snapshot.people.length ? "people" : "pulls"} className="gap-5">
         <PageTabsList>
           <PageTabsTrigger value="people">
             Engineers <span className="ml-1.5 text-muted-foreground">{snapshot.people.length}</span>
