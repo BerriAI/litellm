@@ -3,8 +3,7 @@
 Covers logging.otel.success.exports_metric: a successful non-streaming call must
 land at the OTEL destination as ONE connected trace - a single root SERVER span
 with the auth phase and db lookups under it, the gen-AI CLIENT span parented
-into the same tree, and the cost write either under it or as the root of its
-own trace linked back to the request span. The regression this pins: the proxy publishing
+into the same tree. The regression this pins: the proxy publishing
 the global TracerProvider before callbacks init made server spans export through
 a different provider than the preset's gen-AI spans, so the destination received
 the gen-AI span alone, dangling (fixed in #30590; verified failing at its parent
@@ -29,14 +28,13 @@ from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, OTEL_EXPORTER_
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
-from otel_client import CallTraces, JaegerSpan, JaegerTrace, OtelReader, root_span
+from otel_client import CallTraces, JaegerSpan, JaegerTrace, OtelReader
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 pytestmark = pytest.mark.e2e
 
 MODEL = CHEAP_ANTHROPIC_MODEL
-COST_SPAN = "batch_write_to_db _PROXY_track_cost_callback"
-DB_SPAN_PREFIX = "postgres "
+DB_SPAN_PREFIX = "postgres."
 #: The active OTEL v2 logger's name in /health/readiness/details success_callbacks.
 OTEL_V2_LOGGER_NAME = "OpenTelemetryV2"
 
@@ -79,12 +77,12 @@ def _chain_reaches(span_id: str, root_id: str, trace: JaegerTrace) -> bool:
     return False
 
 
-def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str, require_cost_span: bool = True) -> None:
+def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str) -> None:
     """The enforced behavior: the destination holds exactly one call-id-tagged
     trace for the call, rooted at the SERVER span, with auth/db children and
     the gen-AI span all connected into that one tree - no dangling parent
-    references - and the cost write either in that trace or as the root of
-    its own trace linked FOLLOWS_FROM to the request SERVER span."""
+    references. The spend enqueue after the response does no I/O, so it emits
+    no span; the flush that writes spend is its own background trace."""
     hits = traces.hits
     assert hits, (
         "no trace for this call arrived at the destination within the deadline "
@@ -121,21 +119,6 @@ def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str, r
     assert any(name.startswith(DB_SPAN_PREFIX) for name in names), (
         f"no db ('{DB_SPAN_PREFIX}*') span in the trace; spans: {names}"
     )
-    if require_cost_span and COST_SPAN not in names:
-        cost_traces = [t for t in traces.linked if (r := root_span(t)) is not None and r.operation_name == COST_SPAN]
-        assert len(cost_traces) == 1, (
-            f"cost write span {COST_SPAN!r} reached neither the request trace nor its own "
-            f"trace linked to the request SERVER span; request spans: {names}; "
-            f"linked traces: {[(t.trace_id, t.span_names()) for t in traces.linked]}"
-        )
-        cost_root = root_span(cost_traces[0])
-        assert cost_root is not None, f"cost write trace has no single root; spans: {cost_traces[0].span_names()}"
-        link = next(ref for ref in cost_root.references if ref.span_id == root.span_id)
-        assert link.ref_type == "FOLLOWS_FROM" and link.trace_id == trace.trace_id, (
-            f"the cost write trace's root must reference the request SERVER span FOLLOWS_FROM, "
-            f"got refType={link.ref_type!r} traceID={link.trace_id!r} (request trace {trace.trace_id})"
-        )
-
     genai = next((span for span in trace.spans if span.operation_name == genai_span), None)
     assert genai is not None, f"gen-AI span {genai_span!r} missing; spans: {names}"
     assert genai.kind == "client", f"gen-AI span must have kind=client, got {genai.kind!r}"
@@ -145,14 +128,11 @@ def _assert_complete_trace(traces: CallTraces, *, route: str, genai_span: str, r
     )
 
 
-def _poll(
-    otel_reader: OtelReader, *, call_id: str, route: str, genai_span: str, require_cost_span: bool = True
-) -> CallTraces:
+def _poll(otel_reader: OtelReader, *, call_id: str, route: str, genai_span: str) -> CallTraces:
     return otel_reader.poll_traces_for_call(
         call_id=call_id,
         settled_names={f"POST {route}", f"auth {route}", genai_span},
         settled_prefixes={DB_SPAN_PREFIX},
-        linked_names=frozenset({COST_SPAN}) if require_cost_span else frozenset(),
     )
 
 
@@ -308,8 +288,7 @@ class TestOtelTraceCompleteness:
         The trace should have a single server root span for the incoming request, with
         the authentication and database work beneath it. The span for the actual model
         call must also belong to that same trace, rather than being exported separately
-        with a missing parent, and the cost-recording work must land either in that
-        trace or in its own trace linked to it.
+        with a missing parent.
 
         This matters because a split trace is easy to miss: all of the spans may still
         arrive, but the model call appears without the surrounding request context.
@@ -367,8 +346,6 @@ class TestOtelTraceCompleteness:
         The trace must have a single root span named "POST /v1/messages". The
         authentication, database, and model-call spans must all belong to
         the same trace and have valid parent relationships leading back to that root.
-        The cost-writing span must land in the request trace or in its own trace
-        linked to it.
 
         The model-call span is expected to be named "chat <model>". The test fails if
         the request is split across multiple traces, if any span references a missing
@@ -397,13 +374,10 @@ class TestOtelTraceCompleteness:
 
         The trace must have a single root span named "POST /v1/responses". The
         authentication, database, and model-call spans must all belong to the same
-        trace and have valid parent relationships leading back to that root. The cost
-        write finishes after the response, so it lands as the root of its own trace
-        linked FOLLOWS_FROM to the request SERVER span.
+        trace and have valid parent relationships leading back to that root.
 
         The model-call span is expected to be named "chat <model>". The test fails on
-        a split request trace, a dangling parent, a disconnected model-call span, or
-        a cost write that is neither in the request trace nor linked to it."""
+        a split request trace, a dangling parent or a disconnected model-call span."""
         route = "/v1/responses"
         _assert_otel_destination_configured(client)
 
@@ -428,8 +402,7 @@ class TestOtelTraceCompleteness:
         """A successful streamed `/chat/completions` request should export one
         complete OTEL trace. The trace must contain a single root `SERVER`
         span, with the auth, database, and gen-AI `CLIENT` spans all
-        connected back to that root, and the cost write in that trace or in
-        its own trace linked to it.
+        connected back to that root.
 
         Streaming has an additional lifecycle risk because the gen-AI span is
         closed by the stream-consumption path after the final chunk has
@@ -477,8 +450,7 @@ class TestOtelTraceCompleteness:
         """A successful streamed `/v1/messages` request should export one
         complete OTEL trace. The trace must contain a single root `SERVER`
         span, with the auth, database, and gen-AI `CLIENT` spans all
-        connected back to that root, and the cost write in that trace or in
-        its own trace linked to it.
+        connected back to that root.
 
         This endpoint has the same streaming lifecycle risk as
         `/chat/completions`: the gen-AI span is closed by the
@@ -558,18 +530,14 @@ class TestOtelTraceCompleteness:
         )
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
-        traces = _poll(
-            otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span, require_cost_span=False
-        )
-        _assert_complete_trace(traces, route=route, genai_span=genai_span, require_cost_span=False)
+        traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
+        _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         one_served_genai_span(traces.hits[0], genai_span)
 
         spend_row = client.poll_proxy_spend_for_key(key)
         assert spend_row is not None and spend_row.spend is not None and spend_row.spend > 0, (
-            "a successful streamed responses call must record a positive-spend row in /spend/logs "
-            "(the cost-write SPAN is knowingly absent on this surface, LIT-4428, but the spend "
-            f"itself must land); got {spend_row!r}"
+            f"a successful streamed responses call must record a positive-spend row in /spend/logs; got {spend_row!r}"
         )
         assert spend_row.call_type == "aresponses", (
             f"the spend row must be attributed to the responses call type, got {spend_row.call_type!r}"
@@ -686,9 +654,7 @@ class TestOtelTraceCompleteness:
         )
 
         genai_span = f"chat {CHEAP_OPENAI_MODEL}"
-        traces = _poll(
-            otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span, require_cost_span=False
-        )
+        traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
         _assert_real_ttft(traces.hits, genai_span=genai_span)
 
     @pytest.mark.covers("logging.otel.failure.exports_metric", exercised_on=["chat_completions"])
@@ -704,9 +670,7 @@ class TestOtelTraceCompleteness:
 
         The test uses a deployment with an invalid upstream API key. This
         allows the request to pass LiteLLM’s proxy authentication and fail at
-        the provider, which is necessary to generate a model-call error span.
-        There should be no cost-write span because failed requests are not
-        billed."""
+        the provider, which is necessary to generate a model-call error span."""
         route = "/chat/completions"
         _assert_otel_destination_configured(client)
 
@@ -736,10 +700,8 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "failed responses must still carry x-litellm-call-id"
 
         genai_span = f"chat {model_name}"
-        traces = _poll(
-            otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span, require_cost_span=False
-        )
-        _assert_complete_trace(traces, route=route, genai_span=genai_span, require_cost_span=False)
+        traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
+        _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
         assert str(_tag(root, "http.status_code")) == "401", (
@@ -760,8 +722,7 @@ class TestOtelTraceCompleteness:
         litellm.provider.error.llm_provider attribute.
 
         Same setup as the chat sibling: a deployment with an invalid upstream
-        API key passes proxy auth and fails at the provider with a real 401,
-        and failed requests are not billed, so no cost-write span."""
+        API key passes proxy auth and fails at the provider with a real 401."""
         route = "/v1/messages"
         _assert_otel_destination_configured(client)
 
@@ -792,10 +753,8 @@ class TestOtelTraceCompleteness:
         assert outcome.call_id is not None, "failed responses must still carry x-litellm-call-id"
 
         genai_span = f"chat {model_name}"
-        traces = _poll(
-            otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span, require_cost_span=False
-        )
-        _assert_complete_trace(traces, route=route, genai_span=genai_span, require_cost_span=False)
+        traces = _poll(otel_reader, call_id=outcome.call_id, route=route, genai_span=genai_span)
+        _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
         assert str(_tag(root, "http.status_code")) == "401", (

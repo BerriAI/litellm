@@ -155,13 +155,46 @@ describe("RunView", () => {
     expect(screen.queryByRole("button", { name: "Show details" })).not.toBeInTheDocument();
   });
 
+  it("keeps loaded steps and totals after a page fails, then retries the same cursor", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 2 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "next-page" };
+    const second: Trace = {
+      ...research,
+      summary,
+      spans: [
+        { ...research.spans[1], type: "tool", name: "later-page-tool", parent_span_id: research.spans[0].span_id },
+      ],
+      next_cursor: null,
+    };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(second);
+    renderWithProviders(<RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+
+    expect(await screen.findByText("Showing 1 of 2 steps")).toBeVisible();
+    const before = screen.getByRole("banner").textContent;
+    await user.click(screen.getByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("Could not load more steps. Your loaded steps are still available.")).toBeVisible();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("later-page-tool")).toBeVisible();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    expect(screen.getAllByRole("treeitem")).toHaveLength(2);
+    expect(screen.getByRole("banner")).toHaveTextContent(before ?? "");
+    expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page", "next-page"]);
+  });
+
   it("keeps a way back to the runs table when a run fails to load", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
-    vi.mocked(agentTraceCall).mockRejectedValue(new Error("trace exceeds the 1000 span read limit"));
+    vi.mocked(agentTraceCall).mockRejectedValue(new Error("Traces are temporarily unavailable"));
     renderWithProviders(<RunView traceId="big" accessToken="sk-test" onBack={onBack} />);
 
-    expect(await screen.findByText("trace exceeds the 1000 span read limit")).toBeInTheDocument();
+    expect(await screen.findByText("Traces are temporarily unavailable")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /back to traces/i }));
     expect(onBack).toHaveBeenCalledTimes(1);
   });

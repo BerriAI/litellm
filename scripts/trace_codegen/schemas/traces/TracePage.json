@@ -76,6 +76,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "resolution_limited": {
+          "type": "boolean",
+          "x-python-optional": true
+        },
         "service": {
           "type": "string"
         },
@@ -113,6 +117,7 @@
         }
       },
       "required": [
+        "resolution_limited",
         "trace_id",
         "trace_ref",
         "name",
