@@ -151,6 +151,7 @@ LLM_CONFIG_NAMES: Final = (
     "AzureAIRerankConfig",
     "InfinityRerankConfig",
     "JinaAIRerankConfig",
+    "ScalewayRerankConfig",
     "DeepinfraRerankConfig",
     "HostedVLLMRerankConfig",
     "NvidiaNimRerankConfig",
@@ -688,6 +689,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "InfinityRerankConfig",
     ),
     "JinaAIRerankConfig": (".llms.jina_ai.rerank.transformation", "JinaAIRerankConfig"),
+    "ScalewayRerankConfig": (".llms.scaleway.rerank.transformation", "ScalewayRerankConfig"),
     "DeepinfraRerankConfig": (
         ".llms.deepinfra.rerank.transformation",
         "DeepinfraRerankConfig",
