@@ -131,6 +131,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
 from litellm.types.llms.bedrock import AwsSessionTag
+from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
@@ -264,7 +265,9 @@ class _TeamRow(Protocol):
 
 
 class _TeamLookupTable(Protocol):
-    def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
+    def find_unique(
+        self, *, where: Mapping[str, object], include: Mapping[str, bool] | None = None
+    ) -> Awaitable[_TeamRow | None]: ...
 
 
 class _TeamTable(_TeamLookupTable, Protocol):
@@ -1994,6 +1997,61 @@ def _canonical_session_tags(tags: Sequence[AwsSessionTag]) -> tuple[tuple[str, s
     return tuple(sorted((tag["Key"], tag["Value"]) for tag in tags))
 
 
+async def _authorize_team_router_dependencies_on_write(
+    *,
+    incoming: Deployment | updateDeployment | None,
+    existing: Deployment | None,
+    actor: UserAPIKeyAuth,
+    team: LiteLLM_TeamTable,
+    prisma_client: PrismaClient,
+) -> None:
+    from litellm.proxy.proxy_server import llm_router
+
+    incoming_params: Final = incoming.litellm_params if incoming is not None else None
+    existing_params: Final = existing.litellm_params if existing is not None else None
+    if not is_complexity_router_model(_effective_model(incoming_params, existing_params)):
+        return
+    if llm_router is None:
+        raise HTTPException(status_code=400, detail="An auto-router model catalog is required.")
+    requested_team_id: Final = incoming.model_info.team_id if incoming is not None and incoming.model_info else None
+    destination_row: Final = (
+        await _repo_team_table(prisma_client).find_unique(
+            where={"team_id": requested_team_id}, include={"litellm_model_table": True}
+        )
+        if requested_team_id is not None and requested_team_id != team.team_id
+        else None
+    )
+    if requested_team_id is not None and requested_team_id != team.team_id and destination_row is None:
+        raise HTTPException(status_code=400, detail="The destination team does not exist.")
+    destination: Final = LiteLLM_TeamTable.model_validate(destination_row.model_dump()) if destination_row else team
+    ModelManagementAuthChecks.can_user_make_team_model_call(
+        team_id=destination.team_id, user_api_key_dict=actor, team_obj=destination, premium_user=True
+    )
+    try:
+        config: Final = RequestComplexityRouterConfig.model_validate(
+            _effective_complexity_router_config(incoming_params, existing_params)
+        )
+    except ValidationError as error:
+        raise HTTPException(status_code=400, detail="The auto-router configuration is invalid.") from error
+    supplied_default: Final = incoming_params.complexity_router_default_model if incoming_params is not None else None
+    stored_default: Final = existing_params.complexity_router_default_model if existing_params is not None else None
+    default_model: Final = (
+        supplied_default
+        if supplied_default is not None
+        else decrypt_value_helper(stored_default, key="complexity_router_default_model", return_original_value=True)
+        if stored_default is not None
+        else None
+    )
+    await authorize_member_auto_router_dependencies(
+        config=config,
+        default_model=default_model,
+        user_api_key_dict=actor,
+        team=destination,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+    )
+
+
 class ModelManagementAuthChecks:
     """
     Common auth checks for model management endpoints
@@ -2123,7 +2181,8 @@ class ModelManagementAuthChecks:
         ## Check team model auth
         if model_params.model_info.team_id is not None:
             team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(
-                where={"team_id": model_params.model_info.team_id}
+                where={"team_id": model_params.model_info.team_id},
+                include={"litellm_model_table": True},
             )
             if team_obj_row is None:
                 # The team was deleted. Callers that opt in (e.g. model deletion) may
@@ -2160,12 +2219,21 @@ class ModelManagementAuthChecks:
                     llm_router=llm_router,
                 )
 
-            return ModelManagementAuthChecks.can_user_make_team_model_call(
+            ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
                 premium_user=premium_user,
             )
+            if member_operation is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                await _authorize_team_router_dependencies_on_write(
+                    incoming=model_params if member_operation == "create" else incoming_model_params,
+                    existing=model_params if member_operation == "update" else None,
+                    actor=user_api_key_dict,
+                    team=team_obj,
+                    prisma_client=prisma_client,
+                )
+            return True
         ## Check non-team model auth
         elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
