@@ -17,15 +17,16 @@ import { type Lens } from "../model/types";
 const TH = "px-3 font-medium";
 const TH_NUM = "px-3 text-right font-medium";
 
-/** Every saved investigation as a table: what it watches, how often, how it last went. */
 export function InvestigationList({
   lenses,
   connected,
+  readOnly = false,
   onEdit,
   onRunNow,
 }: {
   lenses: Lens[];
   connected: boolean;
+  readOnly?: boolean;
   onEdit: (id: string) => void;
   onRunNow: (id: string) => void;
 }) {
@@ -68,10 +69,13 @@ export function InvestigationList({
               return (
                 <tr
                   key={lens.id}
-                  onClick={() => onEdit(lens.id)}
+                  onClick={readOnly ? undefined : () => onEdit(lens.id)}
                   data-testid="investigation-row"
                   aria-label={lens.settings.name}
-                  className="h-9 cursor-pointer border-b border-border/60 text-[12px] transition-colors duration-150 hover:bg-trace-row-hover motion-reduce:transition-none"
+                  className={cn(
+                    "h-9 border-b border-border/60 text-[12px] transition-colors duration-150 hover:bg-trace-row-hover motion-reduce:transition-none",
+                    !readOnly && "cursor-pointer",
+                  )}
                 >
                   <td className="truncate px-3 text-foreground">{lens.settings.name}</td>
                   <td className="truncate px-3 text-muted-foreground">{scopeLabel(lens.settings)}</td>
@@ -104,26 +108,28 @@ export function InvestigationList({
                   </td>
                   <td className="px-3 text-right font-mono tabular-nums text-foreground">{open}</td>
                   <td className="pr-2">
-                    <span className="flex items-center justify-end gap-0.5">
-                      <button
-                        type="button"
-                        aria-label={`Run ${lens.settings.name} now`}
-                        title="Run now"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onRunNow(lens.id);
-                        }}
-                        className="inline-flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                      >
-                        <Play className="size-3" />
-                      </button>
-                      <span
-                        aria-hidden="true"
-                        className="inline-flex size-6 items-center justify-center text-muted-foreground/60"
-                      >
-                        <Pencil className="size-3" />
+                    {!readOnly && (
+                      <span className="flex items-center justify-end gap-0.5">
+                        <button
+                          type="button"
+                          aria-label={`Run ${lens.settings.name} now`}
+                          title="Run now"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRunNow(lens.id);
+                          }}
+                          className="inline-flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                        >
+                          <Play className="size-3" />
+                        </button>
+                        <span
+                          aria-hidden="true"
+                          className="inline-flex size-6 items-center justify-center text-muted-foreground/60"
+                        >
+                          <Pencil className="size-3" />
+                        </span>
                       </span>
-                    </span>
+                    )}
                   </td>
                 </tr>
               );
