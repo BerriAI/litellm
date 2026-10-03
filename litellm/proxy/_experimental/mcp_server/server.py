@@ -8,12 +8,13 @@ import asyncio
 import contextlib
 import contextvars
 import hashlib
+import itertools
 import json
 import os
 import time
 import types
 from collections import Counter
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, NoReturn, Protocol
 
 import httpx
@@ -1426,6 +1427,41 @@ if MCP_AVAILABLE:
 
         return consumed_messages, b"".join(body_chunks)
 
+    class _ConnectBodyPeek:
+        """Reads a session-less ``POST`` body only once a gate asks whether it is ``initialize``, so a challenge
+        that needs no body still answers before the body arrives; consumed messages replay through ``receive``."""
+
+        def __init__(self, receive: Receive, peekable: bool) -> None:
+            self._receive: Final = receive
+            self._peekable: Final = peekable
+            self._body: bytes | None = None
+            self._replay: Iterator[Message] = iter(())
+
+        async def read(self) -> bytes:
+            messages, body = await _read_request_body_for_routing(self._receive)
+            self._replay = itertools.chain(self._replay, messages)
+            return body
+
+        async def body(self) -> bytes:
+            if not self._peekable:
+                return b""
+            if self._body is None:
+                self._body = await self.read()
+            return self._body
+
+        async def connecting(self) -> bool:
+            return _is_initialize_request(await self.body())
+
+        async def receive(self) -> Message:
+            replayed: Final = next(self._replay, None)
+            return replayed if replayed is not None else await self._receive()
+
+    def _known_connecting(value: bool) -> Callable[[], Awaitable[bool]]:
+        async def answer() -> bool:
+            return value
+
+        return answer
+
     async def _handle_stale_mcp_session(
         scope: Scope,
         receive: Receive,
@@ -1608,7 +1644,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
-        connecting: bool,
+        connecting: Callable[[], Awaitable[bool]],
         allowed_server_ids: set[str] | None = None,
         raw_headers: Mapping[str, str] | None = None,
     ) -> None:
@@ -2073,25 +2109,13 @@ if MCP_AVAILABLE:
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             named_session_id: Final = _get_session_id_from_scope(scope)
-            names_live_session: Final = named_session_id is not None and (
-                named_session_id in _stateful_session_owners or named_session_id in _stateful_server_instances()
+            names_live_session: Final = (
+                named_session_id is not None and named_session_id in _stateful_server_instances()
             )
-            consumed_messages, connect_body = (
-                await _read_request_body_for_routing(receive)
-                if scope.get("method") == "POST" and not names_live_session
-                else ([], b"")
+            connect_peek: Final = _ConnectBodyPeek(
+                receive, peekable=scope.get("method") == "POST" and not names_live_session
             )
-            connecting: Final = _is_initialize_request(connect_body)
-
-            # Replay body messages if we consumed them for peeking
-            original_receive: Final = receive
-
-            async def wrapped_receive():
-                if consumed_messages:
-                    return consumed_messages.pop(0)
-                return await original_receive()
-
-            receive = wrapped_receive
+            receive = connect_peek.receive
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
@@ -2105,7 +2129,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
-                connecting=connecting,
+                connecting=connect_peek.connecting,
                 allowed_server_ids=toolset_allowed_server_ids,
                 raw_headers=raw_headers,
             )
@@ -2177,13 +2201,10 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            session_messages, session_body = (
-                await _read_request_body_for_routing(receive)
-                if scope.get("method") == "POST" and names_live_session
-                else ([], b"")
+            session_body: Final = (
+                await connect_peek.read() if scope.get("method") == "POST" and names_live_session else b""
             )
-            consumed_messages.extend(session_messages)
-            body: Final = connect_body or session_body
+            body: Final = await connect_peek.body() or session_body
             is_initialize: Final = _is_initialize_request(body)
 
             use_stateful: Final = bool(session_id or is_initialize)
@@ -2443,7 +2464,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
-                connecting=scope["method"] == "GET",
+                connecting=_known_connecting(scope["method"] == "GET"),
                 allowed_server_ids=toolset_allowed_server_ids,
                 raw_headers=raw_headers,
             )

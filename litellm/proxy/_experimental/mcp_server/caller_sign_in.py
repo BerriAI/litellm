@@ -15,7 +15,7 @@ never imports a concrete provider.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
@@ -162,7 +162,7 @@ async def preflight_caller_sign_in(
     *,
     root_path: str,
     resource_metadata: str | None,
-    connecting: bool,
+    connecting: Callable[[], Awaitable[bool]],
 ) -> None:
     """Run every provider's connect-time check against the subject token, so a bearer the IdP will
     reject surfaces as a challenge here rather than a JSON-RPC error at the first tool call. A fail-closed
@@ -186,9 +186,8 @@ async def preflight_caller_sign_in(
                 )
             case Unavailable(fail_open=True):
                 continue
-            case Unavailable(detail=detail, fail_open=False) if connecting:
-                raise HTTPException(status_code=503, detail=detail)
-            case Unavailable():
-                continue
+            case Unavailable(detail=detail, fail_open=False):
+                if await connecting():
+                    raise HTTPException(status_code=503, detail=detail)
             case _ as verdict:
                 assert_never(verdict)
