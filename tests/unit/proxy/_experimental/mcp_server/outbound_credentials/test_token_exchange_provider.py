@@ -53,34 +53,23 @@ def test_build_gives_each_caller_an_independent_cache():
     assert build_token_exchanger() is not build_token_exchanger()
 
 
-def _recording_client(seen: list[float | None]):
-    class _Resp:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, object]:
-            return {"access_token": "x", "expires_in": 60}
-
-    class _Client:
-        async def post(self, url, headers, data, timeout=None):
-            seen.append(timeout)
-            return _Resp()
-
-    return _Client()
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_timeout", [0.5, None], ids=["bounded", "handler_default"])
-async def test_built_exchanger_posts_with_the_configured_request_timeout(request_timeout):
-    seen: list[float | None] = []
+async def test_build_token_exchanger_drives_the_injected_http_edge():
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    async def post(url: str, form: dict[str, str], client_auth_headers: dict[str, str]) -> dict[str, object] | None:
+        seen.append((url, form))
+        return {"access_token": "x", "expires_in": 60}
+
     config = TokenExchangeConfig(
         token_exchange_endpoint="https://idp/token", client_id="cid", client_secret=SecretStr("csec")
     )
     server = ServerSpec(server_id="srv", resource="https://up.example.com", config=config)
-    with patch(_HTTP_CLIENT, return_value=_recording_client(seen)):
-        result = await build_token_exchanger(request_timeout=request_timeout).exchange("jwt", server, config)
+    result = await build_token_exchanger(post=post).exchange("jwt", server, config)
     assert isinstance(result, Ok)
-    assert seen == [request_timeout]
+    assert result.ok.access_token == "x"
+    assert [url for url, _ in seen] == ["https://idp/token"]
+    assert seen[0][1]["subject_token"] == "jwt"
 
 
 @pytest.mark.asyncio

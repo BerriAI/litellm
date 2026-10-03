@@ -3,7 +3,6 @@ import time
 import uuid
 from types import SimpleNamespace
 from typing import Any, Final
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -24,10 +23,6 @@ from litellm.proxy._experimental.mcp_server.caller_sign_in import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
-from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
-    _post_exchange_endpoint,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import OboTokenExchanger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     ServerSpec,
@@ -65,25 +60,6 @@ def _response(status_code: int, payload: Any = None, text: str | None = None) ->
     if payload is not None:
         return httpx.Response(status_code=status_code, json=payload, request=request)
     return httpx.Response(status_code=status_code, text=text or "", request=request)
-
-
-_HTTP_CLIENT: Final = "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-
-
-def _entra_rejecting_with(body: dict[str, object]) -> object:
-    """An httpx client whose token POST raises the HTTPStatusError the real exchanger classifies."""
-    request: Final = httpx.Request("POST", TOKEN_URL)
-    response: Final = httpx.Response(401, json=body, request=request)
-
-    class _Resp:
-        def raise_for_status(self) -> None:
-            raise httpx.HTTPStatusError("unauthorized", request=request, response=response)
-
-    class _Client:
-        async def post(self, *args: object, **kwargs: object) -> _Resp:
-            return _Resp()
-
-    return _Client()
 
 
 class StubTokenExchanger:
@@ -225,6 +201,24 @@ def _default_fallback_guardrail(handler: FakeHandler, exchanger: StubTokenExchan
         client_secret="secret-123",
         async_handler=handler,
         token_exchanger=exchanger if exchanger is not None else StubTokenExchanger(_obo_ok()),
+        event_hook="pre_mcp_call",
+        default_on=True,
+    )
+
+
+def _entra_driven_guardrail(
+    handler: FakeHandler, *, unreachable_fallback: str = "fail_closed", request_timeout: float = 10.0
+) -> Agent365Guardrail:
+    """A guardrail whose Entra exchange runs through the real exchanger and the guardrail's own HTTP edge, so
+    ``handler`` answers the token POST first and the evaluate POST after it."""
+    return Agent365Guardrail(
+        guardrail_name="agent-365-guard",
+        tenant_id="tenant-abc",
+        client_id="client-xyz",
+        client_secret="secret-123",
+        unreachable_fallback=unreachable_fallback,
+        request_timeout=request_timeout,
+        async_handler=handler,
         event_hook="pre_mcp_call",
         default_on=True,
     )
@@ -793,31 +787,32 @@ class TestUnreachableFallback:
         """Entra answers a garbled or unverifiable caller assertion with invalid_client AADSTS5002723, the
         same top-level code as a wrong gateway secret. The sub-code makes it the caller's 401 challenge,
         never the fail-open Unscanned pass and never a 503 that blames the gateway credentials."""
-        exchanger: Final = OboTokenExchanger(_post_exchange_endpoint)
-        handler: Final = FakeHandler([])
-        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
-        data: Final = _mcp_data()
-        with (
-            patch(
-                _HTTP_CLIENT,
-                return_value=_entra_rejecting_with(
+        handler: Final = FakeHandler(
+            [
+                _response(
+                    400,
                     {
                         "error": "invalid_client",
                         "error_description": "AADSTS5002723: Invalid JWT token. Token is not well formed.",
                         "error_codes": [5002723],
-                    }
-                ),
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+                    },
+                )
+            ]
+        )
+        guardrail: Final = _entra_driven_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, data)
         assert exc_info.value.status_code == 401
         assert "On-Behalf-Of token exchange was rejected" in exc_info.value.detail["message"]
         info: Final = _guardrail_info(data)
         assert info["guardrail_status"] == "guardrail_intervened"
         assert info["guardrail_response"]["verdict"] == "Rejected"
-        assert "client_secret" not in info["guardrail_response"]["reason"]
-        assert handler.calls == []
+        assert (
+            info["guardrail_response"]["reason"]
+            == "the Entra On-Behalf-Of token exchange was rejected (invalid_client)"
+        )
+        assert [call.url for call in handler.calls] == [TOKEN_URL]
 
     @pytest.mark.asyncio
     async def test_evaluate_4xx_blocks_even_fail_open(self):
@@ -847,22 +842,36 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "error_code", ["invalid_client", "unauthorized_client", "invalid_scope", "invalid_resource"]
+        ("entra", "error_code"),
+        [
+            (_response(400, {"error": "invalid_scope"}), "invalid_scope"),
+            (_response(401, {"error": "invalid_client"}), "invalid_client"),
+            (_response(400, {"error": "invalid_client", "error_codes": [7000215]}), "invalid_client"),
+            (_response(400, {"error": "unauthorized_client"}), "unauthorized_client"),
+        ],
+        ids=["invalid_scope", "invalid_client_401", "invalid_client_wrong_secret", "unauthorized_client"],
     )
-    async def test_gateway_credential_rejection_is_unavailable_not_a_caller_401(self, error_code: str):
-        exchanger: Final = StubTokenExchanger([Error(CredError.of_misconfigured(error_code))])
-        handler: Final = FakeHandler([])
-        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
+    async def test_gateway_credential_rejection_is_unavailable_not_a_caller_401(
+        self, entra: httpx.Response, error_code: str
+    ):
+        """The verdict reason carries the OAuth error code Entra answered with, the text the Logs row and the
+        503 detail show an admin, not a generic exchanger summary."""
+        handler: Final = FakeHandler([entra])
+        guardrail: Final = _entra_driven_guardrail(handler)
         data: Final = _mcp_data()
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, data)
         assert exc_info.value.status_code == 503
         assert exc_info.value.headers is None or "WWW-Authenticate" not in exc_info.value.headers
+        assert f"({error_code})" in exc_info.value.detail["message"]
         info: Final = _guardrail_info(data)
         assert info["guardrail_status"] == "guardrail_failed_to_respond"
         assert info["guardrail_response"]["verdict"] == "Unavailable"
-        assert error_code in info["guardrail_response"]["reason"]
-        assert "client_secret" in info["guardrail_response"]["reason"]
+        assert info["guardrail_response"]["reason"] == (
+            f"Entra rejected the gateway's own Agent 365 credentials ({error_code}); "
+            "check the guardrail's client_id and client_secret"
+        )
+        assert [call.url for call in handler.calls] == [TOKEN_URL]
 
     @pytest.mark.asyncio
     async def test_caller_rejection_reason_does_not_blame_the_gateway_credentials(self):
@@ -879,16 +888,16 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_gateway_credential_rejection_follows_fail_open(self):
-        exchanger: Final = StubTokenExchanger([Error(CredError.of_misconfigured("invalid_client"))])
-        handler: Final = FakeHandler([])
-        guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
+        handler: Final = FakeHandler([_response(401, {"error": "invalid_client"})])
+        guardrail: Final = _entra_driven_guardrail(handler, unreachable_fallback="fail_open")
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
         assert result is data
         info: Final = _guardrail_info(data)
         assert info["guardrail_status"] == "guardrail_failed_to_respond"
         assert info["guardrail_response"]["verdict"] == "Unscanned"
-        assert "invalid_client" in info["guardrail_response"]["reason"]
+        assert "(invalid_client)" in info["guardrail_response"]["reason"]
+        assert [call.url for call in handler.calls] == [TOKEN_URL]
 
     @pytest.mark.asyncio
     async def test_exchange_upstream_unavailable_is_unavailable_with_the_summary_not_a_caller_401(self):
@@ -935,6 +944,92 @@ class TestUnreachableFallback:
         info: Final = _guardrail_info(data)
         assert info["guardrail_status"] == "guardrail_failed_to_respond"
         assert info["guardrail_response"]["verdict"] == "Unscanned"
+
+
+class TestEntraTokenEndpointReasons:
+    """Every way the Entra token endpoint can fail keeps its own verdict reason, since that text is what the
+    guardrail Logs row and the 503 detail carry."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("entra", "reason"),
+        [
+            (
+                _response(500, text="<html>gateway</html>"),
+                "the Entra token endpoint could not be reached (HTTPStatusError)",
+            ),
+            (httpx.ConnectError("refused"), "the Entra token endpoint could not be reached (ConnectError)"),
+            (_response(200, text="<html>waf page</html>"), "the Entra token endpoint returned a non-JSON body"),
+            (_response(200, payload=["x"]), "the Entra token endpoint returned a non-object JSON body"),
+            (_response(200, payload={"token_type": "Bearer"}), "the Entra token endpoint returned no access_token"),
+            (
+                _response(200, payload={"access_token": 7}),
+                "the Entra token endpoint returned a non-string access_token",
+            ),
+        ],
+        ids=["http_500", "connect_error", "non_json", "non_object", "no_access_token", "non_string_access_token"],
+    )
+    async def test_unavailable_reason_names_the_fault(self, entra: object, reason: str):
+        handler: Final = FakeHandler([entra])
+        guardrail: Final = _entra_driven_guardrail(handler)
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert reason in exc_info.value.detail["message"]
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unavailable"
+        assert info["guardrail_response"]["reason"] == reason
+        assert [call.url for call in handler.calls] == [TOKEN_URL]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_code", ["invalid_grant", "interaction_required", "invalid_resource"])
+    async def test_caller_rejection_reason_names_the_oauth_code(self, error_code: str):
+        handler: Final = FakeHandler([_response(400, {"error": error_code, "error_codes": [700082]})])
+        guardrail: Final = _entra_driven_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 401
+        assert _guardrail_info(data)["guardrail_response"]["reason"] == (
+            f"the Entra On-Behalf-Of token exchange was rejected ({error_code})"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("unreachable_fallback", ["fail_closed", "fail_open"])
+    async def test_throttled_token_endpoint_blocks_regardless_of_fallback(self, unreachable_fallback: str):
+        handler: Final = FakeHandler([_response(429, text="slow down"), _response(429, text="slow down")])
+        guardrail: Final = _entra_driven_guardrail(handler, unreachable_fallback=unreachable_fallback)
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_response"]["verdict"] == "Throttled"
+        assert info["guardrail_response"]["reason"] == "the Entra token endpoint returned HTTP 429"
+        connect: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+        assert connect == Unavailable(detail="the Entra token endpoint returned HTTP 429", fail_open=False)
+
+    @pytest.mark.asyncio
+    async def test_preflight_gateway_fault_detail_names_the_oauth_code(self):
+        handler: Final = FakeHandler([_response(400, {"error": "invalid_scope"})])
+        guardrail: Final = _entra_driven_guardrail(handler)
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+        assert verdict == Unavailable(
+            detail=(
+                "Entra rejected the gateway's own Agent 365 credentials (invalid_scope); "
+                "check the guardrail's client_id and client_secret"
+            ),
+            fail_open=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_preflight_unavailable_detail_names_the_fault(self):
+        handler: Final = FakeHandler([_response(200, text="<html>waf page</html>")])
+        guardrail: Final = _entra_driven_guardrail(handler, unreachable_fallback="fail_open")
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+        assert verdict == Unavailable(detail="the Entra token endpoint returned a non-JSON body", fail_open=True)
 
 
 class TestOboTokenCache:
@@ -1354,48 +1449,24 @@ class TestPreflightCallerSignIn:
 
     @pytest.mark.asyncio
     async def test_configured_timeout_bounds_the_entra_exchange_leg(self):
-        seen: Final[list[object]] = []
+        handler: Final = FakeHandler([_response(200, {"access_token": "exchanged", "expires_in": 3600})])
+        guardrail: Final = _entra_driven_guardrail(handler, request_timeout=0.5)
 
-        class _Resp:
-            def raise_for_status(self) -> None:
-                return None
-
-            def json(self) -> dict[str, object]:
-                return {"access_token": "exchanged", "expires_in": 3600}
-
-        class _Client:
-            async def post(self, *args: object, **kwargs: object) -> _Resp:
-                seen.append(kwargs.get("timeout"))
-                return _Resp()
-
-        guardrail: Final = Agent365Guardrail(
-            guardrail_name="a365",
-            tenant_id="tenant-abc",
-            client_id="cid",
-            client_secret="csecret",
-            request_timeout=0.5,
-            async_handler=FakeHandler([]),
-        )
-
-        with patch(_HTTP_CLIENT, return_value=_Client()):
-            verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
 
         assert verdict == SignedIn()
-        assert seen == [0.5], "the Entra token POST must carry the guardrail's own request_timeout"
+        assert [(call.url, call.timeout) for call in handler.calls] == [(TOKEN_URL, 0.5)], (
+            "the Entra token POST must carry the guardrail's own request_timeout"
+        )
 
     @pytest.mark.asyncio
     async def test_malformed_assertion_is_rejected_at_connect_even_fail_open(self):
-        exchanger: Final = OboTokenExchanger(_post_exchange_endpoint)
-        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger, unreachable_fallback="fail_open")
+        handler: Final = FakeHandler([_response(401, {"error": "invalid_client", "error_codes": [5002723]})])
+        guardrail: Final = _entra_driven_guardrail(handler, unreachable_fallback="fail_open")
 
-        with patch(
-            _HTTP_CLIENT,
-            return_value=_entra_rejecting_with({"error": "invalid_client", "error_codes": [5002723]}),
-        ):
-            verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
 
-        assert isinstance(verdict, Rejected)
-        assert "client_secret" not in verdict.detail
+        assert verdict == Rejected(detail="invalid_client", claims=None)
 
     @pytest.mark.asyncio
     async def test_misconfigured_fail_closed_is_unavailable(self):

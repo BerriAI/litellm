@@ -1608,6 +1608,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
+        connecting: bool,
         allowed_server_ids: set[str] | None = None,
         raw_headers: Mapping[str, str] | None = None,
     ) -> None:
@@ -1779,6 +1780,7 @@ if MCP_AVAILABLE:
                     subject_token,
                     root_path=get_request_root_path(),
                     resource_metadata=resource_metadata,
+                    connecting=connecting,
                 )
 
             # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
@@ -2070,6 +2072,22 @@ if MCP_AVAILABLE:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
+            consumed_messages, body = (
+                await _read_request_body_for_routing(receive) if scope.get("method") == "POST" else ([], b"")
+            )
+            is_initialize: Final = _is_initialize_request(body)
+
+            # Replay body messages if we consumed them for peeking
+            original_receive: Final = receive
+            if consumed_messages:
+
+                async def wrapped_receive():
+                    if consumed_messages:
+                        return consumed_messages.pop(0)
+                    return await original_receive()
+
+                receive = wrapped_receive
+
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
             # from the fully-authorized server set: a passthrough server that
@@ -2082,6 +2100,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
+                connecting=is_initialize,
                 allowed_server_ids=toolset_allowed_server_ids,
                 raw_headers=raw_headers,
             )
@@ -2117,8 +2136,6 @@ if MCP_AVAILABLE:
             # - No session ID + initialize → stateful (so client gets mcp-session-id)
             # - No session ID + other → stateless (curl, Inspector, Notion)
             session_id = _get_session_id_from_scope(scope)
-            is_initialize = False
-            consumed_messages: list[Message] = []
 
             # Owner-binding: a live stateful session may only be driven by the
             # caller that created it. Reject mismatches with 403 so a leaked
@@ -2126,8 +2143,7 @@ if MCP_AVAILABLE:
             #
             # Run before ``_handle_stale_mcp_session`` so a non-owner cannot
             # force-clean another caller's residual tracking entries via a
-            # stale DELETE, and before peeking the request body so the 403
-            # response sees a pristine ``receive`` channel.
+            # stale DELETE.
             if session_id:
                 expected_owner: Final = _stateful_session_owners.get(session_id)
                 request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
@@ -2156,11 +2172,6 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            body = b""
-            if scope.get("method") == "POST":
-                consumed_messages, body = await _read_request_body_for_routing(receive)
-                is_initialize = _is_initialize_request(body)
-
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
 
@@ -2188,17 +2199,6 @@ if MCP_AVAILABLE:
                     )
                     await too_many_response(scope, receive, send)
                     return
-
-            # Replay body messages if we consumed them for peeking
-            original_receive: Final = receive
-            if consumed_messages:
-
-                async def wrapped_receive():
-                    if consumed_messages:
-                        return consumed_messages.pop(0)
-                    return await original_receive()
-
-                receive = wrapped_receive
 
             # Serialize requests on the same stateful session so concurrent
             # callers don't clobber each other's auth context mid-flight.
@@ -2429,6 +2429,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
+                connecting=scope["method"] == "GET",
                 allowed_server_ids=toolset_allowed_server_ids,
                 raw_headers=raw_headers,
             )

@@ -8933,6 +8933,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
             user_api_key_auth=UserAPIKeyAuth(api_key="sk-granted-docs", user_id="u-1"),
             client_ip=None,
             raw_headers={"x-litellm-api-key": "sk-granted-docs"},
+            connecting=True,
         )
 
     @pytest.mark.asyncio
@@ -9021,6 +9022,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
             user_api_key_auth=UserAPIKeyAuth(api_key="sk-collision", user_id="u-1"),
             client_ip=None,
             raw_headers={"x-litellm-api-key": "sk-collision"},
+            connecting=True,
         )
 
     @pytest.mark.asyncio
@@ -9128,6 +9130,7 @@ class TestConnectPreflightRoutesLikeTheScopedRouter:
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-group", user_id="u-1"),
                 client_ip=None,
                 raw_headers={"x-litellm-api-key": "sk-group"},
+                connecting=True,
             )
 
         assert outcome is None, (
@@ -10450,6 +10453,7 @@ class TestPreemptive401ModeAware:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
                 client_ip=None,
+                connecting=True,
             )
 
     async def _connect_with_a_grant(self, server, requested: str, path: str) -> HTTPException:
@@ -10472,6 +10476,7 @@ class TestPreemptive401ModeAware:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
                 client_ip=None,
+                connecting=True,
             )
         return exc.value
 
@@ -10553,6 +10558,7 @@ class TestPreemptive401ModeAware:
             mcp_server_auth_headers=None,
             user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
             client_ip=None,
+            connecting=True,
         )
 
         assert outcome is None, "an unselected aggregate connect must pass without a sign-in challenge"
@@ -10655,6 +10661,7 @@ class TestPreemptive401ModeAware:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
                 client_ip=None,
+                connecting=True,
             )
 
         assert exc.value.status_code == 401
@@ -10763,6 +10770,7 @@ class TestSingleServerPreflightReachesIdJag:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                 client_ip=None,
+                connecting=True,
             )
 
     @pytest.mark.asyncio
@@ -10821,6 +10829,7 @@ class TestSingleServerPreflightReachesIdJag:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                 client_ip=None,
+                connecting=True,
             )
 
         assert exc.value.status_code == 401
@@ -10889,6 +10898,7 @@ class TestOboPreflightScopedToAllowedServers:
                     "x-litellm-api-key": user_api_key_auth.api_key if user_api_key_auth else "",
                     "authorization": self.SUBJECT_HEADERS["Authorization"],
                 },
+                connecting=True,
             )
         return allowed_lookup, preflight
 
@@ -10951,6 +10961,7 @@ class TestOboChallengeGateKeepsBaseConnectRules:
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1"),
                 client_ip=None,
                 raw_headers={"x-litellm-api-key": "sk-1234", "authorization": "Bearer sk-1234"},
+                connecting=True,
             )
 
     @pytest.mark.asyncio
@@ -11795,6 +11806,7 @@ class TestConnectChallengeResolver:
                     mcp_server_auth_headers=None,
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                     client_ip=None,
+                    connecting=True,
                 )
         finally:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(
@@ -11836,6 +11848,7 @@ class TestConnectChallengeResolver:
                     mcp_server_auth_headers=None,
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                     client_ip=None,
+                    connecting=True,
                 )
         finally:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(
@@ -11888,6 +11901,7 @@ class TestConnectChallengeResolver:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                 client_ip=None,
+                connecting=True,
             )
 
         assert exc.value.status_code == 401
@@ -11955,6 +11969,7 @@ class TestConnectChallengeResolver:
                     mcp_server_auth_headers=None,
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                     client_ip=client_ip,
+                    connecting=True,
                 )
         finally:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(
@@ -12003,6 +12018,7 @@ class TestConnectChallengeResolver:
                     mcp_server_auth_headers=None,
                     user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                     client_ip=None,
+                    connecting=True,
                 )
         finally:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(
@@ -12019,7 +12035,7 @@ class TestConnectSignInPreflight:
     """A subject token the provider rejects must fail at connect with the RFC 9728 challenge, not as a
     JSON-RPC error on every tools/call where ``WWW-Authenticate`` is lost."""
 
-    async def _connect(self, route_names, guardrail, allowed, raw_headers=None):
+    async def _connect(self, route_names, guardrail, allowed, raw_headers=None, connecting=True):
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         server = _catalog_server()
@@ -12044,6 +12060,7 @@ class TestConnectSignInPreflight:
                 client_ip=None,
                 raw_headers=raw_headers
                 or {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
+                connecting=connecting,
             )
 
     @pytest.mark.asyncio
@@ -12090,6 +12107,97 @@ class TestConnectSignInPreflight:
 
         assert exc.value.status_code == 503
         assert exc.value.detail == "the Entra token endpoint could not be reached"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rpc_method", "session_id", "reaches"),
+        [
+            ("initialize", None, None),
+            ("tools/call", "open-session-1", "stateful"),
+            ("tools/call", None, "stateless"),
+        ],
+        ids=["connect_503", "open_session_tools_call", "stateless_tools_call"],
+    )
+    async def test_fail_closed_outage_is_the_connects_503_only_on_initialize(self, rpc_method, session_id, reaches):
+        """Only the ``initialize`` POST turns a fail-closed provider outage into the connect's 503. Every other
+        JSON-RPC POST on the gated route must reach the session manager with its body intact, so the tools/call
+        hook answers the outage inside the result envelope and writes the guardrail Logs row, as base did."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub",
+            preflight_result=Unavailable("Entra rejected the gateway's own Agent 365 credentials", fail_open=False),
+        )
+        body = json.dumps({"jsonrpc": "2.0", "id": 7, "method": rpc_method, "params": {}}).encode()
+        session_headers = [(b"mcp-session-id", session_id.encode())] if session_id else []
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/catalog",
+            "headers": [(b"content-type", b"application/json"), (b"authorization", b"Bearer entra.jwt.token")]
+            + session_headers,
+        }
+        receive = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+        send = AsyncMock()
+        delivered: dict[str, bytes] = {}  # mutable-ok: records which manager saw the replayed body
+
+        def _recorder(manager: str):
+            async def handle(_scope, replayed_receive, _send):
+                delivered[manager] = (await replayed_receive())["body"]
+
+            return handle
+
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch.object(
+                    server_module,
+                    "extract_mcp_auth_context",
+                    AsyncMock(
+                        return_value=(
+                            UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                            None,
+                            ["catalog"],
+                            None,
+                            None,
+                            {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
+                        )
+                    ),
+                ),
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+                patch.object(server_module, "_SESSION_MANAGERS_INITIALIZED", True),
+                patch.object(server_module.session_manager_stateful, "handle_request", _recorder("stateful")),
+                patch.object(server_module.session_manager_stateless, "handle_request", _recorder("stateless")),
+                patch.object(
+                    server_module.session_manager_stateful,
+                    "_server_instances",
+                    {session_id: MagicMock()} if session_id else {},
+                ),
+            ):
+                if reaches is None:
+                    with pytest.raises(HTTPException) as exc:
+                        await server_module.handle_streamable_http_mcp(scope, receive, send)
+                    assert exc.value.status_code == 503
+                    assert exc.value.detail == "Entra rejected the gateway's own Agent 365 credentials"
+                else:
+                    await server_module.handle_streamable_http_mcp(scope, receive, send)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+            if session_id:
+                server_module._remove_stateful_session_tracking(session_id)
+
+        assert guardrail.preflight_calls == ["entra.jwt.token"]
+        assert delivered == ({} if reaches is None else {reaches: body})
+        send.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_multi_server_connect_never_awaits_the_preflight(self):

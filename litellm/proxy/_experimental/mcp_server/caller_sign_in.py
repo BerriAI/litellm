@@ -162,9 +162,12 @@ async def preflight_caller_sign_in(
     *,
     root_path: str,
     resource_metadata: str | None,
+    connecting: bool,
 ) -> None:
     """Run every provider's connect-time check against the subject token, so a bearer the IdP will
-    reject surfaces as a challenge here rather than a JSON-RPC error at the first tool call."""
+    reject surfaces as a challenge here rather than a JSON-RPC error at the first tool call. A fail-closed
+    provider outage is the connect's 503 only while ``connecting``; on an open session the tool-call hook
+    answers it inside the JSON-RPC envelope, with its guardrail Logs row."""
     from fastapi import HTTPException  # noqa: PLC0415  # lazy: fastapi import stays off the cold path
 
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
@@ -181,9 +184,11 @@ async def preflight_caller_sign_in(
                 raise_token_exchange_challenge(
                     server, root_path=root_path, claims=claims, resource_metadata=resource_metadata
                 )
-            case Unavailable(detail=detail, fail_open=True):
+            case Unavailable(fail_open=True):
                 continue
-            case Unavailable(detail=detail, fail_open=False):
+            case Unavailable(detail=detail, fail_open=False) if connecting:
                 raise HTTPException(status_code=503, detail=detail)
+            case Unavailable():
+                continue
             case _ as verdict:
                 assert_never(verdict)

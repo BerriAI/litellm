@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
     InMemoryTokenCacheBackend,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+    ExchangeHttpPost,
     OboTokenExchanger,
     SubjectTokenRejected,
     TokenExchangeClientError,
@@ -39,7 +40,7 @@ _INVALID_ASSERTION_AADSTS_PREFIX: Final = "50027"
 
 
 @dataclass(frozen=True, slots=True)
-class _OAuthErrorBody:
+class OAuthErrorBody:
     error: str | None
     claims: str | None
     error_codes: tuple[str, ...]
@@ -53,7 +54,7 @@ class _OAuthErrorBody:
         return self.error
 
 
-def _oauth_error_fields(response: httpx.Response) -> _OAuthErrorBody:
+def oauth_error_fields(response: httpx.Response) -> OAuthErrorBody:
     """Read the RFC 6749 5.2 ``error`` code, the IdP's step-up ``claims`` blob and Entra's
     ``error_codes`` sub-codes from a token-endpoint error body, None or empty for whatever is absent.
 
@@ -65,13 +66,13 @@ def _oauth_error_fields(response: httpx.Response) -> _OAuthErrorBody:
     try:
         body: Final[object] = response.json()
     except Exception:  # noqa: BLE001
-        return _OAuthErrorBody(error=None, claims=None, error_codes=())
+        return OAuthErrorBody(error=None, claims=None, error_codes=())
     if not isinstance(body, dict):
-        return _OAuthErrorBody(error=None, claims=None, error_codes=())
+        return OAuthErrorBody(error=None, claims=None, error_codes=())
     code: Final = body.get("error")
     claims: Final = body.get("claims")
     raw_codes: Final = body.get("error_codes")
-    return _OAuthErrorBody(
+    return OAuthErrorBody(
         error=code if isinstance(code, str) else None,
         claims=claims if isinstance(claims, str) and claims else None,
         error_codes=tuple(str(c) for c in raw_codes if isinstance(c, (int, str)))
@@ -81,7 +82,7 @@ def _oauth_error_fields(response: httpx.Response) -> _OAuthErrorBody:
 
 
 async def _post_exchange_endpoint(
-    url: str, form: dict[str, str], client_auth_headers: dict[str, str], *, timeout: float | None = None
+    url: str, form: dict[str, str], client_auth_headers: dict[str, str]
 ) -> dict[str, object] | None:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
@@ -96,7 +97,7 @@ async def _post_exchange_endpoint(
     try:
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
         response: Final = await client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped handler
-            url, headers=headers, data=form, timeout=timeout
+            url, headers=headers, data=form
         )
         response.raise_for_status()  # pyright: ignore
         parsed: Final[object] = response.json()  # pyright: ignore
@@ -108,7 +109,7 @@ async def _post_exchange_endpoint(
             verbose_logger.warning("MCP token exchange throttled or timed out (HTTP %d)", status_code)
             return None
         if 400 <= status_code < 500:
-            oauth_error: Final = _oauth_error_fields(status_err.response)
+            oauth_error: Final = oauth_error_fields(status_err.response)
             gateway_fault: Final = oauth_error.gateway_fault
             if gateway_fault is not None:
                 verbose_logger.warning(
@@ -135,10 +136,7 @@ async def _post_exchange_endpoint(
     return parsed  # pyright: ignore
 
 
-def build_token_exchanger(*, request_timeout: float | None = None) -> OboTokenExchanger:
-    async def post(url: str, form: dict[str, str], client_auth_headers: dict[str, str]) -> dict[str, object] | None:
-        return await _post_exchange_endpoint(url, form, client_auth_headers, timeout=request_timeout)
-
+def build_token_exchanger(*, post: ExchangeHttpPost = _post_exchange_endpoint) -> OboTokenExchanger:
     return OboTokenExchanger(
         post,
         cache=InMemoryTokenCacheBackend(max_size=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE),
