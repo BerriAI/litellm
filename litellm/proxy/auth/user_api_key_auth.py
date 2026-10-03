@@ -2295,9 +2295,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
     )
 
     if valid_token is not None:
-        valid_token = update_valid_token_with_end_user_params(
-            valid_token=valid_token, end_user_params=end_user_params
-        )
+        valid_token = update_valid_token_with_end_user_params(valid_token=valid_token, end_user_params=end_user_params)
         valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
     user_obj: LiteLLM_UserTable | None = None
