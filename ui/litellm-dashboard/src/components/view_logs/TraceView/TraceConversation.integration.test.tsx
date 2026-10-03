@@ -80,9 +80,50 @@ describe("TraceConversation", () => {
     const user = userEvent.setup();
     vi.mocked(agentTraceSpanCall).mockRejectedValueOnce(new Error("temporarily unavailable"));
     renderWithProviders(<TraceConversation trace={trace} accessToken="test" onOpenStep={vi.fn()} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("missing from the conversation");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retry this step to continue the conversation");
     await user.click(screen.getByRole("button", { name: "Retry step" }));
     expect(await screen.findByText("Read the release notes")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("holds later turns and the final answer behind a failed step until retry succeeds", async () => {
+    const user = userEvent.setup();
+    const first = { ...tool, span_id: "first", name: "First response", type: "llm", start_offset_ms: 1 };
+    const failedTool = { ...tool, start_offset_ms: 2 };
+    const last = { ...first, span_id: "last", name: "Final response", start_offset_ms: 3 };
+    const traced = { ...trace, spans: [root, first, failedTool, last] } as Trace;
+    const question = { role: "user", content: "Read the release notes" };
+    const checking = {
+      role: "assistant",
+      content: "Checking the release",
+      tool_calls: [{ name: "read_file", args: { path: "CHANGELOG.md" } }],
+    };
+    const firstDetail = { ...rootDetail, span_id: "first", output: JSON.stringify([checking]) };
+    const lastDetail = {
+      ...rootDetail,
+      span_id: "last",
+      input: JSON.stringify([question, checking, { role: "tool", content: "All checks passed" }]),
+    };
+    const toolFetch = vi.fn().mockRejectedValueOnce(new Error("unavailable")).mockResolvedValue(toolDetail);
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "tool") return toolFetch();
+      if (id === "first") return firstDetail;
+      if (id === "last") return lastDetail;
+      return rootDetail;
+    });
+    renderWithProviders(<TraceConversation trace={traced} accessToken="test" onOpenStep={vi.fn()} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("read_file");
+    expect(await screen.findByText("Checking the release")).toBeVisible();
+    expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("End of conversation")).not.toBeInTheDocument();
+    expect(screen.getByText("2 of 4 steps loaded")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Retry step" }));
+    expect(await screen.findByText("The release is ready")).toBeVisible();
+    expect(screen.getAllByText("Checking the release")).toHaveLength(1);
+    expect(screen.getAllByText("Read the release notes")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Expand read_file tool call" })).toHaveLength(1);
+    expect(screen.getByText("End of conversation")).toBeVisible();
   });
 });

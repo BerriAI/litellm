@@ -42,12 +42,13 @@ export function TraceConversation({
     })),
   });
   const loading = queries.some((query) => query.isPending);
-  const details = new Map<string, SpanDetail>();
-  const pendingIndex = queries.findIndex((query) => query.isPending);
-  queries.forEach((query, index) => {
-    if (query.data && (pendingIndex < 0 || index < pendingIndex)) details.set(visible[index].span_id, query.data);
-  });
-  const complete = visible.length === steps.length && !loading;
+  const failed = queries.some((query) => query.isError);
+  const unresolvedIndex = queries.findIndex((query) => !query.isSuccess);
+  const loadedCount = unresolvedIndex < 0 ? queries.length : unresolvedIndex;
+  const details = new Map(
+    queries.slice(0, loadedCount).map((query, index) => [visible[index].span_id, query.data!] as const),
+  );
+  const complete = loadedCount === steps.length;
   const items = buildConversation(trace.spans, details, complete);
   return (
     <section aria-label="Trace conversation" className="min-h-0 flex-1 overflow-y-auto">
@@ -79,7 +80,7 @@ export function TraceConversation({
           (query, index) =>
             query.isError && (
               <div key={visible[index].span_id} role="alert" className="rounded-md border p-3 text-sm">
-                Could not load {visible[index].name}. This step is missing from the conversation.
+                Could not load {visible[index].name}. Retry this step to continue the conversation.
                 <Button variant="outline" size="sm" className="mt-2" onClick={() => query.refetch()}>
                   Retry step
                 </Button>
@@ -91,20 +92,16 @@ export function TraceConversation({
             Loading conversation…
           </p>
         )}
-        {!loading && items.length === 0 && (
+        {complete && items.length === 0 && (
           <p className="text-sm text-muted-foreground">No conversation content recorded.</p>
         )}
         <div className="flex items-center justify-between gap-3 border-t pt-4 text-xs text-muted-foreground">
-          <span>
-            {visible.length === steps.length
-              ? "End of conversation"
-              : `${visible.length} of ${steps.length} steps loaded`}
-          </span>
+          <span>{complete ? "End of conversation" : `${loadedCount} of ${steps.length} steps loaded`}</span>
           {visible.length < steps.length && (
             <Button
               variant="outline"
               size="sm"
-              disabled={loading}
+              disabled={loading || failed}
               onClick={() => setLimit((current) => current + CONVERSATION_PAGE_SIZE)}
             >
               Load next {Math.min(CONVERSATION_PAGE_SIZE, steps.length - visible.length)} steps

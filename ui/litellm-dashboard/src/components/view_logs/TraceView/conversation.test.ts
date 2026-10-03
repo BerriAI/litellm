@@ -60,7 +60,11 @@ describe("trace conversation", () => {
         ],
       },
     };
-    const items = buildConversation([root, model], new Map([["model", normalized]]), true);
+    const details = new Map([
+      ["root", detail("root", [], [])],
+      ["model", normalized],
+    ]);
+    const items = buildConversation([root, model], details, true);
     expect(items[0].messages).toEqual([
       user,
       { role: "assistant", content: "Checking", tool_calls: [{ name: "lookup", args: { order: 42 } }] },
@@ -74,8 +78,11 @@ describe("trace conversation", () => {
     const second = { ...first, span_id: "second", parent_span_id: "other", start_offset_ms: 2 };
     const framework = { ...first, span_id: "framework", type: "framework" } as Span;
     const spans = [root, agent, otherAgent, first, second, framework];
-    expect(conversationSteps(spans).map((span) => span.span_id)).toEqual(["root", "first", "second"]);
+    expect(conversationSteps(spans).map((span) => span.span_id)).toEqual(["root", "agent", "other", "first", "second"]);
     const details = new Map([
+      ["root", detail("root", [], [])],
+      ["agent", detail("agent", [], [])],
+      ["other", detail("other", [], [])],
       ["first", detail("first", [user], [answer])],
       ["second", detail("second", [user], [answer])],
     ]);
@@ -91,5 +98,145 @@ describe("trace conversation", () => {
     const details = new Map([["root", detail("root", [user], [answer])]]);
     expect(buildConversation([root], details, false).flatMap((item) => item.messages)).toEqual([user]);
     expect(buildConversation([root], details, true).flatMap((item) => item.messages)).toEqual([user, answer]);
+  });
+
+  it("pairs typed tool arguments without coercing strings that resemble JSON", () => {
+    const model = { ...root, span_id: "model", parent_span_id: "root", type: "llm", start_offset_ms: 1 } as Span;
+    const tool = { ...model, span_id: "tool", name: "lookup", type: "tool", start_offset_ms: 2 } as Span;
+    const args = { order: 42, active: true, filters: { tags: ["paid"] }, empty: null, label: "42", text: "true" };
+    const typedCall = { ...call, tool_calls: [{ name: "lookup", args }] };
+    const toolDetail: SpanDetail = {
+      ...detail("tool", args, "Shipped"),
+      input_ui: {
+        kind: "fields",
+        fields: Object.entries(args).map(([key, value]) => ({
+          key,
+          value: typeof value === "string" ? value : JSON.stringify(value),
+        })),
+      },
+    };
+    const details = new Map([
+      ["root", detail("root", [user], [])],
+      ["model", detail("model", [user], [typedCall])],
+      ["tool", toolDetail],
+    ]);
+    const items = buildConversation([root, model, tool], details, true);
+    expect(items.flatMap((item) => item.messages.flatMap((message) => message.tool_calls ?? []))).toEqual([]);
+    expect(items.find((item) => item.toolCall)?.toolCall?.args).toEqual(args);
+
+    const differentType = { ...typedCall, tool_calls: [{ name: "lookup", args: { ...args, order: "42" } }] };
+    details.set("model", detail("model", [user], [differentType]));
+    const unmatched = buildConversation([root, model, tool], details, true);
+    expect(unmatched.flatMap((item) => item.messages.flatMap((message) => message.tool_calls ?? []))).toEqual(
+      differentType.tool_calls,
+    );
+  });
+
+  it("loads child agents and places their own answers after their tools", () => {
+    const parent = { ...root, start_offset_ms: 0, duration_ms: 100 };
+    const agent = { ...parent, span_id: "agent", parent_span_id: "root", start_offset_ms: 1, duration_ms: 20 };
+    const tool = {
+      ...agent,
+      span_id: "tool",
+      parent_span_id: "agent",
+      type: "tool",
+      start_offset_ms: 2,
+      duration_ms: 2,
+    } as Span;
+    const next = { ...tool, span_id: "next", parent_span_id: "root", type: "llm", start_offset_ms: 30 } as Span;
+    const final = { role: "assistant", content: "Finished the whole run" };
+    const details = new Map([
+      ["root", detail("root", [], [final])],
+      ["agent", detail("agent", [user], [answer])],
+      ["tool", detail("tool", { order: 42 }, "Shipped")],
+      ["next", detail("next", [], [final])],
+    ]);
+    const spans = [parent, agent, tool, next];
+    expect(conversationSteps(spans)).toContain(agent);
+    const items = buildConversation(spans, details, true);
+    expect(items.map((item) => item.id)).toEqual(["agent", "tool", "agent-output", "next"]);
+    expect(items.flatMap((item) => item.messages)).toEqual([user, answer, final]);
+
+    details.delete("next");
+    expect(buildConversation(spans, details, false).flatMap((item) => item.messages)).toEqual([user, answer]);
+    details.delete("tool");
+    expect(buildConversation(spans, details, false).flatMap((item) => item.messages)).toEqual([user]);
+  });
+
+  it("does not repeat a child agent answer already recorded by its model", () => {
+    const parent = { ...root, start_offset_ms: 0, duration_ms: 100 };
+    const agent = { ...parent, span_id: "agent", parent_span_id: "root", start_offset_ms: 1, duration_ms: 20 };
+    const model = {
+      ...agent,
+      span_id: "model",
+      parent_span_id: "agent",
+      type: "llm",
+      start_offset_ms: 2,
+      duration_ms: 2,
+    } as Span;
+    const spans = [parent, agent, model];
+    const details = new Map([
+      ["root", detail("root", [], [])],
+      ["agent", detail("agent", [user], [answer])],
+      ["model", detail("model", [user], [answer])],
+    ]);
+    expect(buildConversation(spans, details, true).flatMap((item) => item.messages)).toEqual([user, answer]);
+  });
+
+  it("stops at a missing step even if later details and completion are supplied", () => {
+    const first = { ...root, span_id: "first", parent_span_id: "root", type: "llm", start_offset_ms: 1 } as Span;
+    const missing = { ...first, span_id: "missing", start_offset_ms: 2 };
+    const last = { ...first, span_id: "last", start_offset_ms: 3 };
+    const details = new Map([
+      ["root", detail("root", [user], [answer])],
+      ["first", detail("first", [user], [call])],
+      ["last", detail("last", [user, call, result], [answer])],
+    ]);
+    expect(buildConversation([root, first, missing, last], details, true).flatMap((item) => item.messages)).toEqual([
+      user,
+      call,
+    ]);
+  });
+
+  it("keeps nested and parallel agent answers in their own histories", () => {
+    const parent = { ...root, start_offset_ms: 0, duration_ms: 100 };
+    const agent = { ...parent, span_id: "agent", parent_span_id: "root", start_offset_ms: 1, duration_ms: 20 };
+    const nested = { ...agent, span_id: "nested", parent_span_id: "agent", start_offset_ms: 2, duration_ms: 5 };
+    const other = { ...agent, span_id: "other", start_offset_ms: 4, duration_ms: 30 };
+    const tool = {
+      ...nested,
+      span_id: "tool",
+      parent_span_id: "nested",
+      type: "tool",
+      start_offset_ms: 3,
+      duration_ms: 1,
+    } as Span;
+    const otherTool = { ...tool, span_id: "other-tool", parent_span_id: "other", start_offset_ms: 5 };
+    const summary = { role: "assistant", content: "Nested work complete" };
+    const details = new Map([
+      ["root", detail("root", [], [])],
+      ["agent", detail("agent", [], [summary])],
+      ["nested", detail("nested", [], [answer])],
+      ["other", detail("other", [], [answer])],
+      ["tool", detail("tool", {}, "First result")],
+      ["other-tool", detail("other-tool", {}, "Second result")],
+    ]);
+    const items = buildConversation([parent, agent, nested, tool, other, otherTool], details, true);
+    expect(items.map((item) => item.id)).toEqual([
+      "tool",
+      "other-tool",
+      "nested-output",
+      "agent-output",
+      "other-output",
+    ]);
+    expect(items.flatMap((item) => item.messages)).toEqual([answer, summary, answer]);
+  });
+
+  it("renders a tool-only trace as one exchange", () => {
+    const tool = { ...root, type: "tool" } as Span;
+    const items = buildConversation([tool], new Map([["root", detail("root", { order: 42 }, "Shipped")]]), true);
+    expect(items).toHaveLength(1);
+    expect(items[0].toolResult).toBe("Shipped");
+    expect(items[0].messages).toEqual([]);
   });
 });

@@ -7,7 +7,7 @@ export function conversationSteps(spans: readonly Span[]): Span[] {
   const parents = new Set(spans.map((span) => span.parent_span_id));
   return spans
     .filter((span) => {
-      const isEvent = span.type === "llm" || span.type === "tool" || !parents.has(span.span_id);
+      const isEvent = ["agent", "llm", "tool"].includes(span.type) || !parents.has(span.span_id);
       return !isFrameworkSpan(span) && (span.parent_span_id === null || isEvent);
     })
     .sort((a, b) => a.start_offset_ms - b.start_offset_ms);
@@ -84,9 +84,10 @@ function toolItem(
   items: ConversationItem[],
 ): ConversationItem {
   const args =
-    detail.input_ui?.kind === "fields"
+    parseJson(detail.input) ??
+    (detail.input_ui?.kind === "fields"
       ? Object.fromEntries(detail.input_ui.fields.map((field) => [field.key, field.value]))
-      : parseJson(detail.input) ?? detail.input;
+      : detail.input);
   const call = { name: span.name, args };
   const match = pending.findIndex(
     (candidate) =>
@@ -105,6 +106,49 @@ function toolItem(
   return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result };
 }
 
+interface ConversationEvent {
+  span: Span;
+  time: number;
+  output: boolean;
+}
+
+function conversationEvents(
+  steps: readonly Span[],
+  byId: ReadonlyMap<string, Span>,
+  details: ReadonlyMap<string, SpanDetail>,
+  complete: boolean,
+): ConversationEvent[] {
+  const missingIndex = steps.findIndex((span) => !details.has(span.span_id));
+  const loaded = missingIndex < 0 ? steps : steps.slice(0, missingIndex);
+  const boundary = missingIndex < 0 ? -Infinity : steps[missingIndex].start_offset_ms;
+  const ends = new Map<string, number>();
+  const depths = new Map<string, number>();
+  for (const span of steps) {
+    const end = span.start_offset_ms + span.duration_ms;
+    const visited = new Set<string>();
+    let ancestor: Span | undefined = span;
+    while (ancestor && !visited.has(ancestor.span_id)) {
+      visited.add(ancestor.span_id);
+      ends.set(ancestor.span_id, Math.max(ends.get(ancestor.span_id) ?? -Infinity, end));
+      ancestor = ancestor.parent_span_id ? byId.get(ancestor.parent_span_id) : undefined;
+    }
+    depths.set(span.span_id, visited.size);
+  }
+  return loaded
+    .flatMap((span) => {
+      const start = { span, time: span.start_offset_ms, output: false };
+      if (span.type === "tool" || (span.type !== "agent" && span.parent_span_id !== null)) return [start];
+      const end = ends.get(span.span_id)!;
+      return (complete && missingIndex < 0) || end < boundary ? [start, { span, time: end, output: true }] : [start];
+    })
+    .sort(
+      (a, b) =>
+        a.time - b.time ||
+        Number(a.output) - Number(b.output) ||
+        (a.output ? -1 : 1) * (depths.get(a.span.span_id)! - depths.get(b.span.span_id)!),
+    );
+}
+
 export function buildConversation(
   spans: readonly Span[],
   details: ReadonlyMap<string, SpanDetail>,
@@ -114,8 +158,9 @@ export function buildConversation(
   const histories = new Map<string, TraceMessage[]>();
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
-  const roots: { span: Span; output: TraceMessage[] }[] = [];
+  const events = conversationEvents(conversationSteps(spans), byId, details, complete);
   const branch = (span: Span): string => {
+    if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
     let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
     const visited = new Set<string>();
     while (parent && !visited.has(parent.span_id)) {
@@ -125,11 +170,18 @@ export function buildConversation(
     }
     return span.parent_span_id ?? span.span_id;
   };
-  for (const span of conversationSteps(spans)) {
-    const detail = details.get(span.span_id);
-    if (!detail) continue;
+  for (const event of events) {
+    const { span } = event;
+    const detail = details.get(span.span_id)!;
     const key = branch(span);
     const history = histories.get(key) ?? [];
+    if (event.output) {
+      const output = messages(detail.output, detail.output_ui, "assistant");
+      const fresh = newConversationMessages(history, output);
+      if (fresh.length) items.push({ id: `${span.span_id}-output`, span, messages: fresh });
+      histories.set(key, [...history, ...fresh]);
+      continue;
+    }
     if (span.type === "tool") {
       const item = toolItem(span, detail, pendingCalls.get(key) ?? [], items);
       items.push(item);
@@ -139,10 +191,9 @@ export function buildConversation(
     const input = messages(detail.input, detail.input_ui, "user");
     const output = messages(detail.output, detail.output_ui, "assistant");
     const fresh = newConversationMessages(history, input);
-    if (span.parent_span_id === null) {
-      roots.push({ span, output });
+    if (span.type === "agent" || span.parent_span_id === null) {
       histories.set(key, input);
-      if (fresh.length) items.push({ id: span.span_id, span, messages: fresh });
+      if (fresh.length || span.status === "error") items.push({ id: span.span_id, span, messages: fresh });
       continue;
     }
     const combined = [...fresh, ...output];
@@ -161,13 +212,6 @@ export function buildConversation(
           tool_calls: message.tool_calls ? [...message.tool_calls] : undefined,
         })),
       });
-  }
-  if (complete) {
-    for (const { span, output } of roots) {
-      const last = items.flatMap((item) => item.messages).at(-1);
-      const fresh = newConversationMessages(last ? [last] : [], output);
-      if (fresh.length) items.push({ id: `${span.span_id}-output`, span, messages: fresh });
-    }
   }
   return items
     .map((item) => ({
