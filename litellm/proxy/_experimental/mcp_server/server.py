@@ -2112,8 +2112,13 @@ if MCP_AVAILABLE:
             names_live_session: Final = (
                 named_session_id is not None and named_session_id in _stateful_server_instances()
             )
+            request_owner: Final = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
+            expected_owner: Final = (
+                _stateful_session_owners.get(named_session_id) if named_session_id is not None else None
+            )
+            owner_mismatch: Final = expected_owner is not None and expected_owner != request_owner
             connect_peek: Final = _ConnectBodyPeek(
-                receive, peekable=scope.get("method") == "POST" and not names_live_session
+                receive, peekable=scope.get("method") == "POST" and not names_live_session and not owner_mismatch
             )
             receive = connect_peek.receive
 
@@ -2174,9 +2179,7 @@ if MCP_AVAILABLE:
             # force-clean another caller's residual tracking entries via a
             # stale DELETE.
             if session_id:
-                expected_owner: Final = _stateful_session_owners.get(session_id)
-                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
-                if expected_owner is not None and expected_owner != request_owner:
+                if owner_mismatch:
                     verbose_logger.warning(
                         "Rejecting MCP request: session '%s' owner mismatch.",
                         session_id,
@@ -2220,7 +2223,6 @@ if MCP_AVAILABLE:
             # session. Cap how many a single caller can hold so an authenticated
             # client cannot spam `initialize` and exhaust memory.
             if is_initialize and not session_id:
-                request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
                 if not await _enforce_stateful_session_cap_for_owner(request_owner):
                     verbose_logger.warning(
                         "Rejecting MCP initialize: caller already holds the maximum number of active stateful sessions."
