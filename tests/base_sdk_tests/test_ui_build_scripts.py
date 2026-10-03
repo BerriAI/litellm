@@ -9,12 +9,17 @@ import pytest
 
 @pytest.mark.parametrize("script", ["build_ui.sh", "build_ui_custom_path.sh", "build_release_ui.sh"])
 @pytest.mark.parametrize("failure", [None, "build", "copy"])
-def test_ui_build_stages_assets_without_committing(tmp_path: Path, script: str, failure: str | None) -> None:
+@pytest.mark.parametrize("existing_assets", [False, True])
+def test_ui_build_stages_assets_without_committing(tmp_path: Path, script: str, failure: str | None, existing_assets: bool) -> None:
     source: Final = Path(__file__).resolve().parents[2] / "ui/litellm-dashboard"
     dashboard: Final = tmp_path / "ui/litellm-dashboard"
     dashboard.mkdir(parents=True)
     for name in ("build_ui.sh", "build_ui_custom_path.sh", "build_release_ui.sh"):
         shutil.copy(source / name, dashboard / name)
+    destination: Final = tmp_path / "litellm-proxy-extras/litellm_proxy_extras/ui"
+    if existing_assets:
+        destination.mkdir(parents=True)
+        (destination / ".litellm-ui-inputs-sha256").write_text("previous-build")
     commands: Final = tmp_path / "bin"
     commands.mkdir()
     programs: Final = {
@@ -40,6 +45,6 @@ def test_ui_build_stages_assets_without_committing(tmp_path: Path, script: str, 
         assert "Deployment completed" not in result.stdout
     else:
         assert result.returncode == 0, result.stderr
-        destination: Final = tmp_path / "litellm-proxy-extras/litellm_proxy_extras/ui"
+        assert not (destination / ".litellm-ui-inputs-sha256").exists()
         assert (destination / "index.html").read_text() == "dashboard"
         assert (destination / ".asset").read_text() == "hidden"
