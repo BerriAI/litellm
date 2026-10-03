@@ -1471,7 +1471,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         .await?;
         let metadata = serde_json::json!({
             "project": "example", "labels": {"priority": 3, "enabled": true},
-            "dotted.key": "literal", "quote'\\key": null, "items": [{"name": "first"}],
+            "dotted.key": "private-metadata-value", "quote'\\key": null, "items": [{"name": "first"}],
             "<custom>&{{key}}": {"nested.key": true}
         });
         insert_rows(
@@ -1623,6 +1623,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
                 .any(|field| field["path"] == serde_json::json!(["items", 1, "name"]))
         );
         assert!(guide.contains("CustomColumn: String"));
+        assert!(!guide.contains("private-metadata-value"));
         assert!(guide.contains("JSONExtractRaw(metadata, '<custom>&{{key}}', 'nested.key')"));
         assert!(guide.contains("SpanAttributes['custom.tag']"));
         assert!(guide.contains("ResourceAttributes['custom.resource']"));
@@ -1654,7 +1655,10 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         })
         .collect::<Vec<_>>();
     assert!(example_positions.windows(2).all(|pair| pair[0] < pair[1]));
-    assert!(example_positions.last() < gotcha_positions.first());
+    assert!(
+        example_positions.last().ok_or("last example")?
+            < gotcha_positions.first().ok_or("first gotcha")?
+    );
     for example in examples {
         let sql = example["sql"].as_str().ok_or("missing example SQL")?;
         assert!(guide.contains(example["name"].as_str().ok_or("missing example name")?));
@@ -1795,8 +1799,9 @@ async fn query_help_displays_discovery_truncation(
          SELECT toString(number), now64(3), now64(3), '{\"key\":true}' FROM numbers(1000)",
     )
     .await?;
+    let reader = Connection::configured(&database.url, "trace_test", "default", "")?;
     let help = serde_json::to_value(
-        litellm_traces_clickhouse::query_help(&database.client, &writer).await?,
+        litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
     )?;
     let guide = help["guide"].as_str().ok_or("guide")?;
     assert_eq!(help["metadata"]["truncated"], true);
