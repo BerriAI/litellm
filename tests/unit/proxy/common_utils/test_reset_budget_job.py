@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 import types
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import Any, Dict, Final, List, Optional
@@ -20,8 +21,15 @@ from litellm.constants import (
     RESET_BUDGET_JOB_LOCK_TTL_SECONDS,
     RESET_BUDGET_JOB_NAME,
 )
-from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob, _RowReset
+from litellm.proxy.common_utils.reset_budget_job import (
+    ResetBudgetJob,
+    _RowReset,
+    _write_key_windows,
+    _write_team_windows,
+)
 from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+from litellm.proxy.utils import PrismaClient
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 # Mock classes for testing
@@ -3578,3 +3586,27 @@ def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_p
     counter_cache.redis_cache.async_delete_cache.assert_any_await(key="spend:user:carol")
     counter_cache.in_memory_cache.set_cache.assert_not_called()
     counter_cache.redis_cache.async_set_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("write_windows", "prisma_table", "span_name"),
+    [
+        (_write_key_windows, "litellm_verificationtoken", "postgres.update LiteLLM_VerificationToken"),
+        (_write_team_windows, "litellm_teamtable", "postgres.update LiteLLM_TeamTable"),
+    ],
+)
+async def test_a_budget_window_write_renders_a_postgres_update_span_for_its_table(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+    write_windows: Callable[[PrismaClient, str, str], Awaitable[None]],
+    prisma_table: str,
+    span_name: str,
+) -> None:
+    prisma = MagicMock()
+    update = engine_call()
+    setattr(prisma.db, prisma_table, MagicMock(update=update))
+
+    await write_windows(prisma, "row-1", "{}")
+
+    assert update.await_count == 1
+    assert await postgres_span_names() == (span_name,)
