@@ -385,5 +385,40 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertIn("garbage", mock_warning.call_args.args)
 
 
+class TestDurationPrefixRejection(unittest.TestCase):
+    def test_rejects_prefix_matched_garbage(self):
+        for bad in ("30dabc", "30days", "30s; DROP", "1moabc", "30dabc ", "30s;DROP TABLE"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    duration_in_seconds(bad)
+                base_time = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+                with patch.object(duration_parser.verbose_logger, "warning") as mock_warning:
+                    result = get_next_standardized_reset_time(bad, base_time, "UTC")
+                self.assertEqual(result, datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc))
+                mock_warning.assert_called_once()
+                self.assertIn("Unrecognized budget_duration", mock_warning.call_args.args[0])
+                self.assertEqual(mock_warning.call_args.args[1], bad)
+
+    def test_accepts_valid_with_optional_strip(self):
+        self.assertEqual(duration_in_seconds("30d"), 30 * 86400)
+        self.assertEqual(duration_in_seconds("30d "), 30 * 86400)
+        self.assertEqual(duration_in_seconds(" 30d"), 30 * 86400)
+        with self.assertRaises(ValueError):
+            duration_in_seconds("30")
+        with self.assertRaises(ValueError):
+            duration_in_seconds("30D")
+
+    def test_non_string_duration_is_rejected(self):
+        for bad in (None, 123, 30, 1.5, [], {}):  # type: ignore[arg-type]
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    duration_in_seconds(bad)  # type: ignore[arg-type]
+                base_time = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+                with patch.object(duration_parser.verbose_logger, "warning") as mock_warning:
+                    result = get_next_standardized_reset_time(bad, base_time, "UTC")  # type: ignore[arg-type]
+                self.assertEqual(result, datetime(2023, 5, 16, 0, 0, 0, tzinfo=timezone.utc))
+                mock_warning.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
