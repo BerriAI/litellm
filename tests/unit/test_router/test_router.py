@@ -18892,6 +18892,16 @@ def test_set_fallbacks_appends_default_wildcard_without_mutating_input():
     assert configured == [{"audio-a": []}]
 
 
+def test_update_fallback_settings_applies_both_values_in_one_rebuild():
+    router = Router(model_list=[], default_fallbacks=["old-model"])
+    router._update_fallback_settings({"fallbacks": [{"audio-a": []}], "default_fallbacks": ["new-model"]})
+    assert router.fallbacks == [{"audio-a": []}, {"*": ["new-model"]}]
+    router._update_fallback_settings({"default_fallbacks": None})
+    assert router.fallbacks == [{"audio-a": []}]
+    router._update_fallback_settings({"model_list": []})
+    assert router.fallbacks == [{"audio-a": []}]
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

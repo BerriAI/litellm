@@ -12217,6 +12217,18 @@ class Router:
             effective.append(self._materialized_default_fallback)
         self.fallbacks = effective if effective or fallbacks is not None else None
 
+    def _update_fallback_settings(self, kwargs: dict) -> None:
+        """Apply runtime fallbacks and default_fallbacks together.
+
+        The effective list depends on both, so rebuild it once after either
+        value changes.
+        """
+        if "fallbacks" not in kwargs and "default_fallbacks" not in kwargs:
+            return
+        if "default_fallbacks" in kwargs:
+            self.default_fallbacks = list(kwargs["default_fallbacks"] or [])
+        self._set_fallbacks(kwargs.get("fallbacks", self.fallbacks))
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -12232,15 +12244,12 @@ class Router:
         _existing_router_settings: Final = self.get_settings()
         rebuild_routing_groups = False
         routing_args_updated = False
-        for var in kwargs:
+        self._update_fallback_settings(kwargs)
+        for var in [name for name in kwargs if name not in ("fallbacks", "default_fallbacks")]:
             if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
-                elif var == "fallbacks":
-                    self._set_fallbacks(kwargs[var])
-                elif var == "default_fallbacks":
-                    self.default_fallbacks = list(kwargs[var] or [])
                 elif var == "routing_groups":
                     rebuild_routing_groups = True
                 elif var == "optional_pre_call_checks":
@@ -12277,9 +12286,6 @@ class Router:
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
-
-        if "default_fallbacks" in kwargs:
-            self._set_fallbacks(self.fallbacks)
 
         if routing_args_updated:
             self._apply_updated_routing_strategy_args()
