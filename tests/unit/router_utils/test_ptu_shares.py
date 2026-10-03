@@ -19,13 +19,15 @@ _GPT6SOL: Final = AZURE_PTU_CAPACITY["gpt-6-sol"]
 _SHARES: Final = {"team-a": 30, "team-b": 20}
 
 
-def _shared(model: str = "azure/gpt-4.1", shares: object = _SHARES, deployment_id: str = "shared") -> dict:
+def _shared(
+    model: str = "azure/gpt-4.1", shares: object = _SHARES, deployment_id: str = "shared", ptu_count: int | None = None
+) -> dict:
     return {
         "model_name": "gpt-4.1-ptu",
         "litellm_params": {"model": model},
         "model_info": {
             "id": deployment_id,
-            "ptu_count": 50,
+            "ptu_count": ptu_count or (sum(shares.values()) if isinstance(shares, dict) else 50),
             "cost_per_ptu_per_hour": 1.0,
             "ptu_effective_from": "2026-01-01T00:00:00Z",
             "ptu_shares": shares,
@@ -79,6 +81,23 @@ def test_a_single_team_deployment_and_a_malformed_share_map_are_not_filtered_her
     result: Final = filter_ptu_shared_deployments([_single_team(), _shared(shares={"team-a": 0})], "team-z")
     assert [d["model_info"]["id"] for d in result.deployments] == ["single", "shared"]
     assert result.withheld is False
+
+
+_TERMLESS_SHARED: Final = {
+    "model_name": "gpt-4.1-ptu",
+    "litellm_params": {"model": "azure/gpt-4.1"},
+    "model_info": {"id": "shared", "ptu_shares": _SHARES},
+}
+
+
+def test_a_share_map_registration_would_refuse_reserves_nothing():
+    """Registration refuses ``ptu_shares`` without the count, rate and start they split, and a map
+    that does not add up to the count, so a row carrying either shape holds nobody's capacity:
+    every team is served from it and no ceiling applies, the same as before the map was read."""
+    short: Final = _shared(shares={"team-a": 30}, ptu_count=50)
+    for deployment in (_TERMLESS_SHARED, short):
+        assert filter_ptu_shared_deployments([deployment], "team-z").withheld is False
+        assert _unaliased_ceiling([deployment], "team-a", "gpt-4.1-ptu") is None
 
 
 def test_a_team_is_served_from_its_shared_deployment_first_and_never_from_another_teams_reservation():

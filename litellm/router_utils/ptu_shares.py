@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Generic, TypeVar
 
-from litellm.litellm_core_utils.ptu_pricing import is_model_info_mapping, parsed_ptu_shares, ptu_terms
+from litellm.litellm_core_utils.ptu_pricing import is_model_info_mapping, ptu_terms
 from litellm.llms.azure.ptu_capacity import PTUCapacity, deployment_ptu_capacity, is_azure_deployment
 from litellm.router_utils.common_utils import team_may_use_deployment
 
@@ -36,10 +36,17 @@ class PTUShareFilterResult(Generic[_DeploymentT]):
 
 
 def _deployment_shares(deployment: Mapping[str, object]) -> Mapping[str, int] | None:
+    """The teams a deployment's capacity is split across, else None.
+
+    Only a map registration would accept counts, read through the same terms flat cost accrues
+    under, so a row that reached the table without its count, rate and start reserves nothing
+    instead of refusing every other team while charging nobody.
+    """
     model_info: Final = deployment.get("model_info")
-    if not is_model_info_mapping(model_info):
+    if not is_model_info_mapping(model_info) or model_info.get("ptu_shares") is None:
         return None
-    return parsed_ptu_shares(model_info.get("ptu_shares"))
+    terms: Final = ptu_terms(model_info)
+    return None if terms is None else terms.shares
 
 
 def filter_ptu_shared_deployments(
