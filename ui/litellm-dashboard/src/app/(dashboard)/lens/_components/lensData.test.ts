@@ -184,8 +184,8 @@ describe("Lens selection and findings", () => {
         "## Problem\nThe workspace was not a Git repository.",
         "## User goal\nOpen a PR fixing a typo",
         '## What happened\nGit returned "fatal: not a git repository"',
-        "## Test cases\n1. Input: Fix the typo and open a PR\n   Expect: A PR URL is returned\n" +
-          "2. Input: Rename greet\n   Expect: The rename is committed",
+        "## Test cases\n1. **Input:** Fix the typo and open a PR  \n   **Expect:** A PR URL is returned\n" +
+          "2. **Input:** Rename greet  \n   **Expect:** The rename is committed",
       ].join("\n\n"),
     );
   });
