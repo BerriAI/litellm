@@ -332,6 +332,30 @@ def test_rule_only_base_model_bills_the_deployment_price_through_the_sdks(
 
 @pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
 @pytest.mark.timeout(180)
+def test_rule_only_base_model_bills_the_deployment_price_when_a_sibling_deployment_serves_that_name(
+    gateway: Gateway, stream: bool
+) -> None:
+    with wire_server(_anthropic_reply) as wire, gateway.scenario() as scenario:
+        input_rate, output_rate = _listed_rates(scenario, DEPLOYMENT_MODEL, wire.url)
+        rule_only: Final = _rule_only_name()
+        _deployment(
+            scenario, f"integration-{uuid4().hex}", {**_anthropic_params(wire.url), "model": f"anthropic/{rule_only}"}
+        )
+        model: Final = _deployment(
+            scenario, f"integration-{uuid4().hex}", _anthropic_params(wire.url), {"base_model": rule_only}
+        )
+        key: Final = scenario.key(models=[model])
+        path: Final = "/v1/chat/completions"
+
+        response: Final = gateway.request("POST", path, _body(path, model, f"sibling {uuid4().hex}", stream), key=key)
+
+        assert response.status_code == 200, response.text
+        row: Final = _spend_rows(key, 1)[0]
+        assert float(str(row["spend"])) == pytest.approx(INPUT_TOKENS * input_rate + OUTPUT_TOKENS * output_rate), row
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("non-streaming", "streaming"))
+@pytest.mark.timeout(180)
 def test_custom_pricing_still_beats_a_rule_only_base_model(gateway: Gateway, stream: bool) -> None:
     with wire_server(_anthropic_reply) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(

@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -137,7 +138,6 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     _cached_get_model_info_helper,
-    _get_model_info_from_generalization,
     _get_potential_model_names,
     token_counter,
 )
@@ -926,17 +926,35 @@ def _get_response_model(completion_response: object) -> str | None:
     return None
 
 
-def _prices_only_via_capability_rule(model: str | None, custom_llm_provider: str | None) -> bool:
-    if model is None or model in litellm.model_cost or f"{custom_llm_provider}/{model}" in litellm.model_cost:
+def _has_cost_map_rates(key: str) -> bool:
+    row: Final = litellm.model_cost.get(key)
+    return isinstance(row, dict) and any(
+        "cost" in field and isinstance(value, (int, float)) and not isinstance(value, bool)
+        for field, value in row.items()
+    )
+
+
+def _prices_only_via_capability_rule(model: object, custom_llm_provider: str | None) -> bool:
+    # The router registers every deployment model in the cost map, rates or not, so an
+    # unpriced exact key still counts as rule-only when a capability rule matches it.
+    if (
+        not isinstance(model, str)
+        or _has_cost_map_rates(model)
+        or _has_cost_map_rates(f"{custom_llm_provider}/{model}")
+    ):
         return False
     try:
-        return (
-            _get_model_info_from_generalization(
-                model=model,
-                potential_model_names=_get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider),
-                custom_llm_provider=custom_llm_provider,
-            )
-            is not None
+        names: Final = _get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider)
+        candidates: Final = (
+            model,
+            names["combined_model_name"],
+            names["split_model"],
+            names["combined_stripped_model_name"],
+            names["stripped_model_name"],
+            names["provider_prefixed_model_name"],
+        )
+        return not any(_has_cost_map_rates(candidate) for candidate in candidates) and any(
+            match_capability_generalizations(candidate) is not None for candidate in candidates
         )
     except Exception:
         return False

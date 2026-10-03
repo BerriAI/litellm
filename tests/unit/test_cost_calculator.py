@@ -5672,6 +5672,32 @@ def test_completion_cost_prices_capability_rule_alias_from_the_deployment(
     ) == pytest.approx(expected)
 
 
+def test_completion_cost_prices_rule_only_base_model_registered_without_rates(_local_model_cost_map: None) -> None:
+    litellm.register_model({"anthropic/claude-opus-9": {"litellm_provider": "anthropic", "mode": "chat"}})
+    response: Final = ModelResponse(
+        model="claude-haiku-4-5",
+        usage=Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+    )
+    row: Final = litellm.model_cost["claude-haiku-4-5"]
+
+    assert completion_cost(
+        completion_response=response,
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        base_model="claude-opus-9",
+    ) == pytest.approx(30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"])
+
+
+def test_completion_cost_skips_an_unhashable_response_model(_local_model_cost_map: None) -> None:
+    response: Final = ModelResponse(usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    setattr(response, "model", ["gpt-4o"])
+    row: Final = litellm.model_cost["gpt-4o"]
+
+    assert completion_cost(completion_response=response, model="gpt-4o", base_model="gpt-4o") == pytest.approx(
+        10 * row["input_cost_per_token"] + 5 * row["output_cost_per_token"]
+    )
+
+
 def test_pricing_entry_for_cost_calc_skips_capability_rule_alias(_local_model_cost_map: None) -> None:
     response: Final = ModelResponse(
         id="chatcmpl_x",
