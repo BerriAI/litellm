@@ -305,7 +305,9 @@ async def get_model_insights_task_classifier(
     _require_task_classifier_role(user_api_key_dict, allow_view_only=True)
     prisma_client: Final = _model_insights_task_classifier_prisma()
     stored: Final = await ConfigRepository(prisma_client).get_param(MODEL_USAGE_TASK_CLASSIFIER_PARAM)
-    return _task_classifier_response(_task_classifier_config(stored.param_value if stored is not None else None), env_lookup)
+    return _task_classifier_response(
+        _task_classifier_config(stored.param_value if stored is not None else None), env_lookup
+    )
 
 
 @router.put(

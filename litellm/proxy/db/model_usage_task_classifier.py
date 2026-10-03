@@ -274,8 +274,7 @@ async def _classify_chunk(
                 transaction.key,
                 task_type=(
                     answer.choice
-                    if (answer := response.answers.get(f"r{index + 1}")) is not None
-                    and answer.choice in criteria
+                    if (answer := response.answers.get(f"r{index + 1}")) is not None and answer.choice in criteria
                     else MODEL_INSIGHTS_DEFAULT_TASK
                 ),
             ),

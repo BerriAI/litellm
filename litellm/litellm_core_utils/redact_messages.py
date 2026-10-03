@@ -350,9 +350,9 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     )
 
     request_headers_value: Final = metadata.get("headers", {})
-    request_headers: Final = _LOGGING_MAPPING_ADAPTER.validate_python(
-        request_headers_value if isinstance(request_headers_value, Mapping) else {}
-    )
+    if not isinstance(request_headers_value, Mapping):
+        return True
+    request_headers: Final = _LOGGING_MAPPING_ADAPTER.validate_python(request_headers_value)
 
     # Check for headers that explicitly control redaction
     if request_headers and bool(request_headers.get("litellm-disable-message-redaction", False)):
