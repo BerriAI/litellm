@@ -8566,8 +8566,10 @@ class Router:
             _, _all_deployments = self._common_checks_available_deployment(
                 model=model,
             )
+            # Deployment-id lookup returns a single dict; wrap it so cooldown
+            # filtering still runs instead of reporting zero healthy copies.
             if isinstance(_all_deployments, dict):
-                return []
+                _all_deployments = [_all_deployments]
         except Exception:
             pass
 
@@ -8594,8 +8596,10 @@ class Router:
             _, _all_deployments = self._common_checks_available_deployment(
                 model=model,
             )
+            # Deployment-id lookup returns a single dict; wrap it so cooldown
+            # filtering still runs instead of reporting zero healthy copies.
             if isinstance(_all_deployments, dict):
-                return [], _all_deployments
+                _all_deployments = [_all_deployments]
         except Exception:
             pass
 
