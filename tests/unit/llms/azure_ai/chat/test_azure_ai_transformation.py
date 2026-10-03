@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -144,6 +145,51 @@ def test_azure_ai_validate_environment_with_azure_ad_token():
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+
+
+def test_azure_ai_maps_max_completion_tokens_to_max_tokens():
+    mapped_params: Final = litellm.get_optional_params(
+        model="mistral-large-3",
+        custom_llm_provider="azure_ai",
+        max_completion_tokens=256,
+    )
+
+    assert mapped_params["max_tokens"] == 256
+    assert "max_completion_tokens" not in mapped_params
+
+
+def test_azure_ai_keeps_max_completion_tokens_for_gpt_5():
+    mapped_params: Final = litellm.get_optional_params(
+        model="gpt-5",
+        custom_llm_provider="azure_ai",
+        max_completion_tokens=256,
+    )
+
+    assert mapped_params["max_completion_tokens"] == 256
+    assert "max_tokens" not in mapped_params
+
+
+def test_azure_ai_keeps_max_completion_tokens_for_reasoning_models(_local_model_cost_map: None) -> None:
+    mapped_params: Final = litellm.get_optional_params(
+        model="o3",
+        custom_llm_provider="azure_ai",
+        max_completion_tokens=256,
+    )
+
+    assert mapped_params["max_completion_tokens"] == 256
+    assert "max_tokens" not in mapped_params
+
+
+def test_azure_ai_keeps_params_without_max_completion_tokens():
+    mapped_params: Final = litellm.get_optional_params(
+        model="mistral-large-3",
+        custom_llm_provider="azure_ai",
+        temperature=0.2,
+    )
+
+    assert mapped_params["temperature"] == 0.2
+    assert "max_tokens" not in mapped_params
+    assert "max_completion_tokens" not in mapped_params
 
 
 def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
