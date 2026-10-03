@@ -13,7 +13,7 @@ import re
 import secrets
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Final, NamedTuple, Protocol, Union, cast
+from typing import Final, NamedTuple, Protocol, Union, cast
 
 import fastapi
 import orjson
@@ -208,7 +208,7 @@ def _get_model_from_request_context(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_router: Any | None = None,
+    llm_router: litellm.Router | None = None,
     team_id: str | None = None,
 ) -> str | list[str] | None:
     return get_model_from_request(
@@ -513,8 +513,8 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
 
 
 def _routing_selector_matches_claim(
-    selector_value: Any | None,
-    claim_value: Any | None,
+    selector_value: object,
+    claim_value: object,
     *,
     split_space_delimited: bool = False,
 ) -> bool:
@@ -654,7 +654,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     # ``websocket.url``, which Starlette reconstructs from the (poisonable)
     # Host header. Carry the ASGI scope's path / root_path so the lookup
     # never reaches the fallback.
-    synthetic_scope: Final[dict[str, Any]] = {
+    synthetic_scope: Final[dict[str, object]] = {
         "type": "http",
         "method": "GET",
         "query_string": ws_scope.get("query_string", b""),
@@ -3202,7 +3202,7 @@ async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request_data: dict,
     route: str,
-    llm_router: Any | None,
+    llm_router: litellm.Router | None,
     team_object: LiteLLM_TeamTableCachedObj | None,
     user_object: LiteLLM_UserTable | None,
     prisma_client: PrismaClient | None,
@@ -3248,7 +3248,7 @@ def _should_skip_budget_checks(
     request_data: dict,
     route: str,
     request: Request | None,
-    llm_router: Any | None,
+    llm_router: litellm.Router | None,
     team_id: str | None = None,
 ) -> bool:
     model: Final = _get_model_from_request_context(
@@ -3745,7 +3745,7 @@ async def _enforce_key_and_fallback_model_access(
     route: str,
     request: Request | None,
     llm_model_list: list | None,
-    llm_router: Any | None,
+    llm_router: litellm.Router | None,
 ) -> None:
     """
     Key-level model allowlist and client fallbacks (same as standard auth).

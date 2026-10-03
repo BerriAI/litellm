@@ -2,9 +2,11 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Any, Final
+from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -22,6 +24,29 @@ DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ApiKeyInfo(TypedDict):
+    token: ReadOnly[NotRequired[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _DeviceCodeInfo(TypedDict):
+    device_code: ReadOnly[NotRequired[str]]
+    user_code: ReadOnly[NotRequired[str]]
+    verification_uri: ReadOnly[NotRequired[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AccessTokenPollInfo(TypedDict):
+    access_token: ReadOnly[NotRequired[str]]
+    error: ReadOnly[NotRequired[object]]
+
+
+_API_KEY_INFO_ADAPTER: Final = TypeAdapter(_ApiKeyInfo)
+_DEVICE_CODE_INFO_ADAPTER: Final = TypeAdapter(_DeviceCodeInfo)
+_ACCESS_TOKEN_POLL_INFO_ADAPTER: Final = TypeAdapter(_AccessTokenPollInfo)
 
 
 class Authenticator:
@@ -88,7 +113,7 @@ class Authenticator:
         """
         try:
             with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
+                api_key_info: Final = json.load(f)
                 if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
                     return api_key_info.get("token")
                 else:
@@ -105,10 +130,10 @@ class Authenticator:
             pass  # Already logged in the try block
 
         try:
-            api_key_info = self._refresh_api_key()
+            refreshed_api_key_info = self._refresh_api_key()
             with open(self.api_key_file, "w") as f:
-                json.dump(api_key_info, f)
-            token: Final = api_key_info.get("token")
+                json.dump(refreshed_api_key_info, f)
+            token: Final = refreshed_api_key_info.get("token")
             if token:
                 return token
             else:
@@ -145,7 +170,7 @@ class Authenticator:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
             return None
 
-    def _refresh_api_key(self) -> dict[str, Any]:
+    def _refresh_api_key(self) -> _ApiKeyInfo:
         """
         Refresh the API key using the access token.
 
@@ -166,7 +191,7 @@ class Authenticator:
                 response = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
-                response_json = response.json()
+                response_json = _API_KEY_INFO_ADAPTER.validate_python(response.json())
 
                 if "token" in response_json:
                     return response_json
@@ -213,7 +238,7 @@ class Authenticator:
 
         return headers
 
-    def _get_device_code(self) -> dict[str, str]:
+    def _get_device_code(self) -> _DeviceCodeInfo:
         """
         Get a device code for GitHub authentication.
 
@@ -233,7 +258,7 @@ class Authenticator:
                 json={"client_id": client_id, "scope": "read:user"},
             )
             resp.raise_for_status()
-            resp_json: Final = resp.json()
+            resp_json: Final = _DEVICE_CODE_INFO_ADAPTER.validate_python(resp.json())
 
             required_fields: Final = ["device_code", "user_code", "verification_uri"]
             if not all(field in resp_json for field in required_fields):
@@ -294,7 +319,7 @@ class Authenticator:
                     },
                 )
                 resp.raise_for_status()
-                resp_json = resp.json()
+                resp_json = _ACCESS_TOKEN_POLL_INFO_ADAPTER.validate_python(resp.json())
 
                 if "access_token" in resp_json:
                     verbose_logger.info("Authentication successful!")
@@ -342,9 +367,15 @@ class Authenticator:
         """
         device_code_info: Final = self._get_device_code()
 
-        device_code: Final = device_code_info["device_code"]
-        user_code: Final = device_code_info["user_code"]
-        verification_uri: Final = device_code_info["verification_uri"]
+        device_code: Final = device_code_info.get("device_code")
+        user_code: Final = device_code_info.get("user_code")
+        verification_uri: Final = device_code_info.get("verification_uri")
+
+        if device_code is None or user_code is None or verification_uri is None:
+            raise GetDeviceCodeError(
+                message="Response missing required fields",
+                status_code=400,
+            )
 
         print(  # noqa: T201
             f"Please visit {verification_uri} and enter code {user_code} to authenticate.",

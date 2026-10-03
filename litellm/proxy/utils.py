@@ -1182,6 +1182,24 @@ def _raise_malformed_listing_filter_return(error: MalformedListingFilterReturn) 
     )
 
 
+class _BudgetAlertEmailer(Protocol):
+    async def budget_alerts(
+        self,
+        type: Literal[
+            "token_budget",
+            "user_budget",
+            "soft_budget",
+            "max_budget_alert",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+            "project_budget",
+        ],
+        user_info: CallInfo,
+    ) -> object: ...
+
+
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -1213,7 +1231,7 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
-        self.email_logging_instance: Any | None = None
+        self.email_logging_instance: _BudgetAlertEmailer | None = None
         if BaseEmailLogger is not None:
             email_logger_class: Final = _get_email_logger_class()
             if email_logger_class is not None:
