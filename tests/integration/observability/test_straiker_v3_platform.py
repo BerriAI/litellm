@@ -783,14 +783,22 @@ def test_v1_post_call_sends_response_envelope(rig: Rig) -> None:
     assert "synthetic answer " + marker in json.dumps(calls[0].body.get("response"))
 
 
-# E: explicit api_version v1 with a v3-shaped key follows the configuration, not the key
-def test_explicit_api_version_v1_overrides_key_prefix(rig: Rig) -> None:
-    marker: Final = rig.marker()
-    response: Final = _chat(rig, "explicit " + marker, guardrails=["straiker-v3-as-v1"])
-    assert response.status_code == 200, response.text
-    calls: Final = _v1_calls(rig, marker, V3_KEY)
-    assert len(calls) == 1, rig.sink_calls(marker)
-    assert calls[0].headers["x-straiker-webhook-format"] == "litellm"
+# E: a saved api_version v1 with an sk_agt_ key routes to v3; the key prefix decides, not the saved version
+def test_saved_api_version_v1_with_v3_key_routes_to_v3_not_the_v1_webhook(rig: Rig) -> None:
+    allowed_marker: Final = rig.marker()
+    allowed: Final = _chat(rig, "saved v1 " + allowed_marker, guardrails=["straiker-v3-as-v1"])
+    assert allowed.status_code == 200, allowed.text
+    assert len(_v3_request_calls(rig, allowed_marker, agent=None)) == 1, rig.sink_calls(allowed_marker)
+    assert _v1_calls(rig, allowed_marker, V3_KEY) == ()
+    assert len(rig.provider_calls(allowed_marker, rig.provider_drain())) == 1
+
+    blocked_marker: Final = rig.marker()
+    blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-as-v1"])
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1, rig.sink_calls(blocked_marker)
+    assert _v1_calls(rig, blocked_marker, V3_KEY) == ()
+    assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 
 
 def test_stray_api_version_with_v3_key_still_enforces_on_v3(rig: Rig) -> None:
@@ -1062,10 +1070,17 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
 
 
 # C2: one proxy worker is killed during a burst; the other keeps serving and detect still runs for each call
+def _is_live_worker(child: psutil.Process, exclude: int) -> bool:
+    if child.pid == exclude:
+        return False
+    try:
+        return child.status() != psutil.STATUS_ZOMBIE and "spawn_main" in " ".join(child.cmdline())
+    except psutil.Error:
+        return False
+
+
 def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psutil.Process, ...]:
-    return tuple(
-        c for c in parent.children() if c.is_running() and c.pid != exclude and "spawn_main" in " ".join(c.cmdline())
-    )
+    return tuple(c for c in parent.children() if _is_live_worker(c, exclude))
 
 
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:

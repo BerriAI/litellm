@@ -3,8 +3,8 @@ import os
 
 ALLOWED_FILES = [
     # The standalone Lens process reuses one client for its entire lifetime, without importing the proxy SDK.
-    "../../litellm/proxy/engine/worker.py",
-    "./litellm/proxy/engine/worker.py",
+    "../../litellm/proxy/lens/worker.py",
+    "./litellm/proxy/lens/worker.py",
     # local files
     "../../litellm/__init__.py",
     "../../litellm/llms/custom_httpx/http_handler.py",

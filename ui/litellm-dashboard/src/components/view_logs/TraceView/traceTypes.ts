@@ -1,93 +1,29 @@
-/**
- * Agent tracing types. Mirrors `litellm/tracing/types.py` exactly.
- *
- * A trace is one agent run made of spans (agent / llm / tool / chain / framework).
- */
+import type { components, paths } from "@/lib/http/schema";
 
-export type SpanType = "agent" | "llm" | "tool" | "chain" | "framework";
-export type SpanStatus = "ok" | "error" | "unset";
-
-export interface Span {
-  span_id: string;
-  parent_span_id: string | null;
-  name: string;
-  type: SpanType;
-  /** The agent this span runs inside, e.g. "researcher". */
-  agent: string;
-  /** Relative to trace start. */
-  start_offset_ms: number;
-  duration_ms: number;
-  status: SpanStatus;
-  /** Exception message when status is "error". */
-  error?: string | null;
-  input_preview: string;
-  model: string | null;
-  input_tokens: number;
-  output_tokens: number;
-  litellm_request_id: string | null;
-  spend?: number | null;
-}
-
-/** One distinct agent in a trace. 200 invocations of `researcher` = one node. */
-export interface AgentNode {
-  name: string;
-  parent_agent: string | null;
-  invocations: number;
-  llm_calls: number;
-  tool_calls: number;
-  duration_ms: number;
-  spend?: number | null;
-}
-
-export interface TraceSummary {
-  trace_id: string;
-  trace_ref?: string;
-  name: string;
-  service: string;
-  input_preview: string;
-  /** ISO 8601 */
-  start_time: string;
-  duration_ms: number;
-  status: SpanStatus;
-  span_count: number;
-  agent_count: number;
-  llm_calls: number;
-  tool_calls: number;
-  /** Spans with an error status; > 0 means the run shows as failed. */
-  error_count: number;
-  input_tokens: number;
-  output_tokens: number;
-  models: string[];
-  spend?: number | null;
-}
-
-export interface Trace {
-  summary: TraceSummary;
-  agents: AgentNode[];
-  spans: Span[];
-}
-
-export interface TracePage {
-  data: TraceSummary[];
-  next_cursor: string | null;
-}
-
-/** `input` / `output` are JSON strings (messages for llm spans, raw args / result for tools). */
-export interface SpanDetail {
-  span_id: string;
-  input: string;
-  output: string;
-  attributes: Record<string, string>;
-}
+export type Trace = paths["/v1/traces/{trace_id}"]["get"]["responses"][200]["content"]["application/json"];
+export type TracePage = paths["/v1/traces"]["get"]["responses"][200]["content"]["application/json"];
+export type SpanErrorPage =
+  paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["responses"][200]["content"]["application/json"];
+type ApiSpanDetail =
+  paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["responses"][200]["content"]["application/json"];
+export type Span = Trace["spans"][number];
+export type SpanType = Span["type"];
+export type SpanStatus = Span["status"];
+export type AgentNode = Trace["agents"][number];
+export type TraceSummary = Trace["summary"];
+export type SpanDetail = Omit<ApiSpanDetail, "input_ui" | "output_ui"> &
+  Partial<Pick<ApiSpanDetail, "input_ui" | "output_ui">>;
+export type UIToolCall = components["schemas"]["UIToolCall"];
+export type UIMessage = components["schemas"]["UIMessage"];
+export type UIField = components["schemas"]["UIField"];
+export type UIContent = ApiSpanDetail["input_ui"];
 
 export interface TraceToolCall {
   name: string;
   args: unknown;
 }
 
-export interface TraceMessage {
+export type TraceMessage = Omit<UIMessage, "role" | "tool_calls"> & {
   role: string;
-  content: string;
-  name?: string;
   tool_calls?: TraceToolCall[];
-}
+};

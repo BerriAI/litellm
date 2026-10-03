@@ -8,7 +8,6 @@ The optional live edge measures headers without recording credentials or bodies.
 from __future__ import annotations
 
 import os
-import socket
 import subprocess
 import sys
 import threading
@@ -20,13 +19,12 @@ from pathlib import Path
 from typing import Final
 
 import psycopg
+from e2e_config import INHERITED_ENV_PREFIXES, available_port
 from e2e_http import NoBody
 from idp import Keycloak, stop_process_group
 from proxy_client import ProxyClient, build_proxy_client
 from psycopg.rows import class_row
-from pydantic import BaseModel, SecretStr, TypeAdapter, ValidationError
-
-INHERITED_ENV_PREFIXES: Final = ("REDIS_", "MICROSOFT_", "GOOGLE_", "GENERIC_", "PROXY_")
+from pydantic import BaseModel, SecretStr, ValidationError
 
 
 class StoredOAuth(BaseModel):
@@ -99,12 +97,6 @@ class OAuthObservation:
         expected_header: Final = f"Bearer {expected.access_token.get_secret_value()}"
         assert all(item[1] == expected_header for item in snapshot), "upstream bearer did not match the stored token"
         assert all(not item[2] for item in snapshot), "gateway bearer leaked to the upstream"
-
-
-def available_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return TypeAdapter(tuple[str, int]).validate_python(listener.getsockname())[1]
 
 
 @dataclass(slots=True)
