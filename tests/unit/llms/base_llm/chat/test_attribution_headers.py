@@ -91,6 +91,12 @@ def handler_path(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 
 _NOVITA_MODEL: Final = "novita/meta-llama/llama-3.3-70b-instruct"
 
+# (model, attribution header name) for every provider that opts in
+_ATTRIBUTED: Final = [
+    pytest.param(_NOVITA_MODEL, "x-novita-source", id="novita"),
+    pytest.param("perplexity/sonar", "x-pplx-integration", id="perplexity"),
+]
+
 
 def _drain(response: object) -> None:
     for _ in cast(Iterable[object], response):
@@ -102,10 +108,13 @@ async def _adrain(response: object) -> None:
         pass
 
 
+@pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
 @pytest.mark.parametrize("stream", [False, True])
-def test_attribution_header_sent_sync(server: _CaptureServer, handler_path: str, stream: bool) -> None:
+def test_attribution_header_sent_sync(
+    server: _CaptureServer, handler_path: str, model: str, header: str, stream: bool
+) -> None:
     response: Final = litellm.completion(
-        model=_NOVITA_MODEL,
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         api_base=server.api_base,
         api_key="k",
@@ -114,14 +123,17 @@ def test_attribution_header_sent_sync(server: _CaptureServer, handler_path: str,
     if stream:
         _drain(response)
 
-    assert server.last("x-novita-source") == ["litellm"]
+    assert server.last(header) == ["litellm"]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
 @pytest.mark.parametrize("stream", [False, True])
-async def test_attribution_header_sent_async(server: _CaptureServer, handler_path: str, stream: bool) -> None:
+async def test_attribution_header_sent_async(
+    server: _CaptureServer, handler_path: str, model: str, header: str, stream: bool
+) -> None:
     response: Final = await litellm.acompletion(
-        model=_NOVITA_MODEL,
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         api_base=server.api_base,
         api_key="k",
@@ -130,36 +142,38 @@ async def test_attribution_header_sent_async(server: _CaptureServer, handler_pat
     if stream:
         await _adrain(response)
 
-    assert server.last("x-novita-source") == ["litellm"]
+    assert server.last(header) == ["litellm"]
 
 
+@pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
 @pytest.mark.parametrize("header_kwarg", ["headers", "extra_headers"])
 def test_caller_header_overrides_attribution_any_casing(
-    server: _CaptureServer, handler_path: str, header_kwarg: str
+    server: _CaptureServer, handler_path: str, model: str, header: str, header_kwarg: str
 ) -> None:
-    caller_headers: Final = {"x-NOVITA-source": "my-app"}
+    caller_headers: Final = {header.upper(): "my-app"}
 
     litellm.completion(
-        model=_NOVITA_MODEL,
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         api_base=server.api_base,
         api_key="k",
         **{header_kwarg: caller_headers},
     )
 
-    assert server.last("x-novita-source") == ["my-app"]
-    assert caller_headers == {"x-NOVITA-source": "my-app"}
+    assert server.last(header) == ["my-app"]
+    assert caller_headers == {header.upper(): "my-app"}
 
 
 def test_provider_without_attribution_sends_none(server: _CaptureServer, handler_path: str) -> None:
     litellm.completion(
-        model="perplexity/sonar",
+        model="together_ai/meta-llama/Llama-3-8b-chat-hf",
         messages=[{"role": "user", "content": "hi"}],
         api_base=server.api_base,
         api_key="k",
     )
 
     assert server.last("x-novita-source") == []
+    assert server.last("x-pplx-integration") == []
 
 
 def test_global_litellm_headers_still_apply_and_are_not_mutated(
