@@ -53,6 +53,16 @@ REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
 
 
+def allowlisted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            meta_key.removeprefix(REQUESTER_METADATA_PATH): value
+            for meta_key in metadata_keys
+            if (value := metadata.get(meta_key))
+        }
+    )
+
+
 @dataclass(frozen=True)
 class RequestIdentity:
     call_id: str | None = None

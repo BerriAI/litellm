@@ -7,7 +7,7 @@ Phoenix + any other OpenInference-aware backend simultaneously.
 """
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import Final
@@ -15,10 +15,12 @@ from typing import Final
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
     MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
+    MessageToolCall,
     collect,
-    drop_none,
+    drop_none_pairs,
     json_if,
     message_content,
+    message_tool_calls,
     output_messages,
     tool_definition_attrs,
 )
@@ -31,37 +33,106 @@ from litellm.integrations.otel.model.payloads import (
 _INPUT_MESSAGES: Final = "llm.input_messages"
 _OUTPUT_MESSAGES: Final = "llm.output_messages"
 _MESSAGE_FAMILIES: Final = (_INPUT_MESSAGES, _OUTPUT_MESSAGES)
+_MESSAGE_BASE: Final = -1
+
+_ParsedMessage = tuple[object, str | None, tuple[MessageToolCall, ...]]
 
 
-def _message_key_groups(attrs: Mapping[str, AttrValue]) -> Mapping[tuple[str, int], tuple[str, ...]]:
-    """Per-index message keys in ``attrs`` grouped by ``(family, index)``."""
-    tagged: Final = sorted(
-        (family, int(key.split(".")[2]), key)
-        for key in attrs
-        for family in _MESSAGE_FAMILIES
-        if key.startswith(f"{family}.")
+def _parse_message(message: object) -> _ParsedMessage:
+    role: Final = message.get("role") if isinstance(message, dict) else None
+    return role, message_content(message), message_tool_calls(message)
+
+
+def _tool_call_attribute_pairs(
+    prefix: str, idx: int, tool_calls: tuple[MessageToolCall, ...]
+) -> Iterator[tuple[str, str | None]]:
+    for tool_idx, tool_call in enumerate(tool_calls):
+        yield f"{prefix}.{idx}.message.tool_calls.{tool_idx}.tool_call.id", tool_call.id
+        yield f"{prefix}.{idx}.message.tool_calls.{tool_idx}.tool_call.function.name", tool_call.name
+        yield f"{prefix}.{idx}.message.tool_calls.{tool_idx}.tool_call.function.arguments", tool_call.arguments
+
+
+def _message_attribute_pairs(
+    prefix: str,
+    messages: Sequence[_ParsedMessage],
+    *,
+    with_tool_call_attrs: bool,
+) -> Iterator[tuple[str, str | None]]:
+    for idx, (role, content, tool_calls) in enumerate(messages):
+        yield f"{prefix}.{idx}.message.role", role if isinstance(role, str) else None
+        yield f"{prefix}.{idx}.message.content", content
+        if with_tool_call_attrs:
+            yield from _tool_call_attribute_pairs(prefix, idx, tool_calls)
+
+
+def _message_value(messages: Sequence[_ParsedMessage]) -> str:
+    return json.dumps(
+        [
+            {
+                "role": role,
+                "content": content,
+                **({"tool_calls": [tool_call.to_openai_dict() for tool_call in tool_calls]} if tool_calls else {}),
+            }
+            for role, content, tool_calls in messages
+        ]
     )
+
+
+def _message_key_group(key: str) -> tuple[str, int, int, str] | None:
+    family: Final = next(
+        (family for family in _MESSAGE_FAMILIES if key.startswith(f"{family}.")),
+        None,
+    )
+    if family is None:
+        return None
+    parts: Final = key.split(".")
+    message_idx: Final = int(parts[2])
+    tool_idx: Final = int(parts[5]) if parts[4] == "tool_calls" else _MESSAGE_BASE
+    return family, message_idx, tool_idx, key
+
+
+def _message_key_groups(attrs: Mapping[str, AttrValue]) -> Mapping[tuple[str, int, int], tuple[str, ...]]:
+    """Message and tool-call keys in ``attrs`` grouped by family, message index, and tool index."""
+    tagged: Final = tuple(tag for key in attrs if (tag := _message_key_group(key)) is not None)
     return MappingProxyType(
-        {group: tuple(key for _, _, key in keys) for group, keys in groupby(tagged, key=lambda tag: tag[:2])}
+        {group: tuple(key for _, _, _, key in keys) for group, keys in groupby(sorted(tagged), key=lambda tag: tag[:3])}
     )
 
 
-def _shed_order(groups: Mapping[tuple[str, int], tuple[str, ...]]) -> tuple[tuple[str, int], ...]:
-    """Message groups least valuable first: middle prompt turns, extra choices, then the opener, the newest turn
-    and the first choice."""
-    inputs: Final = sorted(idx for family, idx in groups if family == _INPUT_MESSAGES)
-    outputs: Final = sorted(idx for family, idx in groups if family == _OUTPUT_MESSAGES)
+def _message_shed_groups(
+    groups: Mapping[tuple[str, int, int], tuple[str, ...]], family: str, message_idx: int
+) -> Iterator[tuple[str, int, int]]:
+    tool_call_groups: Final = tuple(
+        sorted(
+            (group for group in groups if group[:2] == (family, message_idx) and group[2] != _MESSAGE_BASE),
+            key=lambda group: group[2],
+            reverse=True,
+        )
+    )
+    yield from tool_call_groups
+    base_group: Final = (family, message_idx, _MESSAGE_BASE)
+    if base_group in groups:
+        yield base_group
+
+
+def _shed_order(groups: Mapping[tuple[str, int, int], tuple[str, ...]]) -> tuple[tuple[str, int, int], ...]:
+    """Middle inputs, extra choices, pinned inputs, then the first choice, with tool calls before message keys."""
+    inputs: Final = sorted(frozenset(idx for family, idx, _ in groups if family == _INPUT_MESSAGES))
+    outputs: Final = sorted(frozenset(idx for family, idx, _ in groups if family == _OUTPUT_MESSAGES))
     pinned_inputs: Final = tuple(dict.fromkeys((*inputs[:1], *inputs[-1:])))
-    return (
+    message_order: Final = (
         *((_INPUT_MESSAGES, idx) for idx in inputs[1:-1]),
         *((_OUTPUT_MESSAGES, idx) for idx in reversed(outputs[1:])),
         *((_INPUT_MESSAGES, idx) for idx in pinned_inputs),
         *((_OUTPUT_MESSAGES, idx) for idx in outputs[:1]),
     )
+    return tuple(
+        chain.from_iterable(_message_shed_groups(groups, family, message_idx) for family, message_idx in message_order)
+    )
 
 
 def fit_indexed_messages(attrs: Mapping[str, AttrValue], budget: int | None) -> Mapping[str, AttrValue]:
-    """``attrs`` with whole per-index messages shed, least valuable first, until at most ``budget`` keys remain.
+    """``attrs`` with indexed message attributes shed, least valuable first, until at most ``budget`` keys remain.
 
     ``None`` means the span has no attribute count limit. Every message still rides the ``input.value`` and
     ``output.value`` blobs, so shedding a per-index pair loses no content.
@@ -85,7 +156,9 @@ class OpenInferenceMapper:
     - ``llm.model_name`` / ``llm.provider`` / ``llm.invocation_parameters``
     - ``llm.input_messages.{i}.message.role`` / ``...content``
     - ``llm.output_messages.{i}.message.role`` / ``...content``
+    - ``llm.output_messages.{i}.message.tool_calls.{j}.tool_call.*``
     - ``llm.token_count.prompt`` / ``...completion`` / ``...total``
+    - ``metadata`` — JSON object of allowlisted promoted request metadata
     - ``input.value`` / ``output.value`` — JSON-serialized request / response
     """
 
@@ -121,6 +194,7 @@ class OpenInferenceMapper:
         "llm.invocation_parameters": lambda d: json_if(
             collect(OpenInferenceMapper._INVOCATION_PARAMS, d.request_params)
         ),
+        "metadata": lambda d: json_if(dict(sorted(d.promoted_metadata.items()))),
     }
 
     def __init__(self, tool_attr_budget: int = MAX_TOOL_DEFINITION_ATTRS_PER_SPAN) -> None:
@@ -137,27 +211,36 @@ class OpenInferenceMapper:
         return {
             **collect(self._LLM_CALL_ATTRS, data),
             **collect(self._BLOB_ATTRS, data),
-            **self._messages(_INPUT_MESSAGES, "input.value", data.messages_in),
-            **self._messages(_OUTPUT_MESSAGES, "output.value", output_messages(data)),
+            **self._messages(
+                _INPUT_MESSAGES,
+                "input.value",
+                data.messages_in,
+                with_tool_call_attrs=False,
+            ),
+            **self._messages(
+                _OUTPUT_MESSAGES,
+                "output.value",
+                output_messages(data),
+                with_tool_call_attrs=True,
+            ),
             **self._tools(data),
         }
 
     @staticmethod
-    def _messages(prefix: str, value_key: str, messages: Sequence[object]) -> AttributeMap:
+    def _messages(
+        prefix: str,
+        value_key: str,
+        messages: Sequence[object],
+        *,
+        with_tool_call_attrs: bool,
+    ) -> AttributeMap:
         """``{prefix}.{idx}.message.*`` keys for every message + the ``value_key`` blob of all of them."""
-        parsed: Final = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
-        attrs: Final = drop_none(
-            {
-                key: value
-                for idx, (role, content) in enumerate(parsed)
-                for key, value in (
-                    (f"{prefix}.{idx}.message.role", role if isinstance(role, str) else None),
-                    (f"{prefix}.{idx}.message.content", content),
-                )
-            }
+        parsed: Final = tuple(_parse_message(message) for message in messages)
+        attrs: Final = drop_none_pairs(
+            _message_attribute_pairs(prefix, parsed, with_tool_call_attrs=with_tool_call_attrs)
         )
         if parsed:
-            attrs[value_key] = json.dumps([{"role": role, "content": content} for role, content in parsed])
+            attrs[value_key] = _message_value(parsed)
         return attrs
 
     def _tools(self, data: LLMCallSpanData) -> AttributeMap:
