@@ -13,7 +13,8 @@ import os
 import random
 import time
 import traceback
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
@@ -24,6 +25,7 @@ from pydantic import TypeAdapter
 from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
@@ -50,13 +52,14 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
-from litellm.proxy.common_utils.user_api_key_cache import project_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
     daily_spend_entity_ids,
     merge_by_conflict_key,
 )
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
@@ -273,9 +276,23 @@ def _timed_request_duration_ms(
     return duration_ms
 
 
-def _spend_update_tx(prisma_client: PrismaClient) -> _SpendTransactionManager:
+_ENTITY_SPEND_MODELS: Final[Mapping[_EntitySpendTable, str]] = MappingProxyType(
+    {
+        "litellm_tagtable": "LiteLLM_TagTable",
+        "litellm_agentstable": "LiteLLM_AgentsTable",
+        "litellm_modelaccessgroupbudgettable": "LiteLLM_ModelAccessGroupBudgetTable",
+        "litellm_projecttable": "LiteLLM_ProjectTable",
+    }
+)
+
+
+@asynccontextmanager
+async def _spend_update_tx(
+    prisma_client: PrismaClient, table: str, call_type: str = "commit_spend_updates"
+) -> AsyncGenerator[_SpendTransaction]:
     tx: Final[_SpendTransactionManager] = prisma_client.db.tx(timeout=timedelta(seconds=60))
-    return tx
+    async with db_span(call_type, table), tx as transaction:
+        yield transaction
 
 
 _daily_spend_commit_started: Final[ContextVar[asyncio.Event | None]] = ContextVar(
@@ -2051,7 +2068,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_UserTable") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by ID for consistent lock ordering across pods to prevent deadlocks.
                             # batch_() issues statements sequentially within the tx, so iteration
@@ -2092,7 +2109,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_VerificationToken") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by token for consistent lock ordering across pods to prevent deadlocks.
                             for token, response_cost in sorted(key_list_transactions.items()):
@@ -2124,7 +2141,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_TeamTable") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
                             for team_id, response_cost in sorted(team_list_transactions.items()):
@@ -2162,7 +2179,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_TeamMembership") as transaction:
                         await _write_team_member_spend(transaction, team_member_list_transactions)
                     # Transaction succeeded, break out of retry loop
                     break
@@ -2182,12 +2199,13 @@ class DBSpendUpdateWriter:
             if team_memberships_to_invalidate and proxy_logging_obj is not None:
                 user_api_key_cache: Final = proxy_logging_obj.call_details.get("user_api_key_cache")
                 if user_api_key_cache is not None:
-                    for user_id, team_id in team_memberships_to_invalidate:
-                        cache_key = f"team_membership:{user_id}:{team_id}"
-                        await user_api_key_cache.async_delete_cache(key=cache_key)
-                        verbose_proxy_logger.debug(
-                            "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
-                        )
+                    with service_target(AUTH_OBJECTS_TARGET):
+                        for user_id, team_id in team_memberships_to_invalidate:
+                            cache_key = f"team_membership:{user_id}:{team_id}"
+                            await user_api_key_cache.async_delete_cache(key=cache_key)
+                            verbose_proxy_logger.debug(
+                                "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
+                            )
         elif on_table_committed is not None:
             on_table_committed("team_member_list_transactions")
 
@@ -2198,7 +2216,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, "LiteLLM_OrganizationTable") as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
                             for org_id, response_cost in sorted(org_list_transactions.items()):
@@ -2224,7 +2242,10 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction, transaction.batch_() as batcher:
+                    async with (
+                        _spend_update_tx(prisma_client, "LiteLLM_OrganizationMembership") as transaction,
+                        transaction.batch_() as batcher,
+                    ):
                         for key, response_cost in sorted(org_member_list_transactions.items()):
                             _, quoted_org_id, _, quoted_user_id = key.split("::")
                             batcher.litellm_organizationmembership.update_many(
@@ -2306,6 +2327,7 @@ class DBSpendUpdateWriter:
             on_table_committed("agent_list_transactions")
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _invalidate_project_caches(project_ids: Sequence[str], proxy_logging_obj: ProxyLogging | None) -> None:
         if not project_ids or proxy_logging_obj is None:
             return
@@ -2342,7 +2364,7 @@ class DBSpendUpdateWriter:
             for i in range(n_retry_times + 1):
                 start_time = time.time()
                 try:
-                    async with _spend_update_tx(prisma_client) as transaction:
+                    async with _spend_update_tx(prisma_client, _ENTITY_SPEND_MODELS[table_accessor]) as transaction:
                         async with transaction.batch_() as batcher:
                             # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
                             for entity_id, response_cost in sorted(transactions.items()):
@@ -2509,7 +2531,7 @@ class DBSpendUpdateWriter:
                                 table=table, transactions=tuple(transactions_to_process.values())
                             )
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
-                            async with _spend_update_tx(prisma_client) as transaction:
+                            async with _spend_update_tx(prisma_client, table.name, "upsert_daily_spend") as transaction:
                                 await transaction.execute_raw(sql, *params)
                                 _mark_daily_spend_commit_started()
                             _mark_daily_spend_commit_finished()

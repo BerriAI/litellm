@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLensDemo, createLensDemoData } from "./createLensDemo";
-import type { TracePage } from "@/components/view_logs/TraceView/traceTypes";
 import { evidenceTarget } from "../model/findings";
 
 describe("Lens demo data", () => {
@@ -56,14 +55,16 @@ describe("Lens demo data", () => {
   it("filters time windows locally and rejects writes or unknown reads without network access", async () => {
     const network = vi.spyOn(globalThis, "fetch");
     const now = Date.now();
-    const { client } = createLensDemo(now);
-    const all = await client.get<TracePage>("/v1/traces");
-    const recent = await client.get<TracePage>("/v1/traces", { query: { start_ms: now - 3600_000, end_ms: now } });
+    const { services } = createLensDemo(now);
+    const all = await services.traces.list({ startMs: 0, endMs: now });
+    const recent = await services.traces.list({ startMs: now - 3600_000, endMs: now });
     expect(recent.data.length).toBeGreaterThan(0);
     expect(recent.data.length).toBeLessThan(all.data.length);
     expect(recent.data.every((trace) => Date.parse(trace.start_time) >= now - 3600_000)).toBe(true);
-    await expect(client.post("/lens", { body: {} })).rejects.toMatchObject({ status: 403 });
-    await expect(client.get("/lens/real-investigation")).rejects.toMatchObject({ status: 404 });
+    const settings = services.lens.lenses().then((list) => list.lenses[0].settings);
+    await expect(services.lens.saveLens(undefined, await settings)).rejects.toMatchObject({ status: 403 });
+    await expect(services.lens.run("real-investigation", "job")).rejects.toMatchObject({ status: 404 });
+    await expect(services.traces.trace("missing")).rejects.toMatchObject({ status: 404 });
     expect(network).not.toHaveBeenCalled();
     network.mockRestore();
   });

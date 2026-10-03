@@ -3,13 +3,13 @@
 import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLensDemo } from "../LensDemoContext";
-import { useLensApi } from "../api/useLensApi";
+import { useLensApi } from "../services";
 import { lensQueries } from "../api/queries";
 import { evidenceTarget, mergeFeedback, sortedFindings } from "../model/findings";
 import type { Job, Lens } from "../model/types";
 
 export function useInvestigationResults(accessToken: string, lens: Lens | undefined) {
-  const apiClient = useLensApi();
+  const api = useLensApi(accessToken);
   const demo = useLensDemo();
   const [batchId, setBatchId] = useState("latest");
   const [historyOffset, setHistoryOffset] = useState(0);
@@ -18,10 +18,8 @@ export function useInvestigationResults(accessToken: string, lens: Lens | undefi
   const [filter, setFilter] = useState("open");
   const [kind, setKind] = useState<"issue" | "pattern">("issue");
   const [evidence, setEvidence] = useState<{ id: string; span: string } | null>(null);
-  const history = useQuery(
-    lensQueries.history(apiClient, accessToken, { lensId: lens?.id, historyOffset, demo: !!demo }),
-  );
-  const historical = useQuery(lensQueries.run(apiClient, accessToken, lens?.id, batchId));
+  const history = useQuery(lensQueries.history(api, { lensId: lens?.id, historyOffset, demo: !!demo }));
+  const historical = useQuery(lensQueries.run(api, lens?.id, batchId));
   const { job, missingSnapshot, selectedOutsideHistory, batchSettings, batchFindings } = runSnapshot(
     lens,
     batchId,
@@ -42,7 +40,7 @@ export function useInvestigationResults(accessToken: string, lens: Lens | undefi
   const target = evidence ? evidenceTarget(evidence.id) : null;
   const [requestOffset, setRequestOffset] = useState(0);
   const evidenceInput = { lensId: lens?.id, evidenceId: evidence?.id, requestOffset, source: target?.source };
-  const requestEvidence = useQuery(lensQueries.evidence(apiClient, accessToken, evidenceInput));
+  const requestEvidence = useQuery(lensQueries.evidence(api, evidenceInput));
   const reset = useCallback(() => {
     setBatchId("latest");
     setHistoryOffset(0);

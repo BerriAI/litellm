@@ -4118,6 +4118,46 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
     )
 
 
+def test_is_prompt_caching_valid_prompt_stops_counting_once_the_minimum_is_reached(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the router's prompt-cache deployment check tokenized the whole 400k to 700k token
+    Claude Code conversation on every request only to compare it with a 1024-token minimum, which
+    sat on the request's wall clock between auth and the LLM call. The check must decide after the
+    first few messages and still agree with the full count on both sides of the minimum."""
+    import litellm.litellm_core_utils.token_counter as token_counter_module
+
+    long_prompt = PROMPT_CACHE_MESSAGES * 50
+    counted_messages: list[int] = []  # mutable-ok: recorder for the _count_messages double
+    real_count_messages = token_counter_module._count_messages
+
+    def counting(params, batch, use_default_image_token_count, default_token_count):
+        counted_messages.append(len(batch))
+        return real_count_messages(params, batch, use_default_image_token_count, default_token_count)
+
+    monkeypatch.setattr(token_counter_module, "_count_messages", counting)
+
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=1024) is True
+    assert sum(counted_messages) < len(long_prompt), sum(counted_messages)
+
+    full_count = litellm.token_counter(model="claude-opus-4-8", messages=long_prompt, use_default_image_token_count=True)
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=full_count)
+        is True
+    )
+    assert (
+        is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=long_prompt, min_token_count=full_count + 1)
+        is False
+    )
+
+
+def test_is_prompt_caching_valid_prompt_without_messages_is_not_cacheable(local_model_cost_map: None) -> None:
+    """A tools-only call has no cacheable prefix, matching the pre-existing result for messages=None."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=None, tools=tools) is False
+    assert is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=None) is False
+
+
 def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression LIT-4392: the success/failure existence guards used isinstance, so a user
     subclass of a built-in logger already promoted into the callback lists made the guard
