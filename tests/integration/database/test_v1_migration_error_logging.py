@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -241,6 +241,7 @@ def _relay(source: socket.socket, destination: socket.socket) -> None:
 class _PostgresForwardingServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = 64
     target: tuple[str, int]
 
     def __init__(self, port: int, target: tuple[str, int]) -> None:
@@ -265,16 +266,17 @@ class _PostgresForwardingHandler(socketserver.BaseRequestHandler):
 
 
 @contextmanager
-def _postgres_forwarder(port: int, target: tuple[str, int]) -> Iterator[None]:
+def _gated_postgres_forwarder(port: int, target: tuple[str, int]) -> Iterator[Callable[[], None]]:
     server: Final = _PostgresForwardingServer(port, target)
     thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     try:
-        yield
+        yield thread.start
     finally:
-        server.shutdown()
+        if thread.is_alive():
+            server.shutdown()
         server.server_close()
-        thread.join(timeout=10)
+        if thread.ident is not None:
+            thread.join(timeout=10)
 
 
 def _stop_process(process: subprocess.Popen[str]) -> None:
@@ -384,32 +386,33 @@ def test_unreachable_database_recovers_after_postgres_forwarder_starts(tmp_path:
         hostname: Final = admin.hostname
         port: Final = admin.port
         assert hostname is not None and port is not None
+        target_host: Final = "127.0.0.1" if hostname == "localhost" else hostname
         forwarding_port: Final = free_port()
         forwarded_url: Final = _replace_port(database_url, forwarding_port, "127.0.0.1")
         command, environment = _migration_invocation(forwarded_url, tmp_path, {})
         output_path: Final = tmp_path / "migration-output.log"
-        with output_path.open("w") as output_file:
-            process: Final = subprocess.Popen(
-                command,
-                cwd=REPO_ROOT,
-                env=environment,
-                stdout=output_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                start_new_session=True,
-            )
-            try:
-                observation: Final = eventually(
-                    lambda: _migration_log_has_p1001_or_process_exited(output_path, process),
-                    lambda state: state[0] or state[1],
-                    seconds=900,
+        with _gated_postgres_forwarder(forwarding_port, (target_host, port)) as open_forwarder:
+            with output_path.open("w") as output_file:
+                process: Final = subprocess.Popen(
+                    command,
+                    cwd=REPO_ROOT,
+                    env=environment,
+                    stdout=output_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
                 )
-                assert observation[0], _safe_output(output_path.read_text())
-                target_host: Final = "127.0.0.1" if hostname == "localhost" else hostname
-                with _postgres_forwarder(forwarding_port, (target_host, port)):
+                try:
+                    observation: Final = eventually(
+                        lambda: _migration_log_has_p1001_or_process_exited(output_path, process),
+                        lambda state: state[0] or state[1],
+                        seconds=900,
+                    )
+                    assert observation[0], _safe_output(output_path.read_text())
+                    open_forwarder()
                     completed_returncode: Final = process.wait(timeout=900)
-            finally:
-                _stop_process(process)
+                finally:
+                    _stop_process(process)
         output: Final = output_path.read_text()
         errors: Final = error_lines(output)
         p1001_errors: Final = tuple(line for line in errors if "P1001" in line)
