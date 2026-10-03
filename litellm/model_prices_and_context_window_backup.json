@@ -16085,6 +16085,28 @@
         "input_cost_per_image_token": 4.7e-07,
         "source": "https://cohere.com/pricing"
     },
+    "cohere/embed-v5.0-pro": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 2048,
+        "supports_embedding_image_input": true,
+        "source": "https://cohere.com/pricing"
+    },
+    "cohere/embed-v5.0-fast": {
+        "input_cost_per_token": 8e-08,
+        "litellm_provider": "cohere",
+        "max_input_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 2048,
+        "supports_embedding_image_input": true,
+        "source": "https://cohere.com/pricing"
+    },
     "cohere/parse-v5.0": {
         "litellm_provider": "cohere",
         "mode": "ocr",
@@ -61056,6 +61078,9 @@
         "input_cost_per_audio_token": 2e-06,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "gemini",
+        "max_input_tokens": 98304,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
         "mode": "audio_transcription",
         "output_cost_per_token": 1.2e-05,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -61078,6 +61103,9 @@
         "input_cost_per_audio_token": 3.5e-06,
         "input_cost_per_token": 3.5e-06,
         "litellm_provider": "gemini",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
         "mode": "audio_transcription",
         "output_cost_per_token": 2.1e-05,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -64087,6 +64115,23 @@
             "text",
             "image",
             "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5-lite": {
+        "input_cost_per_image": 0.01,
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.02,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
         ],
         "supported_output_modalities": [
             "video"
@@ -75510,6 +75555,42 @@
         "supports_tool_choice": false,
         "supports_vision": true,
         "supports_web_search": true
+    },
+    "openrouter/openai/gpt-image-2": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://openrouter.ai/api/v1/images/models/openai/gpt-image-2/endpoints",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "openrouter/openai/gpt-image-2.5-flare": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://openrouter.ai/api/v1/images/models/openai/gpt-image-2.5-flare/endpoints",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "openrouter/openai/gpt-image-2.5-sunburst": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openrouter",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://openrouter.ai/api/v1/images/models/openai/gpt-image-2.5-sunburst/endpoints",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
     },
     "openrouter/openai/gpt-5.4-mini:batch": {
         "cache_read_input_token_cost": 3.75e-08,
