@@ -24,6 +24,7 @@ import hashlib
 import random
 
 import pytest
+import logging
 
 import litellm
 from litellm import aembedding, completion, embedding
@@ -74,6 +75,28 @@ async def test_dual_cache_async_batch_get_cache():
         await dual_cache.async_batch_get_cache(keys=["test_value", "test_value_2"])
 
         assert mock_redis_cache.call_count == 1
+        
+        
+def test_cache_key_warns_on_dropped_provider_specific_param(caplog):
+    import litellm
+    from litellm.caching.caching import Cache, _warned_dropped_cache_params
+
+    litellm.enable_caching_on_provider_specific_optional_params = False
+    _warned_dropped_cache_params.discard("num_ctx")
+    cache = Cache()
+    try:
+        with caplog.at_level(logging.WARNING):
+            cache.get_cache_key(model="ollama/llama3.2",
+                messages=[{"role": "user", "content": "hello"}], num_ctx=2048)
+        assert any("num_ctx" in r.message for r in caplog.records)
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            cache.get_cache_key(model="ollama/llama3.2",
+                messages=[{"role": "user", "content": "hello"}], num_ctx=4096)
+        assert not any("num_ctx" in r.message for r in caplog.records)
+    finally:
+        _warned_dropped_cache_params.discard("num_ctx")
 
 
 def test_dual_cache_batch_get_cache():

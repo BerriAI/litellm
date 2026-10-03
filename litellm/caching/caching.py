@@ -39,6 +39,7 @@ from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
+_warned_dropped_cache_params: set = set()
 if TYPE_CHECKING:
     from litellm.rust_bridge.response_cache import NativeCacheRequest, ResponseCacheRuntime
 
@@ -389,6 +390,19 @@ class Cache:
                         continue  # ignore None params
                     param_value = kwargs[param]
                     cache_key += f"{param}: {param_value}"
+                elif (
+                    kwargs[param] is not None
+                    and param not in _warned_dropped_cache_params
+                    and len(_warned_dropped_cache_params) < 100
+                ):
+                    _warned_dropped_cache_params.add(param)
+                    verbose_logger.warning(
+                        "litellm.cache: provider-specific param '%s' is excluded from the cache key by default, "
+                        "so requests differing only in '%s' will return the same cached response. "
+                        "Set litellm.enable_caching_on_provider_specific_optional_params=True to include it in the key.",
+                        param,
+                        param,
+                    )
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
