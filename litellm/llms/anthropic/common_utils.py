@@ -85,17 +85,15 @@ def anthropic_error_frame_exception(message: str, status_code: int, model: str) 
     """The exception the pre-stream mapping raises for an HTTP answer with the frame's status, so a retry
     policy's per-class budget governs an `event: error` frame the way it governs the error before the stream
     opened; the frame's status stays the one the client sees."""
-    match status_code:
-        case 429:
-            return RateLimitError(message=message, llm_provider="anthropic", model=model)
-        case 500 | 529:
-            return InternalServerError(message=message, llm_provider="anthropic", model=model)
-        case 503:
-            return ServiceUnavailableError(message=message, llm_provider="anthropic", model=model)
-        case 504:
-            return Timeout(message=message, model=model, llm_provider="anthropic", exception_status_code=status_code)
-        case _:
-            return APIError(status_code=status_code, message=message, llm_provider="anthropic", model=model)
+    if status_code == 429:
+        return RateLimitError(message=message, llm_provider="anthropic", model=model)
+    if status_code in (500, 529):
+        return InternalServerError(message=message, llm_provider="anthropic", model=model)
+    if status_code == 503:
+        return ServiceUnavailableError(message=message, llm_provider="anthropic", model=model)
+    if status_code == 504:
+        return Timeout(message=message, model=model, llm_provider="anthropic", exception_status_code=status_code)
+    return APIError(status_code=status_code, message=message, llm_provider="anthropic", model=model)
 
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
