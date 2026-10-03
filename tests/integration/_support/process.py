@@ -1,3 +1,4 @@
+import errno
 import os
 import signal
 import socket
@@ -112,6 +113,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
 
 
 _PORT_ATTEMPTS: Final = 3
+_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE)
 
 
 def _free_port() -> int:
@@ -143,7 +145,7 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
 
 
 def _lost_port_race(launch: _Launch) -> bool:
-    return launch.process.poll() is not None and "address already in use" in launch.log.read_text()
+    return launch.process.poll() is not None and _BIND_COLLISION in launch.log.read_text()
 
 
 def _wait_until_ready(launch: _Launch) -> None:
