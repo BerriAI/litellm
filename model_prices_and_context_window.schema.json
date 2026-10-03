@@ -1062,6 +1062,9 @@
         "supports_reasoning": {
           "type": "boolean"
         },
+        "supports_regex_lookaround": {
+          "type": "boolean"
+        },
         "supports_response_schema": {
           "type": "boolean"
         },

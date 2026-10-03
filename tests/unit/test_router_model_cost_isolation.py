@@ -514,6 +514,34 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     )
 
 
+def test_regex_lookaround_flag_stays_on_the_deployment_that_set_it() -> None:
+    """A deployment's ``supports_regex_lookaround`` override must not land on the shared
+    ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
+    backend_model = "bedrock/us.xai.grok-4.6"
+    deploy_id = "grok-deploy-keep-regex"
+
+    builtin_flag = litellm.get_model_info(model=backend_model).get("supports_regex_lookaround")
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "grok-keep-regex",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": deploy_id, "supports_regex_lookaround": not builtin_flag},
+                }
+            ],
+        )
+
+        assert litellm.model_cost[deploy_id]["supports_regex_lookaround"] is (not builtin_flag)
+        assert litellm.get_model_info(model=backend_model).get("supports_regex_lookaround") is builtin_flag
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_should_store_full_pricing_under_deployment_model_id():
     """
     Per-deployment pricing (including zero) should be stored and
