@@ -77,8 +77,7 @@ class TestMcpKeyWithoutAccessIsDenied:
 
         denied_tools = unwrap(client.list_tools(denied_key)).tool_names_for_server(server_id)
         assert denied_tools == frozenset(), (
-            f"ungranted key saw the server's tools; tools/list leaked across the permission "
-            f"boundary: {denied_tools}"
+            f"ungranted key saw the server's tools; tools/list leaked across the permission boundary: {denied_tools}"
         )
 
     @pytest.mark.covers("mcp.call_tool.api_key.denied_without_permission")
@@ -93,7 +92,7 @@ class TestMcpKeyWithoutAccessIsDenied:
         permitted_key = _key(client, resources, mcp_servers=[server_id])
         denied_key = _key(client, resources, mcp_servers=None)
 
-        tool_name = client.await_tool(permitted_key, server_id, SEARCH_LOGS_TOOL)
+        tool = client.await_tool_entry(permitted_key, server_id, SEARCH_LOGS_TOOL)
 
         search_args = {
             "query": "service:litellm",
@@ -101,14 +100,13 @@ class TestMcpKeyWithoutAccessIsDenied:
             "to": "now",
             "max_tokens": 1000,
         }
+        tool.assert_arguments_are_documented(search_args)
         permitted_call = client.await_call_tool(
-            permitted_key, server_id=server_id, name=tool_name, arguments=search_args
+            permitted_key, server_id=server_id, name=tool.name, arguments=search_args
         )
         assert permitted_call.is_error is not True, f"granted key's tool call errored: {permitted_call}"
 
-        denied = client.await_call_tool_denied(
-            denied_key, server_id=server_id, name=tool_name, arguments=search_args
-        )
+        denied = client.await_call_tool_denied(denied_key, server_id=server_id, name=tool.name, arguments=search_args)
         assert "access_denied" in denied.body, f"403 was not an MCP access denial: {denied.body}"
 
 
@@ -126,17 +124,21 @@ class TestMcpHealthVisibility:
         permitted: Final = _key(client, resources, mcp_servers=[server_x])
         tool: Final = client.await_tool(permitted, server_x, SEARCH_LOGS_TOOL)
         result: Final = client.await_call_tool(
-            permitted, server_id=server_x, name=tool,
+            permitted,
+            server_id=server_x,
+            name=tool,
             arguments={"query": "service:litellm", "from": DD_SEARCH_FROM, "to": "now", "max_tokens": 1000},
         )
         assert result.is_error is not True, f"permitted control failed: {result}"
 
         for grants in ([server_x], [server_y], []):
-            key = client.proxy.generate_key(KeyGenerateBody(
-                user_id=f"e2e-mcp-health-{unique_marker()}",
-                allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"],
-                object_permission=ObjectPermission(mcp_servers=grants),
-            ))
+            key = client.proxy.generate_key(
+                KeyGenerateBody(
+                    user_id=f"e2e-mcp-health-{unique_marker()}",
+                    allowed_routes=["/v1/mcp/server", "/v1/mcp/server/health"],
+                    object_permission=ObjectPermission(mcp_servers=grants),
+                )
+            )
             resources.defer(lambda key=key: client.proxy.delete_key(key))
             listed = unwrap(client.list_servers(key)).root
             assert {row.server_id for row in listed}.intersection(owned) == set(grants)

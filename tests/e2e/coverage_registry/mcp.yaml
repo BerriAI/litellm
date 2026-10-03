@@ -135,3 +135,352 @@
   assertions: [toolset_scoped]
   source: "user_api_key_auth_mcp.py:2137"
   rationale: "A key granted a toolset lists exactly the toolset's tools: the rest of the server's catalog stays hidden and every stored name resolves"
+- id: mcp.list_resource_templates.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: list_resource_templates
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/_experimental/mcp_server/server.py:list_resource_templates
+  rationale: Resource-template listing; same auth stack as tools
+- id: mcp.server_add.api_key.admin_only
+  module: mcp
+  tier: P0
+  operation: server_add
+  auth_family: api_key
+  assertions:
+  - admin_only
+  - persists
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:add_mcp_server
+  rationale: PROXY_ADMIN-gated server registration; persists to DB and is picked up without restart; onboarding path
+- id: mcp.server_list.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: server_list
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:fetch_all_mcp_servers
+  rationale: List registered servers; admin required only to query another team
+- id: mcp.server_get.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: server_get
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:fetch_mcp_server
+  rationale: Fetch one server; non-admins filtered to their allowed servers
+- id: mcp.server_update.api_key.admin_only
+  module: mcp
+  tier: P1
+  operation: server_update
+  auth_family: api_key
+  assertions:
+  - admin_only
+  - persists
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:edit_mcp_server
+  rationale: PROXY_ADMIN-gated edit persists to DB
+- id: mcp.server_delete.api_key.admin_only
+  module: mcp
+  tier: P1
+  operation: server_delete
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:remove_mcp_server
+  rationale: PROXY_ADMIN-gated delete removes the server row
+- id: mcp.server_health.api_key.reports_status
+  module: mcp
+  tier: P1
+  operation: server_health
+  auth_family: api_key
+  assertions:
+  - reports_status
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:health_check_servers
+  rationale: Health check distinguishes a reachable upstream from a broken one
+- id: mcp.server_submit.api_key.creates_pending
+  module: mcp
+  tier: P1
+  operation: server_submit
+  auth_family: api_key
+  assertions:
+  - creates_pending
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:register_mcp_server
+  rationale: Non-admin submission creates a pending row for review; admins auto-approve
+- id: mcp.server_approve.api_key.admin_only
+  module: mcp
+  tier: P1
+  operation: server_approve
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:approve_mcp_server_submission
+  rationale: PROXY_ADMIN approves a pending submission into an active server
+- id: mcp.server_reject.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: server_reject
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:reject_mcp_server_submission
+  rationale: PROXY_ADMIN rejects a pending submission
+- id: mcp.make_public.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: make_public
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:make_mcp_servers_public
+  rationale: PROXY_ADMIN marks servers public for the AI Hub
+- id: mcp.oauth_authorize.oauth.issues_code
+  module: mcp
+  tier: P1
+  operation: oauth_authorize
+  auth_family: oauth
+  assertions:
+  - issues_code
+  source: litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py:byok_authorize_post
+  rationale: Authenticated authorize stores a one-time code bound to user_id + PKCE challenge and redirects with code+state
+- id: mcp.oauth_token.oauth.exchanges_code
+  module: mcp
+  tier: P1
+  operation: oauth_token
+  auth_family: oauth
+  assertions:
+  - exchanges_code
+  source: litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py:byok_token
+  rationale: Valid code + PKCE verifier mints a byok_session JWT and persists the per-user upstream credential
+- id: mcp.oauth_token.oauth.rejects_bad_pkce
+  module: mcp
+  tier: P0
+  operation: oauth_token
+  auth_family: oauth
+  assertions:
+  - rejects_bad_pkce
+  source: litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py:byok_token
+  rationale: S256 verifier mismatch returns invalid_grant; the PKCE trust boundary must not be bypassable
+- id: mcp.oauth_token.oauth.rejects_reused_code
+  module: mcp
+  tier: P1
+  operation: oauth_token
+  auth_family: oauth
+  assertions:
+  - rejects_reused_code
+  source: litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py:byok_token
+  rationale: Authorization code is one-time-use; a replay is refused
+- id: mcp.oauth_metadata.none.discoverable
+  module: mcp
+  tier: P2
+  operation: oauth_metadata
+  auth_family: none
+  assertions:
+  - discoverable
+  source: litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py:oauth_authorization_server_metadata
+  rationale: Public .well-known AS + protected-resource metadata advertise S256 + authorization_code so MCP clients discover
+    the flow
+- id: mcp.user_credential_set.api_key.persists
+  module: mcp
+  tier: P1
+  operation: user_credential_set
+  auth_family: api_key
+  assertions:
+  - persists
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:store_mcp_user_credential
+  rationale: Caller stores its own BYOK key for a server; injected at egress on later tool calls
+- id: mcp.user_credential_delete.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: user_credential_delete
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:delete_mcp_user_credential
+  rationale: Caller revokes its own stored BYOK key
+- id: mcp.oauth_user_credential_status.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: oauth_user_credential_status
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:get_mcp_oauth_user_credential_status
+  rationale: Caller checks whether it has a stored upstream OAuth2 credential
+- id: mcp.user_env_vars_set.api_key.rejects_undeclared
+  module: mcp
+  tier: P2
+  operation: user_env_vars_set
+  auth_family: api_key
+  assertions:
+  - persists
+  - rejects_undeclared
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:store_mcp_user_env_vars
+  rationale: Per-user env vars persist, but only admin-declared var names are accepted
+- id: mcp.tools_rest.api_key.succeeds
+  module: mcp
+  tier: P1
+  operation: tools_rest
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:get_mcp_tools
+  rationale: Flat REST tool listing scoped to the calling key's allowed servers
+- id: mcp.tool_search.api_key.denied_without_permission
+  module: mcp
+  tier: P1
+  operation: tool_search
+  auth_family: api_key
+  assertions:
+  - denied_without_permission
+  source: litellm/proxy/_experimental/mcp_server/tool_search.py:handle_mcp_tool_search
+  rationale: Semantic tool-search virtual tool is gated by object_permission.mcp_tool_search_enabled
+- id: mcp.tool_search.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: tool_search
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/_experimental/mcp_server/tool_search.py:handle_mcp_tool_search
+  rationale: Semantic tool search returns ranked tools for a permitted key
+- id: mcp.access_groups.api_key.succeeds
+  module: mcp
+  tier: P2
+  operation: access_groups
+  auth_family: api_key
+  assertions:
+  - succeeds
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:get_mcp_access_groups
+  rationale: List MCP access groups the key can see
+- id: mcp.discover.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: discover
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:discover_mcp_servers
+  rationale: PROXY_ADMIN-only curated well-known server discovery for the UI
+- id: mcp.registry_json.none.public_filtered
+  module: mcp
+  tier: P2
+  operation: registry_json
+  auth_family: none
+  assertions:
+  - public_filtered
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:get_mcp_registry
+  rationale: Public registry is gated by a feature flag and IP-filtered to public servers for external callers
+- id: mcp.toolset_add.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: toolset_add
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:add_mcp_toolset
+  rationale: PROXY_ADMIN creates a toolset
+- id: mcp.toolset_list.api_key.scoped
+  module: mcp
+  tier: P2
+  operation: toolset_list
+  auth_family: api_key
+  assertions:
+  - scoped
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:fetch_mcp_toolsets
+  rationale: Toolset listing is filtered to the key's object_permission.mcp_toolsets
+- id: mcp.toolset_delete.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: toolset_delete
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:remove_mcp_toolset
+  rationale: PROXY_ADMIN deletes a toolset
+- id: mcp.oauth_session.api_key.admin_only
+  module: mcp
+  tier: P2
+  operation: oauth_session
+  auth_family: api_key
+  assertions:
+  - admin_only
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:add_session_mcp_server
+  rationale: PROXY_ADMIN caches a temp in-memory server for the OAuth setup flow (no DB write)
+- id: mcp.upstream_authorize.oauth.redirects_upstream
+  module: mcp
+  tier: P2
+  operation: upstream_authorize
+  auth_family: oauth
+  assertions:
+  - redirects_upstream
+  source: litellm/proxy/management_endpoints/mcp_management_endpoints.py:mcp_authorize
+  rationale: Gateway-managed authorization_code begins the upstream OAuth authorize for a server; the delegate-auth leg needs
+    a real OAuth upstream to prove end to end
+- id: mcp.list_tools.api_key.team_toolset_scoped
+  module: mcp
+  tier: P0
+  operation: list_tools
+  auth_family: api_key
+  assertions:
+  - toolset_scoped
+  source: tests/e2e/mcp/test_mcp_toolset_enforcement_e2e.py:TestMcpToolsetEnforcementPerLevel
+  rationale: 'A toolset attached to a team''s object_permission narrows the team key''s tools/list to exactly the tools it
+    names (LIT-5749: stored but inert before the fix)'
+  fail_before_fix: proven
+- id: mcp.call_tool.api_key.team_toolset_denied_outside
+  module: mcp
+  tier: P0
+  operation: call_tool
+  auth_family: api_key
+  assertions:
+  - denied_outside_toolset
+  source: tests/e2e/mcp/test_mcp_toolset_enforcement_e2e.py:TestMcpToolsetEnforcementPerLevel
+  rationale: A team key calling a tool on the granted server but outside the team's toolset is refused; the named tool stays
+    callable (LIT-5749)
+  fail_before_fix: proven
+- id: mcp.list_tools.api_key.org_toolset_scoped
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions:
+  - toolset_scoped
+  source: tests/e2e/mcp/test_mcp_toolset_enforcement_e2e.py:TestMcpToolsetEnforcementPerLevel
+  rationale: 'A toolset on an org''s object_permission caps a member team''s key that declares no MCP grants of its own (LIT-5749:
+    the org substitution amplifier)'
+  fail_before_fix: proven
+- id: mcp.call_tool.api_key.org_toolset_denied_outside
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions:
+  - denied_outside_toolset
+  source: tests/e2e/mcp/test_mcp_toolset_enforcement_e2e.py:TestMcpToolsetEnforcementPerLevel
+  rationale: An org-inherited key calling outside the org's toolset is refused while the named tool stays callable (LIT-5749)
+  fail_before_fix: proven
+- id: mcp.list_tools.api_key.user_toolset_scoped
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions:
+  - toolset_scoped
+  source: tests/e2e/mcp/test_mcp_toolset_enforcement_e2e.py:TestMcpToolsetEnforcementPerLevel
+  rationale: A toolset on an internal user's row ceils the servers the user's own key grants; user-level toolsets narrow,
+    never grant (LIT-5749)
+  fail_before_fix: proven
+- id: mcp.call_tool.api_key.user_toolset_denied_outside
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: api_key
+  assertions:
+  - denied_outside_toolset
+  source: tests/e2e/mcp/test_mcp_toolset_enforcement_e2e.py:TestMcpToolsetEnforcementPerLevel
+  rationale: A key whose user row holds a toolset is refused calling outside it even though the key itself grants the whole
+    server (LIT-5749)
+  fail_before_fix: proven
