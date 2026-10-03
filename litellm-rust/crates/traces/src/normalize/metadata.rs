@@ -21,6 +21,7 @@ pub enum AgentType {
 #[strum(serialize_all = "kebab-case")]
 pub enum Integration {
     ClaudeCode,
+    ClaudeAgentSdk,
     OpenaiCodex,
     DeepagentsCode,
     Cursor,
@@ -30,6 +31,20 @@ pub enum Integration {
     Langchain,
     Langgraph,
     Deepagents,
+    Autogen,
+    Crewai,
+    GoogleAdk,
+    LlamaIndex,
+    Mastra,
+    MicrosoftAgentFramework,
+    OpenaiAgents,
+    PydanticAi,
+    SemanticKernel,
+    Strands,
+    VercelAiSdk,
+    Instructor,
+    N8n,
+    Temporal,
     #[strum(default)]
     Other(String),
 }
@@ -124,11 +139,7 @@ enum MetadataField {
     LsAgentType,
     LsAgentPurpose,
     LsAgentRuntime,
-    #[strum(
-        serialize = "ls_agent_version",
-        serialize = "ls_agent_runtime_version",
-        to_string = "ls_agent_version"
-    )]
+    #[strum(serialize = "ls_agent_runtime_version", to_string = "ls_agent_version")]
     LsAgentVersion,
     LsTraceSchemaVersion,
     ThreadId,
@@ -139,17 +150,9 @@ enum MetadataField {
     LsProvider,
     GitBranch,
     GitCommitSha,
-    #[strum(
-        serialize = "git_repo_url",
-        serialize = "repository_url",
-        to_string = "git_repo_url"
-    )]
+    #[strum(serialize = "repository_url", to_string = "git_repo_url")]
     GitRepoUrl,
-    #[strum(
-        serialize = "working_directory",
-        serialize = "cwd",
-        to_string = "working_directory"
-    )]
+    #[strum(serialize = "cwd", to_string = "working_directory")]
     WorkingDirectory,
 }
 

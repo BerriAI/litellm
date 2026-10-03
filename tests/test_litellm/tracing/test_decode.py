@@ -524,8 +524,8 @@ def test_openinference_spans():
         input__value="prompt",
         output__value="answer",
     )
-    chain = _span("retriever", b"\x03" * 8, b"\x01" * 8, openinference__span__kind="RETRIEVER")
-    rows = {r["SpanName"]: r for r in decode_otlp(_export(root, llm, chain))}
+    retriever = _span("retriever", b"\x03" * 8, b"\x01" * 8, openinference__span__kind="RETRIEVER")
+    rows = {r["SpanName"]: r for r in decode_otlp(_export(root, llm, retriever))}
     assert (rows["agent"]["ObservationType"], rows["agent"]["AgentName"], rows["agent"]["Input"]) == (
         "agent",
         "writer",
@@ -539,7 +539,7 @@ def test_openinference_spans():
     )
     assert (rows["llm"]["Input"], rows["llm"]["Output"]) == ("prompt", "answer")
     assert "input.value" not in rows["llm"]["SpanAttributes"]
-    assert rows["retriever"]["ObservationType"] == "chain"
+    assert rows["retriever"]["ObservationType"] == "retriever"
 
 
 def test_non_string_attribute_values_are_stringified():

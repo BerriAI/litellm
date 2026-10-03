@@ -23,10 +23,12 @@ const span = (overrides: SpanFields): Span => ({
   name: overrides.span_id,
   type: "chain",
   agent: "support_triage_agent",
+  framework: "",
   start_offset_ms: 0,
   duration_ms: 1300,
   status: "ok",
   error: null,
+  error_truncated: false,
   input_preview: "",
   model: null,
   input_tokens: 0,
@@ -317,7 +319,10 @@ describe("SpanHoverCard", () => {
   ] as const)("renders the %s operation", async (type, label) => {
     const user = userEvent.setup();
     renderWithProviders(
-      <SpanHoverCard facts={spanFacts(span({ type }))} traceStartMs={Date.parse(trace.summary.start_time)}>
+      <SpanHoverCard
+        facts={spanFacts(span({ span_id: "specialized", type }))}
+        traceStartMs={Date.parse(trace.summary.start_time)}
+      >
         <button type="button">row</button>
       </SpanHoverCard>,
     );

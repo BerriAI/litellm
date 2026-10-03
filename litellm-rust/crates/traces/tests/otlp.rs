@@ -620,6 +620,15 @@ fn metadata_sources_merge_with_flattened_values_taking_precedence(span: Span) {
 }
 
 #[rstest]
+fn metadata_projection_respects_the_decoded_byte_budget(span: Span) {
+    let thread = "x".repeat(9 * 1024 * 1024);
+    assert!(matches!(
+        decode_normalization(span, "example", &[("thread_id", &thread)]),
+        Err(litellm_traces::Error::TooLarge)
+    ));
+}
+
+#[rstest]
 fn genai_retrieval_normalizes_query_and_documents(span: Span) {
     let query = "trace storage";
     let documents = r#"[{"id":"doc-1","score":0.9}]"#;

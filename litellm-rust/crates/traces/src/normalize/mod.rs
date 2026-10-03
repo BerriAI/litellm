@@ -20,6 +20,7 @@ mod metadata;
 mod openinference;
 
 pub(crate) use claude_code::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
+pub(crate) use messages::{HIDDEN_BLOCK_TYPES, encode};
 use instrumentation::Instrumentation;
 pub use metadata::{AgentMetadata, AgentType, Integration};
 

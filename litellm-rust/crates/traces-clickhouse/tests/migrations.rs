@@ -243,13 +243,25 @@ async fn normalized_fields_match_clickhouse_catalog(
 async fn agent_metadata_is_stored_and_queryable(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
-    let database = database?;
+    let ready = database?;
+    ensure_schema(
+        &ready.client,
+        &Connection::writer(&ready.url)?,
+        "trace_test",
+        7,
+    )
+    .await?;
     let metadata = serde_json::json!({"thread_id": "thread-1", "ls_subagent_id": "agent-1"});
     insert_rows(
-        &database,
+        &ready,
         "otel_traces",
         vec![BTreeMap::from([
-            ("Timestamp".into(), time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?.into()),
+            (
+                "Timestamp".into(),
+                time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)?
+                    .into(),
+            ),
             ("TraceId".into(), "trace-1".into()),
             ("SpanId".into(), "span-1".into()),
             ("AgentMetadata".into(), metadata.to_string().into()),
@@ -257,7 +269,7 @@ async fn agent_metadata_is_stored_and_queryable(
     )
     .await?;
     let response = read_json(
-        &database,
+        &ready,
         "SELECT JSONExtractString(AgentMetadata, 'thread_id') AS thread_id, JSONExtractString(AgentMetadata, 'ls_subagent_id') AS subagent_id FROM trace_test.otel_traces WHERE TraceId = 'trace-1'",
     ).await?;
     assert_eq!(response["data"][0]["thread_id"], metadata["thread_id"]);

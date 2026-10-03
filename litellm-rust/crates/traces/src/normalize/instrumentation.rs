@@ -23,35 +23,35 @@ const HTTP_CLIENT_SCOPES: [&str; 7] = [
     "@opentelemetry/instrumentation-undici",
 ];
 
-pub(super) enum Instrumentation<'a> {
+pub(super) enum Instrumentation {
     ClaudeCode,
     /// `openinference.instrumentation.<name>`.
-    OpenInference(&'a str),
+    OpenInference(Integration),
     PydanticAi,
     /// SDKs whose own tracer is known only by its scope.
-    Named(&'static str),
+    Named(Integration),
     HttpClient,
     Unknown,
 }
 
-impl<'a> Instrumentation<'a> {
-    pub(super) fn detect(context: &SpanContext<'a>) -> Self {
+impl Instrumentation {
+    pub(super) fn detect(context: &SpanContext<'_>) -> Self {
         let scope = context.scope;
         if scope == CLAUDE_CODE_SCOPE {
             return Self::ClaudeCode;
         }
         if let Some(name) = scope.strip_prefix(OPENINFERENCE_PREFIX) {
-            return Self::OpenInference(name);
+            return Self::OpenInference(Integration::from(name.replace('_', "-")));
         }
         if HTTP_CLIENT_SCOPES.contains(&scope) {
             return Self::HttpClient;
         }
         match scope {
             "pydantic-ai" => Self::PydanticAi,
-            "gcp.vertex.agent" => Self::Named("google-adk"),
+            "gcp.vertex.agent" => Self::Named(Integration::GoogleAdk),
             // `@ai-sdk/otel` uses `gen_ai`; the SDK's built-in telemetry used `ai`.
-            "gen_ai" | "ai" => Self::Named("vercel-ai-sdk"),
-            _ if scope.starts_with("strands.") => Self::Named("strands"),
+            "gen_ai" | "ai" => Self::Named(Integration::VercelAiSdk),
+            _ if scope.starts_with("strands.") => Self::Named(Integration::Strands),
             _ => Self::Unknown,
         }
     }
@@ -59,9 +59,8 @@ impl<'a> Instrumentation<'a> {
     fn framework(&self, context: &SpanContext<'_>) -> String {
         match self {
             Self::ClaudeCode => claude_code::framework(context.attributes).to_owned(),
-            Self::OpenInference(name) => name.replace('_', "-"),
-            Self::PydanticAi => "pydantic-ai".to_owned(),
-            Self::Named(name) => (*name).to_owned(),
+            Self::OpenInference(name) | Self::Named(name) => name.to_string(),
+            Self::PydanticAi => Integration::PydanticAi.to_string(),
             Self::HttpClient | Self::Unknown => String::new(),
         }
     }
@@ -78,14 +77,14 @@ impl<'a> Instrumentation<'a> {
                     facts.role = Some(RoleEvidence::WrapperCandidate(ObservationType::Agent));
                 }
             }
-            Self::OpenInference("langchain") => {
+            Self::OpenInference(Integration::Langchain) => {
                 if !context.parent_span_id.is_empty() && is_langchain_middleware(context.name) {
                     facts.role = Some(RoleEvidence::Declared(ObservationType::Framework));
                 }
                 // LangGraph state: `{"messages": [...]}`.
                 facts.input_preview = state_messages_preview(&facts.input, "messages");
             }
-            Self::OpenInference("llama_index") => {
+            Self::OpenInference(Integration::LlamaIndex) => {
                 if context.name.ends_with(".run_agent_step") {
                     if let Some(agent) = current_agent_name(attr(context.attributes, "input.value"))
                     {
@@ -101,14 +100,14 @@ impl<'a> Instrumentation<'a> {
                     facts.input_preview = Some(String::new());
                 }
             }
-            Self::OpenInference("claude_agent_sdk") => {
+            Self::OpenInference(Integration::ClaudeAgentSdk) => {
                 // The subagent span is named after the `Agent` tool, not the subagent it runs.
                 if facts.agent_name.as_deref() == Some("Agent") {
                     facts.role = Some(RoleEvidence::WrapperCandidate(ObservationType::Agent));
                     facts.agent_name = Some(String::new());
                 }
             }
-            Self::OpenInference("google_adk") => {
+            Self::OpenInference(Integration::GoogleAdk) => {
                 // `Runner.run_async` arguments: the user turn is `new_message`.
                 if let Some(preview) = state_messages_preview(&facts.input, "new_message") {
                     facts.input_preview = Some(preview);

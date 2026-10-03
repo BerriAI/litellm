@@ -16,18 +16,28 @@ use super::{CallEvidence, CallKey, attr};
 /// Characters of a span's input kept for list views.
 pub(super) const PREVIEW_CHARS: usize = 240;
 
+/// Content blocks that carry no display text: reasoning and the model's own tool requests.
+pub(crate) const HIDDEN_BLOCK_TYPES: [&str; 6] = [
+    "reasoning",
+    "thinking",
+    "redacted_thinking",
+    "function_call",
+    "tool_use",
+    "tool_call",
+];
+
 fn display_text(content: &Recognized<ChatMessageContent>) -> String {
     match content {
         Recognized::Known(ChatMessageContent::Text(text)) => text.clone(),
         Recognized::Known(ChatMessageContent::Parts(blocks)) => blocks
             .iter()
-            .filter_map(|block| match block.get("type").and_then(Value::as_str) {
-                Some(
-                    "reasoning" | "thinking" | "redacted_thinking" | "function_call" | "tool_use"
-                    | "tool_call",
-                ) => None,
-                _ => block.get("text").and_then(Value::as_str),
+            .filter(|block| {
+                !block
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| HIDDEN_BLOCK_TYPES.contains(&kind))
             })
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join("\n\n"),
         Recognized::Unrecognized(value) => encode(value),
@@ -379,7 +389,7 @@ impl Formatter for PythonJsonFormatter {
     }
 }
 
-pub(super) fn encode<T: Serialize>(value: &T) -> String {
+pub(crate) fn encode<T: Serialize>(value: &T) -> String {
     let mut output = Vec::new();
     let mut serializer = serde_json::Serializer::with_formatter(&mut output, PythonJsonFormatter);
     if value.serialize(&mut serializer).is_err() {
