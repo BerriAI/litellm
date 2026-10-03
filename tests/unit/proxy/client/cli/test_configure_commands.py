@@ -1,4 +1,6 @@
 import io
+import importlib
+from collections.abc import Callable
 import json
 import os
 import stat
@@ -1246,3 +1248,17 @@ class TestSavedAgentSetup:
         assert len(responses.calls) == 0
         assert not paths[0].exists() and not paths[1].exists()
         assert not _saved_profile_path("claude", paths[0]).exists()
+
+
+@pytest.mark.parametrize("missing", ("click", "filelock", "unrelated_dependency"))
+def test_client_cli_missing_dependency_guidance(missing: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]) -> None:
+    package: Final = importlib.import_module("litellm.proxy.client.cli")
+    failure: Final = ModuleNotFoundError("dependency unavailable", name=missing)
+    fail_optional_import("main", failure)
+    with pytest.raises(ImportError) as error:
+        importlib.reload(package)
+    if missing in ("click", "filelock"):
+        assert "litellm[cli]" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure

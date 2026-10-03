@@ -145,7 +145,3 @@ class TestUIDetectionLogic:
 
             # Restore permissions for cleanup
             os.chmod(readonly_dir, 0o755)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

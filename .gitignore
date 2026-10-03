@@ -154,3 +154,4 @@ coverage-rust.xml
 
 # make lens-dev worker token, generated config and logs
 .lens-dev/
+litellm-proxy-extras/litellm_proxy_extras/ui/

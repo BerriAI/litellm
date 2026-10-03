@@ -7,14 +7,29 @@ arbitrary local image paths working while refusing non-image files like
 """
 
 import os
+import sys
+from unittest.mock import patch
 
 import pytest
 
-
 from litellm.proxy.common_utils.static_asset_utils import (
     detect_local_image_media_type,
+    get_packaged_ui_directory,
     resolve_validated_local_image_path,
 )
+
+
+def test_dashboard_package_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras", None)
+    assert get_packaged_ui_directory() is None
+
+
+def test_dashboard_lookup_preserves_unrelated_import_failures() -> None:
+    error = ModuleNotFoundError("unrelated import failed", name="unrelated_dependency")
+    with patch("litellm.proxy.common_utils.static_asset_utils.package_files", side_effect=error):
+        with pytest.raises(ModuleNotFoundError) as raised:
+            get_packaged_ui_directory()
+    assert raised.value is error
 
 
 @pytest.mark.parametrize(

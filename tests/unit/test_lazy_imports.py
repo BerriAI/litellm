@@ -365,3 +365,9 @@ def test_utils_module_lazy_imports():
         assert name in utils_globals
 
         _verify_only_requested_name_imported_in_utils(name, UTILS_MODULE_NAMES)
+
+
+def test_server_command_preserves_public_identity() -> None:
+    from litellm.proxy.proxy_cli import run_server
+
+    assert litellm.run_server is run_server

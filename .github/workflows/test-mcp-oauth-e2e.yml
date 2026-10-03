@@ -148,9 +148,9 @@ jobs:
           cd ui/litellm-dashboard
           ../../scripts/with_dashboard_node.sh npm ci
           ../../scripts/with_dashboard_node.sh npm run build
-          mkdir -p ../../litellm/proxy/_experimental/out
-          cp -r out/. ../../litellm/proxy/_experimental/out/
-          find ../../litellm/proxy/_experimental/out -name '*.html' ! -name index.html | while read -r page; do
+          mkdir -p ../../litellm-proxy-extras/litellm_proxy_extras/ui
+          cp -r out/. ../../litellm-proxy-extras/litellm_proxy_extras/ui/
+          find ../../litellm-proxy-extras/litellm_proxy_extras/ui -name '*.html' ! -name index.html | while read -r page; do
             mkdir -p "${page%.html}"
             mv "${page}" "${page%.html}/index.html"
           done

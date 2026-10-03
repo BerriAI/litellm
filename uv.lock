@@ -4505,9 +4505,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
-    { name = "click" },
     { name = "fastuuid" },
-    { name = "filelock" },
     { name = "httpx", extra = ["http2"] },
     { name = "huggingface-hub" },
     { name = "importlib-metadata" },
@@ -4531,6 +4529,8 @@ caching = [
     { name = "diskcache" },
 ]
 cli = [
+    { name = "click" },
+    { name = "filelock" },
     { name = "inquirerpy" },
     { name = "keyring" },
     { name = "pyyaml" },
@@ -4570,10 +4570,12 @@ proxy = [
     { name = "azure-storage-blob" },
     { name = "backoff" },
     { name = "boto3" },
+    { name = "click" },
     { name = "cryptography" },
     { name = "expression" },
     { name = "fastapi" },
     { name = "fastapi-sso" },
+    { name = "filelock" },
     { name = "granian" },
     { name = "gunicorn" },
     { name = "hiredis" },
@@ -4681,9 +4683,11 @@ ci = [
 dev = [
     { name = "basedpyright" },
     { name = "botocore-stubs" },
+    { name = "click" },
     { name = "diff-cover" },
     { name = "fakeredis" },
     { name = "fastapi-offline" },
+    { name = "filelock" },
     { name = "hypothesis" },
     { name = "keyring" },
     { name = "langfuse" },
@@ -4763,7 +4767,8 @@ requires-dist = [
     { name = "backoff", marker = "extra == 'proxy'", specifier = ">=2.2.1,<3.0" },
     { name = "boto3", specifier = ">=1.43.1,<2.0" },
     { name = "boto3", marker = "extra == 'proxy'", specifier = ">=1.43.1,<2.0" },
-    { name = "click", specifier = ">=8.0.0,<9.0" },
+    { name = "click", marker = "extra == 'cli'", specifier = ">=8.0.0,<9.0" },
+    { name = "click", marker = "extra == 'proxy'", specifier = ">=8.0.0,<9.0" },
     { name = "cryptography", marker = "extra == 'proxy'", specifier = ">=49.0.0,<51.0" },
     { name = "ddtrace", marker = "extra == 'proxy-runtime'", specifier = ">=4.8.2,<5.0" },
     { name = "detect-secrets", marker = "extra == 'proxy-runtime'", specifier = ">=1.5.0,<2.0" },
@@ -4772,7 +4777,8 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.136.3,<1.0" },
     { name = "fastapi-sso", marker = "extra == 'proxy'", specifier = ">=0.19.0,<1.0" },
     { name = "fastuuid", specifier = ">=0.14.0,<1.0" },
-    { name = "filelock", specifier = ">=3.16.1,<4.0" },
+    { name = "filelock", marker = "extra == 'cli'", specifier = ">=3.16.1,<4.0" },
+    { name = "filelock", marker = "extra == 'proxy'", specifier = ">=3.16.1,<4.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'google'", specifier = ">=1.133.0,<2.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'proxy-runtime'", specifier = ">=1.133.0,<2.0" },
     { name = "google-cloud-iam", marker = "extra == 'extra-proxy'", specifier = ">=2.19.1,<3.0" },
@@ -4895,9 +4901,11 @@ ci = [
 dev = [
     { name = "basedpyright", specifier = "==1.39.7" },
     { name = "botocore-stubs", specifier = "==1.43.14" },
+    { name = "click", specifier = ">=8.0.0,<9.0" },
     { name = "diff-cover", specifier = "==9.7.2" },
     { name = "fakeredis", specifier = "==2.34.1" },
     { name = "fastapi-offline", specifier = "==1.7.6" },
+    { name = "filelock", specifier = ">=3.16.1,<4.0" },
     { name = "hypothesis", specifier = "==6.165.10" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "langfuse", specifier = ">=4.7,<5.0" },
@@ -4965,7 +4973,7 @@ source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.105"
+version = "0.4.106"
 source = { editable = "litellm-proxy-extras" }
 dependencies = [
     { name = "psycopg" },

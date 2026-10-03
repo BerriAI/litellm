@@ -79,7 +79,7 @@ export INTEGRATION_PROXY_URL=http://127.0.0.1:4000
 export INTEGRATION_PEER_URL=""
 export INTEGRATION_UPSTREAM_URL=http://127.0.0.1:8190
 export INTEGRATION_MASTER_KEY="$LITELLM_MASTER_KEY"
-export LITELLM_UI_PATH="$PWD/litellm/proxy/_experimental/out"
+export LITELLM_UI_PATH="$PWD/litellm-proxy-extras/litellm_proxy_extras/ui"
 if [ "$suite" = browser ]; then
   export LITELLM_UI_PATH="$PWD/ui/litellm-dashboard/out"
   test -f "$LITELLM_UI_PATH/index.html"
