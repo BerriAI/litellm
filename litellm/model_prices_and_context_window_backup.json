@@ -79983,6 +79983,7 @@
         "supports_web_search": false
     },
     "azure_ai/kimi-k2-thinking": {
+        "deprecation_date": "2026-03-29",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 262144,
