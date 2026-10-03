@@ -30,7 +30,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from functools import lru_cache, wraps
+from functools import lru_cache, partial, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -8484,6 +8484,14 @@ class ProviderConfigManager:
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
+            LlmProviders.OPENCODE: (
+                partial(ProviderConfigManager._get_opencode_config, provider=LlmProviders.OPENCODE),
+                True,
+            ),
+            LlmProviders.OPENCODE_GO: (
+                partial(ProviderConfigManager._get_opencode_config, provider=LlmProviders.OPENCODE_GO),
+                True,
+            ),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
             LlmProviders.TEXT_COMPLETION_OPENAI: (
@@ -8664,6 +8672,19 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_opencode_config(model: str, provider: LlmProviders) -> BaseConfig:
+        """Pick the wire format OpenCode serves this model on."""
+        from litellm.llms.opencode.common_utils import opencode_endpoint_for_model
+
+        is_go: Final = provider is LlmProviders.OPENCODE_GO
+        endpoint: Final = opencode_endpoint_for_model(provider.value, model)
+        if endpoint == "/v1/messages":
+            return litellm.OpenCodeGoMessagesChatConfig() if is_go else litellm.OpenCodeZenMessagesChatConfig()
+        if endpoint == "/v1/models:generateContent" and not is_go:
+            return litellm.OpenCodeZenGeminiChatConfig()
+        return litellm.OpenCodeGoChatConfig() if is_go else litellm.OpenCodeZenChatConfig()
 
     @staticmethod
     def _get_cohere_config(model: str) -> BaseConfig:
@@ -9152,6 +9173,10 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.OPENCODE == provider:
+            return litellm.OpenCodeZenResponsesAPIConfig()
+        elif litellm.LlmProviders.OPENCODE_GO == provider:
+            return litellm.OpenCodeGoResponsesAPIConfig()
         elif litellm.LlmProviders.SAIL == provider:
             from litellm.llms.sail.responses.transformation import SailResponsesAPIConfig
 
