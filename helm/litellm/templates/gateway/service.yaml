@@ -10,9 +10,12 @@ spec:
   type: {{ .Values.gateway.service.type }}
   ports:
     - port: {{ .Values.gateway.service.port }}
-      targetPort: http
+      targetPort: {{ .Values.gateway.service.portName | default "http" }}
       protocol: TCP
-      name: http
+      name: {{ .Values.gateway.service.portName | default "http" }}
+      {{- with .Values.gateway.service.appProtocol }}
+      appProtocol: {{ . }}
+      {{- end }}
   selector:
     {{- include "litellm.gateway.selectorLabels" . | nindent 4 }}
 {{- end }}
