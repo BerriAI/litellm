@@ -17,7 +17,6 @@ import litellm
 from litellm.llms.clinepass.chat.transformation import (
     ClinePassConfig,
     _apply_model_prefix,
-    _correct_truncated_finish_reason,
     _unwrap_response_envelope,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -275,6 +274,15 @@ def test_completion_streaming_is_not_unwrapped():
         }
         for piece in ["one ", "two ", "three"]
     ]
+    chunks.append(
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "clinepass/deepseek-v4-flash",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        }
+    )
     body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
 
     def fake_post(self, url, *args, **kwargs):
@@ -292,9 +300,17 @@ def test_completion_streaming_is_not_unwrapped():
             max_tokens=4000,
             stream=True,
         )
-        text = "".join(c.choices[0].delta.content or "" for c in stream if c.choices)
+        text = ""
+        finish_reason = None
+        for c in stream:
+            if c.choices:
+                if c.choices[0].delta.content:
+                    text += c.choices[0].delta.content
+                if c.choices[0].finish_reason:
+                    finish_reason = c.choices[0].finish_reason
 
     assert text == "one two three"
+    assert finish_reason == "stop"
 
 
 def test_upstream_401_maps_to_authentication_error():
@@ -329,9 +345,8 @@ def test_upstream_401_maps_to_authentication_error():
 #
 # ClinePass was once observed returning finish_reason "stop" on a completion cut
 # off by max_tokens. Re-probing the live API on 2026-08-22 could not reproduce
-# it (see _correct_truncated_finish_reason's docstring), so the correction is a
-# conservative safety net: single-choice only, upstream "stop" only, and only
-# when usage shows the cap was actually reached.
+# it, so the provider now reports the upstream finish reason unmodified to avoid
+# false positives on natural completions that land exactly on the cap.
 # --------------------------------------------------------------------------
 
 
@@ -354,14 +369,14 @@ def _complete(payload: dict, **kwargs):
         )
 
 
-def test_completion_at_the_cap_is_reported_as_length_not_stop():
+def test_completion_at_the_cap_preserves_upstream_stop():
     response = _complete(_truncated_envelope(4000), max_tokens=4000)
-    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].finish_reason == "stop"
 
 
-def test_completion_over_the_cap_is_reported_as_length():
+def test_completion_over_the_cap_preserves_upstream_stop():
     response = _complete(_truncated_envelope(4001), max_tokens=4000)
-    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].finish_reason == "stop"
 
 
 def test_completion_below_the_cap_keeps_stop():
@@ -379,92 +394,11 @@ def test_no_max_tokens_means_no_rewrite():
     assert response.choices[0].finish_reason == "stop"
 
 
-def test_max_completion_tokens_param_detects_truncation_after_mapping():
+def test_max_completion_tokens_param_preserves_upstream_stop():
     """``max_completion_tokens`` is mapped to ``max_tokens`` before ``request_data`` is built."""
     response = _complete(_truncated_envelope(4000), max_completion_tokens=4000)
-    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].finish_reason == "stop"
 
-
-@pytest.mark.parametrize("bad", [None, "4000", 0, -1, True, False])
-def test_unusable_cap_is_ignored(bad):
-    """Non-numeric, zero, negative and bool caps carry no truncation signal.
-
-    ``bool`` matters because it subclasses ``int``: ``True`` would otherwise be
-    read as a cap of 1 and relabel every response as truncated.
-    """
-
-    class _Choice:
-        finish_reason = "stop"
-
-    class _Usage:
-        completion_tokens = 9999
-
-    class _Response:
-        choices = [_Choice()]
-        usage = _Usage()
-
-    result = _correct_truncated_finish_reason(_Response(), {"max_tokens": bad})
-    assert result.choices[0].finish_reason == "stop"
-
-
-def test_missing_usage_is_ignored():
-    class _Choice:
-        finish_reason = "stop"
-
-    class _Response:
-        choices = [_Choice()]
-        usage = None
-
-    result = _correct_truncated_finish_reason(_Response(), {"max_tokens": 4000})
-    assert result.choices[0].finish_reason == "stop"
-
-
-def _stub_response(finish_reasons, completion_tokens):
-    """Minimal ModelResponse-shaped stub for the truncation helper."""
-
-    class _Choice:
-        def __init__(self, reason):
-            self.finish_reason = reason
-
-    class _Usage:
-        pass
-
-    usage = _Usage()
-    usage.completion_tokens = completion_tokens
-
-    class _Response:
-        pass
-
-    response = _Response()
-    response.choices = [_Choice(r) for r in finish_reasons]
-    response.usage = usage
-    return response
-
-
-def test_multi_choice_response_is_never_rewritten():
-    """`usage.completion_tokens` is an aggregate across choices while `max_tokens`
-    is per choice, so the aggregate cannot say WHICH choice was truncated.
-
-    Two naturally-finished 60-token choices under a cap of 100 aggregate to 120,
-    which would otherwise relabel both as `length`.
-    """
-    response = _stub_response(["stop", "stop"], completion_tokens=120)
-    result = _correct_truncated_finish_reason(response, {"max_tokens": 100})
-    assert [c.finish_reason for c in result.choices] == ["stop", "stop"]
-
-
-def test_single_choice_at_the_cap_is_still_rewritten():
-    """The n>1 guard must not disable the correction for the normal n=1 case."""
-    response = _stub_response(["stop"], completion_tokens=100)
-    result = _correct_truncated_finish_reason(response, {"max_tokens": 100})
-    assert result.choices[0].finish_reason == "length"
-
-
-def test_float_usage_and_cap_are_honoured():
-    """A gateway that reports usage as JSON floats must still be understood."""
-    response = _stub_response(["stop"], completion_tokens=4000.0)
-    result = _correct_truncated_finish_reason(response, {"max_tokens": 4000.0})
-    assert result.choices[0].finish_reason == "length"
 
 
 # --------------------------------------------------------------------------

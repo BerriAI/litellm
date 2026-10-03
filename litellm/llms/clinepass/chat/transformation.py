@@ -49,71 +49,6 @@ CLINEPASS_MODEL_PREFIX: Final = "cline-pass/"
 _BODY_SPECIFIC_HEADERS: Final = ("content-length", "content-encoding")
 
 
-def _as_positive_number(value: Any) -> float | None:
-    """Return ``value`` as a positive number, or ``None`` if it is not one.
-
-    ``bool`` is rejected explicitly: it is a subclass of ``int``, and ``True``
-    would otherwise read as a cap of 1.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if value <= 0:
-        return None
-    return float(value)
-
-
-def _correct_truncated_finish_reason(response: ModelResponse, request_data: dict) -> ModelResponse:
-    """Report a truncated ClinePass completion as ``length``, not ``stop``.
-
-    This is a defensive correction for an upstream bug in which ClinePass
-    returned ``finish_reason: "stop"`` on a completion that had actually been
-    cut off by ``max_tokens``: a request capped at 4000 came back with
-    ``completion_tokens == 4000`` and still claimed a natural stop. Callers that
-    trust ``finish_reason`` -- the documented way to detect truncation -- cannot
-    then distinguish a complete answer from a guillotined one.
-
-    Re-probing the live API later (2026-08-22, both streaming and non-streaming,
-    caps of 2000 and 4000, across both the ``cline-pass/`` and the fallback
-    namespace) did *not* reproduce the misreport: every capped response
-    correctly returned ``length``. The upstream bug appears to have been fixed,
-    or to be intermittent. This correction is therefore kept as a cheap safety
-    net rather than as a workaround for a currently-observable defect, and it is
-    deliberately conservative:
-
-    - only an upstream ``stop`` is ever rewritten; ``length`` is already right,
-    - only when usage shows the cap was actually reached,
-    - and only for single-choice responses. ``usage.completion_tokens`` is an
-      aggregate across all choices while ``max_tokens`` is a per-choice limit,
-      so with ``n > 1`` the aggregate cannot identify *which* choice was
-      truncated -- two naturally-finished 60-token choices under a cap of 100
-      would otherwise both be relabelled ``length``.
-
-    Streaming is deliberately not covered: chunks are assembled by the inherited
-    SSE iterator, the terminal ``finish_reason`` arrives before the usage chunk
-    that would justify rewriting it, and callers that omit
-    ``stream_options.include_usage`` never receive usage at all. Since the
-    misreport no longer reproduces, buffering the stream to correct it is not
-    worth the latency and complexity.
-    """
-    if len(response.choices) != 1:
-        return response
-
-    max_tokens = _as_positive_number(request_data.get("max_tokens"))
-    if max_tokens is None:
-        return response
-
-    usage = getattr(response, "usage", None)
-    completion_tokens = _as_positive_number(getattr(usage, "completion_tokens", None))
-    if completion_tokens is None or completion_tokens < max_tokens:
-        return response
-
-    for choice in response.choices:
-        if getattr(choice, "finish_reason", None) == "stop":
-            choice.finish_reason = "length"
-
-    return response
-
-
 def _unwrap_response_envelope(raw_response: httpx.Response) -> httpx.Response:
     """Strip ClinePass's ``data`` wrapper off a JSON completion body.
 
@@ -263,7 +198,12 @@ class ClinePassConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        response = super().transform_response(
+        # ClinePass was once observed returning finish_reason "stop" on a completion
+        # cut off by max_tokens. Follow-up probes on 2026-08-22 did not reproduce it.
+        # The provider therefore reports the upstream finish reason unmodified: inferring
+        # truncation from usage equalling the cap produces false positives on natural
+        # completions that happen to land exactly on the cap.
+        return super().transform_response(
             model=model,
             raw_response=_unwrap_response_envelope(raw_response),
             model_response=model_response,
@@ -276,11 +216,8 @@ class ClinePassConfig(OpenAIGPTConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        return _correct_truncated_finish_reason(response, request_data)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return ClinePassException(
             message=error_message,
             status_code=status_code,
