@@ -125,3 +125,30 @@ def test_unknown_kwargs_are_flattened_not_wrapped_in_extra_body():
 
     assert "extra_body" not in params
     assert params["some_vendor_knob"] == 7
+
+
+def test_chat_does_not_fall_back_to_the_global_litellm_api_key(monkeypatch):
+    """`litellm.api_key` is the caller's general-purpose (usually OpenAI) key.
+
+    With no ClinePass credential configured, chat must not borrow it: doing so
+    sends that key to the Cline host as a Bearer token.
+    """
+    sent: list[tuple[str, str]] = []
+
+    def record_and_stop(self, *args, **kwargs):
+        sent.append((str(kwargs.get("url")), str((kwargs.get("headers") or {}).get("Authorization", ""))))
+        raise RuntimeError("stop before any network I/O")
+
+    monkeypatch.setattr(HTTPHandler, "post", record_and_stop, raising=True)
+    monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", SENTINEL_OPENAI_KEY)
+
+    with contextlib.suppress(Exception):
+        litellm.completion(
+            model="clinepass/deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=0,
+        )
+
+    assert sent, "the chat request never reached the transport, so nothing was checked"
+    assert all(SENTINEL_OPENAI_KEY not in authorization for _, authorization in sent)

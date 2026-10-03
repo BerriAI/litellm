@@ -868,7 +868,7 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
         elif value.get("litellm_provider") == "deepseek":
             deepseek_models.add(key)
         elif value.get("litellm_provider") == "clinepass":
-            clinepass_models.add(key)
+            clinepass_models.add(key)  # pyright: ignore[reportUnknownArgumentType]  # key comes from the untyped model cost map
         elif value.get("litellm_provider") == "tencent":
             tencent_models.add(key)
         elif value.get("litellm_provider") == "runwayml":

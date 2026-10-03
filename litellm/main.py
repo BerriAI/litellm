@@ -2466,15 +2466,15 @@ def _complete_clinepass(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_key = api_key or get_secret_str("CLINEPASS_API_KEY") or litellm.api_key
+    api_key = api_key or get_secret_str("CLINEPASS_API_KEY")
 
     api_base = api_base or litellm.api_base or get_secret_str("CLINEPASS_API_BASE") or "https://api.cline.bot/api/v1"
 
     ## COMPLETION CALL
     response: Final = base_llm_http_handler.completion(
         model=model,
-        messages=messages,
-        headers=headers,
+        messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # ctx.messages is list[Unknown]
+        headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # ctx.headers is dict[Unknown, Unknown]
         model_response=model_response,
         api_key=api_key,
         api_base=api_base,
