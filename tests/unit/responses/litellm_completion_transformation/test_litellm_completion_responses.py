@@ -5172,3 +5172,41 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
         )
     assert exc_info.value.status_code == 400
     assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+
+
+def test_transform_response_input_param_dict_input():
+    """Verify that a single dictionary input item is correctly converted to a chat completion message."""
+    dict_input = {"type": "message", "role": "user", "content": "hello from dict"}
+    messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=dict_input,
+        responses_api_request={},
+    )
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == "hello from dict"
+
+
+def test_transform_response_input_param_tuple_input():
+    """Verify that tuple input items are accepted like list input items."""
+    tuple_input = (
+        {"type": "message", "role": "user", "content": "first"},
+        {"type": "message", "role": "user", "content": "second"},
+    )
+    messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=tuple_input,
+        responses_api_request={},
+    )
+    assert [message["content"] for message in messages] == ["first", "second"]
+
+
+def test_transform_response_input_param_invalid_type_raises_bad_request():
+    """Verify that passing invalid input types like integer raises BadRequestError."""
+    import litellm
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=123,
+            responses_api_request={},
+        )
+    assert "Invalid input type" in str(exc_info.value)
+    assert "tuple" in str(exc_info.value)
