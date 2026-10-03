@@ -1,6 +1,14 @@
 """Unit tests for internal-call metadata forwarding: budget-reservation stripping and origin stamping."""
 
+from collections.abc import Mapping
+from copy import deepcopy
+from typing import Final
+
+import pytest
+
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils import internal_call_metadata as billing
 from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
     sanitized_forwardable_call_metadata,
@@ -119,3 +127,83 @@ class TestSubCallMetadataSanitization:
         assert sanitized_auth.team_id == "team-1"
         assert sanitized_auth.api_key == auth.api_key
         assert auth.budget_reservation == {"reserved_cost": 1.0}
+
+
+@pytest.mark.parametrize(
+    "alternate",
+    [
+        {},
+        {"litellm_metadata": None},
+        {"litellm_metadata": {}},
+        {"litellm_metadata": {"model_group": "responses", "internal_call_origin": "shadow_eval_judge"}},
+    ],
+)
+def test_evaluation_receipt_preserves_metadata_selection(alternate: Mapping[str, object]) -> None:
+    agent_identity: Final = {"agent_id": "sampled-agent", "billing_agent_id": "billed-agent"}
+    metadata: Final = {
+        **agent_identity,
+        **PARENT,
+        "user_api_key_user_id": "sampled",
+        "model_group": "chat",
+        "internal_call_origin": "shadow_eval_router",
+    }
+    kwargs: Final = {
+        billing.EVALUATION_BILLING_OWNER_KEY: billing.EvaluationBillingOwner("admin"),
+        **agent_identity,
+        "standard_logging_object": {**agent_identity, "metadata": metadata, "response_cost": 0.25},
+        "metadata": metadata,
+        **alternate,
+        "litellm_params": {
+            **agent_identity,
+            "metadata": metadata,
+            **alternate,
+            "proxy_server_request": {"body": {"user": "customer"}},
+        },
+    }
+    snapshot: Final = deepcopy(kwargs)
+
+    receipt: Final = billing.project_evaluation_billing_kwargs(kwargs)
+    resolved: Final = get_litellm_metadata_from_kwargs(receipt)
+    expected: Final = alternate.get("litellm_metadata") or metadata
+    assert isinstance(expected, dict)
+    assert resolved["user_api_key_user_id"] == receipt["user"] == "admin"
+    assert all(resolved[key] == expected[key] for key in ("model_group", "internal_call_origin"))
+    params: Final = receipt["litellm_params"]
+    assert isinstance(params, dict)
+    for bucket in (receipt, params):
+        if not alternate.get("litellm_metadata"):
+            assert bucket.get("litellm_metadata") == alternate.get("litellm_metadata")
+            assert ("litellm_metadata" in bucket) == ("litellm_metadata" in alternate)
+    payload: Final = receipt["standard_logging_object"]
+    assert isinstance(payload, dict)
+    for container in (receipt, params, payload, resolved, payload["metadata"]):
+        assert container.get("agent_id") is None
+        assert container.get("billing_agent_id") is None
+    assert payload["response_cost"] == 0.25
+    assert params["proxy_server_request"]["body"]["user"] is None
+    assert kwargs == snapshot
+
+
+@pytest.mark.parametrize("marker", [None, "forged-admin", {"user_id": "forged-admin"}])
+def test_evaluation_receipt_requires_a_captured_typed_owner(marker: object) -> None:
+    kwargs: Final = {billing.EVALUATION_BILLING_OWNER_KEY: marker, "user": "sampled-user"}
+    with billing.evaluation_billing_context(billing.EvaluationBillingOwner("ambient-admin")):
+        assert billing.project_evaluation_billing_kwargs(kwargs) is kwargs
+
+
+@pytest.mark.parametrize("trusted", (False, True))
+def test_evaluation_receipt_keeps_only_its_own_budget_reservation(trusted: bool) -> None:
+    from litellm.litellm_core_utils.core_helpers import budget_reservation_from_metadata
+    from litellm.proxy.spend_tracking.evaluation_budget import EvaluationBudgetReservation
+
+    reservation: Final = EvaluationBudgetReservation(total={"reserved_cost": 0.25}, model=None)
+    kwargs: Final = {
+        billing.EVALUATION_BILLING_OWNER_KEY: billing.EvaluationBillingOwner("admin"),
+        billing.EVALUATION_BUDGET_RESERVATION_KEY: reservation if trusted else {"total": reservation.total},
+        "litellm_params": {"metadata": PARENT, "litellm_metadata": {"internal_call_origin": "shadow_eval_judge"}},
+    }
+    receipt: Final = billing.project_evaluation_billing_kwargs(kwargs)
+    assert budget_reservation_from_metadata(get_litellm_metadata_from_kwargs(receipt)) is (
+        reservation.total if trusted else None
+    )
+    assert PARENT["user_api_key_budget_reservation"] == {"amount": 1.0}

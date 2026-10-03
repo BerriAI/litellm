@@ -111,7 +111,11 @@ def get_reserved_counter_keys(budget_reservation: dict | None) -> set:
 _lease_renewals: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: asyncio only weak-refs pending tasks
 
 
-def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], counter_keys: frozenset[str]) -> None:
+def _start_reservation_lease_renewal(
+    budget_reservation: Mapping[str, object],
+    counter_keys: frozenset[str],
+    request_task: asyncio.Task[object] | None = None,
+) -> None:
     """A reservation lives inside spend counter keys that expire on their Redis TTL. Renew the TTL
     while the request is in flight so a request longer than the TTL does not drop its
     reservation and admit concurrent requests against the DB floor on any worker."""
@@ -124,7 +128,7 @@ def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], c
             budget_reservation=budget_reservation,
             counter_keys=counter_keys,
             interval=spend_counter_cache.redis_cache.default_ttl / 2,
-            request_task=asyncio.current_task(),
+            request_task=request_task or asyncio.current_task(),
         )
     )
     _lease_renewals.add(task)
@@ -248,7 +252,7 @@ def _is_unbilled_route(route: str) -> bool:
 
 
 async def reserve_budget_for_request(
-    request_body: dict,
+    request_body: dict[str, object],  # mutable-ok: existing reservation helpers accept dictionaries
     route: str,
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth | None,
@@ -262,7 +266,8 @@ async def reserve_budget_for_request(
     apply_user_budget_to_team_keys: bool = False,
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
-) -> dict | None:
+    request_task: asyncio.Task[object] | None = None,
+) -> dict[str, object] | None:  # mutable-ok: shared reservation is finalized by the spend writer
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
     if _is_unbilled_route(route):
@@ -334,7 +339,7 @@ async def reserve_budget_for_request(
         llm_router=llm_router,
         input_token_counts=input_token_counts,
     )
-    budget_reservation: Final = {
+    budget_reservation: Final[dict[str, object]] = {  # mutable-ok: shared finalization state
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
@@ -345,6 +350,7 @@ async def reserve_budget_for_request(
     _start_reservation_lease_renewal(
         budget_reservation=budget_reservation,
         counter_keys=frozenset(get_reserved_counter_keys(budget_reservation=budget_reservation)),
+        request_task=request_task,
     )
     return budget_reservation
 
@@ -1302,7 +1308,7 @@ def _coerce_datetime(value: object) -> datetime | None:
 
 
 def estimate_request_max_cost(
-    request_body: dict,
+    request_body: dict[str, object],  # mutable-ok: existing cost helpers accept dictionaries
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int] | None = None,
@@ -1324,7 +1330,7 @@ def estimate_request_max_cost(
 
 
 def estimate_request_input_cost(
-    request_body: dict,
+    request_body: dict[str, object],  # mutable-ok: existing cost helpers accept dictionaries
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int] | None = None,

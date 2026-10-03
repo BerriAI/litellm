@@ -132,11 +132,11 @@ async def test_is_key_within_model_budget(budget_limiter):
     )
 
     # Test when model is within budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=50.0):
+    with patch.object(budget_limiter, "get_spend_for_model_budget", return_value=50.0):
         assert await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4") is True
 
     # Test when model exceeds budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=150.0):
+    with patch.object(budget_limiter, "get_spend_for_model_budget", return_value=150.0):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
 
@@ -144,9 +144,9 @@ async def test_is_key_within_model_budget(budget_limiter):
     assert await budget_limiter.is_key_within_model_budget(user_api_key, "non-existent") is True
 
 
-# Test _get_spend_for_model_budget
+# Test get_spend_for_model_budget
 @pytest.mark.asyncio
-async def test_get_spend_for_model_budget_reads_the_configured_model_key(
+async def testget_spend_for_model_budget_reads_the_configured_model_key(
     budget_limiter,
 ):
     from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -162,7 +162,7 @@ async def test_get_spend_for_model_budget_reads_the_configured_model_key(
         return 50.0 if key == f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:test-key:gpt-4:1d" else None
 
     with patch.object(budget_limiter.dual_cache, "async_get_cache", side_effect=_spend) as mock_get:
-        spend = await budget_limiter._get_spend_for_model_budget(
+        spend = await budget_limiter.get_spend_for_model_budget(
             entity_type=Litellm_EntityType.KEY,
             entity_id="test-key",
             model="openai/gpt-4",
@@ -218,7 +218,7 @@ async def test_async_log_success_event_uses_per_model_budget_duration(budget_lim
 @pytest.mark.asyncio
 async def test_is_end_user_within_model_budget(budget_limiter):
     # Test when model is within budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=50.0):
+    with patch.object(budget_limiter, "get_spend_for_model_budget", return_value=50.0):
         assert (
             await budget_limiter.is_end_user_within_model_budget(
                 "test-user",
@@ -229,7 +229,7 @@ async def test_is_end_user_within_model_budget(budget_limiter):
         )
 
     # Test when model exceeds budget
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=150.0):
+    with patch.object(budget_limiter, "get_spend_for_model_budget", return_value=150.0):
         with pytest.raises(litellm.BudgetExceededError):
             await budget_limiter.is_end_user_within_model_budget(
                 "test-user",
@@ -248,7 +248,7 @@ async def test_is_end_user_within_model_budget(budget_limiter):
     )
 
 
-# Test _get_spend_for_model_budget for the end-user scope
+# Test get_spend_for_model_budget for the end-user scope
 @pytest.mark.asyncio
 async def test_get_spend_for_end_user_model_budget(budget_limiter):
     from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -262,7 +262,7 @@ async def test_get_spend_for_end_user_model_budget(budget_limiter):
         return 50.0 if key == f"{END_USER_SPEND_CACHE_KEY_PREFIX}:test-user:gpt-4:1d" else None
 
     with patch.object(budget_limiter.dual_cache, "async_get_cache", side_effect=_spend) as mock_get:
-        spend = await budget_limiter._get_spend_for_model_budget(
+        spend = await budget_limiter.get_spend_for_model_budget(
             entity_type=Litellm_EntityType.END_USER,
             entity_id="test-user",
             model="openai/gpt-4",
@@ -522,7 +522,7 @@ async def test_get_fallback_model_within_budget_returns_first_within_budget(
         model_max_budget={"gpt-4o-mini": {"budget_limit": 100.0, "time_period": "1d"}},
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=1.0):
+    with patch.object(budget_limiter, "get_spend_for_model_budget", return_value=1.0):
         result = await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
     assert result == "gpt-4o-mini"
 
@@ -545,7 +545,7 @@ async def test_get_fallback_model_within_budget_skips_exhausted_fallback(
 
     with patch.object(
         budget_limiter,
-        "_get_spend_for_model_budget",
+        "get_spend_for_model_budget",
         side_effect=_spend_for_model,
     ):
         result = await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
@@ -564,7 +564,7 @@ async def test_get_fallback_model_within_budget_returns_none_when_chain_exhauste
         },
         budget_fallbacks={"gpt-4": ["gpt-4o-mini", "claude-haiku"]},
     )
-    with patch.object(budget_limiter, "_get_spend_for_model_budget", return_value=150.0):
+    with patch.object(budget_limiter, "get_spend_for_model_budget", return_value=150.0):
         result = await budget_limiter.get_fallback_model_within_budget(user_api_key, "gpt-4")
     assert result is None
 
