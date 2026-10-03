@@ -526,11 +526,10 @@ class DatabaseURLSettings(BaseSettings):
         Parity with ``construct_database_url_from_env_vars`` in
         ``proxy/utils.py``; ``password`` may be empty for a passwordless URL.
         """
-        quote: Final = urllib.parse.quote_plus
-        user_p: Final = quote(user)
-        name_p: Final = quote(name)
+        user_p: Final = urllib.parse.quote(user, safe="")
+        name_p: Final = urllib.parse.quote(name, safe="")
         if password:
-            url = f"postgresql://{user_p}:{quote(password)}@{host}:{port}/{name_p}"
+            url = f"postgresql://{user_p}:{urllib.parse.quote(password, safe='')}@{host}:{port}/{name_p}"
         else:
             url = f"postgresql://{user_p}@{host}:{port}/{name_p}"
         if schema:

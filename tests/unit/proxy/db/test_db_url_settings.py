@@ -397,6 +397,21 @@ def test_writer_password_is_percent_encoded(monkeypatch):
     )
 
 
+def test_writer_password_with_spaces_and_reserved_characters_is_percent_encoded(monkeypatch):
+    monkeypatch.setenv("DATABASE_HOST", "db")
+    monkeypatch.setenv("DATABASE_PORT", "5432")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.setenv("DATABASE_PASSWORD", "p ss@:/#?%&+=")
+    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
+
+    assert _apply() is True
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://litellm:p%20ss%40%3A%2F%23%3F%25%26%2B%3D@db:5432/litellm"
+        "?max_idle_connection_lifetime=60"
+    )
+
+
 def test_writer_url_not_clobbered_when_already_set(monkeypatch):
     """An operator-pinned DATABASE_URL (e.g. helm's $(VAR) assembly) always
     wins over the discrete fields."""

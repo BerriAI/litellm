@@ -8413,9 +8413,9 @@ def construct_database_url_from_env_vars() -> str | None:
 
     if database_host and database_username and database_name:
         # Handle the problem of special character escaping in the database URL
-        database_username_enc: Final = urllib.parse.quote_plus(database_username)
-        database_password_enc: Final = urllib.parse.quote_plus(database_password) if database_password else ""
-        database_name_enc: Final = urllib.parse.quote_plus(database_name)
+        database_username_enc: Final = urllib.parse.quote(database_username, safe="")
+        database_password_enc: Final = urllib.parse.quote(database_password, safe="") if database_password else ""
+        database_name_enc: Final = urllib.parse.quote(database_name, safe="")
 
         # Construct DATABASE_URL from the provided variables
         if database_password:

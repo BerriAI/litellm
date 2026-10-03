@@ -223,7 +223,11 @@ migrate_env() {
     rm -f "$temp"
     return 1
   fi
-  mv "$temp" .env
+  if ! cat "$temp" >.env; then
+    rm -f "$temp"
+    return 1
+  fi
+  rm -f "$temp"
   echo "Updated $DIR/.env to the current variable names."
 }
 
