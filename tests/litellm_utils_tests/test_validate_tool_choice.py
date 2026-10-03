@@ -36,6 +36,25 @@ def test_validate_tool_choice_cursor_format():
     assert validate_chat_completion_tool_choice({"type": "required"}, model=MODEL) == "required"
 
 
+def test_validate_tool_choice_allowed_tools_passthrough():
+    """Chat completions accepts the allowed_tools shape and keeps its payload intact."""
+    tool_choice = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": "required",
+            "tools": [{"type": "function", "function": {"name": "get_time"}}],
+        },
+    }
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL) is tool_choice
+
+
+def test_validate_tool_choice_allowed_tools_without_payload_is_a_400():
+    """allowed_tools without its nested object stays a caller error."""
+    tool_choice = {"type": "allowed_tools"}
+    with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
+        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
+
+
 @pytest.mark.parametrize(
     "tool_choice",
     [
