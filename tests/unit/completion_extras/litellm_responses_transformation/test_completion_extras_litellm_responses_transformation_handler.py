@@ -1,8 +1,15 @@
+import json
+from collections.abc import Iterator
 from datetime import datetime
+from itertools import chain
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-
+from openai.types.responses import ResponseOutputItemDoneEvent
+from pydantic import JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.handler import (
@@ -10,6 +17,9 @@ from litellm.completion_extras.litellm_responses_transformation.handler import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, SyncResponsesAPIStreamingIterator
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
@@ -216,6 +226,165 @@ def _completed_chat_response() -> ModelResponse:
             }
         ],
     )
+
+
+def _empty_responses_response() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse.model_construct(output=[], error=None)
+
+
+def _output_item_done_event() -> dict[str, JsonValue]:
+    return {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "message",
+            "id": "msg_from_stream",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Recovered from stream",
+                    "annotations": [],
+                }
+            ],
+        },
+    }
+
+
+def _output_text_done_event() -> dict[str, JsonValue]:
+    return {
+        "type": "response.output_text.done",
+        "sequence_number": 1,
+        "item_id": "msg_from_stream",
+        "output_index": 0,
+        "content_index": 0,
+        "text": "Recovered from stream",
+    }
+
+
+def _empty_completed_event() -> dict[str, JsonValue]:
+    return {
+        "type": "response.completed",
+        "sequence_number": 2,
+        "response": {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-5.4",
+            "output": [],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+        },
+    }
+
+
+def _sse_http_response(*events: dict[str, JsonValue]) -> httpx.Response:
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    return httpx.Response(200, content=body.encode(), request=httpx.Request("POST", "https://example.com/responses"))
+
+
+class _StreamIteratorKwargs(TypedDict):
+    response: ReadOnly[httpx.Response]
+    model: ReadOnly[str]
+    responses_api_provider_config: ReadOnly[OpenAIResponsesAPIConfig]
+    logging_obj: ReadOnly[LiteLLMLogging]
+    custom_llm_provider: ReadOnly[str]
+
+
+def _real_stream_iterator_kwargs(recoverable_event: dict[str, JsonValue]) -> _StreamIteratorKwargs:
+    return {
+        "response": _sse_http_response(recoverable_event, _empty_completed_event()),
+        "model": "gpt-5.4",
+        "responses_api_provider_config": OpenAIResponsesAPIConfig(),
+        "logging_obj": LiteLLMLogging(
+            litellm_call_id="test-call",
+            call_type="completion",
+            model="gpt-5.4",
+            messages=[{"role": "user", "content": "hi"}],
+            function_id="fn-id",
+            stream=True,
+            start_time=datetime(2026, 1, 1),
+        ),
+        "custom_llm_provider": "chatgpt",
+    }
+
+
+def _recovered_texts(response: ResponsesAPIResponse) -> list[str]:
+    content_parts: Final = chain.from_iterable(item["content"] for item in response.output)
+    return [part["text"] for part in content_parts]
+
+
+_RECOVERABLE_STREAM_EVENTS: Final = pytest.mark.parametrize(
+    "recoverable_event",
+    [_output_item_done_event(), _output_text_done_event()],
+    ids=["output_item_done", "output_text_done"],
+)
+
+
+@_RECOVERABLE_STREAM_EVENTS
+def test_collect_response_from_stream_recovers_output_items(recoverable_event: dict[str, JsonValue]) -> None:
+    stream: Final = SyncResponsesAPIStreamingIterator(**_real_stream_iterator_kwargs(recoverable_event))
+
+    response: Final = ResponsesToCompletionBridgeHandler()._collect_response_from_stream(stream)
+
+    assert _recovered_texts(response) == ["Recovered from stream"]
+
+
+@_RECOVERABLE_STREAM_EVENTS
+@pytest.mark.asyncio
+async def test_collect_response_from_async_stream_recovers_output_items(recoverable_event: dict[str, JsonValue]) -> None:
+    stream: Final = ResponsesAPIStreamingIterator(**_real_stream_iterator_kwargs(recoverable_event))
+
+    response: Final = await ResponsesToCompletionBridgeHandler()._collect_response_from_stream_async(stream)
+
+    assert _recovered_texts(response) == ["Recovered from stream"]
+
+
+@pytest.mark.parametrize(
+    "terminal_payload",
+    [
+        {"id": "resp_test", "created_at": 0, "output": []},
+        {"output": []},
+    ],
+    ids=["validated-terminal", "partial-terminal"],
+)
+def test_recovery_accepts_sdk_events_and_dictionary_terminals(terminal_payload: dict[str, JsonValue]) -> None:
+    event: Final = ResponseOutputItemDoneEvent(**_output_item_done_event(), sequence_number=1)
+
+    response: Final = ResponsesToCompletionBridgeHandler._coerce_response_object(
+        terminal_payload,
+        {"headers": {"x-request-id": "req_test"}},
+        (object(), event),
+    )
+
+    assert response.output == [event.item.model_dump()]
+    assert response._hidden_params["headers"] == {"x-request-id": "req_test"}
+    assert terminal_payload["output"] == []
+
+
+def test_recovery_preserves_complete_response_without_consuming_events() -> None:
+    terminal: Final = ResponsesAPIResponse.model_construct(output=[_output_item_done_event()["item"]])
+
+    def unavailable_events() -> Iterator[object]:
+        raise AssertionError("Complete terminal output must bypass event recovery")
+        yield
+
+    response: Final = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, unavailable_events())
+
+    assert response is terminal
+    assert response.output == [_output_item_done_event()["item"]]
+
+
+def test_recovery_keeps_empty_terminal_when_no_output_can_be_recovered() -> None:
+    terminal: Final = _empty_responses_response()
+
+    response: Final = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, (object(),))
+
+    assert response is terminal
+    assert response.output == []
 
 
 @pytest.mark.asyncio
