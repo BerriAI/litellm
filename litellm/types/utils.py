@@ -271,6 +271,7 @@ class OffPeakPricing(TypedDict, total=False):
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
+    roi_recommendation: ReadOnly[str]
 
     max_tokens: Required[int | None]
     max_input_tokens: Required[int | None]

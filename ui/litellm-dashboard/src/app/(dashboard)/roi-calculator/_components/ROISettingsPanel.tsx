@@ -422,7 +422,7 @@ export default function ROISettingsPanel({
                     className="h-9"
                   />
                   <p className="text-xs text-muted-foreground">
-                    We recommend GPT-6 Luna for estimating PR effort. Choose a model configured on your gateway.
+                    Choose a model configured on your gateway. Recommended models appear first.
                   </p>
                 </div>
                 <details>

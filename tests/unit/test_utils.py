@@ -928,6 +928,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "rpd": {"type": "number"},
                 "rpm": {"type": "number"},
                 "source": {"type": "string"},
+                "roi_recommendation": {"type": "string"},
                 "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_anthropic_compaction": {"type": "boolean"},

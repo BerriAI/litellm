@@ -49160,6 +49160,17 @@
               },
               "title": "Provider Models",
               "type": "array"
+            },
+            "recommendation": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Recommendation"
             }
           },
           "required": [

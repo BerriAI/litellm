@@ -474,4 +474,28 @@ def test_estimator_picker_keeps_callable_aliases_and_routing_groups(monkeypatch:
         settings: Final = response.json()
         assert settings["ready"] is True
         assert set(settings["available_models"]) == {"concrete", "friendly", "balanced"}
-        assert {"model_name": name, "provider_models": ["openai/gpt-6-luna"]} in settings["estimator_models"]
+        assert {
+            "model_name": name,
+            "provider_models": ["openai/gpt-6-luna"],
+            "recommendation": "GPT-6 Luna",
+        } in settings["estimator_models"]
+
+
+def test_estimator_recommendation_follows_catalog_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    model: Final = "openai/roi-catalog-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {**litellm.model_cost["gpt-6-luna"], "roi_recommendation": "Small test model"},
+    )
+    litellm.get_model_info.cache_clear()
+    try:
+        choices: Final = _estimator_choices_from_deployments(
+            ({"model_name": "estimator", "litellm_params": {"model": model}},)
+        )
+        assert getattr(choices[0], "recommendation", None) == "Small test model"
+        assert litellm.get_model_info(model).get("roi_recommendation") == "Small test model"
+    finally:
+        litellm.get_model_info.cache_clear()

@@ -244,6 +244,10 @@ def cost_schema(key: str) -> JsonSchema:
 
 def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
     return {
+        "roi_recommendation": {
+            "type": "string",
+            "description": "Display name when recommended for ROI effort estimation.",
+        },
         "litellm_provider": {
             "type": "string",
             "description": "LiteLLM provider slug; one of https://docs.litellm.ai/docs/providers.",

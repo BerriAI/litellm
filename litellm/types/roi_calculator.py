@@ -137,6 +137,7 @@ class ROISettingsUpdate(BaseModel):
 class ROIEstimatorModel(BaseModel):
     model_name: str
     provider_models: tuple[str, ...]
+    recommendation: str | None = None
 
 
 class ROISettingsResponse(BaseModel):

@@ -6357,6 +6357,8 @@ def _get_model_info_helper(
             for cost_key, cost_value in _model_info.items():
                 if cost_key not in returned_model_info and _ABOVE_THRESHOLD_COST_KEY.search(cost_key) is not None:
                     returned_model_info[cost_key] = cost_value
+            if isinstance(recommendation := _model_info.get("roi_recommendation"), str):
+                return {**returned_model_info, "roi_recommendation": recommendation}
             return returned_model_info
     except ModelNotMappedError:
         raise
