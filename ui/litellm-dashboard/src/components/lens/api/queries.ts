@@ -6,24 +6,29 @@ import { type LensList, type Job, type Sample, type Settings, type ActivitySelec
 import type { AnalysisModelInfo } from "../setup/fields/analysisModels";
 
 export const lensKeys = {
-  list: (accessToken: string) => ["lenses", accessToken] as const,
-  history: () => ["lens-history"] as const,
-  historyPage: (accessToken: string, lensId: string | undefined, offset: number) =>
-    ["lens-history", lensId, offset, accessToken] as const,
-  models: (accessToken: string) => ["lens-models", accessToken] as const,
-  modelDetails: (accessToken: string) => ["lens-model-details", accessToken] as const,
-  activity: (accessToken: string) => ["lens-activity-available", accessToken] as const,
+  all: ["lens"] as const,
+  lists: () => [...lensKeys.all, "list"] as const,
+  list: (accessToken: string) => [...lensKeys.lists(), { accessToken }] as const,
+  histories: () => [...lensKeys.all, "history"] as const,
+  history: (accessToken: string, lensId: string | undefined, offset: number) =>
+    [...lensKeys.histories(), { accessToken, lensId, offset }] as const,
+  runs: () => [...lensKeys.all, "run"] as const,
   run: (accessToken: string, lensId: string | undefined, batchId: string) =>
-    ["lens-batch", lensId, batchId, accessToken] as const,
+    [...lensKeys.runs(), { accessToken, lensId, batchId }] as const,
   evidence: (accessToken: string, lensId: string | undefined, evidenceId: string | undefined, offset: number) =>
-    ["lens-evidence", lensId, evidenceId, offset, accessToken] as const,
+    [...lensKeys.all, "evidence", { accessToken, lensId, evidenceId, offset }] as const,
+  models: (accessToken: string) => [...lensKeys.all, "models", { accessToken }] as const,
+  modelDetails: (accessToken: string) => [...lensKeys.all, "model-details", { accessToken }] as const,
+  activity: (accessToken: string) => [...lensKeys.all, "activity-available", { accessToken }] as const,
   discovery: (accessToken: string, source: Settings["source"], hours: number | undefined, asOf: string) =>
-    ["lens-activity-options", source, hours, asOf, accessToken] as const,
+    [...lensKeys.all, "discovery", { accessToken, source, hours, asOf }] as const,
   preview: (accessToken: string, scope: ActivitySelection, offset: number, asOf: string) =>
-    ["lens-activity-preview", scope, offset, asOf, accessToken] as const,
-  agents: (accessToken: string, asOf: string) => ["lens-agents", accessToken, asOf] as const,
-  analysisKeys: (accessToken: string, query: string) => ["lens-analysis-keys", accessToken, query] as const,
-  analysisKeyInfo: (accessToken: string, keyId: string | undefined) => ["lens-key-info", accessToken, keyId] as const,
+    [...lensKeys.all, "preview", { accessToken, scope, offset, asOf }] as const,
+  agents: (accessToken: string, asOf: string) => [...lensKeys.all, "agents", { accessToken, asOf }] as const,
+  analysisKeys: (accessToken: string, query: string) =>
+    [...lensKeys.all, "analysis-keys", { accessToken, query }] as const,
+  analysisKeyInfo: (accessToken: string, keyId: string | undefined) =>
+    [...lensKeys.all, "analysis-key-info", { accessToken, keyId }] as const,
 };
 
 export const lensQueries = {
@@ -70,7 +75,7 @@ export const lensQueries = {
     { lensId, historyOffset, demo }: { lensId: string | undefined; historyOffset: number; demo: boolean },
   ) {
     const options = {
-      queryKey: lensKeys.historyPage(accessToken, lensId, historyOffset),
+      queryKey: lensKeys.history(accessToken, lensId, historyOffset),
       enabled: !!lensId,
       queryFn: () => apiClient.get<Job[]>(`/lens/${lensId}/runs`, { accessToken, query: { offset: historyOffset } }),
       refetchInterval: demo ? (false as const) : 10000,

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as renderProviders, testQueryClient } from "@/../tests/test-utils";
 import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
+import { lensKeys } from "../api/queries";
 import { InvestigationsView } from "./InvestigationsView";
 import { briefMarkdown } from "../model/findings";
 import { runTime } from "../model/format";
@@ -299,7 +300,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
   await user.click(connection.getByRole("button", { name: "Close" }));
   expect(guide.getByRole("button", { name: "New investigation" })).toBeDisabled();
   await act(async () => {
-    testQueryClient.setQueryData(["lenses", "test"], {
+    testQueryClient.setQueryData(lensKeys.list("test"), {
       lenses: [],
       tracing_enabled: true,
       workers: [

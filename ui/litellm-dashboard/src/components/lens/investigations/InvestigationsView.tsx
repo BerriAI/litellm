@@ -47,7 +47,6 @@ export function InvestigationsView({
   const [workerSetup, setWorkerSetup] = useState(false);
   const [monitoring, setMonitoring] = useState(false);
   const now = useNow(2000);
-  const key = lensKeys.list(accessToken);
   const query = useQuery(lensQueries.list(apiClient, accessToken, !!demo, workerSetup));
   const models = useQuery(lensQueries.models(apiClient, accessToken));
   const modelDetails = useQuery(lensQueries.modelDetails(apiClient, accessToken));
@@ -111,15 +110,15 @@ export function InvestigationsView({
     return lens?.settings;
   };
   const refresh = () => {
-    void client.invalidateQueries({ queryKey: key });
-    void client.invalidateQueries({ queryKey: lensKeys.history() });
+    void client.invalidateQueries({ queryKey: lensKeys.list(accessToken) });
+    void client.invalidateQueries({ queryKey: lensKeys.histories() });
   };
   const update = async (path: string, body: unknown, method: "post" | "put" | "patch" = "post") => {
     setBusy(true);
     setError("");
     try {
       await updateLens.mutateAsync({ path, body, method });
-      await client.invalidateQueries({ queryKey: key });
+      await client.invalidateQueries({ queryKey: lensKeys.list(accessToken) });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not update lens");
     } finally {
