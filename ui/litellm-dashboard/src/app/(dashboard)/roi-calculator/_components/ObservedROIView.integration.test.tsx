@@ -1,0 +1,203 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import ObservedROIView from "./ObservedROIView";
+import type { ObservedSettings, ObservedSnapshot, ObservedStatus } from "./observedData";
+
+const settings: ObservedSettings = {
+  source_provider: "gitlab",
+  api_url: "https://gitlab.com/api/v4",
+  repos: ["org/service"],
+  has_token: true,
+  connection_type: "app",
+  update_interval_minutes: 1440,
+  ready: true,
+};
+const idle: ObservedStatus = {
+  running: false,
+  phase: "complete",
+  stage: "",
+  done: 0,
+  total: 0,
+  error: null,
+  finished_at: null,
+};
+const period = {
+  window: { start: "2026-09-01", end: "2026-09-28" },
+  merged_prs: 1,
+  median_merge_hours: 16 / 3600,
+  human_authored: 1,
+  agent_authored: 0,
+  missing_author: 0,
+  agents_without_requester: 0,
+  matched_internal_prs: 0,
+  new_bug_labeled_issues: 0,
+  new_regression_labeled_issues: 0,
+  explicitly_titled_revert_prs: 0,
+  matched_users_recorded_spend: 0,
+  spend_observation: "no_records" as const,
+  human_summary: { median_merge_hours: 16 / 3600 },
+};
+const report: ObservedSnapshot = {
+  source_provider: "gitlab",
+  repos: ["org/service"],
+  unmatched_logins: [],
+  unlinked_branches: [],
+  captured_at: "2026-09-29T00:00:00Z",
+  periods: { current: period, previous: period, last_year: period },
+  people: [],
+  pulls: { current: [], previous: [], last_year: [] },
+};
+const app = { configured: true, api_url: null, callback_url: null };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  window.history.replaceState(null, "", "/");
+});
+
+describe("observed ROI dashboard", () => {
+  it("retries failures, keeps the report during cancellation, and refreshes after completion", async () => {
+    let status: ObservedStatus = { ...idle, phase: "error", error: "Provider temporarily unavailable" };
+    let completeOnPoll = false;
+    let currentReport = report;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const path = new URL(input, "http://localhost").pathname;
+        if (path.endsWith("/settings")) return Response.json(settings);
+        if (path.endsWith("/report")) return Response.json({ report: currentReport });
+        if (path.endsWith("/sync")) {
+          if (init.method === "POST") status = { ...idle, running: true, phase: "pulls" };
+          if (init.method === "DELETE") status = { ...idle, phase: "cancelled" };
+          if (init.method === "GET" && completeOnPoll) {
+            status = { ...idle, finished_at: "2026-09-29T00:01:00Z" };
+            currentReport = { ...report, repos: ["org/updated"] };
+          }
+          return Response.json(status);
+        }
+        throw new Error(path);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    expect(await screen.findByRole("tab", { name: "Merge requests", selected: true })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Quality" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Provider temporarily unavailable");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel sync" }));
+    expect(await screen.findByRole("button", { name: "Sync now" })).toBeEnabled();
+    expect(screen.getByText("org/service")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(await screen.findByRole("button", { name: "Cancel sync" })).toBeEnabled();
+    completeOnPoll = true;
+    expect(await screen.findByText("org/updated", {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Quality", selected: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+  });
+
+  it("syncs the selected range and labels its equal-length comparison", async () => {
+    let currentReport = report;
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const url = new URL(input, "http://localhost");
+        if (url.pathname.endsWith("/settings")) return Response.json(settings);
+        if (url.pathname.endsWith("/report")) return Response.json({ report: currentReport });
+        if (url.pathname.endsWith("/sync")) {
+          if (init.method === "POST") {
+            requested.push(url.searchParams.get("days") ?? "");
+            currentReport = {
+              ...report,
+              periods: {
+                ...report.periods,
+                current: { ...period, window: { start: "2026-09-22", end: "2026-09-28" } },
+                previous: { ...period, window: { start: "2026-09-15", end: "2026-09-21" } },
+              },
+            };
+          }
+          return Response.json(idle);
+        }
+        throw new Error(url.pathname);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    await user.click(await screen.findByRole("combobox", { name: "Reporting period" }));
+    await user.click(await screen.findByRole("option", { name: "Last 7 days" }));
+    await waitFor(() => expect(requested).toEqual(["7"]));
+    expect(await screen.findByText(/Comparing with Sep 15.*Sep 21/)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Reporting period" })).toHaveTextContent("Last 7 days");
+    expect(screen.getByRole("combobox", { name: "Comparison period" })).toHaveTextContent("vs. previous period");
+  });
+
+  it("shows a successful empty repository without a setup prompt or invented durations", async () => {
+    const emptyPeriod = {
+      ...period,
+      merged_prs: 0,
+      human_authored: 0,
+      median_merge_hours: null,
+      human_summary: { median_merge_hours: null },
+    };
+    const empty = { ...report, periods: { current: emptyPeriod, previous: emptyPeriod, last_year: emptyPeriod } };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const path = new URL(input, "http://localhost").pathname;
+        if (path.endsWith("/settings")) return Response.json(settings);
+        if (path.endsWith("/report")) return Response.json({ report: empty });
+        if (path.endsWith("/sync")) return Response.json(idle);
+        throw new Error(path);
+      }),
+    );
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    expect(await screen.findByRole("heading", { name: "No merged changes yet" })).toBeInTheDocument();
+    expect(screen.getByText("No merges")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
+    expect(screen.queryByText("0h")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { query: "connected=gitlab", alerts: [] },
+    { query: "connection_failed=1", alerts: ["Connection failed or expired. Try again or use a token"] },
+    { query: "connection_cancelled=1", alerts: ["Connection cancelled. Choose an app or token to try again"] },
+  ])("resumes setup after $query and refreshes saved changes after closing", async ({ query, alerts }) => {
+    window.history.replaceState(null, "", `/roi-calculator/?${query}`);
+    let currentSettings = settings;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init: RequestInit) => {
+        const path = new URL(input, "http://localhost").pathname;
+        if (path.endsWith("/apps")) return Response.json({ github: app, gitlab: app });
+        if (path.endsWith("/repositories")) return Response.json({ repositories: [], has_more: false });
+        if (path.endsWith("/settings")) {
+          if (init.method === "PUT") currentSettings = { ...settings, repos: ["org/changed"] };
+          return Response.json(currentSettings);
+        }
+        if (path.endsWith("/report")) return Response.json({ report: { ...report, repos: currentSettings.repos } });
+        if (path.endsWith("/sync"))
+          return init.method === "POST"
+            ? Response.json({ detail: "Provider unavailable" }, { status: 502 })
+            : Response.json(idle);
+        throw new Error(path);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    const dialog = await screen.findByRole("dialog", { name: "Choose repositories" });
+    expect(
+      within(dialog)
+        .queryAllByRole("alert")
+        .map((alert) => alert.textContent),
+    ).toEqual(alerts);
+    expect(window.location.search).toBe("");
+    fireEvent.change(within(dialog).getByLabelText("Repositories"), { target: { value: "org/changed" } });
+    await user.click(within(dialog).getByRole("button", { name: "Save and sync" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Provider unavailable");
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByText("org/changed")).toBeInTheDocument();
+  });
+});
