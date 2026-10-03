@@ -440,10 +440,10 @@ class _EventStreamTally:
 
 class AWSEventStreamDecoder:
     def __init__(self, model: str, json_mode: bool | None = False) -> None:
-        from botocore.parsers import EventStreamJSONParser
+        from litellm.llms.bedrock.common_utils import create_event_stream_parser
 
         self.model = model
-        self.parser = EventStreamJSONParser()
+        self.parser = create_event_stream_parser()
         self.content_blocks: list[ContentBlockDeltaEvent] = []
         self.tool_calls_index: int | None = None
         self.response_id: str | None = None

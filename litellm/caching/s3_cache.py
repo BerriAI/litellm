@@ -16,6 +16,7 @@ from functools import partial
 from typing import Final
 
 from litellm._logging import print_verbose, verbose_logger
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 
 from .base_cache import BaseCache
 
@@ -36,6 +37,7 @@ class S3Cache(BaseCache):
         s3_path=None,
         **kwargs,
     ):
+        require_aws_sdk()
         import boto3
 
         self.bucket_name = s3_bucket_name

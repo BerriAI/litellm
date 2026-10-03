@@ -14,16 +14,16 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 import tiktoken
-from tokenizers import AddedToken
-from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
+    from tokenizers import AddedToken
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
     from litellm.rust_bridge._native import HuggingFaceEncoding
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
@@ -270,6 +270,15 @@ class HuggingFaceTokenizer:
         return self._native.get_vocab_size(with_added_tokens)
 
     def get_added_tokens_decoder(self) -> dict[int, AddedToken]:  # mutable-ok: [LIT001] SDK return type
+        try:
+            from tokenizers import AddedToken
+        except ModuleNotFoundError as error:
+            if error.name != "tokenizers":
+                raise
+            raise ImportError(
+                'Install Hugging Face tokenizer support with pip install "litellm[tokenizers]"'
+            ) from error
+
         return {
             token_id: AddedToken(
                 content, single_word=single_word, lstrip=lstrip, rstrip=rstrip, normalized=normalized, special=special
@@ -361,8 +370,18 @@ def _batch_input(
 
 
 Encoding: TypeAlias = tiktoken.Encoding | OpenAIEncoding
-HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
-Tokenizer: TypeAlias = Encoding | HuggingFace
+if TYPE_CHECKING:
+    HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
+    Tokenizer: TypeAlias = Encoding | HuggingFace
+
+
+def __getattr__(name: str) -> UnionType:
+    if name not in ("HuggingFace", "Tokenizer"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from litellm.rust_bridge.tokenizer import _python_huggingface_tokenizer
+
+    huggingface: Final = _python_huggingface_tokenizer() | HuggingFaceTokenizer
+    return huggingface if name == "HuggingFace" else Encoding | huggingface
 
 
 class _AddedToken(Protocol):

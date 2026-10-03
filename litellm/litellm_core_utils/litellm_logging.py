@@ -64,6 +64,7 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 from litellm.litellm_core_utils.classifier_logging import (
     classifier_audit_fields,
     classifier_input_snapshot,
@@ -4514,6 +4515,8 @@ def _init_custom_logger_compatible_class(
     """
     Initialize a custom logger compatible class
     """
+    if logging_integration in ("s3_v2", "aws_sqs"):
+        require_aws_sdk()
     try:
         custom_logger_init_args = custom_logger_init_args or {}
         if logging_integration == "agentops":  # Add AgentOps initialization
@@ -5328,6 +5331,8 @@ def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list[CustomLogger])
 def get_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
 ) -> CustomLogger | None:
+    if logging_integration in ("s3_v2", "aws_sqs"):
+        require_aws_sdk()
     try:
         if logging_integration == "lago":
             for callback in _in_memory_loggers:

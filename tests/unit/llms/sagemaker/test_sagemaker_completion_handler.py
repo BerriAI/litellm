@@ -267,3 +267,13 @@ def test_load_credentials_assumes_role_with_session_tags(monkeypatch):
     assert credentials.access_key == "ASIASMCOMPTAGGED"
     assert aws_region_name == "us-east-1"
     assert "aws_session_tags" not in optional_params
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.llms.sagemaker.completion.handler import SagemakerLLM
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        SagemakerLLM()._load_credentials({})

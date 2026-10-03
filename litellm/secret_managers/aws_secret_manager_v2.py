@@ -24,6 +24,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -637,11 +638,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         request_data: dict | None = None,
     ) -> tuple[str, "HTTPHeaders", bytes]:
         """Prepare the AWS Secrets Manager request"""
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        require_aws_sdk()
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+
         optional_params = optional_params or {}
 
         # Build optional_params from instance settings if not provided

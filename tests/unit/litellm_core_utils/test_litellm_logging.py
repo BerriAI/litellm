@@ -9165,3 +9165,19 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("callback", ("s3_v2", "aws_sqs"))
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_aws_callback_setup_does_not_swallow_missing_extra(callback: str, missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.litellm_core_utils.litellm_logging import _init_custom_logger_compatible_class, get_custom_logger_compatible_class
+    from litellm.integrations.sqs import SQSLogger
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        _init_custom_logger_compatible_class(callback, internal_usage_cache=None, llm_router=None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        get_custom_logger_compatible_class(callback)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        SQSLogger()

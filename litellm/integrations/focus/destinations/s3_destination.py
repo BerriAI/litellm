@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from datetime import timezone
 from typing import Final, TypedDict
 
-import boto3
 from typing_extensions import ReadOnly
 
 from .base import FocusDestination, FocusTimeWindow
@@ -75,6 +74,13 @@ class FocusS3Destination(FocusDestination):
         }
 
     def _upload(self, content: bytes, object_key: str) -> None:
+        try:
+            import boto3
+        except ModuleNotFoundError as error:
+            if error.name != "boto3":
+                raise
+            raise ImportError('Install S3 support with pip install "litellm[aws]"') from error
+
         s3_client: Final = boto3.client("s3", **self._client_kwargs())
         s3_client.put_object(
             Bucket=self.bucket_name,

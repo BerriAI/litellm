@@ -8,6 +8,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.aws_dependencies import require_aws_sdk
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
@@ -42,10 +43,9 @@ class SagemakerLLM(BaseAWSLLM):
         self,
         optional_params: dict,
     ):
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        require_aws_sdk()
+        from botocore.credentials import Credentials
+
         auth_params: Final = pop_aws_auth_params(optional_params)
         aws_region_name = optional_params.pop("aws_region_name", None)
         optional_params.pop("aws_bedrock_runtime_endpoint", None)
@@ -79,11 +79,9 @@ class SagemakerLLM(BaseAWSLLM):
         aws_region_name: str,
         extra_headers: dict | None = None,
     ):
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        require_aws_sdk()
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
         dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
@@ -547,6 +545,7 @@ class SagemakerLLM(BaseAWSLLM):
         Supports Hugging Face (TGI), Voyage, and Cohere embedding endpoints
         """
         ### BOTO3 INIT
+        require_aws_sdk()
         import boto3
 
         # Use _load_credentials to support role assumption (aws_role_name, aws_session_name)

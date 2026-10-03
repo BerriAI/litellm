@@ -5069,3 +5069,13 @@ async def test_send_batch_time_grows_linearly_with_the_batch() -> None:
     quadrupled: Final = await _timed_send_batch(8_000)
 
     assert quadrupled / baseline < 8, f"2k took {baseline:.3f}s, 8k took {quadrupled:.3f}s"
+
+
+@pytest.mark.parametrize("missing", ("boto3", "botocore"))
+def test_missing_aws_extra_explains_installation(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from litellm.integrations.s3_v2 import S3Logger
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    with pytest.raises(ImportError, match=r"litellm\[aws\]"):
+        S3Logger()
