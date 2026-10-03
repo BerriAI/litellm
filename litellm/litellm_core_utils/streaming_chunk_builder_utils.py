@@ -455,20 +455,31 @@ class ChunkProcessor:
                         continue
                     if isinstance(tool_call, dict):
                         key = (choice_index, tool_call.get("index", 0))
+                        if fragment_id := tool_call.get("id"):
+                            yield key, "id", fragment_id
                         function = tool_call.get("function")
                         if isinstance(function, dict):
                             if fragment_arguments := function.get("arguments"):
                                 yield key, "arguments", fragment_arguments
-                        elif function_arguments := getattr(function, "arguments", None):
-                            yield key, "arguments", function_arguments
+                            if fragment_name := function.get("name"):
+                                yield key, "name", fragment_name
+                        else:
+                            if function_arguments := getattr(function, "arguments", None):
+                                yield key, "arguments", function_arguments
+                            if function_name := getattr(function, "name", None):
+                                yield key, "name", function_name
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict) and (custom_input := custom.get("input")):
                             yield key, "custom_input", custom_input
                     else:
                         key = (choice_index, getattr(tool_call, "index", 0))
+                        if object_id := getattr(tool_call, "id", None):
+                            yield key, "id", object_id
                         function = getattr(tool_call, "function", None)
                         if object_arguments := getattr(function, "arguments", None):
                             yield key, "arguments", object_arguments
+                        if object_name := getattr(function, "name", None):
+                            yield key, "name", object_name
                         custom = getattr(tool_call, "custom", None)
                         if object_custom_input := getattr(custom, "input", None):
                             yield key, "custom_input", object_custom_input
@@ -607,7 +618,7 @@ class ChunkProcessor:
             if tool_call_data["id"] and tool_call_data["custom_name"]:
                 tool_calls_list.append(
                     ChatCompletionMessageCustomToolCall(
-                        id=tool_call_data["id"],
+                        id=joined_fragments.get((index, "id")) or tool_call_data["id"],
                         custom=ChatCompletionCustomToolCallPayload(
                             name=tool_call_data["custom_name"],
                             input=joined_fragments.get((index, "custom_input"), ""),
@@ -620,12 +631,12 @@ class ChunkProcessor:
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
                     arguments=combined_arguments,
-                    name=tool_call_data["name"],
+                    name=joined_fragments.get((index, "name")) or tool_call_data["name"],
                 )
 
                 # Prepare params for ChatCompletionMessageToolCall
                 tool_call_params = {
-                    "id": tool_call_data["id"],
+                    "id": joined_fragments.get((index, "id")) or tool_call_data["id"],
                     "function": function,
                     "type": tool_call_data["type"] or "function",
                 }
