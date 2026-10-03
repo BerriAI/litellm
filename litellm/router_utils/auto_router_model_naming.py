@@ -17,14 +17,18 @@ from typing import Final, Literal, TypeAlias
 
 from litellm.router_strategy.complexity_router.config import (
     COMPLEXITY_ROUTER_CONFIG_KEYS,
+    DEFAULT_JEV_INSTRUCTIONS,
     LLM_CLASSIFIER_TYPES,
+    normalize_classifier_config_aliases,
 )
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
 
-StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+StrategyRouterDependencyRole: TypeAlias = Literal[
+    "tier", "default", "classifier", "embedding", "evaluation", "compactor"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +117,7 @@ def strategy_router_dependencies(
     """The model names a strategy-router deployment must reach, in no particular order.
 
     A field is a dependency only under the condition the runtime itself reads it: the
-    classifier model needs `classifier_type: llm`, and the complexity embedding model needs
+    classifier model needs an LLM-backed classifier type, and the complexity embedding model needs
     `semantic_keyword_matching`. Listing one the router never calls reds a working deployment.
 
     The two default-model spellings are not symmetric. A quality router falls back to its
@@ -148,15 +152,27 @@ def strategy_router_dependencies(
                 )
             )
         )
-    complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
+    complexity: Final = normalize_classifier_config_aliases(_mapping(litellm_params.get("complexity_router_config")))
     classifier: Final = _mapping(complexity.get("classifier_llm_config"))
+    decision_classifier: Final = _mapping(complexity.get("opensource_classifier_config"))
+    decision_provider: Final = decision_classifier.get("provider", "jev")
+    accounting_provider: Final = "typesafe" if decision_provider == "jev" else decision_provider
     return tuple(
         dict.fromkeys(
             tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
             + _named(litellm_params.get("complexity_router_default_model"), "default")
+            + _named(_mapping(complexity.get("context_compaction")).get("model"), "compactor")
             + (
                 _named(classifier.get("model"), "classifier")
                 if complexity.get("classifier_type") in LLM_CLASSIFIER_TYPES
+                else ()
+            )
+            + (
+                _named(
+                    f"{accounting_provider}/{decision_classifier.get('model', 'jev-latest')}",
+                    "evaluation",
+                )
+                if complexity.get("classifier_type") == "oss_classifier"
                 else ()
             )
             + (
@@ -194,7 +210,10 @@ def defines_custom_classifier_prompt(complexity_router_config: object) -> bool:
     Scoped to the classifier types that actually call an LLM, which is also where the config validator
     accepts these fields: the heuristic scorers never read them.
     """
-    config: Final = _mapping(complexity_router_config)
+    config: Final = normalize_classifier_config_aliases(_mapping(complexity_router_config))
+    if config.get("classifier_type") == "oss_classifier":
+        instructions: Final = _mapping(config.get("opensource_classifier_config")).get("instructions")
+        return isinstance(instructions, str) and instructions != DEFAULT_JEV_INSTRUCTIONS
     if config.get("classifier_type") not in LLM_CLASSIFIER_TYPES:
         return False
     return _mapping(config.get("classifier_llm_config")).get("system_prompt") is not None or any(
@@ -218,9 +237,8 @@ class GatedAutoRouterCapability:
     stored ``litellm_params`` (``{config}`` is the caller's expression for the normalized
     ``complexity_router_config`` jsonb, substituted as many times as the predicate needs); they live
     on one record so they cannot drift apart. ``subject`` and ``remedy`` build the shared refusal
-    message. A validated config claims at most one capability, and the validator is what makes that
-    true: tier_definitions rejects every heuristic classifier_type, and it also rejects the
-    classifier system_prompt, which in turn only applies to the classifier types heuristic_v2 is not.
+    message. A validated config claims at most one capability: gated classifier types cannot be
+    combined with operator-defined tiers or classifier prompts.
     """
 
     key: str
@@ -238,8 +256,28 @@ HEURISTIC_V2_CAPABILITY: Final = GatedAutoRouterCapability(
     sql_config_predicate="{config} ->> 'classifier_type' = 'heuristic_v2'",
 )
 
+CAPABILITY_CLASSIFIER_CAPABILITY: Final = GatedAutoRouterCapability(
+    key="capability",
+    subject="with classifier_type 'capability' (Capability)",
+    remedy="Use a different classifier or remove an existing Capability router.",
+    uses=lambda config: _mapping(config).get("classifier_type") == "capability",
+    sql_config_predicate="{config} ->> 'classifier_type' = 'capability'",
+)
+
+LLM_V2_CAPABILITY: Final = GatedAutoRouterCapability(
+    key="llm_v2",
+    subject="with classifier_type 'llm_v2' (Fuse v2)",
+    remedy="Use a different classifier or remove an existing Fuse v2 router.",
+    uses=lambda config: _mapping(config).get("classifier_type") == "llm_v2",
+    sql_config_predicate="{config} ->> 'classifier_type' = 'llm_v2'",
+)
+
 _OPERATOR_PROMPT_FIELDS_SQL: Final = " OR ".join(
     f"{{config}} ->> '{field}' IS NOT NULL" for field in OPERATOR_CLASSIFIER_PROMPT_FIELDS
+)
+_DEFAULT_JEV_INSTRUCTIONS_SQL: Final = DEFAULT_JEV_INSTRUCTIONS.replace("'", "''")
+_OPENSOURCE_CLASSIFIER_CONFIG_SQL: Final = (
+    "COALESCE({config} -> 'opensource_classifier_config', {config} -> 'jev_classifier_config')"
 )
 
 CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
@@ -254,11 +292,19 @@ CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
         "jsonb_typeof({config} -> 'tier_definitions') = 'array' OR "
         f"({{config}} ->> 'classifier_type' IN ({_LLM_CLASSIFIER_TYPES_SQL}) AND ("
         "{config} -> 'classifier_llm_config' ->> 'system_prompt' IS NOT NULL OR "
-        f"{_OPERATOR_PROMPT_FIELDS_SQL}))"
+        f"{_OPERATOR_PROMPT_FIELDS_SQL})) OR "
+        "({config} ->> 'classifier_type' IN ('oss_classifier', 'jev') AND "
+        f"jsonb_typeof({_OPENSOURCE_CLASSIFIER_CONFIG_SQL} -> 'instructions') = 'string' AND "
+        f"{_OPENSOURCE_CLASSIFIER_CONFIG_SQL} ->> 'instructions' <> '{_DEFAULT_JEV_INSTRUCTIONS_SQL}')"
     ),
 )
 
-GATED_AUTO_ROUTER_CAPABILITIES: Final = (HEURISTIC_V2_CAPABILITY, CUSTOMIZATION_CAPABILITY)
+GATED_AUTO_ROUTER_CAPABILITIES: Final = (
+    HEURISTIC_V2_CAPABILITY,
+    CAPABILITY_CLASSIFIER_CAPABILITY,
+    LLM_V2_CAPABILITY,
+    CUSTOMIZATION_CAPABILITY,
+)
 
 
 def claimed_capability(complexity_router_config: object) -> GatedAutoRouterCapability | None:

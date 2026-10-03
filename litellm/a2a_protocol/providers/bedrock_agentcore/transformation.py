@@ -85,7 +85,7 @@ def _filter_reserved_headers(
 
 
 def _request_scoped_runtime_session_id(
-    params: Mapping[str, Any],
+    params: Mapping[str, object],
     litellm_params: Mapping[str, Any],
 ) -> str | None:
     context_id: Final = get_session_id_from_a2a_params(params)

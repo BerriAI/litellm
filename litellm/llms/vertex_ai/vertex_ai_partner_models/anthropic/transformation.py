@@ -14,7 +14,7 @@ from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class VertexAIError(Exception):
@@ -197,7 +197,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
