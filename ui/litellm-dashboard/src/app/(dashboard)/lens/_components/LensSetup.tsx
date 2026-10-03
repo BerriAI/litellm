@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, X } from "lucide-react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,7 +16,16 @@ import {
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DurationInput } from "./DurationInput";
 import { ActivityScope, type ActivitySelection } from "./ActivityScope";
-import { analysisModelOptions, normalizeFilters, type AnalysisModelInfo, type Settings } from "./lensData";
+import { WatchPicker } from "./WatchPicker";
+import {
+  analysisModelOptions,
+  initialWatches,
+  isWatch,
+  normalizeFilters,
+  watchChecks,
+  type AnalysisModelInfo,
+  type Settings,
+} from "./lensData";
 
 function validateSample(selection: ActivitySelection) {
   const hours = selection.lookback_hours ?? 24;
@@ -77,7 +86,8 @@ export function LensSetup({
   };
   const [selection, setSelection] = useState(initialSelection);
   const [context, setContext] = useState(initial?.context ?? "");
-  const [questions, setQuestions] = useState(() => (initial?.checks?.length ? initial.checks : [newCheck()]));
+  const [watching, setWatching] = useState<ReadonlySet<string>>(() => initialWatches(initial?.checks));
+  const [questions, setQuestions] = useState(() => (initial?.checks ?? []).filter((check) => !isWatch(check)));
   const [selectedModel, setModel] = useState<string | null>(initial?.model ?? null);
   const model = selectedModel ?? defaultModel ?? "";
   const [budget, setBudget] = useState(initial?.monthly_budget ?? 100);
@@ -102,8 +112,8 @@ export function LensSetup({
     if (step >= 2 && manualSelection && !selection.execution_ids?.length)
       throw new Error("Choose at least one run or turn off individual selection");
     validateSample(selection);
-    if (step >= 1 && !context.trim() && !filledChecks.length)
-      throw new Error("Describe the expected behavior or what to look out for");
+    const nothingToCheck = !context.trim() && !filledChecks.length && !watching.size;
+    if (step >= 1 && nothingToCheck) throw new Error("Describe the expected behavior or pick something to watch for");
     if (filledChecks.some((check) => check.instruction.trim().length < 3))
       throw new Error("Use at least three characters for each check");
   };
@@ -132,7 +142,10 @@ export function LensSetup({
         interval_minutes: interval,
         concurrency: initial?.concurrency ?? 8,
         filters: normalizeFilters(selection.filters ?? []),
-        checks: filledChecks.map((check) => ({ ...check, instruction: check.instruction.trim() })),
+        checks: [
+          ...watchChecks(watching),
+          ...filledChecks.map((check) => ({ ...check, instruction: check.instruction.trim() })),
+        ],
       };
       await onSave(settings);
     } catch (cause) {
@@ -172,7 +185,7 @@ export function LensSetup({
       }}
     >
       <DialogContent
-        className={`flex max-h-[90dvh] flex-col gap-6 overflow-hidden ${step === 2 ? "sm:max-w-3xl" : "sm:max-w-xl"}`}
+        className={`flex max-h-[90dvh] flex-col gap-6 overflow-hidden ${["sm:max-w-xl", "sm:max-w-2xl", "sm:max-w-3xl"][step]}`}
       >
         <DialogHeader>
           <DialogTitle className="text-xl">{headings[step]}</DialogTitle>
@@ -239,8 +252,13 @@ export function LensSetup({
                   placeholder="Answer the customer's question using verified sources and explain when information is missing."
                 />
               </label>
-              <fieldset className="space-y-3">
-                <legend className="mb-2 text-sm font-medium">What should we look out for?</legend>
+              <WatchPicker
+                selected={watching}
+                onChange={setWatching}
+                onAddCustom={() => setQuestions([...questions, newCheck()])}
+              />
+              <fieldset className="space-y-2">
+                <legend className="sr-only">Custom checks</legend>
                 {questions.map((check, index) => (
                   <div key={check.id} className="flex items-start gap-2">
                     <Textarea
@@ -254,7 +272,7 @@ export function LensSetup({
                         )
                       }
                       rows={2}
-                      placeholder="e.g. Repeated searches that add no useful information"
+                      placeholder="e.g. Quotes a price without checking the pricing tool"
                     />
                     <Button
                       variant="ghost"
@@ -266,29 +284,7 @@ export function LensSetup({
                     </Button>
                   </div>
                 ))}
-                <Button variant="outline" size="sm" onClick={() => setQuestions([...questions, newCheck()])}>
-                  <Plus className="size-3.5" /> Add check
-                </Button>
               </fieldset>
-              {(!context.trim() || !filledChecks.length) && (
-                <Button
-                  variant="link"
-                  className="h-auto px-0"
-                  onClick={() => {
-                    if (!context.trim())
-                      setContext(
-                        "Answer the user's question using verified sources. Explain when information is missing.",
-                      );
-                    if (!filledChecks.length)
-                      setQuestions([
-                        newCheck("Find repeated work that adds no useful information."),
-                        newCheck("Find claims that contradict the available evidence."),
-                      ]);
-                  }}
-                >
-                  Use an example
-                </Button>
-              )}
             </>
           )}
           {step === 2 && (
