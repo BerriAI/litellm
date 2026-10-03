@@ -48,6 +48,8 @@ struct ListTracesRowEncoding {
     pub status: litellm_traces::SpanStatus,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ms: i64,
+    #[serde(default, deserialize_with = "super::number::deserialize")]
+    pub fenced_start_ms: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub duration_ms: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -341,7 +343,7 @@ mod tests {
     #[case::quoted(true)]
     fn rows_decode_into_neutral_contracts(#[case] quoted: bool) {
         round_trip::<ListTracesRow>(
-            json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "STATUS_CODE_OK", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["claude-agent-sdk"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
+            json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "STATUS_CODE_OK", "start_ms": -1, "fenced_start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["claude-agent-sdk"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
             quoted,
         );
         round_trip::<TraceSpansRow>(

@@ -19,6 +19,7 @@ FROM agent_traces_by_key
 WHERE ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND UserIds = [{user_id:String}])
        OR has({team_ids:Array(String)}, TeamId))
+  AND ({snapshot_ms:UInt64} = 0 OR ReceivedMs <= {snapshot_ms:UInt64})
 GROUP BY TeamId, ApiKeyHash, TraceId
 HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
    AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})
@@ -30,10 +31,11 @@ LIMIT {limit:UInt32}
 )
 SELECT page.* EXCEPT (trace_start, trace_end),
        identities.agent_names AS agent_names, identities.agent_count AS agent_count,
-       identities.frameworks AS frameworks
+       identities.frameworks AS frameworks, identities.fenced_start_ms AS fenced_start_ms
 FROM page
 LEFT JOIN (
     SELECT TeamId, ApiKeyHash, TraceId,
+           toUnixTimestamp64Milli(min(Timestamp)) AS fenced_start_ms,
            arraySort(groupUniqArrayIf(AgentName, AgentName != '')) AS agent_names,
            arraySort(groupUniqArrayIf(toString(Framework), Framework != '')) AS frameworks,
            uniqExactIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent') AS agent_count

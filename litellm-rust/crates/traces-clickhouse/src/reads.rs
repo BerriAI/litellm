@@ -133,6 +133,16 @@ impl ListTraversal {
         )
     }
 
+    /// A backdated span received after publication can lower a listed run's rollup start below
+    /// the cursor; its fenced start still sits at or above the cursor, so the run is not repeated.
+    fn unseen(&self, row: &contracts::ListTracesRow) -> bool {
+        let cursor = &self.cursor.position;
+        cursor.start_ms == 0
+            || row.fenced_start_ms == 0
+            || (row.fenced_start_ms, row.trace_ref.as_str())
+                < (cursor.start_ms, cursor.trace_ref.as_str())
+    }
+
     fn continue_after(
         &self,
         keys: &KeyRing,
@@ -275,17 +285,24 @@ pub async fn list_traces(
         .iter()
         .map(|row| (row.trace_ref.clone(), row.start_ms))
         .collect();
-    let items: Vec<litellm_traces::TraceSummary> = stream::iter(page.chunks(16))
+    let last_candidate = page.last().map(|row| ListPosition {
+        start_ms: row.start_ms,
+        trace_ref: row.trace_ref.clone(),
+    });
+    let unseen: Vec<contracts::ListTracesRow> = page
+        .into_iter()
+        .filter(|row| traversal.unseen(row))
+        .collect();
+    let items: Vec<litellm_traces::TraceSummary> = stream::iter(unseen.chunks(16))
         .then(|batch| list_summaries(client, connection, access, batch, snapshot_ms))
         .try_collect::<Vec<_>>()
         .await?
         .into_iter()
         .flatten()
         .collect();
-    let next_cursor = items
-        .last()
+    let next_cursor = last_candidate
         .filter(|_| !exhausted)
-        .map(|last| traversal.continue_after(keys, &starts, last))
+        .map(|last| keys.encode(&traversal.binding, &traversal.cursor.advance(last)))
         .transpose()?;
     let page = Page {
         items,
@@ -318,27 +335,34 @@ async fn list_summaries(
         start_ms,
         end_ms: end_ms.saturating_add(1),
     });
-    let spans = match crate::span_batches::read_list_spans(client, connection, params, snapshot_ms)
-        .await
-    {
-        Ok(spans) => spans,
-        Err(Error::ReadTooLarge) => {
-            return stream::iter(runs)
-                .then(|row| async move {
-                    match get_trace(client, connection, access, &row.trace_id, &row.trace_ref).await
-                    {
-                        Ok(trace) => {
-                            Ok(trace.map_or_else(|| listed_summary(row), |trace| trace.summary))
+    let spans =
+        match crate::span_batches::read_list_spans(client, connection, params, snapshot_ms).await {
+            Ok(spans) => spans,
+            Err(Error::ReadTooLarge) => {
+                return stream::iter(runs)
+                    .then(|row| async move {
+                        match read_trace(
+                            client,
+                            connection,
+                            access,
+                            &row.trace_id,
+                            &row.trace_ref,
+                            snapshot_ms,
+                        )
+                        .await
+                        {
+                            Ok(trace) => Ok(
+                                trace.map_or_else(|| listed_summary(row), |trace| trace.summary)
+                            ),
+                            Err(Error::ReadTooLarge) => Ok(listed_summary(row)),
+                            Err(error) => Err(error),
                         }
-                        Err(Error::ReadTooLarge) => Ok(listed_summary(row)),
-                        Err(error) => Err(error),
-                    }
-                })
-                .try_collect()
-                .await;
-        }
-        Err(error) => return Err(error),
-    };
+                    })
+                    .try_collect()
+                    .await;
+            }
+            Err(error) => return Err(error),
+        };
     let by_trace = spans.into_iter().into_group_map_by(|span| {
         (
             span.team_id.clone(),
@@ -377,6 +401,17 @@ pub async fn get_trace(
     trace_id: &str,
     trace_ref: &str,
 ) -> Result<Option<Trace>, Error> {
+    read_trace(client, connection, access, trace_id, trace_ref, u64::MAX).await
+}
+
+async fn read_trace(
+    client: &Client,
+    connection: &Connection,
+    access: &ReadAccessParams,
+    trace_id: &str,
+    trace_ref: &str,
+    snapshot_ms: u64,
+) -> Result<Option<Trace>, Error> {
     let Some(trace_ref) = reference(client, connection, access, trace_id, trace_ref).await? else {
         return Ok(None);
     };
@@ -385,7 +420,7 @@ pub async fn get_trace(
         trace_id: trace_id.to_owned(),
         trace_ref: trace_ref.clone(),
     };
-    let rows = crate::span_batches::read_spans(client, connection, params, u64::MAX).await?;
+    let rows = crate::span_batches::read_spans(client, connection, params, snapshot_ms).await?;
     if rows.is_empty() {
         return Ok(None);
     }
@@ -566,7 +601,7 @@ pub async fn get_span_error(
         trace_ref,
         span_id: span_id.to_owned(),
         error_offset: offset,
-        error_version: position.revision.clone(),
+        error_version: String::new(),
     });
     let Some(row) = fetch::<SpanError>(client, connection, &params)
         .await?
@@ -625,6 +660,68 @@ mod tests {
         OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap()
     }
 
+    fn listed_row(
+        trace_ref: &str,
+        start_ms: i64,
+        fenced_start_ms: i64,
+    ) -> contracts::ListTracesRow {
+        contracts::ListTracesRow {
+            trace_id: "t".into(),
+            trace_ref: trace_ref.into(),
+            team_id: "team-a".into(),
+            api_key_hash: String::new(),
+            user_id: "user-a".into(),
+            name: String::new(),
+            service: String::new(),
+            input_preview: String::new(),
+            status: litellm_traces::SpanStatus::Ok,
+            start_ms,
+            fenced_start_ms,
+            duration_ms: 1,
+            span_count: 1,
+            agent_count: 0,
+            agent_invocations: 0,
+            llm_calls: 0,
+            tool_calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            models: Vec::new(),
+            agent_names: Vec::new(),
+            frameworks: Vec::new(),
+            error_count: 0,
+            request_ids: Vec::new(),
+        }
+    }
+
+    #[rstest]
+    #[case::first_page_keeps_everything(None, 50, 900, true)]
+    #[case::earlier_fenced_start(Some((500, "b")), 50, 400, true)]
+    #[case::same_start_lower_ref(Some((500, "b")), 500, 500, true)]
+    #[case::unknown_fenced_start(Some((500, "b")), 50, 0, true)]
+    #[case::backdated_after_publication(Some((500, "b")), 50, 900, false)]
+    #[case::same_start_same_ref(Some((500, "a")), 50, 500, false)]
+    fn unseen_drops_runs_whose_fenced_start_was_already_listed(
+        #[case] cursor: Option<(i64, &str)>,
+        #[case] start_ms: i64,
+        #[case] fenced_start_ms: i64,
+        #[case] expected: bool,
+    ) {
+        let keys = keys();
+        let token = cursor.map(|(start_ms, trace_ref)| {
+            let first = ListTraversal::open(&keys, &access(), (0, 1000), None, now()).unwrap();
+            let position = ListPosition {
+                start_ms,
+                trace_ref: trace_ref.into(),
+            };
+            keys.encode(&first.binding, &first.cursor.advance(position))
+                .unwrap()
+        });
+        let traversal =
+            ListTraversal::open(&keys, &access(), (0, 1000), token.as_deref(), now()).unwrap();
+        let row = listed_row("a", start_ms, fenced_start_ms);
+        assert_eq!(traversal.unseen(&row), expected);
+    }
+
     #[rstest]
     fn list_traversal_pins_publication_and_continues_after_the_last_run() {
         let keys = keys();
@@ -641,6 +738,7 @@ mod tests {
             input_preview: String::new(),
             status: litellm_traces::SpanStatus::Ok,
             start_ms: 1_790_742_989_377,
+            fenced_start_ms: 1_790_742_989_377,
             duration_ms: 1,
             span_count: 1,
             agent_count: 0,

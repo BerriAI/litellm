@@ -41,6 +41,8 @@ pub struct ListTracesRow {
     #[serde(serialize_with = "crate::wire::serialize_status")]
     pub status: crate::SpanStatus,
     pub start_ms: i64,
+    #[serde(default)]
+    pub fenced_start_ms: i64,
     pub duration_ms: i64,
     pub span_count: u64,
     pub agent_count: u64,

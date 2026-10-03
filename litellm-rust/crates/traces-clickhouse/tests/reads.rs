@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use litellm_traces::query::named::ReadAccessParams;
 use litellm_traces_clickhouse::{
-    Connection, InsertTable, QueryScope, get_trace, get_trace_page, insert_rows, list_traces,
+    Connection, InsertTable, QueryScope, get_span_error, get_trace, get_trace_page, insert_rows,
+    list_traces,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -16,6 +17,26 @@ use support::TestResult;
 
 fn keys() -> litellm_pagination::KeyRing {
     litellm_pagination::KeyRing::new(["fixture-cursor-secret"]).unwrap()
+}
+
+/// `insert_rows` stamps `EngineReceivedMs` with the wall clock; tests that pin a receipt time
+/// write the row directly.
+async fn insert_received(
+    client: &litellm_http::Client,
+    writer: &Connection,
+    row: serde_json::Value,
+) -> TestResult {
+    let response = client
+        .post(writer.url().clone())
+        .body(format!(
+            "INSERT INTO {DATABASE}.otel_traces FORMAT JSONEachRow\n{row}"
+        ))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Err(response.text().await?.into());
+    }
+    Ok(())
 }
 
 #[rstest]
@@ -628,6 +649,21 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         ])],
     )
     .await?;
+    insert_received(
+        client,
+        &writer,
+        json!({
+            "Timestamp": "2026-09-21 00:00:00.000000000",
+            "TraceId": run.trace_id,
+            "SpanId": "late-child",
+            "ParentSpanId": "0101010101010101",
+            "ObservationType": "tool",
+            "TeamId": "team-a",
+            "ApiKeyHash": "key-a",
+            "EngineReceivedMs": u64::MAX / 2
+        }),
+    )
+    .await?;
     let after = list_traces(
         client,
         &reader,
@@ -668,5 +704,183 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         .await,
         Err(litellm_traces_clickhouse::Error::ReadTooLarge)
     ));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_backdated_span_received_after_publication_does_not_repeat_a_listed_run(
+    #[future(awt)] seeded_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = seeded_database?;
+    let client = &fixture.database.client;
+    let reader = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let mut cursor = None;
+    let mut listed = Vec::new();
+    let fixture_run = loop {
+        let page = list_traces(
+            client,
+            &reader,
+            &keys(),
+            &access,
+            0,
+            2_000_000_000_000,
+            cursor.as_deref(),
+            1,
+        )
+        .await?;
+        let run = page
+            .items
+            .into_iter()
+            .next()
+            .ok_or("fixture run not listed")?;
+        cursor = page.next_cursor;
+        listed.push(run.trace_ref.clone());
+        if run.span_count == 3 {
+            break run;
+        }
+    };
+    let continuation = cursor.clone().ok_or("fixture run was the last run")?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    insert_received(
+        client,
+        &writer,
+        json!({
+            "Timestamp": "2020-01-01 00:00:00.000000000",
+            "TraceId": fixture_run.trace_id,
+            "SpanId": "backdated-root",
+            "TeamId": "team-a",
+            "ApiKeyHash": "key-a",
+            "EngineReceivedMs": u64::MAX / 2
+        }),
+    )
+    .await?;
+    for statement in [
+        format!("SYSTEM START MERGES {DATABASE}.agent_traces_by_key"),
+        format!("OPTIMIZE TABLE {DATABASE}.agent_traces_by_key FINAL"),
+    ] {
+        let response = client
+            .post(fixture.database.url.clone())
+            .body(statement)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(response.text().await?.into());
+        }
+    }
+    let mut cursor = Some(continuation);
+    while let Some(current) = cursor {
+        let page = list_traces(
+            client,
+            &reader,
+            &keys(),
+            &access,
+            0,
+            2_000_000_000_000,
+            Some(&current),
+            1,
+        )
+        .await?;
+        listed.extend(page.items.into_iter().map(|run| run.trace_ref));
+        cursor = page.next_cursor;
+    }
+    let mut unique = listed.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), listed.len(), "{listed:?}");
+    let fresh = list_traces(
+        client,
+        &reader,
+        &keys(),
+        &access,
+        0,
+        2_000_000_000_000,
+        None,
+        50,
+    )
+    .await?;
+    let fresh_listings = fresh
+        .items
+        .iter()
+        .filter(|run| run.trace_ref == fixture_run.trace_ref)
+        .count();
+    assert_eq!(fresh_listings, 1);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_changed_diagnostic_reports_traversal_changed_instead_of_not_found(
+    #[future(awt)] seeded_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = seeded_database?;
+    let client = &fixture.database.client;
+    let reader = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let writer = Connection::writer(&fixture.database.url)?;
+    let diagnostic = |received: u64, message: String| {
+        json!({
+            "Timestamp": "2026-09-21 00:00:00.000000000",
+            "TraceId": "diagnostic-trace",
+            "SpanId": "diagnostic-span",
+            "StatusCode": "STATUS_CODE_ERROR",
+            "StatusMessage": message,
+            "TeamId": "team-a",
+            "ApiKeyHash": "key-a",
+            "EngineReceivedMs": received
+        })
+    };
+    insert_received(client, &writer, diagnostic(100, "a".repeat(40_000))).await?;
+    let first = get_span_error(
+        client,
+        &reader,
+        &keys(),
+        &access,
+        "diagnostic-trace",
+        "diagnostic-span",
+        "",
+        None,
+    )
+    .await?
+    .ok_or("missing diagnostic")?;
+    let continuation = first.next_cursor.ok_or("diagnostic fit in one page")?;
+    insert_received(client, &writer, diagnostic(50, "b".repeat(40_000))).await?;
+    let uncached_reader =
+        Connection::reader(&format!("{}?max_threads=1", fixture.database.url), DATABASE)?;
+    let changed = get_span_error(
+        client,
+        &uncached_reader,
+        &keys(),
+        &access,
+        "diagnostic-trace",
+        "diagnostic-span",
+        "",
+        Some(&continuation),
+    )
+    .await;
+    assert!(
+        matches!(
+            changed,
+            Err(litellm_traces_clickhouse::Error::Pagination(
+                litellm_pagination::Error::TraversalChanged
+            ))
+        ),
+        "{changed:?}"
+    );
     Ok(())
 }

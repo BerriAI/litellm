@@ -577,6 +577,7 @@ fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
         input_preview: "hi".into(),
         status: SpanStatus::Ok,
         start_ms: 1_790_742_989_377,
+        fenced_start_ms: 1_790_742_989_377,
         duration_ms: 51_385,
         span_count: 126,
         agent_count: 2,
