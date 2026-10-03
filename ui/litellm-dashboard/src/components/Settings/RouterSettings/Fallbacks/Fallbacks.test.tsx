@@ -8,6 +8,7 @@ import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 
 vi.mock("../../../networking", () => ({
   getCallbacksCall: vi.fn(),
+  getRouterSettingsCall: vi.fn(),
   setCallbacksCall: vi.fn(),
 }));
 
@@ -57,7 +58,7 @@ vi.mock("../../../common_components/DeleteResourceModal", () => ({
 
 vi.mock("./AddFallbacks", () => ({
   __esModule: true,
-  default: ({ value, onChange }: any) => {
+  default: ({ value, onChange, disabled }: any) => {
     const handleClick = async () => {
       if (onChange) {
         try {
@@ -69,7 +70,7 @@ vi.mock("./AddFallbacks", () => ({
       }
     };
     return (
-      <button onClick={handleClick} data-testid="add-fallbacks-button">
+      <button onClick={handleClick} disabled={disabled} data-testid="add-fallbacks-button">
         Add Fallbacks
       </button>
     );
@@ -107,6 +108,7 @@ describe("Fallbacks", () => {
     vi.mocked(networkingModule.getCallbacksCall).mockResolvedValue({
       router_settings: mockRouterSettings,
     });
+    vi.mocked(networkingModule.getRouterSettingsCall).mockResolvedValue({ fields: [], source: {} });
     vi.mocked(networkingModule.setCallbacksCall).mockResolvedValue(undefined);
     vi.mocked(fetchModelsModule.fetchAvailableModels).mockResolvedValue([
       { model_group: "gpt-4", mode: "chat" },
@@ -388,5 +390,82 @@ describe("Fallbacks", () => {
       },
       { timeout: 3000 },
     );
+  });
+
+  describe("config.yaml owned fallbacks", () => {
+    it("freezes add, edit and delete when fallbacks source is config", async () => {
+      const user = userEvent.setup();
+      vi.mocked(networkingModule.getRouterSettingsCall).mockResolvedValue({
+        fields: [],
+        source: { fallbacks: "config" },
+      });
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("add-fallbacks-button")).toBeDisabled();
+      });
+
+      const editButton = screen.getAllByTestId("edit-fallback-button")[0];
+      const deleteButton = getFirstRowDeleteButton();
+      expect(editButton).toHaveAttribute("aria-disabled", "true");
+      expect(deleteButton).toHaveAttribute("aria-disabled", "true");
+
+      await user.click(editButton);
+      await user.click(deleteButton!);
+
+      expect(screen.queryByText("Configure Model Fallbacks")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("delete-modal")).not.toBeInTheDocument();
+    });
+
+    it("keeps fallbacks visible and explains why edits are unavailable when the source request fails", async () => {
+      vi.mocked(networkingModule.getRouterSettingsCall).mockRejectedValue(new Error("boom"));
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load router settings");
+      expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      expect(screen.queryByTestId("add-fallbacks-button")).not.toBeInTheDocument();
+    });
+
+    it("hides write actions until the source map has loaded", async () => {
+      let resolveSources: (value: { fields: never[]; source: Record<string, string> }) => void = () => {};
+      vi.mocked(networkingModule.getRouterSettingsCall).mockReturnValue(
+        new Promise((resolve) => {
+          resolveSources = resolve;
+        }),
+      );
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+      expect(screen.queryByTestId("add-fallbacks-button")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("edit-fallback-button")).not.toBeInTheDocument();
+
+      resolveSources({ fields: [], source: { fallbacks: "config" } });
+      expect(await screen.findByTestId("add-fallbacks-button")).toBeDisabled();
+    });
+
+    it.each(["env", "default", "db"])("keeps fallbacks editable when source is %s", async (source) => {
+      const user = userEvent.setup();
+      vi.mocked(networkingModule.getRouterSettingsCall).mockResolvedValue({
+        fields: [],
+        source: { fallbacks: source },
+      });
+      renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+      });
+
+      expect(screen.getByTestId("add-fallbacks-button")).toBeEnabled();
+      const editButton = screen.getAllByTestId("edit-fallback-button")[0];
+      expect(editButton).toHaveAttribute("aria-disabled", "false");
+
+      await user.click(editButton);
+
+      await waitFor(() => {
+        expect(screen.getByText("Configure Model Fallbacks")).toBeInTheDocument();
+      });
+    });
   });
 });

@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import DynamicForm from "./dynamic_form";
@@ -11,6 +11,7 @@ interface Setting {
   field_value: unknown;
   stored_in_db: boolean | null;
   premium_field: boolean;
+  source?: "config" | "db" | "env" | "default" | "unset";
 }
 
 const SETTINGS: Setting[] = [
@@ -240,5 +241,61 @@ describe("DynamicForm presentation", () => {
     expect(screen.getAllByText("In DB")).toHaveLength(2);
     expect(screen.getByText("In Config")).toBeInTheDocument();
     expect(screen.getByText("Not Set")).toBeInTheDocument();
+  });
+});
+
+describe("DynamicForm config.yaml owned fields", () => {
+  const withSource = (source: Setting["source"]) => SETTINGS.map((setting) => ({ ...setting, source }));
+
+  it("disables number, text and switch controls plus reset when source is config", async () => {
+    const user = userEvent.setup();
+    const { handleSubmit, handleResetField } = renderForm({ settings: withSource("config") });
+
+    expect(screen.getByDisplayValue("12")).toBeDisabled();
+    expect(screen.getByDisplayValue("us-east")).toBeDisabled();
+    const toggle = screen.getByRole("switch");
+    expect(toggle).toHaveAttribute("data-disabled");
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Reset daily_report_frequency" })).toBeDisabled();
+
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Reset daily_report_frequency" }));
+    await submit(user);
+
+    expect(handleResetField).not.toHaveBeenCalled();
+    expect(handleSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each(["env", "default", "db", "unset"] as const)("keeps fields editable when source is %s", async (source) => {
+    const user = userEvent.setup();
+    const { handleSubmit } = renderForm({ settings: withSource(source) });
+
+    expect(screen.getByDisplayValue("us-east")).toBeEnabled();
+    const toggle = screen.getByRole("switch");
+    expect(toggle).not.toHaveAttribute("data-disabled");
+
+    fireEvent.change(screen.getByDisplayValue("us-east"), { target: { value: "us-eastZ" } });
+    await user.click(toggle);
+    await submit(user);
+
+    expect(handleSubmit).toHaveBeenCalledWith({ region_name: "us-eastZ", slack_alerting: true });
+  });
+
+  it("freezes only the config owned field", async () => {
+    const user = userEvent.setup();
+    const settings = SETTINGS.map((setting) =>
+      setting.field_name === "region_name"
+        ? { ...setting, source: "config" as const }
+        : { ...setting, source: "db" as const },
+    );
+    const { handleSubmit } = renderForm({ settings });
+
+    expect(screen.getByDisplayValue("us-east")).toBeDisabled();
+    expect(screen.getByDisplayValue("12")).toBeEnabled();
+
+    fireEvent.change(screen.getByDisplayValue("12"), { target: { value: "127" } });
+    await submit(user);
+
+    expect(handleSubmit).toHaveBeenCalledWith({ daily_report_frequency: "127" });
   });
 });

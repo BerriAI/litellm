@@ -11,6 +11,7 @@ import {
   parseTeamAdminEditableFields,
   teamAdminFieldLabel,
 } from "@/components/team/teamAdminEditAccess";
+import { ConfigOwnedField, isConfigOwned } from "@/components/shared/ConfigOwnedField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,6 +31,7 @@ export default function TeamAdminEditableFieldsSettings() {
   const supportedFields = parseSupportedTeamAdminEditableFields(data?.field_schema);
   const savedFields = parseTeamAdminEditableFields(data?.values);
   const enabledFields = supportedFields.filter((field) => savedFields.includes(field));
+  const configOwned = isConfigOwned(data?.source, "team_admin_editable_team_fields");
 
   return (
     <Card>
@@ -56,6 +58,7 @@ export default function TeamAdminEditableFieldsSettings() {
             enabledFields={enabledFields}
             supportedFields={supportedFields}
             isPending={isPending}
+            configOwned={configOwned}
             saveSettings={saveSettings}
           />
         )}
@@ -68,6 +71,7 @@ interface TeamAdminEditableFieldsFormProps {
   enabledFields: readonly string[];
   supportedFields: readonly string[];
   isPending: boolean;
+  configOwned: boolean;
   saveSettings: SaveEditableFields;
 }
 
@@ -75,6 +79,7 @@ function TeamAdminEditableFieldsForm({
   enabledFields,
   supportedFields,
   isPending,
+  configOwned,
   saveSettings,
 }: TeamAdminEditableFieldsFormProps) {
   const form = useZodForm(editableFieldsSchema, {
@@ -111,16 +116,18 @@ function TeamAdminEditableFieldsForm({
               const checkboxId = `team-admin-editable-${name}`;
               return (
                 <label key={name} htmlFor={checkboxId} className="flex cursor-pointer items-center gap-2">
-                  <Checkbox
-                    id={checkboxId}
-                    checked={field.value.includes(name)}
-                    disabled={isPending}
-                    onCheckedChange={(checked) =>
-                      field.onChange(
-                        supportedFields.filter((item) => (item === name ? checked : field.value.includes(item))),
-                      )
-                    }
-                  />
+                  <ConfigOwnedField frozen={configOwned} className="inline-flex">
+                    <Checkbox
+                      id={checkboxId}
+                      checked={field.value.includes(name)}
+                      disabled={isPending || configOwned}
+                      onCheckedChange={(checked) =>
+                        field.onChange(
+                          supportedFields.filter((item) => (item === name ? checked : field.value.includes(item))),
+                        )
+                      }
+                    />
+                  </ConfigOwnedField>
                   <span className="text-sm text-foreground">{teamAdminFieldLabel(name)}</span>
                 </label>
               );
@@ -129,9 +136,11 @@ function TeamAdminEditableFieldsForm({
         )}
       />
       <div className="flex justify-end">
-        <Button type="submit" disabled={isPending || !form.formState.isDirty}>
-          {isPending ? "Saving..." : "Save"}
-        </Button>
+        <ConfigOwnedField frozen={configOwned} className="inline-flex">
+          <Button type="submit" disabled={isPending || configOwned || !form.formState.isDirty}>
+            {isPending ? "Saving..." : "Save"}
+          </Button>
+        </ConfigOwnedField>
       </div>
     </form>
   );

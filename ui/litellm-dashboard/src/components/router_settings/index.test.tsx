@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import RouterSettings from "./index";
 
@@ -67,9 +67,9 @@ describe("RouterSettings", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("should render the Save Changes and Reset buttons when authenticated", () => {
+  it("should render the Save Changes and Reset buttons when authenticated", async () => {
     renderWithProviders(<RouterSettings {...defaultProps} />);
-    expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reset/i })).toBeInTheDocument();
   });
 
@@ -182,5 +182,103 @@ describe("RouterSettings", () => {
       expect(toast.fromError).toHaveBeenCalled();
     });
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  describe("config.yaml owned fields", () => {
+    it("freezes routing strategy, tag filtering and reliability inputs whose source is config", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getRouterSettingsCall).mockResolvedValue({
+        ...mockRouterSettingsResponse,
+        source: { routing_strategy: "config", enable_tag_filtering: "config", num_retries: "config", timeout: "db" },
+      });
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      const strategySelect = await findStrategySelect();
+      expect(strategySelect).toHaveAttribute("data-disabled");
+      expect(screen.getByRole("switch")).toHaveAttribute("data-disabled");
+      expect(await screen.findByRole("textbox", { name: /num_retries/i })).toBeDisabled();
+      expect(screen.getByRole("textbox", { name: /timeout/i })).toBeEnabled();
+
+      await user.hover(strategySelect);
+      expect(await screen.findByText("Set in config.yaml and cannot be changed here")).toBeInTheDocument();
+    });
+
+    it("drops the previous source map while a new session is loading", async () => {
+      vi.mocked(getRouterSettingsCall).mockResolvedValueOnce({ ...mockRouterSettingsResponse, source: {} });
+      const { rerender } = renderWithProviders(<RouterSettings {...defaultProps} />);
+      expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
+
+      let resolveStale: (
+        value: typeof mockRouterSettingsResponse & { source: Record<string, string> },
+      ) => void = () => {};
+      vi.mocked(getRouterSettingsCall).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveStale = resolve;
+        }),
+      );
+      rerender(<RouterSettings {...defaultProps} accessToken="stale-token" />);
+      expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+
+      vi.mocked(getRouterSettingsCall).mockResolvedValueOnce({ ...mockRouterSettingsResponse, source: {} });
+      rerender(<RouterSettings {...defaultProps} accessToken="current-token" />);
+      expect(await screen.findByRole("button", { name: /save changes/i })).toBeInTheDocument();
+
+      resolveStale({ ...mockRouterSettingsResponse, source: {} });
+      await act(async () => {});
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    it("shows an error instead of a blank page when the source request fails", async () => {
+      vi.mocked(getRouterSettingsCall).mockRejectedValue(new Error("boom"));
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Failed to load router settings");
+      expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+    });
+
+    it("holds the form until the source map has loaded so config owned fields never render editable", async () => {
+      let resolveSources: (
+        value: typeof mockRouterSettingsResponse & { source: Record<string, string> },
+      ) => void = () => {};
+      vi.mocked(getRouterSettingsCall).mockReturnValue(
+        new Promise((resolve) => {
+          resolveSources = resolve;
+        }),
+      );
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      await waitFor(() => expect(getCallbacksCall).toHaveBeenCalled());
+      expect(screen.queryByRole("textbox", { name: /num_retries/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /save changes/i })).not.toBeInTheDocument();
+
+      resolveSources({ ...mockRouterSettingsResponse, source: { num_retries: "config" } });
+      expect(await screen.findByRole("textbox", { name: /num_retries/i })).toBeDisabled();
+    });
+
+    it.each(["env", "default", "db"])("keeps fields editable when source is %s", async (source) => {
+      const user = userEvent.setup();
+      vi.mocked(getRouterSettingsCall).mockResolvedValue({
+        ...mockRouterSettingsResponse,
+        source: { routing_strategy: source, enable_tag_filtering: source, num_retries: source },
+      });
+      renderWithProviders(<RouterSettings {...defaultProps} />);
+
+      const strategySelect = await findStrategySelect();
+      expect(strategySelect).not.toHaveAttribute("data-disabled");
+      expect(screen.getByRole("switch")).not.toHaveAttribute("data-disabled");
+      const numRetries = await screen.findByRole("textbox", { name: /num_retries/i });
+      expect(numRetries).toBeEnabled();
+      expect(screen.queryByText("Set in config.yaml and cannot be changed here")).not.toBeInTheDocument();
+
+      fireEvent.change(numRetries, { target: { value: "7" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() =>
+        expect(setCallbacksCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.objectContaining({ router_settings: expect.objectContaining({ num_retries: 7 }) }),
+        ),
+      );
+    });
   });
 });
