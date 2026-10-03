@@ -34,9 +34,7 @@ describe("Lens findings", () => {
         { input: "Rename greet", expected: "The rename is committed" },
       ],
     };
-    expect(
-      briefMarkdown("PRs were never opened", briefInput),
-    ).toBe(
+    expect(briefMarkdown("PRs were never opened", briefInput)).toBe(
       [
         "# PRs were never opened",
         "## Problem\nThe workspace was not a Git repository.",
