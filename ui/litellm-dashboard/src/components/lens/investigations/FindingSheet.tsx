@@ -10,6 +10,7 @@ import { type Finding, type Sample } from "../model/types";
 
 export function FindingSheet({
   finding,
+  agents = [],
   sampledRuns,
   readOnly,
   busy,
@@ -18,6 +19,7 @@ export function FindingSheet({
   changeFinding,
 }: {
   finding?: Finding;
+  agents?: readonly string[];
   sampledRuns: Sample["executions"];
   readOnly: boolean;
   busy: boolean;
@@ -46,6 +48,7 @@ export function FindingSheet({
             <SheetHeader>
               <SheetTitle className="pr-8 text-xl leading-snug">{finding.title}</SheetTitle>
               <SheetDescription>
+                {agents.length > 0 && <span className="font-medium text-foreground">{agents.join(", ")} · </span>}
                 {finding.kind === "issue" ? `${finding.priority} priority` : "Pattern"} ·{" "}
                 {finding.occurrences?.length ?? 0} linked {finding.occurrences?.length === 1 ? "run" : "runs"}
               </SheetDescription>

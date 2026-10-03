@@ -193,8 +193,8 @@ export function investigationDefaults(
     questions: (initial?.checks ?? []).filter((check) => !isWatch(check)),
     selectedModel: initial?.model ?? null,
     budget: initial?.monthly_budget ?? 100,
-    repeat: mode === "edit" && !!initial?.enabled,
-    interval: initial?.interval_minutes ?? 30,
+    repeat: mode === "new" || (mode === "edit" && !!initial?.enabled),
+    interval: initial?.interval_minutes ?? 15,
     manualSelection: !!initial?.execution_ids?.length,
   };
 }

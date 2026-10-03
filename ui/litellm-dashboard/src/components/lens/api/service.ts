@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { RunWindow } from "../investigations/detail/RunNowDialog";
 import type { ApiClient } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
 import type { ActivitySelection, Job, Lens, LensList, Sample, Settings, WorkerCreated } from "../model/types";
@@ -44,7 +45,8 @@ export interface LensApi {
   keys(alias: string, page: number, signal: AbortSignal): Promise<KeyPage>;
   keyInfo(keyId: string): Promise<KeyInfo>;
   saveLens(id: string | undefined, settings: Settings): Promise<Lens>;
-  startRun(lensId: string): Promise<void>;
+  startRun(lensId: string, request?: RunWindow): Promise<void>;
+  watchAll(): Promise<components["schemas"]["WatchAllResult"]>;
   cancelRun(lensId: string): Promise<void>;
   reviewFinding(lensId: string, findingId: string, status: FindingStatus, reason: string): Promise<void>;
   registerWorker(analysisKeyId: string | null): Promise<WorkerCreated>;
@@ -109,7 +111,9 @@ export function liveLensApi(apiClient: ApiClient, accessToken: string): LensApi 
       keyInfoSchema.parse(await apiClient.get("/key/info", { accessToken, query: { key: keyId } })).info,
     saveLens: (id, settings) =>
       apiClient.request<Lens>(id ? "PUT" : "POST", id ? `/lens/${id}` : "/lens", { accessToken, body: settings }),
-    startRun: (lensId) => apiClient.post(`/lens/${lensId}/runs`, { accessToken, body: {} }),
+    startRun: (lensId, request = {}) => apiClient.post(`/lens/${lensId}/runs`, { accessToken, body: request }),
+    watchAll: () =>
+      apiClient.post<components["schemas"]["WatchAllResult"]>("/lens/watch-all", { accessToken, body: {} }),
     cancelRun: (lensId) => apiClient.post(`/lens/${lensId}/cancel`, { accessToken, body: {} }),
     reviewFinding: (lensId, findingId, status, reason) =>
       apiClient.patch(`/lens/${lensId}/findings/${findingId}`, { accessToken, body: { status, reason } }),

@@ -14,7 +14,7 @@ import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
 import { createLensDemo } from "./demo/createLensDemo";
 
-type Tab = "traces" | "investigations";
+type Tab = "traces" | "findings" | "investigations";
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
 export function LensWorkspace(props: WorkspaceProps) {
@@ -59,12 +59,12 @@ function LensContent({
   const demo = useLensDemo();
   const [tab, setTab] = useQueryState(
     "tab",
-    parseAsStringLiteral(["traces", "investigations"]).withOptions({ history: "push" }),
+    parseAsStringLiteral(["traces", "findings", "investigations"]).withOptions({ history: "push" }),
   );
   const [lensId] = useQueryState("lens", parseAsString);
   const [demoTab, setDemoTab] = useState(initialTab);
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
-  const defaultTab = lensId ? "investigations" : "traces";
+  const defaultTab = lensId ? "findings" : "traces";
   const activeTab = demo ? demoTab : tab ?? defaultTab;
   const openDemo = onDemo ? () => onDemo(activeTab) : undefined;
   return (
@@ -86,6 +86,9 @@ function LensContent({
                 <TabsTrigger value="traces" className="px-3">
                   Traces
                 </TabsTrigger>
+                <TabsTrigger value="findings" className="px-3">
+                  Findings
+                </TabsTrigger>
                 <TabsTrigger value="investigations" className="px-3">
                   Investigations
                 </TabsTrigger>
@@ -102,19 +105,23 @@ function LensContent({
               onDemo={activeTab === "traces" ? openDemo : undefined}
             />
           </TabsContent>
-          <TabsContent value="investigations" keepMounted={!!demo}>
-            {demo || isProxyAdminTierRole(userRole) ? (
-              <InvestigationsView
-                accessToken={accessToken}
-                readOnly={readOnly || !isProxyAdminRole(userRole)}
-                onDemo={activeTab === "investigations" ? openDemo : undefined}
-              />
-            ) : (
-              <p className="py-6 text-sm text-muted-foreground">
-                Investigations require proxy administrator access. You can still view your traces.
-              </p>
-            )}
-          </TabsContent>
+          {(["findings", "investigations"] as const).map((view) => (
+            <TabsContent key={view} value={view} keepMounted={!!demo} className="flex min-h-0 flex-col">
+              {demo || isProxyAdminTierRole(userRole) ? (
+                <InvestigationsView
+                  view={view}
+                  active={activeTab === view}
+                  accessToken={accessToken}
+                  readOnly={readOnly || !isProxyAdminRole(userRole)}
+                  onDemo={activeTab === view ? openDemo : undefined}
+                />
+              ) : (
+                <p className="py-6 text-sm text-muted-foreground">
+                  Investigations require proxy administrator access. You can still view your traces.
+                </p>
+              )}
+            </TabsContent>
+          ))}
         </Tabs>
       </main>
     </LensPreviewTarget.Provider>

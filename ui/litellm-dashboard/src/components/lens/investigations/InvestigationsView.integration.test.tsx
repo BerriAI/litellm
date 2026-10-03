@@ -1,4 +1,4 @@
-import { act, screen, within, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as renderProviders, testQueryClient } from "@/../tests/test-utils";
@@ -15,7 +15,7 @@ function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof
 }
 
 vi.mock("@/components/networking", () => ({
-  apiClient: { get: vi.fn(), post: vi.fn(), request: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), request: vi.fn() },
   proxyBaseUrl: "",
 }));
 
@@ -86,6 +86,8 @@ const lens: Lens = {
       id: "scan",
       findings: [pattern, issue],
       assessments: [],
+      steps: [],
+      trigger: "schedule",
       attempts: 0,
       error: "",
       cost: 0,
@@ -232,7 +234,7 @@ describe("Lens findings and runs", () => {
   });
 });
 
-it("runs saved settings immediately without opening setup", async () => {
+it("runs with saved settings from Run now without opening setup, then accepts an agent and window", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens")
@@ -258,8 +260,22 @@ it("runs saved settings immediately without opening setup", async () => {
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" />);
   await user.click(await screen.findByRole("button", { name: "Run now" }));
+  const choices = await screen.findByRole("dialog", { name: "Run now" });
+  expect(within(choices).getByRole("button", { name: "Since last run" })).toHaveAttribute("aria-pressed", "true");
+  await user.click(within(choices).getByRole("button", { name: "Run now" }));
   expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", { accessToken: "test", body: {} });
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+  vi.mocked(apiClient.post).mockClear();
+  await user.click(screen.getByRole("button", { name: "Run now" }));
+  const custom = await screen.findByRole("dialog", { name: "Run now" });
+  fireEvent.change(within(custom).getByRole("combobox", { name: "Agent" }), { target: { value: "billing" } });
+  await user.click(within(custom).getByRole("button", { name: "Last 24h" }));
+  await user.click(within(custom).getByRole("button", { name: "Run now" }));
+  expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", {
+    accessToken: "test",
+    body: { agent_name: "billing", lookback_hours: 24 },
+  });
 });
 
 it("offers the interactive demo without starting an investigation", async () => {
@@ -507,6 +523,46 @@ it("closes editing when browser navigation leaves the investigation", async () =
   expect(apiClient.request).not.toHaveBeenCalled();
 });
 
+it("resolves every investigation's copy of a merged finding from one row", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    return { data: [] };
+  });
+  vi.mocked(apiClient.patch).mockResolvedValue(undefined);
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  const rows = await screen.findAllByRole("row", { name: issue.title });
+  expect(rows).toHaveLength(1);
+  await user.click(rows[0]);
+  await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
+  await waitFor(() => expect(apiClient.patch).toHaveBeenCalledTimes(2));
+  const resolved = vi
+    .mocked(apiClient.patch)
+    .mock.calls.map(([path]) => path)
+    .sort();
+  expect(resolved).toEqual(["/lens/lens/findings/issue", "/lens/twin/findings/issue"]);
+});
+
+it("lists investigations without edit or run controls for read-only viewers", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" view="investigations" readOnly />);
+  const row = await screen.findByRole("row", { name: lens.settings.name });
+  expect(within(row).queryByRole("button", { name: /now/ })).not.toBeInTheDocument();
+  await user.click(row);
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
 it("shows the actual saved failure and run context without opening backend logs", async () => {
   testQueryClient.clear();
   const error =
@@ -525,4 +581,25 @@ it("shows the actual saved failure and run context without opening backend logs"
   expect(failure.getByText("failed-run")).toBeVisible();
   expect(failure.getByText(job.settings.model)).toBeVisible();
   expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();
+});
+
+it("keeps a merged finding open to retry when one investigation's update fails", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    return { data: [] };
+  });
+  vi.mocked(apiClient.patch).mockReset();
+  vi.mocked(apiClient.patch).mockImplementation(async (path) => {
+    if (String(path).startsWith("/lens/twin/")) throw new Error("Twin reviews could not be updated");
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  await user.click(await screen.findByRole("row", { name: issue.title }));
+  await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
+  expect(await screen.findByText("Twin reviews could not be updated")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Mark resolved" })).toBeVisible();
 });

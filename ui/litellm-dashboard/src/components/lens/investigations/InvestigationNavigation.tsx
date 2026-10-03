@@ -25,21 +25,26 @@ export function InvestigationNavigation({
   setEditing: (mode: "new") => void;
 }) {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3">
+    <header className={lens ? "flex flex-wrap items-center justify-between gap-2" : "flex items-center gap-2"}>
       {lens ? (
         <Button variant="ghost" size="sm" className="-ml-3" onClick={() => selectLens(null)}>
-          <ArrowLeft className="size-4" /> All investigations
+          <ArrowLeft className="size-4" /> Back
         </Button>
-      ) : (
-        <h2 className="text-lg font-semibold">Investigations</h2>
-      )}
+      ) : null}
       {showActions && (
         <div className="flex flex-wrap gap-2">
-          <Button variant="ghost" disabled={!activityReady} onClick={() => setWorkerSetup(true)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!activityReady}
+            onClick={() => setWorkerSetup(true)}
+            title={connected ? "Worker connected" : "Connect worker"}
+            className="text-muted-foreground"
+          >
             <StatusDot state={connected ? "ok" : "warn"} />
-            {connected ? "Worker connected" : "Connect worker"}
+            {connected ? "Worker" : "Connect worker"}
           </Button>
-          <Button variant={lens ? "outline" : "default"} disabled={!ready} onClick={() => setEditing("new")}>
+          <Button size="sm" variant={lens ? "outline" : "default"} disabled={!ready} onClick={() => setEditing("new")}>
             <Plus className="size-4" /> New investigation
           </Button>
         </div>

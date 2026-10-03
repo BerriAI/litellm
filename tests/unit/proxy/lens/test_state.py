@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from functools import reduce
 from typing import Final
 
 import pytest
 
 from litellm.proxy.lens.models import (
+    MAX_STEPS,
     AgentTestCase,
     Check,
     Evidence,
@@ -12,9 +14,19 @@ from litellm.proxy.lens.models import (
     Lens,
     LensSettings,
     Scope,
+    Step,
     Worker,
 )
-from litellm.proxy.lens.state import can_access, claim_job, current_job, merge_finding, queue_job, renew_budget
+from litellm.proxy.lens.state import (
+    add_step,
+    can_access,
+    claim_job,
+    current_job,
+    merge_finding,
+    next_scan_start,
+    queue_job,
+    renew_budget,
+)
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
@@ -163,15 +175,42 @@ def test_monthly_budget_renews_without_erasing_job_costs() -> None:
 
 
 @pytest.mark.parametrize("hours", (24, 168, 720, 4800, 8760))
-def test_every_scan_uses_the_configured_lookback_window(hours: int) -> None:
+def test_first_scan_covers_the_configured_lookback_window(hours: int) -> None:
     original: Final = lens()
     configured: Final = original.model_copy(
         update={"settings": LensSettings.model_validate({**original.settings.model_dump(), "lookback_hours": hours})}
     )
     first: Final = queue_job(configured, NOW, "first")
     assert first.jobs[0].start == NOW - timedelta(hours=hours)
-    resumed: Final = configured.model_copy(update={"last_scan_at": NOW - timedelta(hours=1)})
-    assert queue_job(resumed, NOW, "next").jobs[0].start == NOW - timedelta(hours=hours)
+    assert first.jobs[0].trigger == "schedule"
+
+
+def test_later_scheduled_scans_only_cover_traces_since_the_last_scan() -> None:
+    resumed: Final = lens().model_copy(update={"last_scan_at": NOW - timedelta(hours=1)})
+    job: Final = queue_job(resumed, NOW, "next").jobs[0]
+    assert job.start == NOW - timedelta(hours=1)
+    assert job.end == NOW - timedelta(minutes=2)
+
+
+def test_a_scan_after_a_long_outage_never_reaches_past_the_lookback_window() -> None:
+    stale: Final = lens().model_copy(update={"last_scan_at": NOW - timedelta(days=400)})
+    assert queue_job(stale, NOW, "next").jobs[0].start == NOW - timedelta(hours=stale.settings.lookback_hours)
+
+
+def test_run_now_with_an_exact_window_scans_that_window_and_is_marked_manual() -> None:
+    window: Final = (NOW - timedelta(hours=5), NOW - timedelta(hours=3))
+    job: Final = queue_job(lens(), NOW, "manual", window=window, trigger="manual").jobs[0]
+    assert (job.start, job.end) == window
+    assert job.trigger == "manual"
+
+
+def test_steps_keep_only_the_most_recent_entries() -> None:
+    job: Final = queue_job(lens(), NOW, "job").jobs[0]
+    steps: Final = tuple(Step(at=NOW, kind="stage", label=f"step {i}") for i in range(MAX_STEPS + 5))
+    grown: Final = reduce(add_step, steps, job)
+    assert len(grown.steps) == MAX_STEPS
+    assert grown.steps[0].label == "step 5"
+    assert grown.steps[-1].label == f"step {MAX_STEPS + 4}"
 
 
 def test_finding_keeps_uncertainty_separate_from_the_main_summary() -> None:
@@ -285,6 +324,17 @@ def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check
     separate: Final = merge_finding(reviewed, other, 2, NOW)
     assert separate.id != legacy_id
     assert separate.status == "open" and separate.reason == ""
+
+
+def test_only_successful_scheduled_scans_move_the_next_scan_forward() -> None:
+    previous: Final = lens().model_copy(update={"last_scan_at": NOW - timedelta(hours=3)})
+    scheduled: Final = queue_job(previous, NOW, "scheduled").jobs[0]
+    manual: Final = queue_job(
+        previous, NOW, "manual", window=(NOW - timedelta(hours=2), NOW - timedelta(hours=1)), trigger="manual"
+    ).jobs[0]
+    assert next_scan_start(previous, scheduled, failed=False) == scheduled.end
+    assert next_scan_start(previous, scheduled, failed=True) == previous.last_scan_at
+    assert next_scan_start(previous, manual, failed=False) == previous.last_scan_at
 
 
 @pytest.mark.parametrize("field", ("lookback_hours", "interval_minutes"))

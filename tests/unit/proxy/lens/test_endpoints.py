@@ -1,13 +1,24 @@
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm import Router
-from litellm.proxy.lens.endpoints import list_agents, user_scope, validate_model, worker_supports_model
-from litellm.proxy.lens.models import LensSettings
+from litellm.proxy.lens.endpoints import (
+    list_agents,
+    run_settings,
+    run_window,
+    user_scope,
+    watchable,
+    watching,
+    validate_model,
+    worker_supports_model,
+)
+from litellm.proxy.lens.models import Lens, LensSettings, RunRequest, Scope
 
 
 @pytest.fixture
@@ -165,6 +176,79 @@ def test_regular_keys_cannot_read_lens_results(role: LitellmUserRoles | None) ->
     with pytest.raises(HTTPException) as error:
         user_scope(auth)
     assert error.value.status_code == 403
+
+
+def saved_lens() -> Lens:
+    now: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
+    return Lens(
+        id="lens",
+        scope=Scope(all_teams=True),
+        settings=LensSettings(name="Support", model="analysis", context="Answer questions", agent_name="support"),
+        created_at=now,
+        next_run_at=now,
+        budget_month="2026-01",
+    )
+
+
+def test_run_now_agent_override_only_changes_the_agent_for_that_run() -> None:
+    lens: Final = saved_lens()
+    overridden: Final = run_settings(lens, RunRequest(agent_name="billing"))
+    assert overridden is not None
+    assert overridden.agent_name == "billing"
+    assert overridden.model_copy(update={"agent_name": "support"}) == lens.settings
+
+
+def test_run_now_without_overrides_keeps_the_saved_settings() -> None:
+    assert run_settings(saved_lens(), RunRequest()) is None
+
+
+def test_run_now_rejects_a_window_that_is_missing_an_edge_or_backwards() -> None:
+    now: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
+    with pytest.raises(ValidationError, match="both a start and an end"):
+        RunRequest(start=now)
+    with pytest.raises(ValidationError, match="before end"):
+        RunRequest(start=now, end=now - timedelta(hours=1))
+
+
+def test_watching_switches_a_paused_investigation_on_and_records_the_change() -> None:
+    paused: Final = saved_lens().model_copy(
+        update={"settings": saved_lens().settings.model_copy(update={"enabled": False})}
+    )
+    watched: Final = watching(paused)
+    assert watched.settings.enabled is True
+    assert watched.revision == paused.revision + 1
+    assert watched.settings.model_copy(update={"enabled": False}) == paused.settings
+
+
+def test_watching_leaves_an_investigation_that_is_already_on_untouched() -> None:
+    on: Final = saved_lens()
+    assert watching(on) is on
+
+
+async def test_watch_all_skips_an_investigation_whose_model_is_gone_instead_of_failing_them_all(
+    analysis_router: Router,
+) -> None:
+    stale: Final = saved_lens().model_copy(
+        update={"settings": saved_lens().settings.model_copy(update={"model": "retired-model", "enabled": False})}
+    )
+    skipped: Final = await watchable(stale, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+    assert skipped is not None
+    assert skipped.id == stale.id
+    assert skipped.reason
+
+
+def test_run_now_since_last_run_keeps_scanning_only_new_traces_even_with_an_agent_override() -> None:
+    now: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    resumed: Final = saved_lens().model_copy(update={"last_scan_at": now - timedelta(hours=1)})
+    window: Final = run_window(resumed, RunRequest(agent_name="billing"), now)
+    assert window is not None
+    assert window[0] == now - timedelta(hours=1)
+
+
+def test_run_now_with_a_lookback_scans_that_lookback_instead_of_since_last_run() -> None:
+    now: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    resumed: Final = saved_lens().model_copy(update={"last_scan_at": now - timedelta(hours=1)})
+    assert run_window(resumed, RunRequest(lookback_hours=24), now) is None
 
 
 @pytest.mark.parametrize("provider", (False, True))

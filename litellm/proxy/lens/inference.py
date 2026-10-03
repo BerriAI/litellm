@@ -13,9 +13,9 @@ from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.proxy.lens.billing import complete, validate_key
-from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Worker
+from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Step, Worker
 from litellm.proxy.lens.repository import LensRepository
-from litellm.proxy.lens.state import current_job, renew_budget, replace_job
+from litellm.proxy.lens.state import add_step, current_job, renew_budget, replace_job
 from litellm.types.utils import CostPerToken, ModelResponse
 
 
@@ -199,12 +199,14 @@ async def analyze(
             if e.budget_month == now.strftime("%Y-%m")
             else e
         )
-        return (
-            replace_job(
-                adjusted, charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
-            )
-            if charged
-            else adjusted
+        if charged is None:
+            return adjusted
+        return replace_job(
+            adjusted,
+            add_step(
+                charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)})),
+                model_step(response, body, job.settings.model, cost),
+            ),
         )
 
     @asynccontextmanager
@@ -250,6 +252,37 @@ async def analyze(
         finish_reason="length"
         if choice.finish_reason == "length"
         else ("content_filter" if choice.finish_reason == "content_filter" else None),
+    )
+
+
+class Usage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
+class UsageEnvelope(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    model: str | None = None
+    usage: Usage | None = None
+
+
+_PURPOSE_LABELS: Final = MappingProxyType(
+    {"extract": "Reviewed a run", "cluster": "Compared observations", "investigate": "Checked a pattern"}
+)
+
+
+def model_step(response: ModelResponse, body: ModelRequest, requested: str, cost: float) -> Step:
+    envelope: Final = UsageEnvelope.model_validate_json(response.model_dump_json())
+    return Step(
+        at=datetime.now(timezone.utc),
+        kind="model",
+        label=_PURPOSE_LABELS[body.purpose],
+        model=envelope.model or requested,
+        purpose=body.purpose,
+        prompt_tokens=(envelope.usage.prompt_tokens if envelope.usage else None) or 0,
+        completion_tokens=(envelope.usage.completion_tokens if envelope.usage else None) or 0,
+        cost=cost,
     )
 
 
