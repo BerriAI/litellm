@@ -5688,6 +5688,21 @@ def test_completion_cost_prices_rule_only_base_model_registered_without_rates(_l
     ) == pytest.approx(30 * row["input_cost_per_token"] + 40 * row["output_cost_per_token"])
 
 
+def test_completion_cost_prices_mixed_case_base_model_over_response_model(_local_model_cost_map: None) -> None:
+    response: Final = ModelResponse(
+        model="claude-sonnet-4-5",
+        usage=Usage(prompt_tokens=100, completion_tokens=100, total_tokens=200),
+    )
+    row: Final = litellm.model_cost["claude-haiku-4-5"]
+
+    assert completion_cost(
+        completion_response=response,
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        base_model="CLAUDE-HAIKU-4-5",
+    ) == pytest.approx(100 * row["input_cost_per_token"] + 100 * row["output_cost_per_token"])
+
+
 def test_completion_cost_skips_an_unhashable_response_model(_local_model_cost_map: None) -> None:
     response: Final = ModelResponse(usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
     setattr(response, "model", ["gpt-4o"])

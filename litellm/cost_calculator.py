@@ -138,6 +138,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     _cached_get_model_info_helper,
+    _get_model_cost_key,
     _get_potential_model_names,
     token_counter,
 )
@@ -927,7 +928,8 @@ def _get_response_model(completion_response: object) -> str | None:
 
 
 def _has_cost_map_rates(key: str) -> bool:
-    row: Final = litellm.model_cost.get(key)
+    cost_key: Final = _get_model_cost_key(key)
+    row: Final = None if cost_key is None else litellm.model_cost.get(cost_key)
     return isinstance(row, dict) and any(
         "cost" in field and isinstance(value, (int, float)) and not isinstance(value, bool)
         for field, value in row.items()
