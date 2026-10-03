@@ -3816,6 +3816,80 @@ async def test_stateful_mcp_session_owner_mismatch_is_rejected_before_the_body_i
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_session_owner_mismatch_is_refused_before_the_body_arrives():
+    """A POST naming another caller's session is refused with 403 while the sender is still withholding the body,
+    so a stalled body cannot delay the refusal or reach the stateful manager."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "owned-session-stalled-body"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    intruder_auth = UserAPIKeyAuth(api_key="intruder-key", user_id="intruder")
+    mcp_server._stateful_session_auth_contexts[session_id] = MagicMock()
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer intruder-key"),
+            (b"mcp-session-id", session_id.encode()),
+        ],
+    }
+    body_never_sent = asyncio.Event()
+
+    async def withheld_body() -> Message:
+        await body_never_sent.wait()
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent_messages: list[Message] = []
+
+    async def capture_send(message: Message) -> None:
+        sent_messages.append(message)
+
+    handle_request_mock = AsyncMock()
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(intruder_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful,
+                "handle_request",
+                side_effect=handle_request_mock,
+            ),
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                {session_id: MagicMock()},
+            ),
+        ):
+            await asyncio.wait_for(handle_streamable_http_mcp(scope, withheld_body, capture_send), timeout=2)
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+
+    handle_request_mock.assert_not_awaited()
+    statuses = [m["status"] for m in sent_messages if m.get("type") == "http.response.start"]
+    assert statuses == [403]
+
+
+@pytest.mark.asyncio
 async def test_stateful_mcp_session_post_hands_the_whole_body_to_the_session_manager():
     """The owner's follow-up POST on a live session reaches the stateful manager with every body byte intact
     after the routing peek."""
