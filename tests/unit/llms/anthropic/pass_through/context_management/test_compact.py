@@ -13,7 +13,7 @@ Coverage:
 """
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1207,6 +1207,7 @@ def _fake_user_api_key_auth(
     end_user_model_max_budget=None,
     end_user_id=None,
     user_model_max_budget=None,
+    team_member_model_max_budget=None,
     user_id=None,
     token=None,
 ):
@@ -1228,6 +1229,7 @@ def _fake_user_api_key_auth(
     auth.end_user_model_max_budget = end_user_model_max_budget
     auth.end_user_id = end_user_id
     auth.user_model_max_budget = user_model_max_budget
+    auth.team_member_model_max_budget = team_member_model_max_budget
     auth.user_id = user_id
     auth.token = token
     return auth
@@ -1676,6 +1678,56 @@ async def test_summary_model_denied_when_user_over_model_budget():
     ).parameters
     for kwarg in ("user_id", "user_model_max_budget", "model"):
         assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter no longer accepts"
+
+
+async def test_summary_model_denied_when_team_member_over_model_budget():
+    import litellm
+
+    member_budget: Final = {"claude-haiku-4-5": {"budget_limit": 5.0, "time_period": "1d"}}
+    mock_call: Final = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+    auth: Final = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        team_member_model_max_budget=member_budget,
+        user_id="member-over-budget",
+        team_id="team-1",
+        token="hashed-token",
+    )
+    limiter: Final = MagicMock()
+    limiter.is_team_member_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(
+            message="over budget", current_cost=10, max_budget=5
+        )
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+    ):
+        result: Final = await apply_compact_20260112(
+            model=MODEL,
+            messages=_simple_messages(),
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+    limiter.is_team_member_within_model_budget.assert_awaited_once_with(
+        user_id="member-over-budget",
+        team_id="team-1",
+        team_member_model_max_budget=member_budget,
+        model="claude-haiku-4-5",
+    )
 
 
 async def test_summary_model_denied_when_end_user_over_model_budget():
@@ -2612,6 +2664,9 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
                 "user_api_key": "sk-parent",
                 "user_api_key_team_id": "team-abc",
                 "user_api_key_user_id": "user-xyz",
+                "user_api_key_team_member_model_max_budget": {
+                    "claude-haiku-4-5": {"budget_limit": 4.0, "time_period": "1d"}
+                },
                 "litellm_call_id": "call-1",
             },
             additional_drop_params=None,
@@ -2622,6 +2677,9 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
     assert captured_summary_metadata.get("user_api_key") == "sk-parent"
     assert captured_summary_metadata.get("user_api_key_team_id") == "team-abc"
     assert captured_summary_metadata.get("user_api_key_user_id") == "user-xyz"
+    assert captured_summary_metadata.get("user_api_key_team_member_model_max_budget") == {
+        "claude-haiku-4-5": {"budget_limit": 4.0, "time_period": "1d"}
+    }
     assert captured_summary_metadata.get("litellm_call_id") == "call-1"
     # Anthropic-shape ``metadata.user_id`` must not leak in as a propagated field.
     assert "user_id" not in captured_summary_metadata

@@ -7141,6 +7141,57 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
 
 
 @pytest.mark.asyncio
+async def test_get_team_member_default_budget_reraises_lookup_error_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+
+    lookup_error: Final = RuntimeError("budget database unavailable")
+    budget_table: Final = MagicMock()
+    budget_table.find_unique = AsyncMock(side_effect=lookup_error)
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks._dictable_table",
+        MagicMock(return_value=budget_table),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await get_team_member_default_budget(
+            budget_id="default-budget",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            raise_on_lookup_error=True,
+        )
+
+    assert exc_info.value is lookup_error
+
+
+@pytest.mark.asyncio
+async def test_get_team_member_default_budget_returns_none_on_lookup_error_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+
+    budget_table: Final = MagicMock()
+    budget_table.find_unique = AsyncMock(side_effect=RuntimeError("budget database unavailable"))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks._dictable_table",
+        MagicMock(return_value=budget_table),
+    )
+
+    budget: Final = await get_team_member_default_budget(
+        budget_id="default-budget",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+
+    assert budget is None
+
+
+@pytest.mark.asyncio
 async def test_get_end_user_object_db_fetch_returns_validated_end_user():
     from litellm.proxy.auth.auth_checks import get_end_user_object
 

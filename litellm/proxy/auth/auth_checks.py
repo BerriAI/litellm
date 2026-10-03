@@ -1513,6 +1513,7 @@ async def get_team_member_default_budget(
     budget_id: str,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
+    raise_on_lookup_error: bool = False,
 ) -> LiteLLM_BudgetTable | None:
     """
     Fetches the team-level default per-member budget referenced by team.metadata["team_member_budget_id"].
@@ -1547,6 +1548,8 @@ async def get_team_member_default_budget(
         )
     except Exception:
         verbose_proxy_logger.exception("Error fetching team-default member budget %s", budget_id)
+        if raise_on_lookup_error:
+            raise
         return None
 
     if budget_record is None:

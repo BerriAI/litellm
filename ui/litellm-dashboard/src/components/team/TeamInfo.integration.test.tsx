@@ -720,4 +720,62 @@ describe("TeamInfoView - member budget reset prompt", () => {
     expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument();
     expect(bulkUpdatePOST).not.toHaveBeenCalled();
   });
+
+  it("omits the default member model budget when it has not changed", async () => {
+    const user = userEvent.setup({ delay: null });
+    const storedBudget = { "gpt-4": { budget_limit: 3, time_period: "30d" } };
+    const data = createMockTeamData({
+      models: ["gpt-4"],
+      team_member_budget_table: {
+        max_budget: 10,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        model_max_budget: storedBudget,
+      },
+    });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: savedTeam, team_id: "123" });
+
+    renderWithProviders(<TeamInfoView {...props} premiumUser />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByPlaceholderText("Max spend ($)");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).not.toHaveProperty("team_member_model_max_budget");
+  });
+
+  it("sends the default member model budget after an edit", async () => {
+    const user = userEvent.setup({ delay: null });
+    const storedBudget = { "gpt-4": { budget_limit: 3, time_period: "30d" } };
+    const data = createMockTeamData({
+      models: ["gpt-4"],
+      team_member_budget_table: {
+        max_budget: 10,
+        budget_duration: null,
+        tpm_limit: null,
+        rpm_limit: null,
+        model_max_budget: storedBudget,
+      },
+    });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(data);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: savedTeam, team_id: "123" });
+
+    renderWithProviders(<TeamInfoView {...props} premiumUser />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByPlaceholderText("Max spend ($)"), { target: { value: "7" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].team_member_model_max_budget).toStrictEqual({
+      "gpt-4": { budget_limit: 7, time_period: "30d" },
+    });
+  });
 });
