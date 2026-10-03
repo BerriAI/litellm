@@ -5,7 +5,7 @@ import { CircleHelp } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import * as React from "react";
 import { useForm, type Resolver } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { FormField } from "@/components/shared/form/FormField";

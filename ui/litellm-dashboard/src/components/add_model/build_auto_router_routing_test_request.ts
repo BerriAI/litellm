@@ -24,10 +24,10 @@ export const buildSavedJevConnectionTestRequest = (
   const result = z
     .object({
       classifier_type: z.literal("jev"),
-      tiers: z.record(z.unknown()),
-      jev_classifier_config: jevClassifierConfigSchema.default({}),
+      tiers: z.record(z.string(), z.unknown()),
+      jev_classifier_config: jevClassifierConfigSchema.prefault({}),
     })
-    .passthrough()
+    .loose()
     .safeParse(parsed);
   if (!result.success) return undefined;
   return {
