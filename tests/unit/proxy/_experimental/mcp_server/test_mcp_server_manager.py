@@ -6983,7 +6983,11 @@ class TestMCPServerManager:
         ("raw_headers", "api_key", "custom_auth", "expected_subject"),
         [
             pytest.param(
-                {"authorization": "Bearer eyJ.x.y"}, "eyJ.x.y", True, "eyJ.x.y", id="custom-auth-idp-bearer-is-the-subject"
+                {"authorization": "Bearer eyJ.x.y"},
+                "eyJ.x.y",
+                True,
+                "eyJ.x.y",
+                id="custom-auth-idp-bearer-is-the-subject",
             ),
             pytest.param(
                 {"authorization": "Bearer eyJ.x.y"},
@@ -6992,9 +6996,7 @@ class TestMCPServerManager:
                 "eyJ.x.y",
                 id="built-in-oauth2-admission-bearer-is-the-subject",
             ),
-            pytest.param(
-                {"authorization": "Bearer sk-1234"}, "sk-1234", True, None, id="virtual-key-is-not-a-subject"
-            ),
+            pytest.param({"authorization": "Bearer sk-1234"}, "sk-1234", True, None, id="virtual-key-is-not-a-subject"),
             pytest.param(
                 {"x-litellm-api-key": "ca-key", "authorization": "Bearer ca-key"},
                 "ca-key",
