@@ -34909,7 +34909,6 @@
             },
             "name": {
               "default": "Lens worker",
-              "maxLength": 100,
               "minLength": 1,
               "title": "Name",
               "type": "string"

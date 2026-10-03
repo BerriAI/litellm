@@ -18,13 +18,7 @@ export function SampleFields() {
         control={control}
         name="selection.lookback_hours"
         render={({ field }) => (
-          <DurationInput
-            label="Review the last"
-            value={field.value ?? 24}
-            base="hours"
-            max={8760}
-            onChange={field.onChange}
-          />
+          <DurationInput label="Review the last" value={field.value ?? 24} base="hours" onChange={field.onChange} />
         )}
       />
       {errors.selection?.lookback_hours?.message && (

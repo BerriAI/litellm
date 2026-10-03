@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
@@ -9,6 +11,7 @@ import litellm
 from litellm.exceptions import ModelNotMappedError
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.proxy.lens.billing import complete, validate_key
 from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Worker
 from litellm.proxy.lens.repository import LensRepository
@@ -21,11 +24,19 @@ class DeploymentParams(BaseModel):
     model: str
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
+    max_completion_tokens: int | None = Field(default=None, gt=0)
+
+
+class ModelCapacity(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 class Deployment(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_params: DeploymentParams
+    model_info: ModelCapacity = ModelCapacity()
 
 
 class Message(BaseModel):
@@ -36,6 +47,7 @@ class Message(BaseModel):
 class Choice(BaseModel):
     model_config = ConfigDict(extra="ignore")
     message: Message
+    finish_reason: str | None = None
 
 
 class Completion(BaseModel):
@@ -88,6 +100,36 @@ def deployment_prices(deployment: Deployment) -> Prices:
         ) from exc
 
 
+def catalog_capacity(model: str) -> ModelCapacity:
+    try:
+        return ModelCapacity.model_validate(litellm.get_model_info(model=model))
+    except (ModelNotMappedError, ValueError):
+        return ModelCapacity()
+
+
+def output_tokens(deployment: Deployment, prompt: str | None = None) -> int:
+    params: Final = deployment.litellm_params
+    configured: Final = params.max_completion_tokens or params.max_tokens or deployment.model_info.max_output_tokens
+    capacity: Final = configured or catalog_capacity(params.model).max_output_tokens
+    if capacity is None:
+        raise HTTPException(
+            400,
+            f"Output capacity is unknown for {params.model}. Set model_info.max_output_tokens to the model's "
+            "supported output capacity or configure max_tokens on its deployment.",
+        )
+    if prompt is None:
+        return capacity
+    adjusted: Final = get_modified_max_tokens(
+        model=params.model,
+        base_model=params.model,
+        messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
+        user_max_tokens=capacity,
+        buffer_perc=0,
+        buffer_num=0,
+    )
+    return adjusted if adjusted is not None else capacity
+
+
 def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
     prices: Final = tuple(deployment_prices(d) for d in deployments)
     input_rate: Final = max(
@@ -102,7 +144,15 @@ def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
         )
         for p in prices
     )
-    return ((len((prompt + _SYSTEM).encode()) + 1024) * input_rate + 4096 * output_rate) * 2
+    output: Final = min(output_tokens(d, prompt) for d in deployments)
+    input_tokens: Final = max(
+        litellm.token_counter(
+            model=d.litellm_params.model,
+            messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
+        )
+        for d in deployments
+    )
+    return input_tokens * input_rate + output * output_rate
 
 
 async def analyze(
@@ -142,37 +192,7 @@ async def analyze(
             current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
         ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
 
-    async def reserve_budget() -> None:
-        if await repo.update(lens.id, reserve) is None:
-            raise HTTPException(409, "Could not reserve analysis budget")
-
-    data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
-        "model": job.settings.model,
-        "messages": [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": body.prompt},
-        ],
-        "max_tokens": 4096,
-        "stream": False,
-        "timeout": 120,
-        "num_retries": 0,
-        "disable_fallbacks": True,
-        "response_format": {"type": "json_object"},
-        "metadata": {
-            "tags": ["litellm-lens"],
-            "lens_id": lens.id,
-            "lens_run_id": job.id,
-            "lens_worker_id": worker.id,
-            "user_api_key_team_id": team_id,
-        },
-    }
-
-    with lens_analysis(), inherit_message_logging_privacy(True):
-        response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
-    parsed: Final = Completion.model_validate_json(response.model_dump_json())
-    cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
-
-    def settle(e: Lens) -> Lens:
+    def settle(e: Lens, cost: float) -> Lens:
         charged: Final = next((j for j in e.jobs if j.id == job.id), None)
         adjusted: Final = (
             e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
@@ -187,8 +207,50 @@ async def analyze(
             else adjusted
         )
 
-    await repo.update(lens.id, settle)
-    return ModelResult(content=parsed.choices[0].message.content or "{}", cost=cost)
+    @asynccontextmanager
+    async def reserve_budget() -> AsyncIterator[None]:
+        if await repo.update(lens.id, reserve) is None:
+            raise HTTPException(409, "Could not reserve analysis budget")
+        try:
+            yield
+        except BaseException:
+            await repo.update(lens.id, lambda e: settle(e, 0))
+            raise
+
+    data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
+        "model": job.settings.model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": body.prompt},
+        ],
+        "max_tokens": min(output_tokens(d, body.prompt) for d in deployments),
+        "stream": False,
+        "num_retries": 0,
+        "disable_fallbacks": True,
+        "response_format": {"type": "json_object"},
+        "metadata": {
+            "tags": ["litellm-lens"],
+            "lens_id": lens.id,
+            "lens_run_id": job.id,
+            "lens_worker_id": worker.id,
+            "user_api_key_team_id": team_id,
+        },
+    }
+
+    with lens_analysis(), inherit_message_logging_privacy(True):
+        response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
+    cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
+
+    await repo.update(lens.id, lambda e: settle(e, cost))
+    parsed: Final = Completion.model_validate_json(response.model_dump_json())
+    choice: Final = parsed.choices[0]
+    return ModelResult(
+        content=choice.message.content or "",
+        cost=cost,
+        finish_reason="length"
+        if choice.finish_reason == "length"
+        else ("content_filter" if choice.finish_reason == "content_filter" else None),
+    )
 
 
 def completion_charge(deployments: tuple[Deployment, ...], response: ModelResponse, estimate: float) -> float:

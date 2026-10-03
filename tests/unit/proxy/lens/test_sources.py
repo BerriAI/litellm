@@ -57,7 +57,10 @@ async def test_sample_never_returns_authentication_attributes() -> None:
 
     reader: Final = SourceReader(StorageResponse())
     sample: Final = await reader.sample(Scope(team_id="alpha"), lens().settings, 1, 2)
-    assert sample.executions[0].metadata == (MetadataFilter(key="environment", value="production"),)
+    assert sample.executions[0].metadata == (
+        MetadataFilter(key="environment", value="production"),
+        MetadataFilter(key="oversized", value="x" * 501),
+    )
     assert "opaque-oauth-bearer" not in sample.model_dump_json()
     assert sample.eligible == 1
 

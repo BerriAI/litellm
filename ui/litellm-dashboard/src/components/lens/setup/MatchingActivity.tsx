@@ -50,7 +50,7 @@ export function MatchingActivity({
     return () => clearTimeout(timer);
   }, [serialized]);
   const historyHours = selection.lookback_hours ?? 24;
-  const validWindow = Number.isInteger(historyHours) && historyHours >= 1 && historyHours <= 8760;
+  const validWindow = Number.isInteger(historyHours) && historyHours >= 1;
   const percent = scope.sample_percent ?? 100;
   const cap = scope.sample_size;
   const validCap = cap == null || (Number.isInteger(cap) && cap > 0);

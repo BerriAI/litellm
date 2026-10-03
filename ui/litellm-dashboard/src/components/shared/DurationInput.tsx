@@ -11,7 +11,7 @@ export type DurationInputProps = Omit<ComponentProps<"div">, "onChange"> & {
   value: number;
   onChange: (value: number) => void;
   base: "minutes" | "hours";
-  max: number;
+  max?: number;
 };
 
 export function DurationInput({ label, value, onChange, base, max, className, ...props }: DurationInputProps) {
@@ -41,7 +41,7 @@ export function DurationInput({ label, value, onChange, base, max, className, ..
           id={id}
           type="number"
           min={1 / scale}
-          max={max / scale}
+          max={max === undefined ? undefined : max / scale}
           step={1 / scale}
           value={Number.isFinite(value) ? value / scale : ""}
           onChange={(event) => onChange(event.target.value === "" ? NaN : Number(event.target.value) * scale)}

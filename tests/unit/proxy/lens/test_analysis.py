@@ -398,23 +398,20 @@ async def test_investigator_keeps_final_outcome_ahead_of_repeated_model_history(
     "quote, check_id, accepted",
     [("timeout", "retries", True), ("invented quote", "retries", False), ("timeout", "unknown", False)],
 )
-async def test_oversized_model_evidence_is_retried_and_quotes_still_verified(
+async def test_many_model_citations_are_accepted_but_quotes_are_still_verified(
     quote: str, check_id: str, accepted: bool
 ) -> None:
     execution: Final = Execution(
         id="run1", source="traces", trace_id="t", team_id="alpha", name="review", start_time="", span_count=1
     )
     part: Final = TracePart(execution_id="run1", span_id="span", name="tool", kind="tool", content="timeout")
-    attempts: Final = iter((8, 1))
+    attempts: Final = iter((8,))
 
     async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
         return ExecutionContent(execution=execution, parts=(part,))
 
     async def model(request: ModelRequest) -> ModelResult:
         count: Final = next(attempts)
-        if count == 1:
-            assert "validation errors" in request.prompt
-            assert '"max_length":6' in request.prompt
         evidence: Final = Evidence(execution_id="run1", span_id="span", quote=quote).model_dump_json()
         return ModelResult(
             content='{"observations":[{"check_id":"'
@@ -434,9 +431,7 @@ async def test_oversized_model_evidence_is_retried_and_quotes_still_verified(
 
 @pytest.mark.asyncio
 async def test_invalid_model_output_has_only_one_repair_attempt() -> None:
-    from pydantic import ValidationError
-
-    from litellm.proxy.lens.analysis import Extraction, structured_response
+    from litellm.proxy.lens.analysis import AnalysisResponseError, Extraction, structured_response
 
     attempts: Final = iter((1, 2))
 
@@ -444,7 +439,9 @@ async def test_invalid_model_output_has_only_one_repair_attempt() -> None:
         assert next(attempts, None) is not None, "Model repair exceeded its retry limit"
         return ModelResult(content="not JSON", cost=0)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(
+        AnalysisResponseError, match="Reading executions failed: Extraction response invalid after 2 attempts"
+    ):
         await structured_response(ModelRequest(purpose="extract", prompt="Extract observations"), Extraction, model)
     assert next(attempts, None) is None
 
@@ -505,16 +502,18 @@ async def test_investigator_can_cite_a_later_page_or_offset(later_span: str) -> 
     draft: Final = finding("run1").model_copy(
         update={"evidence": (Evidence(execution_id="run1", span_id=later_span, quote="timeout"),)}
     )
-    decisions: Final = iter(("read", "submit"))
+    offsets: Final = iter((8000, 16000, None))
 
     async def model(request: ModelRequest) -> ModelResult:
-        if next(decisions) == "read":
-            return ModelResult(content='{"action":"read","execution_id":"run1","offset":8000}', cost=0)
+        offset: Final = next(offsets)
+        if offset is not None:
+            return ModelResult(content=json.dumps({"action": "read", "execution_id": "run1", "offset": offset}), cost=0)
+        assert json.loads(request.prompt)["must_decide"] is False
         assert '"content": "timeout"' in request.prompt
         return ModelResult(content='{"action":"submit","finding":' + draft.model_dump_json() + "}", cost=0)
 
     async def read(execution_id: str, _cursor: str, offset: int) -> ExecutionContent:
-        assert execution_id == "run1" and offset == 8000
+        assert execution_id == "run1" and offset in (8000, 16000)
         return ExecutionContent(execution=execution, parts=(later,))
 
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
@@ -963,6 +962,7 @@ async def test_invalid_candidate_response_preserves_other_findings_and_reports_i
     )
     assert tuple(result.finding for result in results if result.finding is not None) == (finding("run"),)
     assert sum(result.finding is None for result in results) == 1
+    assert "[json_invalid]" in next(result.error for result in results if result.finding is None)
     assert max(counts.get_nowait() for _ in range(counts.qsize())) == 1
 
 
@@ -996,3 +996,203 @@ async def test_investigator_keeps_the_issue_brief() -> None:
     )
     assert result.finding is not None
     assert result.finding.brief == draft.brief
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish_reason", (None, "length", "content_filter"))
+async def test_grouping_failure_keeps_validation_details_without_model_content(finish_reason: str | None) -> None:
+    from litellm.proxy.lens.analysis import AnalysisResponseError, Clusters, structured_response
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        return ModelResult.model_validate(
+            {"content": '{"candidates":[{"title":"private trace"}]}', "cost": 0, "finish_reason": finish_reason}
+        )
+
+    with pytest.raises(AnalysisResponseError) as caught:
+        await structured_response(ModelRequest(purpose="cluster", prompt="private evidence"), Clusters, model)
+    message: Final = str(caught.value)
+    assert message.startswith("Grouping observations failed: Clusters response invalid after 2 attempts.")
+    assert "candidates.0.check_id: Field required [missing]" in message
+    assert "private" not in message
+    if finish_reason:
+        assert f"finish_reason={finish_reason}" in message
+    else:
+        assert "truncated" not in message
+
+
+@pytest.mark.asyncio
+async def test_truncated_but_valid_json_is_repaired_before_accepting_findings() -> None:
+    from litellm.proxy.lens.analysis import Clusters, structured_response
+
+    outputs: Final = iter(
+        (
+            ModelResult(content='{"candidates":[]}', cost=0, finish_reason="length"),
+            ModelResult(content='{"candidates":[]}', cost=0),
+        )
+    )
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        return next(outputs)
+
+    assert await structured_response(ModelRequest(purpose="cluster", prompt="group"), Clusters, model) == Clusters()
+    assert next(outputs, None) is None
+
+
+@pytest.mark.asyncio
+async def test_large_context_and_long_verified_quotes_do_not_silently_end_investigation() -> None:
+    from litellm.proxy.lens.models import FindingDraft, LensSettings
+
+    context: Final = "Read all recorded evidence. " * 5000
+    long_quote: Final = "timeout detail " * 200
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    part: Final = TracePart(execution_id="run", span_id="span", name="tool", kind="tool", content=long_quote)
+    reviewed: Final = Examined(execution=execution, observations=(), parts=(part,), partial=False, cannot_assess=False)
+    expected: Final = FindingDraft.model_validate(
+        {
+            **finding("run").model_dump(),
+            "description": "Recorded failure detail. " * 300,
+            "evidence": [{"execution_id": "run", "span_id": "span", "quote": long_quote}],
+        }
+    )
+    settings: Final = LensSettings.model_validate({**lens().settings.model_dump(), "context": context})
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job", settings=settings).jobs[0], findings=())
+
+    async def model(request: ModelRequest) -> ModelResult:
+        assert json.loads(request.prompt)["context"] == context
+        return ModelResult(content=json.dumps({"action": "submit", "finding": expected.model_dump()}), cost=0)
+
+    async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
+        pytest.fail("Already supplied evidence should not require a read")
+
+    result: Final = await investigate(
+        claim,
+        Candidate(check_id="retries", title="Failure", hypothesis="Retry failed", execution_ids=("run",)),
+        (reviewed,),
+        read,
+        model,
+    )
+    assert result.finding == expected
+
+
+@pytest.mark.asyncio
+async def test_reviewer_can_read_every_offset_of_a_long_span_before_deciding() -> None:
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    original: Final = "trace evidence! " * 16000 + "late verified failure"
+    offsets: Final = SimpleQueue[int]()
+    seen: Final = SimpleQueue[str]()
+
+    async def read(_execution_id: str, _cursor: str, offset: int) -> ExecutionContent:
+        offsets.put(offset)
+        content: Final = (
+            "Preview; read for complete content" if offset == 0 else original[offset - 1 : offset - 1 + 8000]
+        )
+        return ExecutionContent(
+            execution=execution,
+            parts=(
+                TracePart(
+                    execution_id="run",
+                    span_id="span",
+                    name="agent",
+                    kind="agent",
+                    content=content,
+                    truncated=offset == 0 or offset - 1 + 8000 < len(original),
+                ),
+            ),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = json.loads(request.prompt)
+        read_count: Final = payload["completed_read_count"]
+        if read_count:
+            seen.put(payload["read_evidence"][0]["content"])
+        if read_count * 8000 < len(original):
+            return ModelResult(
+                content=json.dumps({"reads": [{"span_id": "span", "offset": 1 + read_count * 8000}]}), cost=0
+            )
+        return ModelResult(
+            content=json.dumps(
+                {
+                    "observations": [
+                        {
+                            "check_id": "retries",
+                            "summary": "Late failure",
+                            "evidence": [{"execution_id": "run", "span_id": "span", "quote": "late verified failure"}],
+                        }
+                    ]
+                }
+            ),
+            cost=0,
+        )
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await extract(claim, execution, read, model)
+    assert "".join(seen.get_nowait() for _ in range(seen.qsize())) == original
+    assert tuple(offsets.get_nowait() for _ in range(offsets.qsize())) == (0, *range(1, len(original) + 1, 8000))
+    assert result.observations[0].evidence[0].quote == "late verified failure"
+    assert not result.cannot_assess
+
+
+@pytest.mark.asyncio
+async def test_investigator_can_read_all_evidence_pages_across_successive_span_batches() -> None:
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=80
+    )
+    parts: Final = tuple(
+        TracePart(
+            execution_id="run",
+            span_id=f"span{i:03}",
+            parent_span_id="root",
+            name=f"Step {i}",
+            kind="tool",
+            content="recorded evidence " * 400 + ("timeout" if i == 79 else "complete"),
+        )
+        for i in range(80)
+    )
+    seen: Final = SimpleQueue[str]()
+    read_cursors: Final = SimpleQueue[str]()
+    expected: Final = finding("run").model_copy(
+        update={"evidence": (Evidence(execution_id="run", span_id="span079", quote="timeout"),)}
+    )
+
+    async def read(_identity: str, cursor: str, _offset: int) -> ExecutionContent:
+        read_cursors.put(cursor)
+        assert cursor in ("", "span039")
+        return ExecutionContent(
+            execution=execution,
+            parts=parts[:40] if not cursor else parts[40:],
+            next_cursor="span039" if not cursor else None,
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = json.loads(request.prompt)
+        if not payload["completed_read_count"]:
+            return ModelResult(content=json.dumps({"action": "read", "execution_id": "run"}), cost=0)
+        for part in payload["evidence"]:
+            seen.put(part["span_id"])
+        if payload["evidence_page"] + 1 < payload["evidence_pages"]:
+            return ModelResult(content=json.dumps({"action": "evidence", "page": payload["evidence_page"] + 1}), cost=0)
+        if payload["last_read"]["next_cursor"]:
+            return ModelResult(
+                content=json.dumps(
+                    {"action": "read", "execution_id": "run", "cursor": payload["last_read"]["next_cursor"]}
+                ),
+                cost=0,
+            )
+        return ModelResult(content=json.dumps({"action": "submit", "finding": expected.model_dump()}), cost=0)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await investigate(
+        claim,
+        Candidate(check_id="retries", title="Failure", hypothesis="Failure", execution_ids=("run",)),
+        (Examined(execution=execution, observations=(), parts=(), partial=False, cannot_assess=False),),
+        read,
+        model,
+    )
+    assert result.finding == expected
+    assert result.error == ""
+    assert tuple(seen.get_nowait() for _ in range(seen.qsize())) == tuple(p.span_id for p in parts)
+    assert tuple(read_cursors.get_nowait() for _ in range(read_cursors.qsize())) == ("", "span039")

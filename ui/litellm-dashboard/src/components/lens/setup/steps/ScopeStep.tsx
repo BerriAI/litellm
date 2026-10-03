@@ -26,7 +26,7 @@ export function ScopeStep({
         step === 0 ? (
           <label className="grid gap-2 text-sm font-medium">
             Investigation name
-            <Input {...register("name")} placeholder="e.g. Support quality" maxLength={100} />
+            <Input {...register("name")} placeholder="e.g. Support quality" />
           </label>
         ) : undefined
       }

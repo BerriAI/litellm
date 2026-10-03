@@ -7,11 +7,12 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, BaseModel, Field
 
-from litellm.proxy._types import LitellmUserRoles, ModelAccessDeniedProxyException, UserAPIKeyAuth
+from litellm.litellm_core_utils.secret_redaction import redact_internal_details
+from litellm.proxy._types import LitellmUserRoles, ModelAccessDeniedProxyException, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_model
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -28,6 +29,7 @@ from litellm.proxy.lens.models import (
     Lens,
     LensList,
     LensSettings,
+    LookbackHours,
     ModelRequest,
     ModelResult,
     Progress,
@@ -324,18 +326,23 @@ class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
     settings: LensSettings
-    lookback_hours: int = Field(default=24, ge=1, le=8760)
+    lookback_hours: LookbackHours = 24
 
 
 @router.post("/preview/sample", response_model=Sample)
 async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Sample:
     validate_selection(body.settings)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
+    try:
+        start: Final = int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000)
+        end: Final = int((now - timedelta(minutes=2)).timestamp() * 1000)
+    except (OverflowError, ValueError) as error:
+        raise HTTPException(422, "Preview window exceeds the supported calendar range") from error
     return await source_reader(storage).sample(
         user_scope(auth),
         body.settings,
-        int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000),
-        int((now - timedelta(minutes=2)).timestamp() * 1000),
+        start,
+        end,
         offset=body.offset,
         preview=True,
     )
@@ -346,7 +353,7 @@ class WorkerBilling(BaseModel):
 
 
 class WorkerName(WorkerBilling):
-    name: str = Field(default="Lens worker", min_length=1, max_length=100)
+    name: str = Field(default="Lens worker", min_length=1)
 
 
 @router.post("/workers/register", response_model=WorkerCreated)
@@ -395,7 +402,7 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 
 @router.post("/worker/claim", response_model=Claim | None)
 async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
-    if protocol_version != 2:
+    if protocol_version not in (2, 3):
         raise HTTPException(409, "Upgrade the Lens worker using the current Connect worker command")
     if worker.analysis_key_id is None:
         raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
@@ -491,12 +498,31 @@ async def content(
     return await source_reader(storage).content(lens.scope, execution, cursor, offset)
 
 
+def model_failure(error: HTTPException | ProxyException) -> HTTPException:
+    if isinstance(error, ProxyException):
+        status: Final = int(error.code) if error.code.isdigit() else 500
+        return HTTPException(status, {"lens_error": redact_internal_details(error.message)}, headers=error.headers)
+    if isinstance(error.detail, str):
+        return HTTPException(
+            error.status_code, {"lens_error": redact_internal_details(error.detail)}, headers=error.headers
+        )
+    return error
+
+
 @router.post("/worker/{lens_id}/{job_id}/model", response_model=ModelResult)
-async def model(lens_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request) -> ModelResult:
+async def model(
+    lens_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request, response: Response
+) -> ModelResult:
     from litellm.proxy.lens.inference import analyze
 
     lens, job = await assigned(lens_id, job_id, worker)
-    return await analyze(repository(), lens, job, worker, body, request)
+    try:
+        completion: Final = await analyze(repository(), lens, job, worker, body, request)
+    except (ProxyException, HTTPException) as error:
+        raise model_failure(error) from error
+    if completion.finish_reason:
+        response.headers["x-litellm-lens-finish-reason"] = completion.finish_reason
+    return completion
 
 
 @router.post("/worker/{lens_id}/{job_id}/result", response_model=Lens)

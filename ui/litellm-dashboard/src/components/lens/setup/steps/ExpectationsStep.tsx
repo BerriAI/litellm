@@ -22,7 +22,6 @@ export function ExpectationsStep() {
         What should the agent be doing?
         <Textarea
           {...register("context")}
-          maxLength={6000}
           rows={4}
           placeholder="Answer the customer's question using verified sources and explain when information is missing."
         />
