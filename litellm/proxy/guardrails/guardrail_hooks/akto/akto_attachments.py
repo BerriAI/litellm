@@ -184,7 +184,9 @@ def _nested_blocks(blocks: tuple[_AttachmentBlock, ...]) -> tuple[_AttachmentBlo
 
 def _nested_content(block: _AttachmentBlock) -> object:
     match block:
-        case _ToolResultBlock(content=content) | _DocumentBlock(source=_Source(type="content", content=content)):
+        case _ToolResultBlock(content=content):
+            return content
+        case _DocumentBlock(source=_Source(type="content", content=content)):
             return content
         case _:
             return None
@@ -198,11 +200,15 @@ def _blocks(content: object) -> tuple[_AttachmentBlock, ...]:
 
 def _classify_block(block: _AttachmentBlock, index: int) -> _Classified:
     match block:
-        case _ImageURLBlock(image_url=_ImageURL(url=url)) | _InputImageBlock(image_url=url):
+        case _ImageURLBlock(image_url=_ImageURL(url=url)):
             return _from_uri(url, None, index, "image")
         case _ImageURLBlock(image_url=str(url)):
             return _from_uri(url, None, index, "image")
-        case _VideoURLBlock(video_url=_ImageURL(url=url)) | _VideoURLBlock(video_url=str(url)):
+        case _InputImageBlock(image_url=url):
+            return _from_uri(url, None, index, "image")
+        case _VideoURLBlock(video_url=_ImageURL(url=url)):
+            return _from_uri(url, None, index, "file")
+        case _VideoURLBlock(video_url=str(url)):
             return _from_uri(url, None, index, "file")
         case _InputAudioBlock(input_audio=_InputAudio(data=str(data), format=audio_format)):
             name: Final = f"attachment-{index}.{audio_format}" if audio_format else None

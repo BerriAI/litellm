@@ -12,12 +12,6 @@ from fastapi import HTTPException
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.akto.akto import UNMASKABLE_REASON, AktoGuardrail
-from litellm.proxy.guardrails.guardrail_hooks.akto.akto_attachments import (
-    Attachment,
-    RequestAttachments,
-    request_attachments,
-    without_attachment_content,
-)
 from litellm.proxy.guardrails.guardrail_registry import (
     guardrail_class_registry,
     guardrail_initializer_registry,
@@ -731,6 +725,21 @@ async def test_pre_call_forwards_akto_masked_prompt(akto_pre_call):
     )
 
     assert result["texts"] == ["be brief", "card XXXX"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_blocks_a_masked_payload_that_is_not_json(akto_pre_call):
+    result = {"Allowed": True, "Modified": True, "ModifiedPayload": "card XXXX", "behaviour": "alert"}
+    akto_pre_call.async_handler.post = AsyncMock(return_value=_response({"data": {"guardrailsResult": result}}))
+
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await akto_pre_call.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=[f"card {CARD}"]),
+            request_data={"messages": [{"role": "user", "content": f"card {CARD}"}]},
+            input_type="request",
+        )
+
+    assert exc_info.value.message == UNMASKABLE_REASON
 
 
 @pytest.mark.asyncio
@@ -1522,6 +1531,39 @@ async def test_a_dict_model_response_is_recorded_as_sent(akto_post_call, sample_
 
     [(_, payload)] = _calls(akto_post_call)
     assert json.loads(json.loads(payload["responsePayload"])["body"]) == tool_use_only
+
+
+def _with_client_response(request_data):
+    fake = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+    return {**request_data, "response": fake, "proxy_server_request": {"body": {"response": fake}}}
+
+
+@pytest.mark.asyncio
+async def test_a_response_sent_by_the_client_is_not_scanned_in_place_of_the_reply(akto_post_call, sample_request_data):
+    akto_post_call.async_handler.post = AsyncMock(return_value=_mock_blocked_response("PII Policy violated"))
+
+    with pytest.raises(GuardrailRaisedException):
+        await akto_post_call.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=[f"card {CARD}"]),
+            request_data=_with_client_response(sample_request_data),
+            input_type="response",
+        )
+
+    [(_, payload)] = _calls(akto_post_call)
+    assert f"card {CARD}" in payload["responsePayload"], "the model's reply is scanned, not the client's"
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_calls_are_checked_when_the_client_sends_a_response(akto_post_call, sample_request_data):
+    akto_post_call.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+
+    await akto_post_call.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], tool_calls=[MCP_TOOL_CALL]),
+        request_data=_with_client_response(sample_request_data),
+        input_type="response",
+    )
+
+    assert "/mcp" in [payload["path"] for _, payload in _calls(akto_post_call)]
 
 
 @pytest.mark.asyncio

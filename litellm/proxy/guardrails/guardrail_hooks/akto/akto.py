@@ -383,10 +383,16 @@ class AktoGuardrail(CustomGuardrail):
         )
 
     @staticmethod
+    def model_response(request_data: Mapping[str, object]) -> object:
+        """Translators keep a "response" already in the request, so one the client sent isn't the model's."""
+        client_body: Final = as_mapping(as_mapping(request_data.get("proxy_server_request")).get("body"))
+        return None if "response" in client_body else request_data.get("response")
+
+    @staticmethod
     def build_response_body(
         inputs: GenericGuardrailAPIInputs, request_data: Mapping[str, object]
     ) -> Mapping[str, object]:
-        model_response: Final = request_data.get("response")
+        model_response: Final = AktoGuardrail.model_response(request_data)
         if isinstance(model_response, BaseModel):
             return model_response.model_dump()
         response_mapping: Final = as_mapping(model_response)
@@ -784,7 +790,13 @@ class AktoGuardrail(CustomGuardrail):
         # Only the complete response is under "response"; mid-stream checks get "responses"
         complete_response: Final = request_data.get("response")
         streamed: Final = bool(request_data.get("stream"))
-        tool_calls: Final = self.response_mcp_tool_calls(complete_response) if complete_response is not None else ()
+        model_response: Final = self.model_response(request_data)
+        tool_call_source: Final = (
+            model_response
+            if model_response is not None
+            else {"choices": [{"message": {"tool_calls": list(inputs.get("tool_calls") or ())}}]}
+        )
+        tool_calls: Final = self.response_mcp_tool_calls(tool_call_source) if complete_response is not None else ()
         return await self.settle(
             self.check_and_record(
                 inputs,
