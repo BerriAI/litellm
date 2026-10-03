@@ -6,6 +6,7 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
+import { MarkdownImage } from "@/components/chat_ui/MarkdownImage";
 import { Message } from "./types";
 
 interface MessageBubbleProps {
@@ -87,6 +88,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                   );
                 },
                 pre: ({ node, ...props }) => <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />,
+                img: MarkdownImage,
               }}
             >
               {message.content}

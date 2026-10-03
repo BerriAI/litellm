@@ -15,6 +15,7 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
+import { MarkdownImage } from "@/components/chat_ui/MarkdownImage";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { ChatMessage } from "./types";
@@ -69,6 +70,7 @@ function MarkdownCodeRenderer({
 
 const markdownComponents: Components = {
   code: MarkdownCodeRenderer,
+  img: MarkdownImage,
   pre: ({ node, ...props }) => <pre className="max-w-full overflow-x-auto" {...props} />,
   p: ({ node, ...props }) => <p className="my-3 first:mt-0 last:mb-0" {...props} />,
   ul: ({ node, ...props }) => <ul className="my-3 list-disc space-y-1 pl-5" {...props} />,
@@ -79,11 +81,6 @@ const markdownComponents: Components = {
   tr: ({ node, ...props }) => <TableRow {...props} />,
   th: ({ node, ...props }) => <TableHead {...props} />,
   td: ({ node, ...props }) => <TableCell {...props} />,
-};
-
-const markdownWithoutImages: Components = {
-  ...markdownComponents,
-  img: ({ alt }) => <span>{alt || "Image omitted"}</span>,
 };
 
 interface UserBubbleProps {
@@ -207,21 +204,13 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
 
 interface AssistantBubbleProps {
   message: ChatMessage;
-  allowImages: boolean;
   isLastMessage: boolean;
   isStreaming: boolean;
   isTypingIndicator: boolean;
   mcpEvents?: ChatMessage["mcpEvents"];
 }
 
-function AssistantBubble({
-  message,
-  allowImages,
-  isLastMessage,
-  isStreaming,
-  isTypingIndicator,
-  mcpEvents,
-}: AssistantBubbleProps) {
+function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicator, mcpEvents }: AssistantBubbleProps) {
   const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
 
@@ -262,10 +251,7 @@ function AssistantBubble({
         ))}
 
       <BubbleContent className="w-full text-foreground">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={allowImages ? markdownComponents : markdownWithoutImages}
-        >
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
           {mainContent}
         </ReactMarkdown>
         {stoppedSuffix && <span className="text-muted-foreground italic"> [stopped]</span>}
@@ -421,7 +407,6 @@ interface Props {
 
 interface ChatMessageContentProps {
   message: ChatMessage;
-  allowImages?: boolean;
   isStreaming?: boolean;
   isLastMessage?: boolean;
   onEditMessage?: (messageId: string, newContent: string) => void;
@@ -429,7 +414,6 @@ interface ChatMessageContentProps {
 
 export function ChatMessageContent({
   message,
-  allowImages = true,
   isStreaming = false,
   isLastMessage = true,
   onEditMessage,
@@ -445,7 +429,6 @@ export function ChatMessageContent({
   return (
     <AssistantBubble
       message={message}
-      allowImages={allowImages}
       isLastMessage={isLastMessage}
       isStreaming={isStreaming}
       isTypingIndicator={isLastMessage && isStreaming && message.content === ""}

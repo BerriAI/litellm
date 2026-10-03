@@ -40,12 +40,7 @@ export function LiteAdminConversation({ entries, thinking, open, reviewRef, onAn
             {entries.map((entry) => (
               <MessageScroller.Item key={entry.id} messageId={entry.id}>
                 {entry.kind === "message" && (
-                  <ChatMessageContent
-                    message={entry.message}
-                    allowImages={false}
-                    isLastMessage={false}
-                    isStreaming={false}
-                  />
+                  <ChatMessageContent message={entry.message} isLastMessage={false} isStreaming={false} />
                 )}
                 {entry.kind === "action" && (
                   <ActionCard entry={entry} open={open} reviewRef={reviewRef} onAnswer={onAnswer} />

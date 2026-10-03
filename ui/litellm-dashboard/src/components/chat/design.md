@@ -212,7 +212,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 Use the official registry `Bubble` and `BubbleContent` primitives. User messages use the muted variant and end alignment. Assistant messages use the ghost variant at full available width. Keep paragraph spacing and list markers in the shared Markdown renderer. GFM tables use the shared Table primitives, which provide horizontal scrolling. Forward Markdown cell styles so column alignment survives rendering
 
-LiteAdmin passes `allowImages={false}` to show image descriptions without automatically requesting external image URLs from administrative answers. Other chat consumers retain image rendering by default
+Every markdown image in model output renders through the shared `MarkdownImage` (`src/components/chat_ui/MarkdownImage.tsx`) as a click-to-load placeholder naming the image host, so the browser never requests a URL the model chose until the admin clicks it. A remount at stream end (the usage panel's in-flight block, a reasoning block's key flip) returns a loaded image to its placeholder, which is the safe direction, so it stays
 
 Scrolling belongs to the conversation container. LiteAdmin uses official MessageScroller items with stable chronological IDs; a pending action and its result stay in the same row. Its inline action review is an explicit product exception to the AlertDialog confirmation pattern below
 
