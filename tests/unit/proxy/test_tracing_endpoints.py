@@ -19,12 +19,11 @@ from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge import loader
-from litellm.rust_bridge.trace_queries import SPAN_DETAIL, SpanDetailParams
-from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
-from litellm.rust_bridge.traces import AllQueryScope, ClickHouseStorage, TraceStorageConfig
-from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
-from litellm.tracing.store import TraceStore
-from litellm.tracing.types import TraceScope
+from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
+from litellm.rust_bridge.trace.queries import TraceSQLResponse
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
+from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 
 SQL_ENVELOPE: Final = {
     "meta": [{"name": "value", "type": "UInt64"}],
@@ -279,24 +278,6 @@ def test_get_span_404_and_200(client, receiver):
     receiver.get_span.assert_awaited_with("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "")
 
 
-def test_get_span_serves_ui_content_from_stored_payloads(client):
-    storage = MagicMock()
-    stored_output = '{"role": "ai", "content": "", "tool_calls": [{"name": "lookup", "args": {"id": 7}}]}'
-    storage.query = AsyncMock(
-        return_value=[{"span_id": "s1", "input": '{"city": "Paris"}', "output": stored_output, "attributes": {}}]
-    )
-    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
-    body = client.get("/v1/traces/t1/spans/s1?trace_ref=run-one").json()
-    assert body["output"] == stored_output
-    assert body["input_ui"] == {"kind": "fields", "fields": [{"key": "city", "value": "Paris"}]}
-    assert body["output_ui"] == {
-        "kind": "messages",
-        "messages": [
-            {"role": "assistant", "content": "", "tool_calls": [{"name": "lookup", "arguments": '{"id": 7}'}]}
-        ],
-    }
-
-
 def test_trace_detail_passes_scoped_reference(client, receiver):
     receiver.get_trace.return_value = TRACE_RESPONSE
     assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
@@ -304,7 +285,7 @@ def test_trace_detail_passes_scoped_reference(client, receiver):
 
 
 def test_invalid_export_and_cursor_are_client_errors(client, receiver):
-    from litellm.tracing.decode import InvalidOTLPPayloadError
+    from litellm.tracing.otlp_http import InvalidOTLPPayloadError
 
     receiver.ingest.side_effect = InvalidOTLPPayloadError("invalid OTLP trace payload")
     assert client.post("/v1/traces", content=b"broken").status_code == 400
@@ -324,7 +305,7 @@ def test_invalid_export_and_cursor_are_client_errors(client, receiver):
 def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKeyAuth) -> None:
     storage: Final = MagicMock(spec=ClickHouseStorage)
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
-    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
     for path in (
         "/v1/traces",
@@ -337,7 +318,8 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
         assert response.status_code == 403, response.text
     query: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert query.status_code == 403, query.text
-    storage.query.assert_not_called()
+    for read in (storage.list_traces, storage.get_trace, storage.get_span, storage.get_span_error):
+        read.assert_not_called()
     storage.query_sql.assert_not_called()
     storage.query_help.assert_not_called()
 
@@ -384,82 +366,32 @@ def test_disabled_receiver_precedes_read_scope_rejection(client: TestClient) -> 
     }
 
 
-@pytest.mark.requires_rust_extension
-def test_injected_receiver_persists_authenticated_tenant(client: TestClient) -> None:
+def test_injected_receiver_ingests_with_the_authenticated_tenant(client: TestClient) -> None:
     storage: Final = MagicMock(spec=ClickHouseStorage)
-    storage.insert_rows = AsyncMock()
-    tracing: Final = TraceReceiver(TraceStore(storage))
-    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
-    response: Final = client.post(
-        "/v1/traces",
-        json={
-            "resourceSpans": [
-                {
-                    "resource": {
-                        "attributes": [
-                            {"key": "litellm.team_id", "value": {"stringValue": "spoofed-team"}},
-                            {"key": "litellm.api_key_hash", "value": {"stringValue": "spoofed-key"}},
-                            {"key": "litellm.org_id", "value": {"stringValue": "spoofed-org"}},
-                        ]
-                    },
-                    "scopeSpans": [
-                        {
-                            "spans": [
-                                {
-                                    "traceId": "01" * 16,
-                                    "spanId": "02" * 8,
-                                    "name": "dependency-injection",
-                                    "startTimeUnixNano": "1000000000",
-                                    "endTimeUnixNano": "1000000001",
-                                }
-                            ]
-                        }
-                    ],
-                }
-            ],
-        },
-    )
+    storage.ingest = AsyncMock(return_value=1)
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
+    response: Final = client.post("/v1/traces", content=b'{"resourceSpans": []}', headers={"content-type": "application/json"})
     assert response.status_code == 200, response.text
     assert response.json() == {}
-    storage.insert_rows.assert_awaited_once()
-    table, rows = storage.insert_rows.await_args.args
-    assert table == "otel_traces"
-    assert len(rows) == 1
-    assert rows[0]["TeamId"] == TEAM_KEY.team_id
-    assert rows[0]["ApiKeyHash"] == TEAM_KEY.token
-    assert rows[0]["ResourceAttributes"] == {
-        "litellm.team_id": TEAM_KEY.team_id,
-        "litellm.api_key_hash": TEAM_KEY.token,
-        "litellm.org_id": TEAM_KEY.org_id,
-        "litellm.user_id": TEAM_KEY.user_id or "",
-    }
+    storage.ingest.assert_awaited_once_with(
+        b'{"resourceSpans": []}',
+        "application/json",
+        Tenant(
+            team_id=TEAM_KEY.team_id or "",
+            api_key_hash=TEAM_KEY.token or "",
+            org_id=TEAM_KEY.org_id or "",
+            user_id=TEAM_KEY.user_id or "",
+        ),
+    )
 
 
 def test_lifespan_receivers_are_app_local() -> None:
     first_storage: Final = MagicMock(spec=ClickHouseStorage)
-    first_storage.query = AsyncMock(
-        return_value=[
-            {
-                "span_id": "first-span",
-                "input": "first-input",
-                "output": "",
-                "attributes": {},
-            }
-        ]
-    )
+    first_storage.get_span = AsyncMock(return_value={**SPAN_DETAIL_RESPONSE, "span_id": "first-span"})
     second_storage: Final = MagicMock(spec=ClickHouseStorage)
-    second_storage.query = AsyncMock(
-        return_value=[
-            {
-                "span_id": "second-span",
-                "input": "second-input",
-                "output": "",
-                "attributes": {},
-            }
-        ]
-    )
-    first_receiver: Final = TraceReceiver(TraceStore(first_storage))
-    second_receiver: Final = TraceReceiver(TraceStore(second_storage))
+    second_storage.get_span = AsyncMock(return_value={**SPAN_DETAIL_RESPONSE, "span_id": "second-span"})
+    first_receiver: Final = TraceReceiver(first_storage)
+    second_receiver: Final = TraceReceiver(second_storage)
     first_storage.ensure_schema = AsyncMock()
     second_storage.ensure_schema = AsyncMock()
 
@@ -492,45 +424,12 @@ def test_lifespan_receivers_are_app_local() -> None:
     second_storage.ensure_schema.assert_awaited_once()
 
     assert first_response.status_code == second_response.status_code == 200
-    assert first_response.json() == {
-        "span_id": "first-span",
-        "input": "first-input",
-        "output": "",
-        "attributes": {},
-        "input_ui": {"kind": "text", "text": "first-input"},
-        "output_ui": {"kind": "text", "text": ""},
-    }
-    assert second_response.json() == {
-        "span_id": "second-span",
-        "input": "second-input",
-        "output": "",
-        "attributes": {},
-        "input_ui": {"kind": "text", "text": "second-input"},
-        "output_ui": {"kind": "text", "text": ""},
-    }
-    assert first_storage.query.await_count == 2
-    first_storage.query.assert_awaited_with(
-        SPAN_DETAIL,
-        SpanDetailParams(
-            all_teams=0,
-            user_id=TEAM_KEY.user_id,
-            team_ids=(),
-            trace_id="t1",
-            span_id="first-span",
-            trace_ref="first-run",
-        ),
-    )
-    second_storage.query.assert_awaited_once_with(
-        SPAN_DETAIL,
-        SpanDetailParams(
-            all_teams=0,
-            user_id=TEAM_KEY.user_id,
-            team_ids=(),
-            trace_id="t1",
-            span_id="second-span",
-            trace_ref="second-run",
-        ),
-    )
+    assert first_response.json()["span_id"] == "first-span"
+    assert second_response.json()["span_id"] == "second-span"
+    scope: Final = TraceScope(all_teams=0, user_id=TEAM_KEY.user_id or "", team_ids=())
+    assert first_storage.get_span.await_count == 2
+    first_storage.get_span.assert_awaited_with("t1", "first-span", scope, "first-run")
+    second_storage.get_span.assert_awaited_once_with("t1", "second-span", scope, "second-run")
 
 
 @pytest.mark.parametrize("auth", [TEAM_KEY, UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)])
@@ -545,7 +444,7 @@ def test_query_validation_precedes_trace_access_checks(client: TestClient, auth:
 def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
     storage: Final = MagicMock(spec=ClickHouseStorage)
     storage.ensure_schema = AsyncMock(side_effect=RuntimeError("storage unavailable"))
-    tracing: Final = TraceReceiver(TraceStore(storage))
+    tracing: Final = TraceReceiver(storage)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
@@ -560,7 +459,7 @@ def test_unavailable_lifespan_receiver_returns_501(enabled: bool) -> None:
         response: Final = client.get("/v1/traces")
     assert response.status_code == 501
     assert storage.ensure_schema.await_count == int(enabled)
-    storage.query.assert_not_called()
+    storage.list_traces.assert_not_called()
 
 
 def test_lens_reads_from_the_lifespan_storage() -> None:
@@ -569,7 +468,7 @@ def test_lens_reads_from_the_lifespan_storage() -> None:
     storage: Final = MagicMock(spec=ClickHouseStorage)
     storage.ensure_schema = AsyncMock()
     storage.lens_sample = AsyncMock(return_value=[])
-    tracing: Final = TraceReceiver(TraceStore(storage))
+    tracing: Final = TraceReceiver(storage)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
@@ -634,21 +533,21 @@ def test_sql_and_help_use_authenticated_scope(
 ) -> None:
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
-    receiver.store.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
-    receiver.store.storage.query_help = AsyncMock(return_value=TraceQueryHelp.model_validate(QUERY_HELP))
+    receiver.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
+    receiver.storage.query_help = AsyncMock(return_value=TraceQueryHelp.model_validate(QUERY_HELP))
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert result.status_code == 200, result.text
     assert result.json() == SQL_ENVELOPE
-    receiver.store.storage.query_sql.assert_awaited_once_with(
+    receiver.storage.query_sql.assert_awaited_once_with(
         "SELECT * FROM otel_traces", expected_scope, "test-secret"
     )
     help_result: Final = client.get("/v1/traces/query/help")
     assert help_result.status_code == 200, help_result.text
     assert help_result.json() == QUERY_HELP
-    receiver.store.storage.query_help.assert_awaited_once_with(expected_scope, "test-secret")
+    receiver.storage.query_help.assert_awaited_once_with(expected_scope, "test-secret")
     forged: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1", "scope": {"kind": "all"}})
     assert forged.status_code == 422, forged.text
-    assert receiver.store.storage.query_sql.await_count == 1
+    assert receiver.storage.query_sql.await_count == 1
 
 
 @pytest.mark.parametrize("auth", (UserAPIKeyAuth(), UserAPIKeyAuth(team_id="a", project_id="p")))
@@ -660,8 +559,8 @@ def test_sql_rejects_missing_identity_without_querying(
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert result.status_code == 403, result.text
     assert client.get("/v1/traces/query/help").status_code == 403
-    receiver.store.storage.query_sql.assert_not_called()
-    receiver.store.storage.query_help.assert_not_called()
+    receiver.storage.query_sql.assert_not_called()
+    receiver.storage.query_help.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -671,20 +570,20 @@ def test_sql_reports_rejected_queries_and_unavailable_readers(
     client: TestClient, receiver: MagicMock, error: Exception, status: int
 ) -> None:
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
-    receiver.store.storage.query_sql = AsyncMock(side_effect=error)
+    receiver.storage.query_sql = AsyncMock(side_effect=error)
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
     assert result.status_code == status, result.text
-    receiver.store.storage.query_sql.assert_awaited_once_with(
+    receiver.storage.query_sql.assert_awaited_once_with(
         "SELECT 1", {"kind": "owned", "user_id": "user", "team_ids": ()}, "test-secret"
     )
 
 
 def test_query_help_does_not_fall_back_when_reader_provisioning_fails(client: TestClient, receiver: MagicMock) -> None:
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
-    receiver.store.storage.query_help = AsyncMock(side_effect=RuntimeError("reader provisioning failed"))
+    receiver.storage.query_help = AsyncMock(side_effect=RuntimeError("reader provisioning failed"))
     result: Final = client.get("/v1/traces/query/help")
     assert result.status_code == 503, result.text
-    receiver.store.storage.query_help.assert_awaited_once_with(
+    receiver.storage.query_help.assert_awaited_once_with(
         {"kind": "owned", "user_id": "user", "team_ids": ()}, "test-secret"
     )
 
@@ -696,15 +595,15 @@ def test_queries_require_a_proxy_secret(
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", secret)
-    receiver.store.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
+    receiver.storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
     if secret is None:
         assert result.status_code == 503, result.text
         assert "master key" in result.json()["detail"]
-        receiver.store.storage.query_sql.assert_not_awaited()
+        receiver.storage.query_sql.assert_not_awaited()
         return
     assert result.status_code == 200, result.text
-    receiver.store.storage.query_sql.assert_awaited_once_with(
+    receiver.storage.query_sql.assert_awaited_once_with(
         "SELECT 1", {"kind": "owned", "user_id": "user", "team_ids": ()}, secret
     )
 
@@ -731,27 +630,19 @@ def test_shared_trace_permissions_reach_read_and_sql_boundaries(
 
     team_lookup: Final = AsyncMock(side_effect=lookup)
     storage: Final = MagicMock(spec=ClickHouseStorage)
-    storage.query = AsyncMock(return_value=[{"span_id": "s1", "input": "", "output": "", "attributes": {}}])
+    storage.get_span = AsyncMock(return_value=SPAN_DETAIL_RESPONSE)
     storage.query_sql = AsyncMock(return_value=TraceSQLResponse.model_validate(SQL_ENVELOPE))
     storage.query_help = AsyncMock(return_value=TraceQueryHelp.model_validate(QUERY_HELP))
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
     client.app.dependency_overrides[get_log_team_lookup] = lambda: team_lookup
-    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
 
     response: Final = client.get("/v1/traces/t1/spans/s1?trace_ref=run-one")
     assert response.status_code == 200, response.text
     assert response.json()["span_id"] == "s1"
-    storage.query.assert_awaited_once_with(
-        SPAN_DETAIL,
-        SpanDetailParams(
-            all_teams=expected[0],
-            user_id=expected[1],
-            team_ids=expected[2],
-            trace_id="t1",
-            span_id="s1",
-            trace_ref="run-one",
-        ),
+    storage.get_span.assert_awaited_once_with(
+        "t1", "s1", TraceScope(all_teams=expected[0], user_id=expected[1], team_ids=expected[2]), "run-one"
     )
     sql_response: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert sql_response.status_code == 200, sql_response.text
@@ -796,7 +687,7 @@ def test_trace_storage_permissions_map_owned_rows(
 
 
 class _NativeConfig:
-    def __init__(self, database: str, url: str, retention_days: int) -> None:
+    def __init__(self, database: str, url: str, retention_days: int, max_attribute_value_bytes: int) -> None:
         pass
 
 
@@ -813,9 +704,8 @@ class _NativeReturningHelp(ModuleType):
 
         self.NativeTraceConfig: Final = _NativeConfig
         self.NativeTraceStorage: Final = Storage
-        self.trace_decode_otlp: Final = list
         self.trace_encode_error: Final = bytes
-        self.trace_normalized_field_definitions: Final = list
+        self.trace_span_rows: Final = list
 
 
 async def test_storage_validates_the_native_query_help_value(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -25672,10 +25672,7 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
-        /**
-         * AgentNode
-         * @description One distinct agent in a trace. 200 invocations of `researcher` = one node.
-         */
+        /** AgentNode */
         AgentNode: {
             /** Duration Ms */
             duration_ms: number;
@@ -41334,6 +41331,13 @@ export interface components {
              */
             status: "estimated" | "needs_review" | "error";
         };
+        /** ROIEstimatorModel */
+        ROIEstimatorModel: {
+            /** Model Name */
+            model_name: string;
+            /** Provider Models */
+            provider_models: string[];
+        };
         /** ROIIdentityMapResponse */
         ROIIdentityMapResponse: {
             /** Identity Map */
@@ -41486,6 +41490,11 @@ export interface components {
             default_prompt: string;
             /** Estimator Model */
             estimator_model: string;
+            /**
+             * Estimator Models
+             * @default []
+             */
+            estimator_models: components["schemas"]["ROIEstimatorModel"][];
             /** Estimator Prompt */
             estimator_prompt: string;
             /** Github Api Url */
@@ -45169,7 +45178,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "agent" | "llm" | "tool" | "chain" | "framework";
+            type: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
         };
         /** SpanDetail */
         SpanDetail: {
@@ -47352,7 +47361,7 @@ export interface components {
             /** Content */
             content: string;
             /** Name */
-            name?: string;
+            name?: string | null;
             /**
              * Role
              * @enum {string}

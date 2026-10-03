@@ -42,7 +42,8 @@ struct ListTracesRowEncoding {
     pub name: String,
     pub service: String,
     pub input_preview: String,
-    pub status: String,
+    #[serde(serialize_with = "litellm_traces::wire::serialize_status")]
+    pub status: litellm_traces::SpanStatus,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ms: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -79,18 +80,30 @@ pub use contracts::TraceSpansParams;
 #[derive(Deserialize, Serialize)]
 #[serde(remote = "contracts::TraceSpansRow")]
 struct TraceSpansRowEncoding {
+    #[serde(default)]
+    pub trace_id: String,
     pub span_id: String,
     pub parent_span_id: String,
     pub name: String,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: litellm_traces::ObservationType,
+    #[serde(
+        default,
+        deserialize_with = "super::number::boolean",
+        serialize_with = "litellm_traces::wire::serialize_flag"
+    )]
+    pub wrapper_candidate: bool,
     pub agent: String,
     #[serde(default)]
     pub framework: String,
-    pub status: String,
+    #[serde(serialize_with = "litellm_traces::wire::serialize_status")]
+    pub status: litellm_traces::SpanStatus,
     pub status_message: String,
-    #[serde(deserialize_with = "super::number::deserialize")]
-    pub error_truncated: u8,
+    #[serde(
+        deserialize_with = "super::number::boolean",
+        serialize_with = "litellm_traces::wire::serialize_flag"
+    )]
+    pub error_truncated: bool,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ns: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -103,6 +116,16 @@ struct TraceSpansRowEncoding {
     #[serde(deserialize_with = "super::number::deserialize")]
     pub output_tokens: u32,
     pub litellm_request_id: String,
+    #[serde(default)]
+    pub call_keys: Vec<litellm_traces::CallKey>,
+    #[serde(
+        default,
+        deserialize_with = "litellm_traces::wire::evidence",
+        serialize_with = "litellm_traces::wire::serialize_evidence"
+    )]
+    pub call_evidence: Option<litellm_traces::CallEvidenceKind>,
+    #[serde(default)]
+    pub tool_call_id: String,
     pub team_id: String,
     pub api_key_hash: String,
     pub user_id: String,
@@ -158,6 +181,8 @@ struct SpendByResponseIdsParamsEncoding {
     #[serde(flatten)]
     pub access: contracts::ReadAccessParams,
     pub response_ids: Vec<String>,
+    pub request_ids: Vec<String>,
+    pub trace_ids: Vec<String>,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ms: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -180,11 +205,14 @@ impl From<contracts::SpendByResponseIdsParams> for SpendByResponseIdsParams {
 struct SpendByResponseIdsRowEncoding {
     pub request_id: String,
     pub response_id: String,
+    pub upstream_response_id: String,
+    pub trace_id: String,
+    pub span_id: String,
     pub team_id: String,
     pub api_key: String,
     pub user: String,
-    #[serde(deserialize_with = "super::number::deserialize")]
-    pub spend: f64,
+    #[serde(deserialize_with = "super::number::optional_finite")]
+    pub spend: Option<f64>,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ms: i64,
 }
@@ -201,6 +229,38 @@ impl Query for ListTraces {
     type Row = ListTracesRow;
 
     const SQL: &'static str = include_str!("../../query/list_traces.sql");
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(remote = "contracts::TracePageSpansParams")]
+struct TracePageSpansParamsEncoding {
+    #[serde(flatten)]
+    pub access: contracts::ReadAccessParams,
+    pub trace_refs: Vec<String>,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub start_ms: i64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub end_ms: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TracePageSpansParams(
+    #[serde(with = "TracePageSpansParamsEncoding")] pub contracts::TracePageSpansParams,
+);
+
+impl From<contracts::TracePageSpansParams> for TracePageSpansParams {
+    fn from(value: contracts::TracePageSpansParams) -> Self {
+        Self(value)
+    }
+}
+
+pub struct TracePageSpans;
+
+impl Query for TracePageSpans {
+    type Params = TracePageSpansParams;
+    type Row = TraceSpansRow;
+
+    const SQL: &'static str = include_str!("../../query/trace_page_spans.sql");
 }
 
 pub struct TraceSpans;
@@ -279,11 +339,11 @@ mod tests {
     #[case::quoted(true)]
     fn rows_decode_into_neutral_contracts(#[case] quoted: bool) {
         round_trip::<ListTracesRow>(
-            json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "ok", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["claude-agent-sdk"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
+            json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "STATUS_CODE_OK", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["claude-agent-sdk"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0, "request_ids": ["request"]}),
             quoted,
         );
         round_trip::<TraceSpansRow>(
-            json!({"span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "agent": "agent", "framework": "claude-agent-sdk", "status": "error", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
+            json!({"trace_id": "trace", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
             quoted,
         );
         round_trip::<SpanDetailRow>(
@@ -295,7 +355,7 @@ mod tests {
             quoted,
         );
         round_trip::<SpendByResponseIdsRow>(
-            json!({"request_id": "request", "response_id": "response", "team_id": "team", "api_key": "key", "user": "user", "spend": 0.125, "start_ms": -1}),
+            json!({"request_id": "request", "response_id": "response", "upstream_response_id": "upstream", "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key", "user": "user", "spend": 0.125, "start_ms": -1}),
             quoted,
         );
     }
@@ -313,8 +373,36 @@ mod tests {
             quoted,
         );
         round_trip::<SpendByResponseIdsParams>(
-            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "response_ids": ["response"], "start_ms": -1, "end_ms": 10}),
+            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "response_ids": ["response"], "request_ids": ["request"], "trace_ids": ["trace"], "start_ms": -1, "end_ms": 10}),
             quoted,
         );
+    }
+    #[rstest]
+    #[case::unknown(json!(null), None)]
+    #[case::free(json!(0), Some(0.0))]
+    #[case::paid(json!("0.125"), Some(0.125))]
+    fn spend_rows_preserve_unknown_and_known_cost(
+        #[case] cost: serde_json::Value,
+        #[case] expected: Option<f64>,
+    ) {
+        let row: SpendByResponseIdsRow = serde_json::from_value(json!({
+            "request_id": "request", "response_id": "response", "upstream_response_id": "",
+            "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key",
+            "user": "user", "spend": cost, "start_ms": 0
+        }))
+        .unwrap();
+        assert_eq!(row.0.spend, expected);
+    }
+    #[rstest]
+    #[case::nan(json!("NaN"))]
+    #[case::infinity(json!("1e999"))]
+    #[case::boolean(json!(true))]
+    fn spend_rows_reject_invalid_cost(#[case] cost: serde_json::Value) {
+        let row = serde_json::from_value::<SpendByResponseIdsRow>(json!({
+            "request_id": "request", "response_id": "response", "upstream_response_id": "",
+            "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key",
+            "user": "user", "spend": cost, "start_ms": 0
+        }));
+        assert!(row.is_err());
     }
 }

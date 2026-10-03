@@ -17,6 +17,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
+    _estimator_choices_from_deployments,
     _estimator_models_from_deployments,
     _gateway_transport,
     _next_update,
@@ -411,3 +412,66 @@ def test_old_source_report_is_not_returned_when_matching_new_source_identity() -
     assert matched.status_code == 200
     assert matched.json()["report"] is None
     assert matched.json()["identity_map"] == {"dev.name": "dev@example.test"}
+
+
+def test_estimator_choices_show_underlying_models_and_exclude_non_chat_routes() -> None:
+    deployments: Final = (
+        {
+            "model_name": "estimator",
+            "litellm_params": {"model": "deployment-name"},
+            "model_info": {"base_model": "gpt-6-luna", "mode": "chat"},
+        },
+        {
+            "model_name": "estimator",
+            "litellm_params": {"model": "second-deployment"},
+            "model_info": {"base_model": "gpt-6-luna", "mode": "chat"},
+        },
+        {
+            "model_name": "embeddings",
+            "litellm_params": {"model": "custom-embedding"},
+            "model_info": {"mode": "embedding"},
+        },
+        {
+            "model_name": "image",
+            "litellm_params": {"model": "custom-image"},
+            "model_info": {"mode": "image_generation"},
+        },
+        {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+        {"model_name": "missing", "litellm_params": {}},
+        {"model_name": "custom-chat", "litellm_params": {"model": "openai/private-model"}},
+    )
+    choices: Final = _estimator_choices_from_deployments(deployments)
+    assert tuple((choice.model_name, choice.provider_models) for choice in choices) == (
+        ("custom-chat", ("openai/private-model",)),
+        ("estimator", ("gpt-6-luna",)),
+    )
+
+
+def test_estimator_picker_keeps_callable_aliases_and_routing_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.router import Router
+
+    configured_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "concrete",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "test"},
+            },
+            {
+                "model_name": "team-only",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "test"},
+                "model_info": {"team_id": "other-team", "team_public_model_name": "private-estimator"},
+            },
+        ],
+        model_group_alias={"friendly": "concrete"},
+        routing_groups=[{"group_name": "balanced", "models": ["concrete"], "routing_strategy": "simple-shuffle"}],
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", configured_router)
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, _ConfigRepository())
+    for name in ("friendly", "balanced"):
+        response: Final = client.put("/roi-calculator/settings", json={"repos": ["org/repo"], "estimator_model": name})
+        assert response.status_code == 200, response.text
+        settings: Final = response.json()
+        assert settings["ready"] is True
+        assert set(settings["available_models"]) == {"concrete", "friendly", "balanced"}
+        assert {"model_name": name, "provider_models": ["openai/gpt-6-luna"]} in settings["estimator_models"]
