@@ -29,7 +29,7 @@ from integration.cost_calculation.cost_tracking_case import (
     StoredResponse,
     TextResponse,
 )
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -64,6 +64,19 @@ class Observation:
     path: str
     authorization: str
     body: dict[str, JsonValue]
+    method: str = "POST"
+    api_key: str = ""
+
+
+class InteractionState(BaseModel):
+    """What the scripted Interactions API answers for one interaction id until a DELETE drops it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    usage: dict[str, JsonValue] | None = None
+    get_status: int = 200
+    delay_seconds: float = 0
 
 
 class _ScenarioRegistration(BaseModel):
@@ -137,6 +150,7 @@ class Provider:
     observations: SimpleQueue[Observation] = field(default_factory=SimpleQueue)
     scripts: dict[str, deque[int]] = field(default_factory=dict)
     scenario_store: ScenarioStore = field(default_factory=ScenarioStore)
+    interactions: dict[str, InteractionState] = field(default_factory=dict)
 
     async def chat(self, request: Request) -> Response:
         body: Final = JSON_OBJECT.validate_json(await request.body())
@@ -218,7 +232,14 @@ class Provider:
         return JSONResponse(
             {
                 "requests": [
-                    {"path": value.path, "authorization": value.authorization, "body": value.body} for value in values
+                    {
+                        "path": value.path,
+                        "authorization": value.authorization,
+                        "body": value.body,
+                        "method": value.method,
+                        "api_key": value.api_key,
+                    }
+                    for value in values
                 ]
             }
         )
@@ -264,7 +285,14 @@ class Provider:
             if raw_body:
                 body: Final = JSON_OBJECT.validate_json(raw_body)
                 if isinstance(body, dict):
-                    self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
+                    self.observations.put(
+                        Observation(
+                            request.url.path,
+                            request.headers.get("authorization", ""),
+                            body,
+                            api_key=request.headers.get("x-goog-api-key", ""),
+                        )
+                    )
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
             route: Final = next(
@@ -279,6 +307,58 @@ class Provider:
                 return JSONResponse({"error": "Unknown scripted route"}, status_code=404)
             return self._response(route, scenario_id)
         return self._response(response, scenario_id)
+
+    async def interaction_state(self, request: Request) -> Response:
+        interaction_id: Final = cast(str, request.path_params["interaction_id"])
+        if request.method == "DELETE":
+            self.interactions.pop(interaction_id, None)
+            return JSONResponse({"interaction_id": interaction_id, "registered": False})
+        try:
+            state: Final = InteractionState.model_validate_json(await request.body())
+        except ValidationError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        self.interactions[interaction_id] = state
+        return JSONResponse({"interaction_id": interaction_id, "registered": True})
+
+    def _observe_interaction(self, request: Request) -> None:
+        self.observations.put(
+            Observation(
+                request.url.path,
+                request.headers.get("authorization", ""),
+                {},
+                method=request.method,
+                api_key=request.headers.get("x-goog-api-key", ""),
+            )
+        )
+
+    async def interaction(self, request: Request) -> Response:
+        self._observe_interaction(request)
+        interaction_id: Final = cast(str, request.path_params["interaction_id"])
+        state: Final = self.interactions.get(interaction_id)
+        if state is None:
+            return JSONResponse(_interaction_not_found(interaction_id), status_code=404)
+        if state.delay_seconds:
+            await asyncio.sleep(state.delay_seconds)
+        if request.method == "DELETE":
+            if self.interactions.pop(interaction_id, None) is None:
+                return JSONResponse(_interaction_not_found(interaction_id), status_code=404)
+            return JSONResponse({})
+        if state.get_status != 200:
+            return JSONResponse(
+                {"error": {"code": state.get_status, "message": "Scripted interaction fetch failure"}},
+                status_code=state.get_status,
+            )
+        return JSONResponse(_interaction_body(interaction_id, state))
+
+    async def cancel_interaction(self, request: Request) -> Response:
+        self._observe_interaction(request)
+        interaction_id: Final = cast(str, request.path_params["interaction_id"])
+        state: Final = self.interactions.get(interaction_id)
+        if state is None:
+            return JSONResponse(_interaction_not_found(interaction_id), status_code=404)
+        cancelled: Final = InteractionState(status="cancelled", usage=state.usage, get_status=state.get_status)
+        self.interactions[interaction_id] = cancelled
+        return JSONResponse(_interaction_body(interaction_id, cancelled))
 
     async def realtime(self, websocket: WebSocket) -> None:
         scenario_id: Final = websocket.headers.get("authorization", "").removeprefix("Bearer ")
@@ -392,6 +472,19 @@ class Provider:
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
+                Route("/__interactions/{interaction_id}", self.interaction_state, methods=["PUT", "DELETE"]),
+                Route("/v1beta/interactions/{interaction_id}:cancel", self.cancel_interaction, methods=["POST"]),
+                Route("/v1beta/interactions/{interaction_id}", self.interaction, methods=["GET", "DELETE"]),
+                Route(
+                    "/{prefix:path}/v1beta/interactions/{interaction_id}:cancel",
+                    self.cancel_interaction,
+                    methods=["POST"],
+                ),
+                Route(
+                    "/{prefix:path}/v1beta/interactions/{interaction_id}",
+                    self.interaction,
+                    methods=["GET", "DELETE"],
+                ),
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),
                 WebSocketRoute("/v1/realtime", self.realtime),
@@ -400,6 +493,21 @@ class Provider:
 
 
 CONTROL_URL: Final = os.environ.get("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8190").rstrip("/")
+
+
+def _interaction_not_found(interaction_id: str) -> dict[str, JsonValue]:
+    return {"error": {"code": 404, "message": f"Interaction {interaction_id} not found", "status": "NOT_FOUND"}}
+
+
+def _interaction_body(interaction_id: str, state: InteractionState) -> dict[str, JsonValue]:
+    return {
+        "id": interaction_id,
+        "object": "interaction",
+        "model": "gemini-3.8-flash",
+        "status": state.status,
+        "steps": [],
+        "usage": state.usage,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,9 +519,9 @@ class ScenarioHandle:
         return f"{self.control_url}/{self.scenario_id}"
 
 
-def register_scenario(scenario_id: str, response: StoredResponse) -> ScenarioHandle:
+def register_scenario(scenario_id: str, response: StoredResponse, *, control_url: str = CONTROL_URL) -> ScenarioHandle:
     http_response: Final = httpx.post(
-        f"{CONTROL_URL}/__scenarios",
+        f"{control_url}/__scenarios",
         json={"scenario_id": scenario_id, "response": response.model_dump(mode="json")},
         trust_env=False,
         timeout=15,
@@ -421,16 +529,32 @@ def register_scenario(scenario_id: str, response: StoredResponse) -> ScenarioHan
     http_response.raise_for_status()
     return ScenarioHandle(
         scenario_id=scenario_id,
-        control_url=CONTROL_URL,
+        control_url=control_url,
     )
 
 
 def delete_scenario(handle: ScenarioHandle) -> None:
     response: Final = httpx.delete(
-        f"{CONTROL_URL}/__scenarios/{handle.scenario_id}",
+        f"{handle.control_url}/__scenarios/{handle.scenario_id}",
         trust_env=False,
         timeout=15,
     )
+    response.raise_for_status()
+
+
+def set_interaction_state(control_url: str, interaction_id: str, state: InteractionState) -> None:
+    response: Final = httpx.put(
+        f"{control_url}/__interactions/{interaction_id}",
+        content=state.model_dump_json(),
+        headers={"content-type": "application/json"},
+        trust_env=False,
+        timeout=15,
+    )
+    response.raise_for_status()
+
+
+def clear_interaction_state(control_url: str, interaction_id: str) -> None:
+    response: Final = httpx.delete(f"{control_url}/__interactions/{interaction_id}", trust_env=False, timeout=15)
     response.raise_for_status()
 
 

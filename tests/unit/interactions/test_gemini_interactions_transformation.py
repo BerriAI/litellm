@@ -10,12 +10,13 @@ Covers:
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-
 
 from litellm.interactions.litellm_responses_transformation.streaming_iterator import (
     LiteLLMResponsesInteractionsStreamingIterator,
 )
+from litellm.llms.gemini.common_utils import GeminiError
 from litellm.llms.gemini.interactions.transformation import (
     GoogleAIStudioInteractionsConfig,
 )
@@ -462,6 +463,32 @@ class TestInteractionOperationUrls:
                     litellm_params=GenericLiteLLMParams(api_key=None),
                     headers={},
                 )
+
+
+class TestGetInteractionResponse:
+    @pytest.mark.parametrize("status_code", [404, 500])
+    def test_non_2xx_raises_even_when_the_error_body_is_json(
+        self, config: GoogleAIStudioInteractionsConfig, status_code: int
+    ) -> None:
+        raw_response = httpx.Response(
+            status_code,
+            json={"error": {"code": status_code, "message": "boom", "status": "INTERNAL"}},
+            request=httpx.Request("GET", "https://generativelanguage.googleapis.com/v1beta/interactions/x"),
+        )
+        with pytest.raises(GeminiError) as raised:
+            config.transform_get_interaction_response(raw_response=raw_response, logging_obj=MagicMock())
+        assert raised.value.status_code == status_code
+        assert "boom" in str(raised.value)
+
+    def test_2xx_parses_the_interaction(self, config: GoogleAIStudioInteractionsConfig) -> None:
+        raw_response = httpx.Response(
+            200,
+            json={"id": "interaction-1", "object": "interaction", "status": "completed", "steps": []},
+            request=httpx.Request("GET", "https://generativelanguage.googleapis.com/v1beta/interactions/x"),
+        )
+        response = config.transform_get_interaction_response(raw_response=raw_response, logging_obj=MagicMock())
+        assert response.id == "interaction-1"
+        assert response.status == "completed"
 
 
 class TestTransformRequestSchemaCoalescing:

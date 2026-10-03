@@ -267,5 +267,11 @@ class AdaptiveRouterSessionRepository(PrismaTableRepository["prisma_models.LiteL
     table_name = "litellm_adaptiveroutersession"
 
 
+class BackgroundInteractionSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundInteractionSettlement"]
+):
+    table_name = "litellm_backgroundinteractionsettlement"
+
+
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
     table_name = "litellm_retiredagent"
