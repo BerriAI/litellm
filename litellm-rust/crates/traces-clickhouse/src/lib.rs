@@ -17,6 +17,7 @@ pub mod query;
 mod query_access;
 mod reads;
 mod schema;
+mod span_batches;
 mod span_row;
 mod sql;
 mod table;
@@ -30,7 +31,7 @@ pub use litellm_storage_clickhouse::{Connection, Parameter};
 pub use litellm_traces::{QueryScope, ReadQuery};
 pub use query::{QueryHelp, execute_read, query_help, query_sql};
 pub use query_access::QueryReaders;
-pub use reads::{get_span, get_span_error, get_trace, list_traces};
+pub use reads::{get_span, get_span_error, get_trace, get_trace_page, list_traces};
 pub use schema::{
     NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, ensure_schema, schema_statements,
 };
