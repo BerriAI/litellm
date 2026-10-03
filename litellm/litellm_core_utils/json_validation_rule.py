@@ -104,7 +104,12 @@ def validate_schema(schema: dict, response: str):
     - schema - dict: JSON schema
     - response - str: Received json response as string.
     """
-    from jsonschema import ValidationError, validate
+    try:
+        from jsonschema import ValidationError, validate
+    except ModuleNotFoundError as error:
+        if error.name != "jsonschema":
+            raise
+        raise ImportError('Install response validation with pip install "litellm[validation]"') from error
 
     from litellm import JSONSchemaValidationError
 

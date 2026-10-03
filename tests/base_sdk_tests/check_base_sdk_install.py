@@ -12,10 +12,14 @@ import importlib.util
 import json
 import os
 import sys
+import subprocess
 import traceback
 import warnings
 from collections.abc import Callable
 from functools import partial
+from importlib.metadata import distribution
+from importlib.resources import files
+from pathlib import Path
 from typing import Final
 
 EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
@@ -24,6 +28,9 @@ TOKENIZER_MODULES: Final = ("tokenizers", "huggingface_hub", "hf_xet", "fsspec")
 
 
 def check_optional_dependencies(profile: str) -> str:
+    if profile == "core":
+        for module in ("click", "filelock", "importlib_metadata", "zipp", "jsonschema", "referencing", "rpds"):
+            _require(importlib.util.find_spec(module) is None, f"core still installs {module}")
     for modules, expected in (
         (AWS_MODULES, profile in ("aws", "aws,tokenizers", "sdk-extras", "proxy")),
         (TOKENIZER_MODULES, profile in ("tokenizers", "aws,tokenizers", "sdk-extras", "proxy")),
@@ -34,9 +41,31 @@ def check_optional_dependencies(profile: str) -> str:
     return f"optional dependencies match {profile}"
 
 
+def check_validation(profile: str) -> str:
+    import litellm
+    from litellm.litellm_core_utils.json_validation_rule import validate_schema
+
+    expected: Final = profile in ("validation", "sdk-extras", "proxy")
+    _require((importlib.util.find_spec("jsonschema") is not None) == expected, "unexpected validation dependencies")
+    if not expected:
+        try:
+            validate_schema({"type": "object"}, "{}")
+        except ImportError as error:
+            _require("litellm[validation]" in str(error), f"missing validation guidance: {error}")
+            return "requested validation requires its extra"
+        raise AssertionError("requested validation silently succeeded without its extra")
+    validate_schema({"type": "object"}, "{}")
+    for response in ("not json", "[]"):
+        try:
+            validate_schema({"type": "object"}, response)
+        except litellm.JSONSchemaValidationError:
+            continue
+        raise AssertionError(f"invalid response passed validation: {response}")
+    return "validation accepts valid responses and rejects invalid JSON or schema mismatches"
+
+
 def check_aws_signed_requests() -> str:
     from botocore.credentials import Credentials
-
     from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToSpeechConfig
     from litellm.llms.sagemaker.chat.handler import SagemakerChatHandler
     from litellm.llms.sagemaker.completion.handler import SagemakerLLM
@@ -383,17 +412,18 @@ def main() -> int:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument(
         "--profile",
-        choices=("core", "aws", "tokenizers", "aws,tokenizers", "sdk-extras", "proxy"),
+        choices=("core", "cli", "validation", "aws", "tokenizers", "aws,tokenizers", "sdk-extras", "proxy"),
         default="core",
     )
     profile: Final = parser.parse_args().profile
     checks: Final = (
         ("optional dependencies", partial(check_optional_dependencies, profile)),
+        ("validation", partial(check_validation, profile)),
         ("AWS feature guidance", check_aws_feature_guidance),
         *(
             check
             for check in CHECKS
-            if not (profile == "proxy" and check[0] == "environment is base-only")
+            if not (profile in ("cli", "proxy") and check[0] == "environment is base-only")
             and not (profile == "proxy" and check[0] == "optional MCP installation guidance")
         ),
         (

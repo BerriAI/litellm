@@ -8,6 +8,8 @@ Related issue: https://github.com/BerriAI/litellm/issues/XXXX
 """
 
 import json
+from collections.abc import Callable
+from typing import Final
 
 import pytest
 
@@ -134,3 +136,48 @@ class TestPerRequestJsonSchemaValidation:
         from litellm.types.utils import all_litellm_params
 
         assert "enable_json_schema_validation" in all_litellm_params
+
+
+@pytest.mark.parametrize("missing", ("jsonschema", "unrelated_dependency"))
+def test_validation_requires_extra_without_hiding_other_import_errors(
+    missing: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]
+) -> None:
+    from litellm.litellm_core_utils.json_validation_rule import validate_schema
+
+    failure: Final = ModuleNotFoundError("dependency unavailable", name=missing)
+    fail_optional_import("jsonschema", failure)
+    with pytest.raises(ImportError) as error:
+        validate_schema({"type": "object"}, "{}")
+    if missing == "jsonschema":
+        assert "litellm[validation]" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+@pytest.mark.parametrize("mode", ("global", "per_request", "enforce"))
+def test_requested_validation_explains_missing_extra(
+    mode: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]
+) -> None:
+    fail_optional_import("jsonschema", ModuleNotFoundError("dependency unavailable", name="jsonschema"))
+    litellm.enable_json_schema_validation = mode == "global"
+    response_format: Final = (
+        {
+            "type": "json_object",
+            "response_schema": STRICT_SCHEMA["json_schema"]["schema"],
+            "enforce_validation": True,
+        }
+        if mode == "enforce"
+        else STRICT_SCHEMA
+    )
+    with pytest.raises(ImportError, match=r"litellm\[validation\]"):
+        post_call_processing(
+            _make_response(VALID_CONTENT),
+            "test-model",
+            {
+                "response_format": response_format,
+                **({"enable_json_schema_validation": True} if mode == "per_request" else {}),
+            },
+            _mock_completion,
+            Rules(),
+        )
