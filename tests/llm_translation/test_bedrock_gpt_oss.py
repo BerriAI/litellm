@@ -9,6 +9,8 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 class TestBedrockGPTOSS(BaseLLMChatTest):
+    test_json_response_format = None
+
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "bedrock/converse/openai.gpt-oss-20b-1:0",

@@ -53,7 +53,8 @@ export default function AuditLogsPanel({
     return typeof entry?.value === "string" && entry.value.trim() ? entry.value.trim() : undefined;
   };
 
-  const canQueryAuditLogs = !!accessToken && !!token && !!userRole && !!userID && isActive && premiumUser;
+  const hasSession = [accessToken, token, userRole, userID].every(Boolean);
+  const canQueryAuditLogs = hasSession && isActive && premiumUser;
 
   const query = useQuery<AuditLogsResponse>({
     queryKey: ["audit_logs", pagination.pageIndex, pagination.pageSize, columnFilters, searchTerm],
@@ -99,7 +100,7 @@ export default function AuditLogsPanel({
 
   if (!premiumUser) {
     return (
-      <div style={{ textAlign: "center", marginTop: "20px" }}>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto text-center">
         <h1 style={{ display: "block", marginBottom: "10px" }}>✨ Enterprise Feature.</h1>
         <p style={{ display: "block", marginBottom: "10px" }}>
           This is a LiteLLM Enterprise feature, and requires a valid key to use.
@@ -127,10 +128,6 @@ export default function AuditLogsPanel({
 
   return (
     <>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Audit Logs</h1>
-      </div>
-
       <AuditLogsTable
         data={query.data?.audit_logs ?? []}
         rowCount={query.data?.total ?? 0}

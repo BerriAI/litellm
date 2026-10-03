@@ -22,8 +22,6 @@ export interface RequestOptions {
   body?: unknown;
   /** Sent verbatim (FormData, Blob, pre-stringified text); disables JSON handling. */
   rawBody?: BodyInit;
-  /** Response body handling. Defaults to JSON parsing; use this for downloads. */
-  responseType?: "json" | "blob" | "text";
   query?: QueryParams;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -113,6 +111,7 @@ export interface ApiClientConfig {
 export interface ApiClient {
   request<T = any>(method: HttpMethod, path: string, options?: RequestOptions): Promise<T>;
   get<T = any>(path: string, options?: RequestOptions): Promise<T>;
+  getBlob(path: string, options?: RequestOptions): Promise<Blob>;
   post<T = any>(path: string, options?: RequestOptions): Promise<T>;
   put<T = any>(path: string, options?: RequestOptions): Promise<T>;
   delete<T = any>(path: string, options?: RequestOptions): Promise<T>;
@@ -139,8 +138,8 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const { getBaseUrl, getAuthHeaderName, onError, fetchImpl } = config;
   const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
-  async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
-    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials, responseType } = options;
+  async function fetchChecked(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<Response> {
+    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials } = options;
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
@@ -179,19 +178,24 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       throw new ApiError(message, response.status, errorBody);
     }
 
-    if (responseType === "blob") {
-      return (await response.blob()) as T;
-    }
-    if (responseType === "text") {
-      return (await response.text()) as T;
-    }
+    return response;
+  }
+
+  async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
+    const response = await fetchChecked(method, path, options);
     const text = await response.text();
     return (text ? JSON.parse(text) : undefined) as T;
+  }
+
+  async function getBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+    const response = await fetchChecked("GET", path, options);
+    return response.blob();
   }
 
   return {
     request,
     get: (path, options) => request("GET", path, options),
+    getBlob,
     post: (path, options) => request("POST", path, options),
     put: (path, options) => request("PUT", path, options),
     delete: (path, options) => request("DELETE", path, options),

@@ -7,6 +7,7 @@ Module responsible for
 
 import asyncio
 import copy
+import dataclasses
 import json
 import os
 import random
@@ -70,6 +71,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendUpdateQueue,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -474,9 +476,7 @@ class DBSpendUpdateWriter:
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
         self.window_spend_update_queue = WindowSpendUpdateQueue()
-        self.interrupted_tag_commits: set[asyncio.Task[None]] = (
-            set()
-        )  # mutable-ok: same registry as DailySpendUpdateQueue.interrupted_commits
+        self.interrupted_tag_commits: set[asyncio.Task[None]] = set()
 
     async def update_database(
         # LiteLLM management object fields
@@ -551,16 +551,19 @@ class DBSpendUpdateWriter:
             ):
                 return False
 
+            # The auto-router router-day rollup is an aggregate like the daily spend tables, so it is
+            # written whether or not per-request spend logs are kept; per-session rows are not.
+            await self._enqueue_autorouter_turn_transaction(
+                payload=payload,
+                prisma_client=prisma_client,
+                spend_logs_kept=disable_spend_logs is False,
+            )
             if disable_spend_logs is False:
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
                     completion_response=completion_response,
                     prisma_client=prisma_client,
                     kwargs=kwargs,
-                )
-                await self._enqueue_autorouter_turn_transaction(
-                    payload=payload,
-                    prisma_client=prisma_client,
                 )
             else:
                 verbose_proxy_logger.debug(
@@ -636,14 +639,12 @@ class DBSpendUpdateWriter:
         spend_logs: Final = SpendLogsRepository(prisma_client).table
         try:
             claimed: Final = await spend_logs.create_many(
-                data=[prisma_client.jsonify_object(row)],  # mutable-ok: prisma create_many takes a list
+                data=[prisma_client.jsonify_object(row)],
                 skip_duplicates=True,
             )
             if claimed == 1:
                 return True
-            existing: Final = await spend_logs.find_unique(
-                where={"request_id": request_id}  # mutable-ok: prisma where clause
-            )
+            existing: Final = await spend_logs.find_unique(where={"request_id": request_id})
         except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; an unreachable DB queues the row like any other spend log
             verbose_proxy_logger.warning(
                 "Could not claim spend row %s for a batch's cost, queueing it: %s", request_id, e
@@ -685,7 +686,7 @@ class DBSpendUpdateWriter:
                 data=prisma_client.jsonify_object(
                     MappingProxyType({field: value for field, value in row.items() if field != "request_id"})
                 ),
-                where={  # mutable-ok: prisma where clause
+                where={
                     "request_id": request_id,
                     "call_type": CallTypes.aretrieve_batch.value,
                     "status": "success",
@@ -732,10 +733,25 @@ class DBSpendUpdateWriter:
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_usage_transaction error (non-blocking): %s", e)
 
+    async def _enqueue_model_usage_transaction(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: PrismaClient,
+    ) -> None:
+        try:
+            transaction: Final = build_model_usage_transaction(payload)
+            if transaction is None:
+                return
+            async with prisma_client._model_usage_transactions_lock:
+                prisma_client.model_usage_transactions.append(transaction)
+        except Exception as e:
+            verbose_proxy_logger.debug("_enqueue_model_usage_transaction error (non-blocking): %s", e)
+
     async def _enqueue_autorouter_turn_transaction(
         self,
         payload: SpendLogsPayload,
         prisma_client: "PrismaClient | None",
+        spend_logs_kept: bool = True,
     ) -> None:
         try:
             if prisma_client is None:
@@ -776,14 +792,21 @@ class DBSpendUpdateWriter:
                 saved_spend=savings_spend.autorouter,
             )
             try:
-                if await self._enqueue_baseline_accounting(payload, metadata, transaction, prisma_client):
+                # A baseline observation publishes only once its spend log exists, so without spend logs
+                # it could never publish; the plain turn still carries this request's recorded savings.
+                if spend_logs_kept and await self._enqueue_baseline_accounting(
+                    payload, metadata, transaction, prisma_client
+                ):
                     return
             except Exception:  # noqa: BLE001  # optional baseline capture must preserve the original actual-spend rollup
                 verbose_proxy_logger.warning("Auto-router baseline observation was unavailable; actual turn retained")
             if transaction is None:
                 return
+            # Without spend logs only the router-day aggregate is kept: an empty session id makes the
+            # session upserts skip the row, so no per-session record is stored.
+            kept: Final = transaction if spend_logs_kept else dataclasses.replace(transaction, session_id="")
             async with prisma_client._autorouter_turn_transactions_lock:
-                prisma_client.autorouter_turn_transactions.append(transaction)
+                prisma_client.autorouter_turn_transactions.append(kept)
         except Exception as e:  # noqa: BLE001  # a metrics enqueue must never fail the spend write
             verbose_proxy_logger.debug("_enqueue_autorouter_turn_transaction error (non-blocking): %s", e)
 
@@ -1147,6 +1170,8 @@ class DBSpendUpdateWriter:
                 "_batch_database_updates: add_spend_log_transaction_to_daily_tag_transaction failed: %s",
                 traceback.format_exc(),
             )
+
+        await self._enqueue_model_usage_transaction(payload=payload_copy, prisma_client=prisma_client)
 
     async def _update_key_db(
         self,
@@ -1561,7 +1586,7 @@ class DBSpendUpdateWriter:
                     window_spend_update_transactions,
                 ) = await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
-                uncommitted = {  # mutable-ok: drives which popped categories still need re-queuing
+                uncommitted = {
                     "db_spend_update_transactions": db_spend_update_transactions,
                     "daily_spend_update_transactions": daily_spend_update_transactions,
                     "daily_team_spend_update_transactions": daily_team_spend_update_transactions,
@@ -1673,9 +1698,7 @@ class DBSpendUpdateWriter:
                     exc=e,
                 )
             finally:
-                to_restore = {  # mutable-ok: transient kwargs payload consumed immediately below
-                    name: txns for name, txns in uncommitted.items() if txns is not None
-                }
+                to_restore = {name: txns for name, txns in uncommitted.items() if txns is not None}
                 if to_restore:
                     await self.redis_update_buffer.restore_transactions_to_redis(**to_restore)
                 await self.pod_lock_manager.release_lock(

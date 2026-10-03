@@ -37,7 +37,7 @@ class PublicDispatch(Generic[RequestT]):
         for rule in rules:
             if not isinstance(rule, RouteRule) or rule.route is not self.route:
                 continue
-            if rule.providers is not None or rule.models is not None or rule.deliveries is not None:
+            if rule.providers is not None or rule.models is not None:
                 if rollout_decision(rule.rollout) is not Decision.PYTHON:
                     return True
                 continue
