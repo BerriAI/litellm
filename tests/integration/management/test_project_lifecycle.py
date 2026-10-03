@@ -33,6 +33,49 @@ def _key_rows(key: str) -> list[dict[str, JsonValue]]:
     )
 
 
+def _key_permission_and_budget_ids(key: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT object_permission_id, budget_id FROM "LiteLLM_VerificationToken" WHERE token = %s',
+        (sha256(key.encode()).hexdigest(),),
+    )
+
+
+def _object_permission_rows(permission_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT * FROM "LiteLLM_ObjectPermissionTable" WHERE object_permission_id = %s',
+        (permission_id,),
+    )
+
+
+def _budget_rows(budget_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT to_jsonb(b) AS row FROM "LiteLLM_BudgetTable" AS b WHERE budget_id = %s',
+        (budget_id,),
+    )
+
+
+def _clear_key_object_permission(key: str, permission_id: str) -> None:
+    write_rows(
+        'UPDATE "LiteLLM_VerificationToken" SET object_permission_id = NULL WHERE token = %s',
+        (sha256(key.encode()).hexdigest(),),
+    )
+    write_rows(
+        'DELETE FROM "LiteLLM_ObjectPermissionTable" WHERE object_permission_id = %s',
+        (permission_id,),
+    )
+
+
+def _clear_project_object_permission(project_id: str, permission_id: str) -> None:
+    write_rows(
+        'UPDATE "LiteLLM_ProjectTable" SET object_permission_id = NULL WHERE project_id = %s',
+        (project_id,),
+    )
+    write_rows(
+        'DELETE FROM "LiteLLM_ObjectPermissionTable" WHERE object_permission_id = %s',
+        (permission_id,),
+    )
+
+
 def _deleted_key_rows(key: str) -> list[dict[str, JsonValue]]:
     return read_rows(
         'SELECT token FROM "LiteLLM_DeletedVerificationToken" WHERE token = %s',
@@ -253,7 +296,22 @@ def test_key_update_rejects_team_change_and_allows_unchanged_values(ownership_ga
         team_a: Final = scenario.team(models=[model])
         team_b: Final = scenario.team(models=[model])
         project_a: Final = scenario.project(team_a, models=[model])
-        key: Final = scenario.key(team_id=team_a, project_id=project_a, models=[model])
+        key: Final = scenario.key(team_id=team_a, project_id=project_a, models=[model], soft_budget=3.0)
+        permission_seed: Final = ownership_gateway.request(
+            "POST",
+            "/key/update",
+            {"key": key, "object_permission": {"vector_stores": ["existing-store"]}},
+        )
+        assert permission_seed.status_code == 200, permission_seed.text
+        key_permission_state: Final = _key_permission_and_budget_ids(key)
+        assert len(key_permission_state) == 1
+        permission_id: Final = string_value(key_permission_state[0]["object_permission_id"])
+        budget_id: Final = string_value(key_permission_state[0]["budget_id"])
+        scenario.cleanups.callback(_clear_key_object_permission, key, permission_id)
+        permission_before: Final = _object_permission_rows(permission_id)
+        budget_before: Final = _budget_rows(budget_id)
+        assert len(permission_before) == 1
+        assert len(budget_before) == 1
         aliased: Final = ownership_gateway.request("POST", "/key/update", {"key": key, "key_alias": "updated"})
         assert aliased.status_code == 200, aliased.text
         after_alias: Final = _key_rows(key)
@@ -267,9 +325,20 @@ def test_key_update_rejects_team_change_and_allows_unchanged_values(ownership_ga
         assert after_unchanged_team == after_alias
         before_reassignment: Final = _key_rows(key)
         assert len(before_reassignment) == 1
-        reassigned: Final = ownership_gateway.request("POST", "/key/update", {"key": key, "team_id": team_b})
+        reassigned: Final = ownership_gateway.request(
+            "POST",
+            "/key/update",
+            {
+                "key": key,
+                "team_id": team_b,
+                "soft_budget": 5.0,
+                "object_permission": {"vector_stores": ["replacement-store"]},
+            },
+        )
         assert reassigned.status_code == 400, reassigned.text
         assert _key_rows(key) == before_reassignment
+        assert _object_permission_rows(permission_id) == permission_before
+        assert _budget_rows(budget_id) == budget_before
 
 
 def test_key_update_can_detach_project_and_change_team(ownership_gateway: Gateway) -> None:
@@ -588,16 +657,41 @@ def test_project_update_rejects_moving_project_with_attached_key(ownership_gatew
         model: Final = scenario.model()
         team_a: Final = scenario.team(models=[model])
         team_b: Final = scenario.team(models=[model])
-        attached_project: Final = scenario.project(team_a, models=[model])
+        budget: Final = scenario.budget(max_budget=3)
+        attached_project: Final = scenario.project(team_a, budget_id=budget, models=[model])
         key: Final = scenario.key(team_id=team_a, project_id=attached_project, models=[model])
+        permission_seed: Final = ownership_gateway.request(
+            "POST",
+            "/project/update",
+            {"project_id": attached_project, "object_permission": {"vector_stores": ["existing-store"]}},
+        )
+        assert permission_seed.status_code == 200, permission_seed.text
+        project_permission: Final = read_rows(
+            'SELECT object_permission_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s',
+            (attached_project,),
+        )
+        assert len(project_permission) == 1
+        permission_id: Final = string_value(project_permission[0]["object_permission_id"])
+        scenario.cleanups.callback(_clear_project_object_permission, attached_project, permission_id)
         project_before: Final = _project_rows(attached_project)
         key_before: Final = _key_rows(key)
+        permission_before: Final = _object_permission_rows(permission_id)
+        budget_before: Final = _budget_rows(budget)
         moved_with_key: Final = ownership_gateway.request(
-            "POST", "/project/update", {"project_id": attached_project, "team_id": team_b}
+            "POST",
+            "/project/update",
+            {
+                "project_id": attached_project,
+                "team_id": team_b,
+                "max_budget": 11,
+                "object_permission": {"vector_stores": ["replacement-store"]},
+            },
         )
         assert moved_with_key.status_code == 400, moved_with_key.text
         assert _project_rows(attached_project) == project_before
         assert _key_rows(key) == key_before
+        assert _object_permission_rows(permission_id) == permission_before
+        assert _budget_rows(budget) == budget_before
 
 
 def test_project_update_allows_moving_project_without_keys(ownership_gateway: Gateway) -> None:

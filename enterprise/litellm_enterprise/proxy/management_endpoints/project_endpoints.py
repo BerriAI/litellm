@@ -790,8 +790,16 @@ async def update_project(
                 data, existing_project, _router_access_group_names(llm_router)
             )
 
+        object_permission_data: Final = (
+            data.object_permission.model_dump(exclude_none=True) if data.object_permission is not None else None
+        )
+        object_permission_payload: Final = (
+            _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data) if object_permission_data else None
+        )
+
         # Prepare update data
         update_data = _jsonified(prisma_client, data.model_dump(exclude_none=True, exclude={"project_id"}))
+        update_data.pop("object_permission", None)
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
 
         # Handle budget updates
@@ -800,48 +808,6 @@ async def update_project(
             **{k: v for k, v in update_data.items() if k in budget_fields},
             **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
         }
-
-        if budget_updates and existing_project.budget_id:
-            # Update existing budget
-            await _budget_table(prisma_client).update(
-                where={"budget_id": existing_project.budget_id},
-                data={
-                    **budget_updates,
-                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                },
-            )
-            # Remove budget fields from project update
-            for field in budget_updates.keys():
-                update_data.pop(field, None)
-
-        # Handle object permissions
-        if "object_permission" in update_data:
-            object_permission_data = update_data.pop("object_permission")
-            if object_permission_data:
-                object_permission_payload: Final = _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data)
-                if existing_project.object_permission_id:
-                    # Update existing permission
-                    await _object_permission_table(prisma_client).update(
-                        where={"object_permission_id": existing_project.object_permission_id},
-                        data=object_permission_payload,
-                    )
-                else:
-                    # Create new permission
-                    created_permission: Final = await _object_permission_table(prisma_client).create(
-                        data=object_permission_payload,
-                    )
-                    update_data["object_permission_id"] = created_permission.object_permission_id
-
-        # Handle metadata fields
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
-            if field in update_data:
-                existing_metadata = update_data.get("metadata")
-                metadata_dict: dict[str, object] = existing_metadata if isinstance(existing_metadata, dict) else {}
-                metadata_dict[field] = update_data.pop(field)
-                update_data["metadata"] = metadata_dict
-
-        # Remove budget fields (following organization_endpoints.py pattern)
-        update_data = _remove_budget_fields_from_project_data(update_data)
 
         if data.team_id is not None:
             current_project_record: Final = await _writer_project_table(prisma_client).find_unique(
@@ -869,6 +835,42 @@ async def update_project(
                             )
                         },
                     )
+
+        if budget_updates and existing_project.budget_id:
+            # Update existing budget
+            await _budget_table(prisma_client).update(
+                where={"budget_id": existing_project.budget_id},
+                data={
+                    **budget_updates,
+                    "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                },
+            )
+            # Remove budget fields from project update
+            for field in budget_updates.keys():
+                update_data.pop(field, None)
+
+        if object_permission_payload is not None:
+            if existing_project.object_permission_id:
+                await _object_permission_table(prisma_client).update(
+                    where={"object_permission_id": existing_project.object_permission_id},
+                    data=object_permission_payload,
+                )
+            else:
+                created_permission: Final = await _object_permission_table(prisma_client).create(
+                    data=object_permission_payload,
+                )
+                update_data["object_permission_id"] = created_permission.object_permission_id
+
+        # Handle metadata fields
+        for field in LiteLLM_ManagementEndpoint_MetadataFields:
+            if field in update_data:
+                existing_metadata = update_data.get("metadata")
+                metadata_dict: dict[str, object] = existing_metadata if isinstance(existing_metadata, dict) else {}
+                metadata_dict[field] = update_data.pop(field)
+                update_data["metadata"] = metadata_dict
+
+        # Remove budget fields (following organization_endpoints.py pattern)
+        update_data = _remove_budget_fields_from_project_data(update_data)
 
         # Update project
         updated_project: Final = await _project_table(prisma_client).update(

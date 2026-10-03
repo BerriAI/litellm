@@ -1076,208 +1076,146 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_existing_permission():
-    """
-    Test updating object permissions when a key already has an existing object_permission_id.
-
-    This test verifies that when updating vector stores for a key that already has an
-    object_permission_id, the existing LiteLLM_ObjectPermissionTable record is updated
-    with the new permissions and the object_permission_id remains the same.
-    """
+async def test_key_update_prepares_existing_object_permission_without_writing():
     from unittest.mock import AsyncMock, MagicMock
 
-    import pytest
-
-    from litellm.proxy._types import (
-        LiteLLM_ObjectPermissionBase,
-        LiteLLM_VerificationToken,
-    )
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _handle_update_object_permission,
+        _prepare_key_update_object_permission,
+        _write_prepared_key_update_object_permission,
     )
 
     mock_prisma_client = AsyncMock()
-
-    # Mock existing key with object_permission_id
     existing_key_row = LiteLLM_VerificationToken(
         token="test_token_hash",
         object_permission_id="existing_perm_id_123",
         user_id="user123",
         team_id=None,
     )
-
-    # Mock existing object permission record
-    existing_object_permission = MagicMock()
-    existing_object_permission.model_dump.return_value = {
+    existing_permission = MagicMock()
+    existing_permission.model_dump.return_value = {
         "object_permission_id": "existing_perm_id_123",
-        "vector_stores": ["old_store_1", "old_store_2"],
+        "vector_stores": ["old_store"],
     }
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_permission)
+    permission_upsert = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
 
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=existing_object_permission
+    object_permission_data = LiteLLM_ObjectPermissionBase(vector_stores=["new_store"]).model_dump(
+        exclude_unset=True, exclude_none=True
     )
-
-    # Mock upsert operation
-    updated_permission = MagicMock()
-    updated_permission.object_permission_id = "existing_perm_id_123"
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
-        return_value=updated_permission
-    )
-
-    # Test data with new object permission
-    data_json = {
-        "object_permission": LiteLLM_ObjectPermissionBase(
-            vector_stores=["new_store_1", "new_store_2", "new_store_3"]
-        ).model_dump(exclude_unset=True, exclude_none=True),
-        "user_id": "user123",
-    }
-
-    # Call the function
-    result = await _handle_update_object_permission(
-        data_json=data_json,
+    upsert = await _prepare_key_update_object_permission(
+        object_permission_data=object_permission_data,
         existing_key_row=existing_key_row,
         prisma_client=mock_prisma_client,
     )
 
-    # Verify the object_permission was removed from data_json and object_permission_id was set
-    assert "object_permission" not in result
-    assert result["object_permission_id"] == "existing_perm_id_123"
-
-    # Verify database operations were called correctly
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_called_once_with(
+    assert upsert is not None
+    assert upsert.object_permission_id == "existing_perm_id_123"
+    assert upsert.record["vector_stores"] == ["new_store"]
+    permission_upsert.assert_not_awaited()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_awaited_once_with(
         where={"object_permission_id": "existing_perm_id_123"}
     )
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+    result = await _write_prepared_key_update_object_permission(
+        data_json={"user_id": "user123"},
+        upsert=upsert,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result == {"user_id": "user123", "object_permission_id": "existing_perm_id_123"}
+    permission_upsert.assert_awaited_once_with(
+        where={"object_permission_id": "existing_perm_id_123"},
+        data={"create": upsert.record, "update": upsert.record},
+    )
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_no_existing_permission():
-    """
-    Test creating object permissions when a key has no existing object_permission_id.
+async def test_key_update_prepares_json_object_permission_and_upserts_new_row():
+    import json
+    from unittest.mock import AsyncMock
 
-    This test verifies that when updating object permissions for a key that has
-    object_permission_id set to None, a new entry is created in the
-    LiteLLM_ObjectPermissionTable and the key is updated with the new object_permission_id.
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    import pytest
-
-    from litellm.proxy._types import (
-        LiteLLM_ObjectPermissionBase,
-        LiteLLM_VerificationToken,
-    )
+    from litellm.proxy._types import LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _handle_update_object_permission,
+        _prepare_key_update_object_permission,
+        _write_prepared_key_update_object_permission,
     )
 
     mock_prisma_client = AsyncMock()
-
-    existing_key_row_no_perm = LiteLLM_VerificationToken(
+    existing_key_row = LiteLLM_VerificationToken(
         token="test_token_hash_2",
         object_permission_id=None,
         user_id="user456",
         team_id=None,
     )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    permission_upsert = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
 
-    # Mock find_unique to return None (no existing permission)
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=None
-    )
-
-    # Mock upsert to create new record
-    new_permission = MagicMock()
-    new_permission.object_permission_id = "new_perm_id_456"
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
-        return_value=new_permission
-    )
-
-    data_json = {
-        "object_permission": LiteLLM_ObjectPermissionBase(
-            vector_stores=["brand_new_store"]
-        ).model_dump(exclude_unset=True, exclude_none=True),
-        "user_id": "user456",
-    }
-
-    result = await _handle_update_object_permission(
-        data_json=data_json,
-        existing_key_row=existing_key_row_no_perm,
+    upsert = await _prepare_key_update_object_permission(
+        object_permission_data=json.dumps({"vector_stores": ["brand_new_store"]}),
+        existing_key_row=existing_key_row,
         prisma_client=mock_prisma_client,
     )
 
-    # Verify new object_permission_id was set
-    assert "object_permission" not in result
-    assert result["object_permission_id"] == "new_perm_id_456"
-    # Verify upsert was called to create new record
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+    assert upsert is not None
+    assert upsert.record["vector_stores"] == ["brand_new_store"]
+    permission_upsert.assert_not_awaited()
+    result = await _write_prepared_key_update_object_permission(
+        data_json={},
+        upsert=upsert,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result["object_permission_id"] == upsert.object_permission_id
+    permission_upsert.assert_awaited_once_with(
+        where={"object_permission_id": upsert.object_permission_id},
+        data={"create": upsert.record, "update": upsert.record},
+    )
 
 
 @pytest.mark.asyncio
-async def test_key_update_object_permissions_missing_permission_record():
-    """
-    Test creating object permissions when existing object_permission_id record is not found.
+async def test_key_update_recreates_missing_object_permission_with_existing_id():
+    from unittest.mock import AsyncMock
 
-    This test verifies that when updating object permissions for a key that has an
-    object_permission_id but the corresponding record cannot be found in the database,
-    a new entry is created in the LiteLLM_ObjectPermissionTable with the new permissions.
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    import pytest
-
-    from litellm.proxy._types import (
-        LiteLLM_ObjectPermissionBase,
-        LiteLLM_VerificationToken,
-    )
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_VerificationToken
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _handle_update_object_permission,
+        _prepare_key_update_object_permission,
+        _write_prepared_key_update_object_permission,
     )
 
     mock_prisma_client = AsyncMock()
-
-    existing_key_row_missing_perm = LiteLLM_VerificationToken(
+    existing_key_row = LiteLLM_VerificationToken(
         token="test_token_hash_3",
         object_permission_id="missing_perm_id_789",
         user_id="user789",
         team_id=None,
     )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    permission_upsert = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
 
-    # Mock find_unique to return None (permission record not found)
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=None
-    )
-
-    # Mock upsert to create new record
-    new_permission = MagicMock()
-    new_permission.object_permission_id = "recreated_perm_id_789"
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
-        return_value=new_permission
-    )
-
-    data_json = {
-        "object_permission": LiteLLM_ObjectPermissionBase(
-            vector_stores=["recreated_store"]
-        ).model_dump(exclude_unset=True, exclude_none=True),
-        "user_id": "user789",
-    }
-
-    result = await _handle_update_object_permission(
-        data_json=data_json,
-        existing_key_row=existing_key_row_missing_perm,
+    upsert = await _prepare_key_update_object_permission(
+        object_permission_data=LiteLLM_ObjectPermissionBase(vector_stores=["recreated_store"]).model_dump(
+            exclude_unset=True, exclude_none=True
+        ),
+        existing_key_row=existing_key_row,
         prisma_client=mock_prisma_client,
     )
 
-    # Verify new object_permission_id was set
-    assert "object_permission" not in result
-    assert result["object_permission_id"] == "recreated_perm_id_789"
-
-    # Verify find_unique was called with the missing permission ID
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique.assert_called_once_with(
-        where={"object_permission_id": "missing_perm_id_789"}
+    assert upsert is not None
+    assert upsert.object_permission_id == "missing_perm_id_789"
+    permission_upsert.assert_not_awaited()
+    await _write_prepared_key_update_object_permission(
+        data_json={},
+        upsert=upsert,
+        prisma_client=mock_prisma_client,
     )
-
-    # Verify upsert was called to create new record
-    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+    permission_upsert.assert_awaited_once_with(
+        where={"object_permission_id": "missing_perm_id_789"},
+        data={"create": upsert.record, "update": upsert.record},
+    )
 
 
 @pytest.mark.asyncio
@@ -7291,7 +7229,7 @@ async def test_bulk_update_keys_object_permission_is_granted_not_dropped(monkeyp
     upserted = prisma.db.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]["create"]
     assert upserted["vector_stores"] == ["vs-1"]
     written = _written_key_row(prisma)
-    assert written["object_permission_id"] == "objperm-bulk"
+    assert written["object_permission_id"] == upserted["object_permission_id"]
     assert not {"max_budget", "team_id", "budget_id"} & written.keys()
 
 
@@ -13170,6 +13108,7 @@ async def test_execute_virtual_key_regeneration_hides_the_untouched_modal_expiry
 _POLICY_DENIAL_MESSAGE = "key duration must be 7d or less"
 _POLICY_HASHED_TOKEN = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
 _POLICY_GENERATED_KEY = {"key": "sk-test-key", "expires": None, "user_id": "test-user", "team_id": None}
+_OBJECT_PERMISSION_ID_AFTER_POLICY = "perm-after-policy"
 
 
 def _seven_day_policy(received: list[CustomKeyPolicyRequest]):
@@ -13311,7 +13250,11 @@ async def test_regenerate_without_changes_still_runs_custom_key_policy(data):
 
 def _policy_existing_team_key() -> LiteLLM_VerificationToken:
     return LiteLLM_VerificationToken(
-        token=_POLICY_HASHED_TOKEN, user_id="test-user", team_id="team-a", max_budget=200.0
+        token=_POLICY_HASHED_TOKEN,
+        user_id="test-user",
+        team_id="team-a",
+        max_budget=200.0,
+        object_permission_id=_OBJECT_PERMISSION_ID_AFTER_POLICY,
     )
 
 
@@ -13457,9 +13400,6 @@ async def test_process_single_key_update_rejects_when_custom_key_policy_denies()
     assert [policy_request.operation for policy_request in received] == ["update"]
 
 
-_OBJECT_PERMISSION_ID_AFTER_POLICY = "perm-after-policy"
-
-
 def _record_object_permission_writes(mock_prisma_client: AsyncMock, events: list[str]) -> None:
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
 
@@ -13579,9 +13519,12 @@ async def test_regenerate_writes_the_object_permission_row_only_after_the_policy
     events: list[str] = []
     _record_object_permission_writes(mock_prisma_client, events)
     data = RegenerateKeyRequest(max_budget=50.0, object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["vs-1"]))
+    existing_key: Final = _make_regenerate_existing_key().model_copy(
+        update={"object_permission_id": _OBJECT_PERMISSION_ID_AFTER_POLICY}
+    )
 
     with _regenerate_policy_mocks(_recording_policy(events, allowed=True), AsyncMock(), AsyncMock()):
-        await _regenerate_under_policy(mock_prisma_client, _make_regenerate_existing_key(), data)
+        await _regenerate_under_policy(mock_prisma_client, existing_key, data)
 
     _assert_permission_row_written_after_policy(
         events, mock_prisma_client.db.litellm_verificationtoken.update.await_args.kwargs["data"]
@@ -20960,11 +20903,25 @@ async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch:
         token="hashed-key",
         team_id=_OWNERSHIP_KEY_TEAM,
         project_id=_OWNED_PROJECT,
+        object_permission_id="permission-update",
+        budget_id="budget-update",
     )
     mock_prisma_client: Final = _wire_update_key_fn(monkeypatch, existing_key_row)
+    existing_permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="permission-update",
+        vector_stores=["existing-store"],
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_permission)
+    permission_upsert: Final = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
+    permission_before: Final = existing_permission.model_dump()
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
-        AsyncMock(return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_DESTINATION_TEAM, team_members=[])),
+        AsyncMock(
+            return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_DESTINATION_TEAM).model_copy(
+                update={"team_members": []}
+            )
+        ),
     )
     mock_prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
         return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
@@ -20976,7 +20933,12 @@ async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch:
     with pytest.raises((HTTPException, ProxyException)) as error:
         await update_key_fn(
             request=mock_request,
-            data=UpdateKeyRequest(key="sk-key", team_id=_OWNERSHIP_DESTINATION_TEAM),
+            data=UpdateKeyRequest(
+                key="sk-key",
+                team_id=_OWNERSHIP_DESTINATION_TEAM,
+                soft_budget=5.0,
+                object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["replacement-store"]),
+            ),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
             litellm_changed_by=None,
         )
@@ -20987,6 +20949,80 @@ async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch:
         f"but the key belongs to {_OWNERSHIP_DESTINATION_TEAM}"
     )
     assert expected_detail in str(getattr(error.value, "detail", None) or getattr(error.value, "message", None))
+    assert existing_permission.model_dump() == permission_before
+    permission_upsert.assert_not_awaited()
+    mock_prisma_client.tx.assert_not_called()
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_key_update_ambiguous_permission_error_precedes_project_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_key_row: Final = LiteLLM_VerificationToken(
+        token="hashed-key",
+        team_id=_OWNERSHIP_KEY_TEAM,
+        project_id=_OWNED_PROJECT,
+        object_permission_id="permission-ambiguous",
+    )
+    mock_prisma_client: Final = _wire_update_key_fn(monkeypatch, existing_key_row)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=LiteLLM_ObjectPermissionTable(
+            object_permission_id="permission-ambiguous",
+            mcp_tool_permissions={},
+        )
+    )
+    permission_upsert: Final = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(server_id="wiki-a-id", alias="wiki", server_name="wiki-a"),
+            MagicMock(server_id="wiki-b-id", alias="wiki", server_name="wiki-b"),
+        ]
+    )
+    mock_prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(
+        return_value=LiteLLM_ProjectTable(project_id=_OWNED_PROJECT, team_id=_OWNERSHIP_PROJECT_TEAM)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(
+            return_value=LiteLLM_TeamTable(
+                team_id=_OWNERSHIP_DESTINATION_TEAM,
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="permission-team",
+                    mcp_servers=["wiki-a-id", "wiki-b-id"],
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+
+    with pytest.raises((HTTPException, ProxyException)) as error:
+        await update_key_fn(
+            request=MagicMock(query_params={}),
+            data=UpdateKeyRequest(
+                key="sk-key",
+                team_id=_OWNERSHIP_DESTINATION_TEAM,
+                object_permission=LiteLLM_ObjectPermissionBase(
+                    mcp_tool_permissions={"wiki": ["read_wiki_structure"]}
+                ),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
+            litellm_changed_by=None,
+        )
+
+    assert str(getattr(error.value, "status_code", None) or getattr(error.value, "code", None)) == "400"
+    expected_detail: Final = {
+        "error": (
+            "Ambiguous mcp_tool_permissions key: 'wiki' matches MCP servers ['wiki-a-id', 'wiki-b-id']. "
+            "Key tool permissions by server_id when servers share a name or alias."
+        )
+    }
+    assert getattr(error.value, "detail", None) == expected_detail or getattr(error.value, "message", None) == str(
+        expected_detail
+    )
+    permission_upsert.assert_not_awaited()
+    mock_prisma_client.writer_db.litellm_projecttable.find_unique.assert_not_awaited()
     mock_prisma_client.update_data.assert_not_awaited()
 
 
@@ -21070,11 +21106,23 @@ async def test_bulk_key_update_rejects_project_team_change_and_allows_other_fiel
         models=[],
         team_id=_OWNERSHIP_PROJECT_TEAM,
         project_id=_OWNED_PROJECT,
+        object_permission_id="permission-bulk",
+        budget_id="budget-bulk",
     )
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key_row)
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
         return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_DESTINATION_TEAM)
     )
+    existing_permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="permission-bulk",
+        vector_stores=["existing-store"],
+    )
+    permission_before: Final = existing_permission.model_dump()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_permission)
+    permission_upsert: Final = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
+    budget_update: Final = AsyncMock()
+    mock_prisma_client.db.litellm_budgettable.update = budget_update
     mock_prisma_client.get_data = AsyncMock(return_value=existing_key_row)
     updated_key: Final = MagicMock()
     updated_key.model_dump.return_value = {
@@ -21089,7 +21137,14 @@ async def test_bulk_key_update_rejects_project_team_change_and_allows_other_fiel
 
     request: Final = BulkUpdateKeyRequest(
         keys=[
-            BulkUpdateKeyRequestItem(key="sk-bulk-key", team_id=_OWNERSHIP_DESTINATION_TEAM),
+            BulkUpdateKeyRequestItem.model_validate(
+                {
+                    "key": "sk-bulk-key",
+                    "team_id": _OWNERSHIP_DESTINATION_TEAM,
+                    "soft_budget": 5.0,
+                    "object_permission": LiteLLM_ObjectPermissionBase(vector_stores=["replacement-store"]),
+                }
+            ),
             BulkUpdateKeyRequestItem(key="sk-bulk-key", max_budget=10.0, tags=["bulk-update"]),
         ]
     )
@@ -21136,6 +21191,10 @@ async def test_bulk_key_update_rejects_project_team_change_and_allows_other_fiel
     assert response.successful_updates[0].key == "sk-bulk-key"
     assert response.successful_updates[0].key_info["max_budget"] == 10.0
     assert response.successful_updates[0].key_info["tags"] == ["bulk-update"]
+    assert existing_permission.model_dump() == permission_before
+    permission_upsert.assert_not_awaited()
+    budget_update.assert_not_awaited()
+    mock_prisma_client.tx.assert_not_called()
     mock_prisma_client.update_data.assert_awaited_once()
 
 
@@ -21199,7 +21258,11 @@ async def test_regenerate_checks_project_team_ownership(
     expected_status: int | None,
     expected_updates: int,
 ) -> None:
-    existing_key: Final = LiteLLM_VerificationToken(token="abc123", team_id=key_team_id)
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="abc123",
+        team_id=key_team_id,
+        object_permission_id="permission-regenerate",
+    )
     mock_prisma_client: Final = _make_regenerate_mock_prisma()
     mock_prisma_client.writer_db = MagicMock()
     mock_prisma_client.writer_db.litellm_projecttable = MagicMock()
@@ -21212,6 +21275,14 @@ async def test_regenerate_checks_project_team_ownership(
     deprecated_key_table: Final = MagicMock()
     deprecated_key_table.upsert = AsyncMock()
     mock_prisma_client.db.litellm_deprecatedverificationtoken = deprecated_key_table
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=LiteLLM_ObjectPermissionTable(
+            object_permission_id="permission-regenerate",
+            vector_stores=["existing-store"],
+        )
+    )
+    permission_upsert: Final = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
     user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id="team-b")
 
     async def regenerate() -> None:
@@ -21234,6 +21305,7 @@ async def test_regenerate_checks_project_team_ownership(
                 data=RegenerateKeyRequest(
                     project_id=_OWNED_PROJECT,
                     grace_period="1h" if expected_status is not None else None,
+                    object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["replacement-store"]),
                 ),
                 user_api_key_dict=_make_regenerate_user_api_key_dict(),
                 litellm_changed_by=None,
@@ -21248,8 +21320,10 @@ async def test_regenerate_checks_project_team_ownership(
         assert "belongs to team team-b, but the key belongs to team-a" in str(error.value.detail)
         deleted_history_table.create_many.assert_not_awaited()
         deprecated_key_table.upsert.assert_not_awaited()
+        permission_upsert.assert_not_awaited()
     else:
         await regenerate()
+        permission_upsert.assert_awaited_once()
 
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == expected_updates
 

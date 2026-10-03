@@ -1277,6 +1277,15 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     destination_team_id: Final = "team-b"
     mock_prisma: Final = _project_update_mocks(monkeypatch, {})
     mock_prisma.db.litellm_projecttable.find_unique.return_value.team_id = "team-a"
+    mock_prisma.db.litellm_projecttable.find_unique.return_value.budget_id = "budget-project"
+    mock_prisma.db.litellm_projecttable.find_unique.return_value.object_permission_id = "permission-project"
+    budget_table: Final = mock.MagicMock()
+    budget_table.update = mock.AsyncMock()
+    permission_table: Final = mock.MagicMock()
+    permission_table.update = mock.AsyncMock()
+    permission_table.create = mock.AsyncMock()
+    mock_prisma.db.litellm_budgettable = budget_table
+    mock_prisma.db.litellm_objectpermissiontable = permission_table
     mock_prisma.db.litellm_teamtable.find_unique = mock.AsyncMock(
         return_value=LiteLLM_TeamTable(team_id=destination_team_id)
     )
@@ -1293,7 +1302,12 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     mock_prisma.writer_db.litellm_verificationtoken.count = mock.AsyncMock(side_effect=count_teamless_keys)
 
     with pytest.raises(ProxyException) as error:
-        await _run_project_update(project_id, team_id=destination_team_id)
+        await _run_project_update(
+            project_id,
+            team_id=destination_team_id,
+            max_budget=50,
+            object_permission={"vector_stores": ["replacement-store"]},
+        )
 
     expected_detail: Final = {
         "error": (
@@ -1305,6 +1319,9 @@ async def test_update_project_rejects_move_when_attached_teamless_key_exists(
     assert expected_detail["error"] in error.value.message
     mock_prisma.writer_db.litellm_verificationtoken.count.assert_awaited_once()
     mock_prisma.db.litellm_verificationtoken.count.assert_not_awaited()
+    budget_table.update.assert_not_awaited()
+    permission_table.update.assert_not_awaited()
+    permission_table.create.assert_not_awaited()
     mock_prisma.db.litellm_projecttable.update.assert_not_awaited()
 
 
