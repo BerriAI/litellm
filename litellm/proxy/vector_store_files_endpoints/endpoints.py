@@ -92,9 +92,7 @@ def _with_managed_file_ids(
 
     first_id: Final = response.get("first_id")
     last_id: Final = response.get("last_id")
-    mapped_data: Final = [  # mutable-ok: OpenAI response schema requires a JSON list
-        _with_managed_file_id(file, id_map) for file in data
-    ]
+    mapped_data: Final = [_with_managed_file_id(file, id_map) for file in data]
     mapped_response: Final[VectorStoreFileListResponse] = {
         **response,
         "data": mapped_data,
@@ -745,7 +743,10 @@ async def vector_store_file_list(
             return response
         managed_files_obj: Final[object | None] = proxy_logging_obj.get_proxy_hook("managed_files")
         return await _with_managed_file_list_ids(
-            response=cast(VectorStoreFileListResponse, response),
+            response=cast(  # cast-ok: [LIT006] this route returns the provider's file-list response shape
+                VectorStoreFileListResponse,
+                response,
+            ),
             managed_files_obj=managed_files_obj,
             user_api_key_dict=user_api_key_dict,
         )
