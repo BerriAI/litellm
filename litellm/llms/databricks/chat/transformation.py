@@ -558,7 +558,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def resolve_reasoning_and_content(
         message: DatabricksMessage, block_reasoning_content: str | None
     ) -> tuple[str | None, str | None]:
-        content_str: Final = DatabricksConfig.extract_content_str(message["content"])
+        content_str: Final = DatabricksConfig.extract_content_str(message.get("content"))
         if block_reasoning_content is not None:
             return block_reasoning_content, content_str
         return _extract_reasoning_content({**message, "content": content_str})
