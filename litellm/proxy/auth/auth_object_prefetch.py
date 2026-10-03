@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
+    get_management_object_redis_ttl,
     get_management_object_ttl,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
@@ -173,13 +174,16 @@ class _CacheEntry:
     row: _RowKind
     model_type: type[BaseModel]
     ttl: float | None
+    redis_ttl: float | None = None
 
 
-def _iter_entries(refs: AuthObjectRefs, management_ttl: float) -> Iterator[_CacheEntry]:
+def _iter_entries(refs: AuthObjectRefs, management_ttl: float, management_redis_ttl: float) -> Iterator[_CacheEntry]:
     if refs.user_id is not None:
-        yield _CacheEntry(refs.user_id, "user_row", LiteLLM_UserTable, management_ttl)
+        yield _CacheEntry(refs.user_id, "user_row", LiteLLM_UserTable, management_ttl, management_redis_ttl)
     if refs.team_id is not None:
-        yield _CacheEntry(f"team_id:{refs.team_id}", "team_row", LiteLLM_TeamTableCachedObj, management_ttl)
+        yield _CacheEntry(
+            f"team_id:{refs.team_id}", "team_row", LiteLLM_TeamTableCachedObj, management_ttl, management_redis_ttl
+        )
     if refs.team_id is not None and refs.membership_user_id is not None:
         yield _CacheEntry(
             team_membership_auth_cache_key(team_id=refs.team_id, user_id=refs.membership_user_id),
@@ -204,11 +208,17 @@ def _iter_entries(refs: AuthObjectRefs, management_ttl: float) -> Iterator[_Cach
             DEFAULT_IN_MEMORY_TTL,
         )
     if refs.project_id is not None:
-        yield _CacheEntry(f"project_id:{refs.project_id}", "project_row", LiteLLM_ProjectTableCachedObj, management_ttl)
+        yield _CacheEntry(
+            f"project_id:{refs.project_id}",
+            "project_row",
+            LiteLLM_ProjectTableCachedObj,
+            management_ttl,
+            management_redis_ttl,
+        )
 
 
 def _entries(refs: AuthObjectRefs, cache: UserApiKeyCache) -> tuple[_CacheEntry, ...]:
-    return tuple(_iter_entries(refs, get_management_object_ttl(cache)))
+    return tuple(_iter_entries(refs, get_management_object_ttl(cache), get_management_object_redis_ttl(cache)))
 
 
 def _missing_in_memory(entries: Sequence[_CacheEntry], memory: _InMemoryCache) -> tuple[_CacheEntry, ...]:
@@ -278,15 +288,20 @@ async def _fetch_rows(
 
 
 async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: UserApiKeyCache) -> None:
-    payloads: Final = tuple(
-        (entry.cache_key, CacheCodec.serialize(value, model_type=entry.model_type), entry.ttl)
-        for entry, value in entries
+    serialized: Final = tuple(
+        (entry, CacheCodec.serialize(value, model_type=entry.model_type)) for entry, value in entries
     )
     memory: Final[_InMemoryCache] = cache.in_memory_cache
-    for cache_key, payload, ttl in payloads:
-        _set_in_memory(memory, cache_key, payload, cache.default_in_memory_ttl if ttl is None else ttl)
+    for entry, payload in serialized:
+        _set_in_memory(
+            memory, entry.cache_key, payload, cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
+        )
     if cache.redis_cache is None:
         return
+    payloads: Final = tuple(
+        (entry.cache_key, payload, entry.ttl if entry.redis_ttl is None else entry.redis_ttl)
+        for entry, payload in serialized
+    )
     batch: Final = active_request_redis_batch(cache.redis_cache)
     with service_target(AUTH_OBJECTS_TARGET):
         if batch is None:

@@ -6,12 +6,15 @@ import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_batch import active_request_redis_batch, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL, DEFAULT_MANAGEMENT_OBJECT_REDIS_CACHE_TTL
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
+    get_management_object_redis_ttl,
     get_management_object_ttl,
     is_user_key_cache_key,
 )
@@ -485,3 +488,59 @@ class TestManagementObjectTTL:
         )
 
         assert mem.last_ttl == 300
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", [HASHED_TOKEN, "team_id:t1"])
+async def test_redis_ttl_outlives_the_memory_ttl_in_both_partitions(key: str):
+    """The per-worker memory copy expires on ``ttl``; the Redis copy every worker and pod shares lives ``redis_ttl``."""
+    memory = CapturingInMemoryCache()
+    key_memory = CapturingInMemoryCache()
+    fake = FakeRedisCache()
+    cache = UserApiKeyCache(
+        in_memory_cache=memory, key_object_in_memory_cache=key_memory, redis_cache=fake, default_in_memory_ttl=60
+    )
+
+    await cache.async_set_cache(key=key, value=_make_key_obj("x"), model_type=UserAPIKeyAuth, ttl=60, redis_ttl=600)
+
+    written = key_memory if is_user_key_cache_key(key) else memory
+    assert (written.last_ttl, fake.last_ttl) == (60, 600)
+    assert cache.get_cache(key=key, model_type=UserAPIKeyAuth) == _make_key_obj("x")
+
+
+def test_management_redis_ttl_defaults_longer_than_memory_and_follows_an_operator_configured_ttl():
+    cache = UserApiKeyCache(default_in_memory_ttl=60)
+    assert get_management_object_redis_ttl(cache) == DEFAULT_MANAGEMENT_OBJECT_REDIS_CACHE_TTL
+    assert get_management_object_redis_ttl(cache) > get_management_object_ttl(cache)
+
+    cache.update_cache_ttl(default_in_memory_ttl=10, default_redis_ttl=10)
+
+    assert (get_management_object_ttl(cache), get_management_object_redis_ttl(cache)) == (10, 10)
+
+
+class _ClusterRecordingRedis(RedisClusterCache):
+    """Cluster fake: a request batch settles each op alone through ``async_set_cache_pipeline_with_ttls``."""
+
+    def __init__(self) -> None:  # noqa: super().__init__ skipped intentionally
+        self.ttls: dict[str, float | None] = {}
+
+    async def async_set_cache_pipeline_with_ttls(self, cache_list, **kwargs):  # pyright: ignore[reportIncompatibleMethodOverride]  # test double records the ttl
+        for key, _, ttl in cache_list:
+            self.ttls[key] = ttl
+
+
+@pytest.mark.asyncio
+async def test_inside_a_request_the_pipelined_redis_set_carries_the_longer_redis_ttl():
+    memory = CapturingInMemoryCache()
+    redis = _ClusterRecordingRedis()
+    cache = UserApiKeyCache(in_memory_cache=memory, redis_cache=redis, default_in_memory_ttl=60)
+
+    with request_redis_batch_scope():
+        await cache.async_set_cache(
+            key="team_id:t2", value=_make_key_obj("x"), model_type=UserAPIKeyAuth, ttl=60, redis_ttl=600
+        )
+        batch = active_request_redis_batch(redis)
+        assert batch is not None and batch.pending == 1
+        await batch.flush()
+
+    assert (memory.last_ttl, redis.ttls["team_id:t2"]) == (60, 600)

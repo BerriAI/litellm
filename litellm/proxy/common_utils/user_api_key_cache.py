@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
@@ -10,8 +11,11 @@ from pydantic import BaseModel
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+from litellm.caching.redis_cache import RedisCache, log_redis_failure
+from litellm.constants import (
+    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    DEFAULT_MANAGEMENT_OBJECT_REDIS_CACHE_TTL,
+)
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 if TYPE_CHECKING:
@@ -83,11 +87,14 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl,
             default_redis_ttl=default_redis_ttl,
         )
+        self.management_redis_ttl: float | None = None
 
     def in_memory_cache_for(self, key: str) -> InMemoryCache:
         return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
 
     def update_cache_ttl(self, default_in_memory_ttl: float | None, default_redis_ttl: float | None) -> None:
+        """An operator-configured ``user_api_key_cache_ttl`` bounds the Redis copy of management objects too."""
+        self.management_redis_ttl = default_redis_ttl
         super().update_cache_ttl(default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl)
         self.key_object_cache.update_cache_ttl(
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
@@ -216,10 +223,14 @@ class UserApiKeyCache(DualCache):
 
     async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
         """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
-        else, or with options the pipeline does not carry, it goes to Redis directly as before."""
+        else, or with options the pipeline does not carry, it goes to Redis directly as before. ``redis_ttl``
+        gives the Redis copy, shared by every worker and pod, a longer life than the per-worker memory copy."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
+        redis_ttl: Final = cast(float | None, kwargs.pop("redis_ttl", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
         ttl: Final = kwargs.get("ttl")
+        if redis_ttl is not None and key is not None and not local_only and isinstance(ttl, (int, float)):
+            return await self._async_set_split_ttl(key, payload, float(ttl), redis_ttl)
         pipelined: Final = (
             key is not None
             and not local_only
@@ -233,6 +244,27 @@ class UserApiKeyCache(DualCache):
         if pipelined and await super().async_set_cache_pre_call(key, payload, ttl) is not None:
             return None
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
+
+    async def _async_set_split_ttl(self, key: str, payload: object, ttl: float, redis_ttl: float) -> None:
+        layer: Final[DualCache] = self.key_object_cache if is_user_key_cache_key(key) else self
+        if await layer.async_set_cache_pre_call(key, payload, ttl, redis_ttl=redis_ttl) is not None:
+            return
+        if layer is self:
+            await super().async_set_cache(key=key, value=payload, local_only=True, ttl=ttl)
+        else:
+            await layer.async_set_cache(key=key, value=payload, local_only=True, ttl=ttl)
+        if layer.redis_cache is None:
+            return
+        try:
+            await layer.redis_cache.async_set_cache(key, payload, ttl=redis_ttl)
+        except Exception as e:  # noqa: BLE001  # best-effort like DualCache.async_set_cache: a Redis write failure must not fail auth
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.ERROR,
+                "LiteLLM Cache: exception in async add_cache",
+                e,
+                with_traceback=True,
+            )
 
     def delete_cache(self, key: str) -> None:
         if is_user_key_cache_key(key):
@@ -412,3 +444,17 @@ def get_management_object_ttl(cache: DualCache) -> float:
     if configured is not None:
         return configured
     return DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+
+
+def get_management_object_redis_ttl(cache: DualCache) -> float:
+    """
+    TTL for the Redis copy of a management object, shared by every worker and pod.
+
+    Memory refreshes from Redis every ``get_management_object_ttl`` seconds; Postgres is read only when
+    this copy expired or a management write evicted it. An operator-configured
+    ``general_settings.user_api_key_cache_ttl`` bounds both layers, as it did before this split.
+    """
+    configured: Final[float | None] = getattr(cache, "management_redis_ttl", None)
+    if configured is not None:
+        return configured
+    return max(get_management_object_ttl(cache), DEFAULT_MANAGEMENT_OBJECT_REDIS_CACHE_TTL)
