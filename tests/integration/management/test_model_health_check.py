@@ -24,6 +24,14 @@ _CONFIGURED_PROBE_REPLY: Final = JsonResponse(
         "usage": {"input_tokens": 10, "output_tokens": 1},
     },
 )
+_STRANDS_PROBE_REPLY: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "model": "strands-decider-2B-hobson-v19",
+        "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+        "usage": {"input_tokens": 10, "output_tokens": 1},
+    },
+)
 _CONFIGURED_STATE: Final[dict[str, JsonValue]] = {"ticket": "health probe"}
 _CONFIGURED_QUESTIONS: Final[dict[str, JsonValue]] = {
     "alive": {"type": "choice", "criteria": {"yes": "the service answers", "no": "the service is down"}}
@@ -114,5 +122,28 @@ def test_evaluation_mode_health_check_sends_the_configured_state_and_questions(g
             (
                 f"/{handle.scenario_id}/v1/systemone",
                 {"model": "jev-custom", "state": _CONFIGURED_STATE, "questions": _CONFIGURED_QUESTIONS},
+            )
+        ]
+
+
+def test_evaluation_mode_health_check_of_the_self_hosted_strands_model_resolves_the_mode_from_the_cost_map(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _STRANDS_PROBE_REPLY)
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="strands_decider/strands-decider-2B-hobson-v19", api_base=handle.api_base(), api_key=None
+        )
+        report: Final = _health_report(gateway, model)
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+        assert _probes_sent_to(gateway, handle) == [
+            (
+                f"/{handle.scenario_id}/v1/systemone",
+                {
+                    "model": "strands-decider-2B-hobson-v19",
+                    "state": os.environ.get("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"),
+                    "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                },
             )
         ]

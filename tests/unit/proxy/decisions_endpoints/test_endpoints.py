@@ -8,9 +8,15 @@ from typing import Final
 
 import pytest
 import respx
+from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from starlette.routing import Match
 
 import litellm
+from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
+from litellm.proxy.decisions_endpoints.endpoints import decisions
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
 from litellm.proxy.proxy_server import (
     app,
     cleanup_router_config_variables,
@@ -266,3 +272,31 @@ def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     assert response.json()["answers"] == _RESPONSE["answers"]
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
+
+
+def _decisions_feature() -> LazyFeature:
+    return next(feature for feature in LAZY_FEATURES if feature.name == "decisions")
+
+
+def _serving_endpoint(bare: FastAPI, path: str) -> object:
+    scope: Final = {"type": "http", "method": "POST", "path": path, "root_path": "", "query_string": b"", "headers": ()}
+    return next(
+        route.endpoint for route in bare.routes if isinstance(route, APIRoute) and route.matches(scope)[0] is Match.FULL
+    )
+
+
+def test_a_config_pass_through_at_v1_decisions_keeps_its_route_and_the_native_api_serves_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+
+    async def pass_through() -> dict[str, str]:
+        return {"served_by": "pass-through"}
+
+    bare: Final = FastAPI()
+    attach_lazy_features(bare, (_decisions_feature(),))
+    SafeRouteAdder.add_api_route_if_not_exists(bare, "/v1/decisions", pass_through, ["POST"])
+    with TestClient(bare) as client:
+        assert client.post("/v1/decisions", json={"model": "gpt-6-luna"}).json() == {"served_by": "pass-through"}
+    assert _serving_endpoint(bare, "/v1/decisions") is pass_through
+    assert _serving_endpoint(bare, "/decisions") is decisions

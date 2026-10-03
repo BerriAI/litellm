@@ -8,15 +8,22 @@ from typing import Final
 
 import httpx
 import pytest
+import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 
 _API_KEY: Final = "synthetic-decisions-key"
+_ENV_KEY: Final = "synthetic-decisions-env-key"
+_PASS_THROUGH_MODEL: Final = "gpt-6-luna"
+_PASS_THROUGH_AUTHORIZATION: Final = "Bearer customer-held-upstream-key"
+_PASS_THROUGH_NEIGHBOUR: Final = "decisions-beside-a-pass-through"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _USAGE: Final[dict[str, JsonValue]] = {"input_tokens": 367, "output_tokens": 3}
 _STATE: Final[dict[str, JsonValue]] = {"ticket": "The export job hangs at 99%", "component": "billing"}
 _QUESTIONS: Final[dict[str, JsonValue]] = {
@@ -36,6 +43,14 @@ _ANSWERS: Final[dict[str, JsonValue]] = {
     },
 }
 _CHAT_BODY: Final[dict[str, JsonValue]] = {"messages": [{"role": "user", "content": "hi"}]}
+_CHAT_REPLY: Final[dict[str, JsonValue]] = {
+    "id": "chatcmpl-decisions-parity",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "pplx-decider-v1-27b",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+}
 _SPEND_QUERY: Final = (
     "SELECT spend, status, call_type, model_group, custom_llm_provider, api_base, prompt_tokens, completion_tokens, "
     'request_tags FROM "LiteLLM_SpendLogs" WHERE request_id = %s'
@@ -162,6 +177,32 @@ def _free_closed_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def _pass_through_config(directory: Path, pass_through_target: str, native_api_base: str) -> Path:
+    base: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **base,
+        "general_settings": {
+            **object_value(base["general_settings"]),
+            "pass_through_endpoints": [
+                {
+                    "path": "/v1/decisions",
+                    "target": pass_through_target,
+                    "headers": {"Authorization": _PASS_THROUGH_AUTHORIZATION},
+                }
+            ],
+        },
+        "model_list": [
+            {
+                "model_name": _PASS_THROUGH_NEIGHBOUR,
+                "litellm_params": {"model": _PERPLEXITY.model, "api_base": native_api_base, "api_key": _API_KEY},
+            }
+        ],
+    }
+    path: Final = directory / "decisions-pass-through.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS, ids=lambda provider: provider.name)
@@ -298,6 +339,72 @@ def test_request_body_api_base_is_refused_like_chat_without_an_upstream_call(gat
         assert 400 <= decisions.status_code < 500, decisions.text
         assert decisions.status_code == chat.status_code, (decisions.text, chat.text)
         assert _upstream_calls(gateway, handle) == []
+
+
+def test_a_deployment_without_a_key_sends_the_provider_env_key_to_its_configured_api_base(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
+        model: Final = scenario.model(model=_PERPLEXITY.model, api_base=handle.api_base(), api_key=None)
+        response: Final = _decide(gateway, model)
+        assert response.status_code == 200, response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert (call["path"], call["authorization"]) == (f"/{handle.scenario_id}/v1/decisions", f"Bearer {_ENV_KEY}")
+
+
+def test_a_deployment_opted_into_client_api_base_sends_decisions_and_chat_to_the_body_api_base(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        configured: Final = _register(scenario, _answer_body(_PERPLEXITY))
+        decisions_target: Final = _register(scenario, _answer_body(_PERPLEXITY))
+        chat_target: Final = _register(scenario, _CHAT_REPLY)
+        model: Final = scenario.model(
+            model=_PERPLEXITY.model,
+            api_base=configured.api_base(),
+            api_key=_API_KEY,
+            configurable_clientside_auth_params=["api_base"],
+        )
+        decisions: Final = _decide(gateway, model, api_base=decisions_target.api_base())
+        chat: Final = _chat(gateway, model, api_base=chat_target.api_base())
+        assert decisions.status_code == 200, decisions.text
+        assert chat.status_code == 200, chat.text
+        assert [call["path"] for call in _upstream_calls(gateway, decisions_target)] == [
+            f"/{decisions_target.scenario_id}/v1/decisions"
+        ]
+        assert [call["path"] for call in _upstream_calls(gateway, chat_target)] == [
+            f"/{chat_target.scenario_id}/chat/completions"
+        ]
+        assert _upstream_calls(gateway, configured) == []
+
+
+def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_api_serves_decisions(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with gateway.scenario() as scenario:
+        pass_through_target: Final = _register(
+            scenario, {"model": _PASS_THROUGH_MODEL, "answers": _ANSWERS, "usage": _USAGE}
+        )
+        native_target: Final = _register(scenario, _answer_body(_PERPLEXITY))
+        config: Final = _pass_through_config(
+            tmp_path, f"{pass_through_target.api_base()}/v1/decisions", native_target.api_base()
+        )
+        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+            through: Final = _decide(owned.gateway, _PASS_THROUGH_MODEL)
+            native: Final = owned.gateway.request(
+                "POST", "/decisions", {"model": _PASS_THROUGH_NEIGHBOUR, "state": _STATE, "questions": _QUESTIONS}
+            )
+        assert through.status_code == 200, through.text
+        assert through.json() == {"model": _PASS_THROUGH_MODEL, "answers": _ANSWERS, "usage": _USAGE}
+        (forwarded,) = _upstream_calls(gateway, pass_through_target)
+        assert (forwarded["path"], forwarded["authorization"], object_value(forwarded["body"])["model"]) == (
+            f"/{pass_through_target.scenario_id}/v1/decisions",
+            _PASS_THROUGH_AUTHORIZATION,
+            _PASS_THROUGH_MODEL,
+        )
+        assert native.status_code == 200, native.text
+        assert [call["path"] for call in _upstream_calls(gateway, native_target)] == [
+            f"/{native_target.scenario_id}/v1/decisions"
+        ]
 
 
 @pytest.mark.parametrize("status", (401, 429, 500))
