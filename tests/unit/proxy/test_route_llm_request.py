@@ -1412,6 +1412,65 @@ async def test_route_request_read_through_disabled_without_store_model_in_db(mon
 
 
 @pytest.mark.asyncio
+async def test_route_request_read_through_supplies_db_model_default_for_missing_param(monkeypatch):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    model_name = "e2e-db-only-max-tokens-default"
+    router = litellm.Router(
+        model_list=[{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
+    )
+    db_row = SimpleNamespace(
+        model_id=f"{model_name}-id",
+        model_name=model_name,
+        litellm_params={"model": "anthropic/claude-sonnet-4-5", "api_key": "fake", "max_tokens": 64},
+        model_info={},
+        blocked=False,
+    )
+    fake_prisma, table = _fake_prisma_client_with_models([db_row])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    data = {"model": model_name, "messages": [{"role": "user", "content": "hi"}]}
+
+    with patch.object(router, "anthropic_messages", new=AsyncMock(return_value="db_default_used")) as spy:
+        response = await (await route_request(data, router, None, "anthropic_messages"))
+
+    assert response == "db_default_used"
+    spy.assert_called_once()
+    assert table.find_many_wheres[0] == {"model_name": model_name}
+
+
+@pytest.mark.asyncio
+async def test_route_request_missing_param_for_unknown_model_still_400s_after_read_through(monkeypatch):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
+
+    model_name = "e2e-unknown-model-missing-max-tokens"
+    router = litellm.Router(
+        model_list=[{"model_name": "some-other-model", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}]
+    )
+    fake_prisma, table = _fake_prisma_client_with_models([])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        await route_request(
+            {"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+            router,
+            None,
+            "anthropic_messages",
+        )
+
+    assert (exc_info.value.code, exc_info.value.param) == ("400", "max_tokens")
+    assert table.find_many_wheres[0] == {"model_name": model_name}
+
+
+@pytest.mark.asyncio
 async def test_route_request_routing_group_name_passes_model_gate():
     from unittest.mock import AsyncMock, patch
 
