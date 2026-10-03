@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_url_settings import add_missing_query_params, token_refresh_params_from_url
+from litellm.proxy.db.log_db_metrics import record_db_io
 from litellm.proxy.db.token_auth import (
     DEFAULT_POSTGRES_PORT,
     DatabaseTokenAuth,
@@ -106,6 +107,7 @@ class _TrackedPrismaEngine:
         return getattr(self._engine, name)
 
     async def query(self, content: str, *, tx_id: str | None) -> object:
+        record_db_io()
         self.tracker.begin_operation()
         try:
             return await self._engine.query(content, tx_id=tx_id)
@@ -113,6 +115,7 @@ class _TrackedPrismaEngine:
             self.tracker.end_operation()
 
     async def start_transaction(self, *, content: str) -> str:
+        record_db_io()
         self.tracker.begin_operation()
         try:
             transaction_id: Final = await self._engine.start_transaction(content=content)
@@ -123,6 +126,7 @@ class _TrackedPrismaEngine:
         return transaction_id
 
     async def commit_transaction(self, tx_id: str) -> None:
+        record_db_io()
         self.tracker.begin_operation()
         try:
             await self._engine.commit_transaction(tx_id)
@@ -131,6 +135,7 @@ class _TrackedPrismaEngine:
             self.tracker.transaction_finished(tx_id)
 
     async def rollback_transaction(self, tx_id: str) -> None:
+        record_db_io()
         self.tracker.begin_operation()
         try:
             await self._engine.rollback_transaction(tx_id)
