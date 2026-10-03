@@ -6,8 +6,8 @@ but litellm_params["litellm_metadata"] is None.
 """
 
 import threading
-from typing import Final
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -116,6 +116,10 @@ class TestShouldRedactMessageLogging:
             litellm_metadata=None,
         )
         assert should_redact_message_logging(details) is False
+
+    def test_none_headers_fail_closed(self) -> None:
+        details: Final = _make_model_call_details(metadata={"headers": None})
+        assert should_redact_message_logging(details) is True
 
     def test_no_headers_global_on(self):
         """Without headers, respects global turn_off_message_logging=True."""

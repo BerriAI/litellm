@@ -9856,6 +9856,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model-insights/task-classifier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insights Task Classifier */
+        get: operations["get_model_insights_task_classifier_model_insights_task_classifier_get"];
+        /** Put Model Insights Task Classifier */
+        put: operations["put_model_insights_task_classifier_model_insights_task_classifier_put"];
+        post?: never;
+        /** Delete Model Insights Task Classifier */
+        delete: operations["delete_model_insights_task_classifier_model_insights_task_classifier_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model-insights/tasks": {
         parameters: {
             query?: never;
@@ -38080,10 +38099,44 @@ export interface components {
             /** Successful Requests */
             successful_requests: number;
         };
+        /** ModelInsightTaskClassifierConfig */
+        ModelInsightTaskClassifierConfig: {
+            /** Model */
+            model: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "jev" | "laya" | "bespoke";
+        };
+        /** ModelInsightTaskClassifierProvider */
+        ModelInsightTaskClassifierProvider: {
+            /** Label */
+            label: string;
+            /** Missing Env */
+            missing_env: string[];
+            /** Models */
+            models: string[];
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "jev" | "laya" | "bespoke";
+            /** Ready */
+            ready: boolean;
+        };
+        /** ModelInsightTaskClassifierResponse */
+        ModelInsightTaskClassifierResponse: {
+            configured: components["schemas"]["ModelInsightTaskClassifierConfig"] | null;
+            /** Providers */
+            providers: components["schemas"]["ModelInsightTaskClassifierProvider"][];
+        };
         /** ModelInsightTaskSummary */
         ModelInsightTaskSummary: {
             /** Category */
             category: string;
+            /** Description */
+            description: string;
             /** Label */
             label: string;
             /** Leader */
@@ -63950,6 +64003,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insights_task_classifier_model_insights_task_classifier_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightTaskClassifierResponse"];
+                };
+            };
+        };
+    };
+    put_model_insights_task_classifier_model_insights_task_classifier_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelInsightTaskClassifierConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightTaskClassifierResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_model_insights_task_classifier_model_insights_task_classifier_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightTaskClassifierResponse"];
                 };
             };
         };

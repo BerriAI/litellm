@@ -693,6 +693,12 @@ def _extract_current_ask_and_system_prompt(
     return current_ask, system_prompt
 
 
+def extract_current_ask_and_system_prompt(
+    messages: Sequence[Mapping[str, object]],
+) -> tuple[str | None, str | None]:
+    return _extract_current_ask_and_system_prompt(messages)
+
+
 def _last_human_ask_index(
     messages: Sequence[Mapping[str, object]],
     marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
@@ -1309,7 +1315,7 @@ class ComplexityRouter(CustomLogger):
     """
 
     @staticmethod
-    def _build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    def build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
         if config.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import oss_connection
 
@@ -1371,7 +1377,7 @@ class ComplexityRouter(CustomLogger):
         self._jev_client: JevClassifierClient | None = (
             jev_client
             if jev_client is not None
-            else self._build_jev_client(jev_config)
+            else self.build_jev_client(jev_config)
             if self.config.classifier_type == "oss_classifier" and jev_config is not None
             else None
         )

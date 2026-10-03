@@ -32,6 +32,20 @@ export type TaskSummary = {
 };
 export type ModelInsightTasksResponse = { start_date: string; end_date: string; tasks: TaskSummary[] };
 
+export type ClassifierProvider = "jev" | "laya" | "bespoke";
+export type TaskClassifierSelection = { provider: ClassifierProvider; model: string };
+export type TaskClassifierProviderOption = {
+  provider: ClassifierProvider;
+  label: string;
+  models: string[];
+  ready: boolean;
+  missing_env: string[];
+};
+export type TaskClassifierStatus = {
+  configured: TaskClassifierSelection | null;
+  providers: TaskClassifierProviderOption[];
+};
+
 export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
 export type Granularity = "day" | "week";
 

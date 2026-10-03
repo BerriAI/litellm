@@ -1,17 +1,30 @@
+from __future__ import annotations
+
 import functools
 import itertools
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime, timedelta, timezone
-from typing import Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from litellm.constants import MODEL_INSIGHTS_DEFAULT_TASK, MODEL_INSIGHTS_MAX_RANGE_DAYS, MODEL_INSIGHTS_TOP_MODELS
+from litellm.llms.oss_decision import OSS_DECISION_MODELS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
+from litellm.proxy.db.model_usage_task_classifier import (
+    MODEL_USAGE_TASK_CLASSIFIER,
+    MODEL_USAGE_TASK_CLASSIFIER_PARAM,
+    ModelUsageTaskClassifier,
+    build_model_usage_task_classifier_client,
+)
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import DailyModelUsageRepository
+from litellm.router_strategy.complexity_router.config import OpenSourceClassifierConfig
+from litellm.router_strategy.complexity_router.jev_classifier import JevClassifierClient
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.model_insights import (
     ModelInsightDailyMetric,
     ModelInsightDailyTotal,
@@ -19,9 +32,16 @@ from litellm.types.model_insights import (
     ModelInsightsMetric,
     ModelInsightsResponse,
     ModelInsightTask,
+    ModelInsightTaskClassifierConfig,
+    ModelInsightTaskClassifierProvider,
+    ModelInsightTaskClassifierProviderName,
+    ModelInsightTaskClassifierResponse,
     ModelInsightTasksResponse,
     ModelInsightTaskSummary,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
@@ -60,7 +80,10 @@ _DAILY_ROWS: Final = TypeAdapter(list[_GroupedDaily])
 _DATE_ROWS: Final = TypeAdapter(list[_GroupedDate])
 _TASK_ROWS: Final = TypeAdapter(list[_GroupedTask])
 _UNCATEGORIZED_TASK: Final = ModelInsightTask(
-    task_type=MODEL_INSIGHTS_DEFAULT_TASK, label="Uncategorized", category="General"
+    task_type=MODEL_INSIGHTS_DEFAULT_TASK,
+    label="Uncategorized",
+    category="General",
+    description="Requests without a recognized task classification.",
 )
 _SUM_FIELDS: Final = {
     "spend": True,
@@ -175,6 +198,187 @@ def _resolve_window(
         )
     date_window: Final[Mapping[str, object]] = {"date": {"gte": start_day.isoformat(), "lte": end_day.isoformat()}}
     return start_day, end_day, date_window, DailyModelUsageRepository(prisma_client)
+
+
+def _model_insights_task_classifier_environment_lookup() -> Callable[[str], str | None]:
+    return get_secret_str
+
+
+def _model_insights_task_classifier_client_builder() -> Callable[[OpenSourceClassifierConfig], JevClassifierClient]:
+    return build_model_usage_task_classifier_client
+
+
+def _model_insights_task_classifier_runtime() -> ModelUsageTaskClassifier:
+    return MODEL_USAGE_TASK_CLASSIFIER
+
+
+def _classifier_required_environment(provider: ModelInsightTaskClassifierProviderName) -> str:
+    match provider:
+        case "jev":
+            return "TYPESAFE_API_KEY"
+        case "laya":
+            return "LAYA_API_BASE"
+        case "bespoke":
+            return "BESPOKE_API_BASE"
+
+
+def _classifier_models(provider: ModelInsightTaskClassifierProviderName) -> tuple[str, ...]:
+    match provider:
+        case "jev":
+            return ("jev-latest",)
+        case "laya":
+            return OSS_DECISION_MODELS["laya"]
+        case "bespoke":
+            return OSS_DECISION_MODELS["bespoke"]
+
+
+def _classifier_provider(
+    provider: ModelInsightTaskClassifierProviderName,
+    label: str,
+    env_lookup: Callable[[str], str | None],
+) -> ModelInsightTaskClassifierProvider:
+    required_env: Final = _classifier_required_environment(provider)
+    ready: Final = bool(env_lookup(required_env))
+    return ModelInsightTaskClassifierProvider(
+        provider=provider,
+        label=label,
+        models=list(_classifier_models(provider)),
+        ready=ready,
+        missing_env=[] if ready else [required_env],
+    )
+
+
+def _task_classifier_response(
+    configured: ModelInsightTaskClassifierConfig | None,
+    env_lookup: Callable[[str], str | None],
+) -> ModelInsightTaskClassifierResponse:
+    return ModelInsightTaskClassifierResponse(
+        configured=configured,
+        providers=[
+            _classifier_provider("jev", "Jev (TypeSafe)", env_lookup),
+            _classifier_provider("laya", "Laya", env_lookup),
+            _classifier_provider("bespoke", "Bespoke Nimble", env_lookup),
+        ],
+    )
+
+
+def _task_classifier_config(stored_value: object | None) -> ModelInsightTaskClassifierConfig | None:
+    if stored_value is None:
+        return None
+    try:
+        return ModelInsightTaskClassifierConfig.model_validate(stored_value)
+    except ValidationError:
+        return None
+
+
+def _require_task_classifier_role(user: UserAPIKeyAuth, *, allow_view_only: bool) -> None:
+    allowed_roles: Final = (
+        (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        if allow_view_only
+        else (LitellmUserRoles.PROXY_ADMIN,)
+    )
+    if user.user_role not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Only proxy admins can manage the model insights task classifier")
+
+
+def _model_insights_task_classifier_prisma() -> PrismaClient:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    return prisma_client
+
+
+@router.get(
+    "/model-insights/task-classifier",
+    tags=["model insights"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelInsightTaskClassifierResponse,
+)
+async def get_model_insights_task_classifier(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    env_lookup: Annotated[
+        Callable[[str], str | None],
+        Depends(_model_insights_task_classifier_environment_lookup),
+    ],
+) -> ModelInsightTaskClassifierResponse:
+    _require_task_classifier_role(user_api_key_dict, allow_view_only=True)
+    prisma_client: Final = _model_insights_task_classifier_prisma()
+    stored: Final = await ConfigRepository(prisma_client).get_param(MODEL_USAGE_TASK_CLASSIFIER_PARAM)
+    return _task_classifier_response(
+        _task_classifier_config(stored.param_value if stored is not None else None), env_lookup
+    )
+
+
+@router.put(
+    "/model-insights/task-classifier",
+    tags=["model insights"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelInsightTaskClassifierResponse,
+)
+async def put_model_insights_task_classifier(
+    body: ModelInsightTaskClassifierConfig,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    env_lookup: Annotated[
+        Callable[[str], str | None],
+        Depends(_model_insights_task_classifier_environment_lookup),
+    ],
+    client_builder: Annotated[
+        Callable[[OpenSourceClassifierConfig], JevClassifierClient],
+        Depends(_model_insights_task_classifier_client_builder),
+    ],
+    classifier: Annotated[ModelUsageTaskClassifier, Depends(_model_insights_task_classifier_runtime)],
+) -> ModelInsightTaskClassifierResponse:
+    _require_task_classifier_role(user_api_key_dict, allow_view_only=False)
+    prisma_client: Final = _model_insights_task_classifier_prisma()
+    required_env: Final = _classifier_required_environment(body.provider)
+    if not env_lookup(required_env):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Provider {body.provider!r} is not ready; set {required_env}",
+        )
+    if body.model not in _classifier_models(body.provider):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model {body.model!r} for provider {body.provider!r}",
+        )
+    try:
+        classifier_config: Final = OpenSourceClassifierConfig(provider=body.provider, model=body.model)
+        client: Final = client_builder(classifier_config)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid task classifier configuration: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not configure provider {body.provider!r} ({type(exc).__name__})",
+        ) from exc
+    await ConfigRepository(prisma_client).set_param(
+        MODEL_USAGE_TASK_CLASSIFIER_PARAM,
+        body.model_dump(mode="json"),
+    )
+    await classifier.activate(body, client)
+    return _task_classifier_response(body, env_lookup)
+
+
+@router.delete(
+    "/model-insights/task-classifier",
+    tags=["model insights"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelInsightTaskClassifierResponse,
+)
+async def delete_model_insights_task_classifier(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    env_lookup: Annotated[
+        Callable[[str], str | None],
+        Depends(_model_insights_task_classifier_environment_lookup),
+    ],
+    classifier: Annotated[ModelUsageTaskClassifier, Depends(_model_insights_task_classifier_runtime)],
+) -> ModelInsightTaskClassifierResponse:
+    _require_task_classifier_role(user_api_key_dict, allow_view_only=False)
+    prisma_client: Final = _model_insights_task_classifier_prisma()
+    await ConfigRepository(prisma_client).delete_param(MODEL_USAGE_TASK_CLASSIFIER_PARAM)
+    await classifier.clear(prisma_client)
+    return _task_classifier_response(None, env_lookup)
 
 
 @router.get(

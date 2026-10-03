@@ -3,6 +3,25 @@ from typing import Literal
 from pydantic import BaseModel
 
 ModelInsightsMetric = Literal["requests", "spend", "tokens"]
+ModelInsightTaskClassifierProviderName = Literal["jev", "laya", "bespoke"]
+
+
+class ModelInsightTaskClassifierConfig(BaseModel):
+    provider: ModelInsightTaskClassifierProviderName
+    model: str
+
+
+class ModelInsightTaskClassifierProvider(BaseModel):
+    provider: ModelInsightTaskClassifierProviderName
+    label: str
+    models: list[str]
+    ready: bool
+    missing_env: list[str]
+
+
+class ModelInsightTaskClassifierResponse(BaseModel):
+    configured: ModelInsightTaskClassifierConfig | None
+    providers: list[ModelInsightTaskClassifierProvider]
 
 
 class ModelInsightMetric(BaseModel):
@@ -33,6 +52,7 @@ class ModelInsightTask(BaseModel):
     task_type: str
     label: str
     category: str
+    description: str
 
 
 class ModelInsightTaskSummary(ModelInsightTask):

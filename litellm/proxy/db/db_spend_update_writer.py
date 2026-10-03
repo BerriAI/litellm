@@ -74,7 +74,10 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     WindowSpendUpdateQueue,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
+from litellm.proxy.db.model_usage_rollup import (
+    MODEL_USAGE_PROMPT_MAX_CHARS,
+    build_model_usage_transaction,
+)
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
@@ -100,6 +103,56 @@ else:
 
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_MODEL_USAGE_MESSAGES_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+_MODEL_USAGE_LOGGING_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _extract_model_usage_prompt(messages: object) -> str | None:
+    if isinstance(messages, str):
+        return messages
+    if not isinstance(messages, list):
+        return None
+    from litellm.router_strategy.complexity_router.complexity_router import (
+        extract_current_ask_and_system_prompt,
+    )
+
+    chat_messages: Final = _MODEL_USAGE_MESSAGES_ADAPTER.validate_python(messages)
+    return extract_current_ask_and_system_prompt(chat_messages)[0]
+
+
+def _model_usage_prompt(kwargs: object | None) -> str | None:
+    try:
+        if kwargs is None:
+            return None
+        logging_kwargs: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs)
+        standard_logging_object: Final = _MODEL_USAGE_LOGGING_OBJECT_ADAPTER.validate_python(
+            logging_kwargs.get("standard_logging_object")
+        )
+        messages: Final[object] = standard_logging_object.get("messages")
+        prompt: Final = _extract_model_usage_prompt(messages)
+        if not prompt:
+            return None
+        from litellm.litellm_core_utils.internal_call_metadata import effective_turn_off_message_logging
+        from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+        if effective_turn_off_message_logging(logging_kwargs) is True:
+            return None
+        litellm_params_value: Final = logging_kwargs.get("litellm_params")
+        litellm_params: Final = (
+            _MODEL_USAGE_LOGGING_OBJECT_ADAPTER.validate_python(litellm_params_value)
+            if isinstance(litellm_params_value, Mapping)
+            else {}
+        )
+        model_call_details: Final[dict[str, object]] = {
+            "litellm_params": litellm_params,
+            "standard_callback_dynamic_params": logging_kwargs.get("standard_callback_dynamic_params"),
+        }
+        if should_redact_message_logging(model_call_details):
+            return None
+        return prompt[:MODEL_USAGE_PROMPT_MAX_CHARS]
+    except Exception as exc:
+        verbose_proxy_logger.debug("Model usage prompt extraction failed (%s)", type(exc).__name__)
+        return None
 
 
 def _org_member_transaction_key(org_id: str, user_id: str) -> str:
@@ -563,6 +616,7 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
+            request_kwargs_for_model_usage: Final[object | None] = cast(object | None, kwargs)
             if not await self._record_spend_log(
                 payload=payload, prisma_client=prisma_client, disable_spend_logs=disable_spend_logs
             ):
@@ -600,6 +654,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
+                    model_usage_prompt=_model_usage_prompt(request_kwargs_for_model_usage),
                     request_model_access_groups=get_request_model_access_groups(kwargs),
                 )
             )
@@ -754,13 +809,15 @@ class DBSpendUpdateWriter:
         self,
         payload: SpendLogsPayload,
         prisma_client: PrismaClient,
+        model_usage_prompt: str | None = None,
     ) -> None:
         try:
-            transaction: Final = build_model_usage_transaction(payload)
+            transaction: Final = build_model_usage_transaction(payload, prompt=model_usage_prompt)
             if transaction is None:
                 return
-            async with prisma_client._model_usage_transactions_lock:
-                prisma_client.model_usage_transactions.append(transaction)
+            from litellm.proxy.db.model_usage_task_classifier import MODEL_USAGE_TASK_CLASSIFIER
+
+            await MODEL_USAGE_TASK_CLASSIFIER.enqueue(prisma_client, transaction)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_model_usage_transaction error (non-blocking): %s", e)
 
@@ -1011,6 +1068,7 @@ class DBSpendUpdateWriter:
         prisma_client: PrismaClient | None,
         litellm_proxy_budget_name: str | None,
         payload: SpendLogsPayload,
+        model_usage_prompt: str | None = None,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
     ):
@@ -1188,7 +1246,12 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
-        await self._enqueue_model_usage_transaction(payload=payload_copy, prisma_client=prisma_client)
+        if prisma_client is not None:
+            await self._enqueue_model_usage_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+                model_usage_prompt=model_usage_prompt,
+            )
 
     async def _update_key_db(
         self,
