@@ -63,6 +63,13 @@ describe("findingAgents", () => {
   });
 });
 
+const ranked = (id: string, title: string, priority: Finding["priority"], lastSeen: string): Partial<Finding> => ({
+  id,
+  title,
+  priority,
+  last_seen: lastSeen,
+});
+
 describe("inboxRows", () => {
   it("merges the same problem for the same agent across investigations into one row", () => {
     const rows = inboxRows([
@@ -101,9 +108,9 @@ describe("inboxRows", () => {
   it("orders by priority, then by most recent", () => {
     const rows = inboxRows([
       lens("a", "x", [
-        finding({ id: "1", title: "old high", priority: "high", last_seen: "2026-10-01T00:00:00Z" }),
-        finding({ id: "2", title: "new low", priority: "low", last_seen: "2026-10-03T00:00:00Z" }),
-        finding({ id: "3", title: "new high", priority: "high", last_seen: "2026-10-02T00:00:00Z" }),
+        finding(ranked("1", "old high", "high", "2026-10-01T00:00:00Z")),
+        finding(ranked("2", "new low", "low", "2026-10-03T00:00:00Z")),
+        finding(ranked("3", "new high", "high", "2026-10-02T00:00:00Z")),
       ]),
     ]);
     expect(rows.map((r) => r.title)).toEqual(["new high", "old high", "new low"]);
