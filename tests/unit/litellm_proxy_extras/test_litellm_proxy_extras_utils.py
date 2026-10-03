@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Final, Optional
+from typing import Final, NoReturn, Optional
 
 import pytest
 
@@ -1318,6 +1318,30 @@ class TestV1MigrationFailuresLogAtError:
             for message in messages
         )
 
+    def test_called_process_error_with_no_command_retries_all_v1_attempts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import litellm_proxy_extras.utils as utils_module
+
+        migration_dir: Final = tmp_path / "migration_dir"
+        migration_dir.mkdir()
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(migration_dir))
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
+        calls: Final[list[None]] = []
+
+        def fail_run(*args: object, **kwargs: object) -> NoReturn:
+            calls.append(None)
+            raise subprocess.CalledProcessError(1, None, stderr="Error: P3018 unclassified")
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", fail_run)
+
+        succeeded: Final = ProxyExtrasDBManager._run_migrations(use_migrate=True, use_v2_resolver=False)
+
+        assert succeeded is False
+        assert len(calls) == 4
+
     def test_a_timeout_logs_at_error_naming_the_migrate_deploy_timeout_env_var(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -1485,3 +1509,40 @@ def test_redact_command_error_masks_url_arguments(password: str, monkeypatch: py
     assert "7x" not in message
     assert "postgresql://REDACTED@db:5432/litellm" in message
     assert "returned non-zero exit status 1" in message
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        None,
+        Path("/usr/bin/prisma"),
+        7,
+        ("prisma", "migrate", "deploy"),
+        ["prisma", "migrate", "deploy"],
+        "prisma migrate deploy",
+    ),
+)
+def test_redact_command_error_preserves_unredacted_command_format(
+    command: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    error: Final = subprocess.CalledProcessError(1, command)
+
+    assert _redact_command_error(error) == str(error)
+
+
+def test_redact_command_error_masks_password_in_tuple_url_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password: Final = "zq 7x"
+    database_url: Final = f"postgresql://u:{password}@db:5432/litellm"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    error: Final = subprocess.CalledProcessError(1, ("prisma", "migrate", "deploy", "--to-url", database_url))
+
+    message: Final = _redact_command_error(error)
+
+    assert message.startswith("Command '('")
+    assert password not in message
+    assert "postgresql://REDACTED@db:5432/litellm" in message

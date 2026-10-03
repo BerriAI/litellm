@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, Union
 from urllib.parse import unquote, urlsplit
 
 from litellm_proxy_extras import prisma_toolchain
@@ -234,13 +234,17 @@ def _redact_credentials(text: str) -> str:
     return _secret_shape_redactor()(result)
 
 
+def _redacted_command(command: object) -> Union[str, tuple[str, ...], list[str]]:
+    if isinstance(command, tuple):
+        return tuple(_redact_credentials(str(argument)) for argument in command)
+    if isinstance(command, list):
+        return [_redact_credentials(str(argument)) for argument in command]
+    return _redact_credentials(str(command))
+
+
 def _redact_command_error(error: subprocess.CalledProcessError) -> str:
-    command: Final = (
-        _redact_credentials(error.cmd)
-        if isinstance(error.cmd, str)
-        else [_redact_credentials(str(argument)) for argument in error.cmd]
-    )
-    return str(subprocess.CalledProcessError(error.returncode, command))
+    redacted_command: Final = _redacted_command(error.cmd)
+    return str(subprocess.CalledProcessError(error.returncode, redacted_command))
 
 
 def _get_prisma_command() -> str:
