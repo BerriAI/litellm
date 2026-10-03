@@ -6,7 +6,6 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import asyncio
 import json
-import os
 import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
@@ -25,6 +24,11 @@ from .common_utils import (
     all_gemini_url_modes,
     get_vertex_base_model_name,
     get_vertex_base_url,
+)
+from .credentials_source import (
+    VertexCredentialsJson,
+    load_vertex_credentials_source,
+    raise_vertex_credentials_failure,
 )
 
 
@@ -127,27 +131,10 @@ class VertexBase:
     ) -> tuple[_VertexCredentialsObject | None, str]:
         if credentials is not None:
             if isinstance(credentials, str):
-                _is_path: Final = os.path.exists(
-                    credentials
-                )  # credentials is from server config (litellm_params), not user input
-                verbose_logger.debug(
-                    "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
-                    _is_path,
-                    os.getcwd(),
-                )
-
-                try:
-                    if _is_path:
-                        with open(credentials) as f:
-                            json_obj = json.load(f)
-                    else:
-                        json_obj = json.loads(credentials)
-                except Exception as e:
-                    raise Exception(
-                        "Unable to load vertex credentials from environment. "
-                        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-                        f"Parse error: {type(e).__name__}"
-                    )
+                source: Final = load_vertex_credentials_source(credentials)
+                if not isinstance(source, VertexCredentialsJson):
+                    raise_vertex_credentials_failure(source)
+                json_obj: Mapping[str, object] = source.value
             elif isinstance(credentials, dict):
                 json_obj = credentials
             else:
