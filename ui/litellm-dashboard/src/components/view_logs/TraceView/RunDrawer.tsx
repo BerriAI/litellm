@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronsRight, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronsRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { cn } from "@/lib/cva.config";
@@ -130,6 +130,14 @@ function HeaderButton({
   );
 }
 
+function FullScreenButton({ fullScreen, onToggle }: { fullScreen: boolean; onToggle: () => void }) {
+  return (
+    <HeaderButton label={fullScreen ? "Exit full screen" : "Enter full screen"} onClick={onToggle}>
+      {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+    </HeaderButton>
+  );
+}
+
 interface RunDrawerProps {
   trace: TraceSummary | null;
   runs: readonly TraceSummary[];
@@ -142,6 +150,7 @@ const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 /** Right-side drawer over the runs list: resizable, keeps the list clickable, swaps runs in place. */
 export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps) {
   const [width, setWidth] = useDrawerWidth();
+  const [fullScreen, setFullScreen] = useState(false);
   const [lastShown, setLastShown] = useState<TraceSummary | null>(trace);
   const [exitedKey, setExitedKey] = useState<string | null>(null);
   if (trace !== null && trace !== lastShown) setLastShown(trace);
@@ -183,7 +192,7 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
     <aside
       aria-label="Trace details"
       data-testid="run-drawer"
-      style={{ width }}
+      style={{ width: fullScreen ? "100%" : width }}
       onAnimationEnd={(event) => {
         if (closing && event.target === event.currentTarget) setExitedKey(runKey(shown));
       }}
@@ -192,7 +201,7 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
         closing ? "animate-trace-drawer-out" : "animate-trace-drawer-in",
       )}
     >
-      <ResizeHandle width={width} onResize={setWidth} />
+      {!fullScreen && <ResizeHandle width={width} onResize={setWidth} />}
       <div className="flex h-[37px] shrink-0 items-center gap-1 border-b border-border px-2">
         <HeaderButton label="Close (Esc)" onClick={() => onSelect(null)}>
           <ChevronsRight className="size-4" />
@@ -209,6 +218,12 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
             {index + 1} / {runs.length}
           </span>
         )}
+        <div className="ml-auto flex items-center gap-1">
+          <FullScreenButton fullScreen={fullScreen} onToggle={() => setFullScreen((current) => !current)} />
+          <HeaderButton label="Close trace (Esc)" onClick={() => onSelect(null)}>
+            <X className="size-4" />
+          </HeaderButton>
+        </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <RunView
