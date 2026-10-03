@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+import litellm
+
 from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
     VertexAIGeminiImageEditConfig,
 )
@@ -132,7 +134,7 @@ class TestVertexAIGeminiImageEditTransformation:
         """Test that missing image raises ValueError"""
         optional_params = {}
 
-        with pytest.raises(ValueError, match="requires at least one image"):
+        with pytest.raises(litellm.BadRequestError, match="requires at least one image"):
             self.config.transform_image_edit_request(
                 model=self.model,
                 prompt=self.prompt,
