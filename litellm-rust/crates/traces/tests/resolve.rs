@@ -794,3 +794,67 @@ fn complete_wrapper_accounts_for_retries_missing_from_the_call_span() {
     assert_eq!(trace.summary.spend, Some(0.75));
     assert_eq!(trace.agents[0].spend, Some(0.75));
 }
+
+#[rstest]
+#[case::parent_first(false)]
+#[case::child_first(true)]
+fn overlapping_model_spans_count_leaf_usage_and_keep_agent_ownership(#[case] reverse: bool) {
+    let root = TraceSpansRow {
+        input_tokens: 900,
+        output_tokens: 800,
+        ..row("root", "", "planner", "agent", "planner")
+    };
+    let wrapper = TraceSpansRow {
+        input_tokens: 700,
+        output_tokens: 600,
+        ..llm("wrapper", "root", "", "")
+    };
+    let call = llm("call", "wrapper", "", "");
+    let rows = if reverse {
+        [call, wrapper, root]
+    } else {
+        [root, wrapper, call]
+    };
+    let trace = resolve_trace("trace", "ref", &rows, &[]).unwrap();
+    assert_eq!(trace.summary.name, "planner");
+    assert_eq!(trace.summary.llm_calls, 1);
+    assert_eq!(
+        (trace.summary.input_tokens, trace.summary.output_tokens),
+        (100, 20)
+    );
+    assert_eq!(trace.agents.len(), 1);
+    assert_eq!(trace.agents[0].name, "planner");
+    assert_eq!(trace.agents[0].llm_calls, 1);
+}
+
+#[rstest]
+fn empty_root_preview_uses_the_earliest_agent_or_model_input() {
+    let rows = [
+        at(
+            TraceSpansRow {
+                input_preview: "later input".into(),
+                ..llm("later", "root", "", "")
+            },
+            20,
+            1,
+        ),
+        TraceSpansRow {
+            input_preview: String::new(),
+            ..row("root", "", "planner", "agent", "planner")
+        },
+        at(row("tool", "root", "search", "tool", ""), 1, 1),
+        at(
+            TraceSpansRow {
+                input_preview: "earlier input".into(),
+                ..llm("earlier", "root", "", "")
+            },
+            10,
+            1,
+        ),
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &[]).unwrap();
+    assert_eq!(trace.summary.input_preview, rows[3].input_preview);
+    assert_eq!(trace.summary.name, rows[1].name);
+    assert_eq!(trace.spans[0].start_offset_ms, 20.0);
+    assert_eq!(trace.spans[3].start_offset_ms, 10.0);
+}

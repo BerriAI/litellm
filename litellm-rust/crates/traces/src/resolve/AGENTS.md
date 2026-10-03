@@ -1,5 +1,5 @@
 - Resolve normalized span evidence across the available trace into span views, agent nodes, and summaries shared by trace detail and list responses
-- Keep graph traversal in `graph.rs`, spend lookup and evidence matching in `spend.rs`, and view assembly in `mod.rs`
+- Keep graph traversal in `graph.rs`, spend lookup and evidence matching in `spend.rs`, role and call resolution in `resolution.rs`, and view assembly in `view.rs`; keep `mod.rs` as the entrypoint
 - Own wrapper resolution, agent ownership, model and tool call deduplication, usage totals, and spend attribution
 - Handle missing parents, self-links, and cycles without assuming export order or a complete graph
 - Match spend only within the trace's team and user or API-key ownership; preserve the distinction between request IDs, response IDs, and transport span IDs
