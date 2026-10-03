@@ -34,6 +34,7 @@ def tag_txn(**overrides):
         "endpoint": "/chat/completions",
         "prompt_tokens": 10,
         "completion_tokens": 20,
+        "timed_completion_tokens": 20,
         "spend": 0.25,
         "api_requests": 1,
         "successful_requests": 1,
@@ -87,10 +88,10 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 25 bound columns per row plus the inlined updated_at, so the row count is what
+    # 26 bound columns per row plus the inlined updated_at, so the row count is what
     # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 25
-    assert "$2500::text" in sql
+    assert len(params) == 100 * 26
+    assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
@@ -115,6 +116,7 @@ def test_conflict_target_is_the_full_unique_constraint():
         "failed_requests",
         "total_response_time_ms",
         "timed_requests",
+        "timed_completion_tokens",
     ],
 )
 def test_counters_increment_rather_than_overwrite(column):

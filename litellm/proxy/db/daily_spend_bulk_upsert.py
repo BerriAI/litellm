@@ -91,6 +91,7 @@ _COUNTER_COLUMNS: Final = (
     "compression_saved_tokens",
     "total_response_time_ms",
     "timed_requests",
+    "timed_completion_tokens",
 )
 _SPEND_COLUMNS: Final = (
     "spend",

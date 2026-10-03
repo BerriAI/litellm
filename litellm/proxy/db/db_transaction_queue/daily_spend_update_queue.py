@@ -162,6 +162,10 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                         payload.get("timed_requests", 0) or 0
                     ) + daily_transaction.get("timed_requests", 0)
 
+                    daily_transaction["timed_completion_tokens"] = (
+                        payload.get("timed_completion_tokens", 0) or 0
+                    ) + daily_transaction.get("timed_completion_tokens", 0)
+
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)
         return aggregated_daily_spend_update_transactions

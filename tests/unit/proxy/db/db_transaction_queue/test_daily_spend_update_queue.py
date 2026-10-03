@@ -40,6 +40,7 @@ async def test_add_single_update(daily_spend_update_queue):
         "spend": 10.0,
         "prompt_tokens": 100,
         "completion_tokens": 50,
+        "timed_completion_tokens": 50,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -73,6 +74,7 @@ async def test_add_multiple_updates(daily_spend_update_queue):
         "spend": 5.0,
         "prompt_tokens": 200,
         "completion_tokens": 30,
+        "timed_completion_tokens": 0,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -181,6 +183,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "spend": 10.0,
         "prompt_tokens": 100,
         "completion_tokens": 50,
+        "timed_completion_tokens": 50,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -190,6 +193,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "spend": 5.0,
         "prompt_tokens": 200,
         "completion_tokens": 30,
+        "timed_completion_tokens": 0,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -199,6 +203,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "spend": 15.0,  # 10 + 5
         "prompt_tokens": 300,  # 100 + 200
         "completion_tokens": 80,  # 50 + 30
+        "timed_completion_tokens": 50,
         "api_requests": 2,  # 1 + 1
         "successful_requests": 2,  # 1 + 1
         "failed_requests": 0,  # 0 + 0
@@ -235,6 +240,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "spend": 10.0,
         "prompt_tokens": 100,
         "completion_tokens": 50,
+        "timed_completion_tokens": 50,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -244,6 +250,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "spend": 5.0,
         "prompt_tokens": 200,
         "completion_tokens": 30,
+        "timed_completion_tokens": 0,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -253,6 +260,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "spend": 15.0,  # 10 + 5
         "prompt_tokens": 300,  # 100 + 200
         "completion_tokens": 80,  # 50 + 30
+        "timed_completion_tokens": 50,
         "api_requests": 2,  # 1 + 1
         "successful_requests": 2,  # 1 + 1
         "failed_requests": 0,  # 0 + 0

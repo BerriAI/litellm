@@ -3714,6 +3714,7 @@ async def test_daily_transaction_rolls_up_response_time_for_successful_requests(
     assert transaction is not None
     assert transaction["total_response_time_ms"] == request_duration_ms
     assert transaction["timed_requests"] == 1
+    assert transaction["timed_completion_tokens"] == 5
 
 
 @pytest.mark.asyncio
@@ -3746,6 +3747,7 @@ async def test_daily_transaction_excludes_untimed_requests_from_response_time(
     assert transaction is not None
     assert transaction["total_response_time_ms"] == 0
     assert transaction["timed_requests"] == 0
+    assert transaction["timed_completion_tokens"] == 0
 
 
 def _deadlock_error():

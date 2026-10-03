@@ -42,7 +42,7 @@ export interface MetricWithMetadata {
 }
 
 export interface ProviderThroughputMetrics {
-  completion_tokens: number;
+  timed_completion_tokens: number;
   total_response_time_ms: number;
   timed_requests: number;
   output_tokens_per_second?: number | null;

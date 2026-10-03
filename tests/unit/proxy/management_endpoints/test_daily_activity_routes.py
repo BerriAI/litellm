@@ -59,6 +59,7 @@ class _Activity:
     failed_requests: int
     total_response_time_ms: int
     timed_requests: int
+    timed_completion_tokens: int
 
 
 _ENTITY_CASES: Final[tuple[tuple[str, str, str], ...]] = (
@@ -101,6 +102,7 @@ def _activity_for_entity(
             failed_requests=0,
             total_response_time_ms=100,
             timed_requests=1,
+            timed_completion_tokens=5,
         )
         for api_key, date, model, spend, cache_read in key_rows
     )
@@ -157,6 +159,7 @@ def _seeded_activity() -> tuple[_Activity, ...]:
             failed_requests=0,
             total_response_time_ms=100,
             timed_requests=1,
+            timed_completion_tokens=5,
         )
         for table in entity_ids
     )
@@ -180,6 +183,7 @@ def _metrics(rows: Sequence[_Activity]) -> Mapping[str, int | float]:
         "failed_requests": sum(row.failed_requests for row in rows),
         "total_response_time_ms": sum(row.total_response_time_ms for row in rows),
         "timed_requests": sum(row.timed_requests for row in rows),
+        "timed_completion_tokens": sum(row.timed_completion_tokens for row in rows),
     }
 
 

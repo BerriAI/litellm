@@ -4352,11 +4352,6 @@
         },
         "ProviderThroughputMetrics": {
           "properties": {
-            "completion_tokens": {
-              "default": 0,
-              "title": "Completion Tokens",
-              "type": "integer"
-            },
             "output_tokens_per_second": {
               "anyOf": [
                 {
@@ -4367,6 +4362,11 @@
                 }
               ],
               "title": "Output Tokens Per Second"
+            },
+            "timed_completion_tokens": {
+              "default": 0,
+              "title": "Timed Completion Tokens",
+              "type": "integer"
             },
             "timed_requests": {
               "default": 0,

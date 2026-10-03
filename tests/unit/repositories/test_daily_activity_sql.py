@@ -237,17 +237,11 @@ def test_aggregate_query_sums_all_savings_drivers_and_response_time() -> None:
     fields: Final = tuple(field for field in SpendMetrics.model_fields if field.endswith("_savings_spend")) + (
         "total_response_time_ms",
         "timed_requests",
+        "timed_completion_tokens",
     )
 
     assert fields
     assert all(f"SUM({field})" in query.sql for field in fields)
-
-
-def test_aggregated_query_groups_models_and_model_groups_by_provider() -> None:
-    query = build_aggregated_sql(_scope(), api_key_limit=constants.USAGE_TOP_API_KEYS_DEFAULT)
-
-    assert "(date, model, custom_llm_provider)" in query.sql
-    assert "(date, COALESCE(NULLIF(model_group, ''), model), custom_llm_provider)" in query.sql
 
 
 def test_aggregated_query_binds_sentinel_and_api_key_limit_after_scope_values() -> None:

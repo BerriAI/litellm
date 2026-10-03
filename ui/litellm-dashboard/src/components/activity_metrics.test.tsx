@@ -1416,7 +1416,7 @@ describe("processActivityData", () => {
       api_key_breakdown: {},
       provider_breakdown: {
         openai: {
-          completion_tokens: 900,
+          timed_completion_tokens: 900,
           total_response_time_ms: 3000,
           timed_requests: 3,
           output_tokens_per_second: 300,

@@ -161,6 +161,9 @@ class DailySpendRecord(Protocol):
     @property
     def timed_requests(self) -> int: ...
 
+    @property
+    def timed_completion_tokens(self) -> int: ...
+
 
 class _KeyMetadataDict(TypedDict, total=False):
     key_alias: ReadOnly[str | None]
@@ -238,15 +241,17 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
 
 
 def _provider_throughput(
-    completion_tokens: int,
+    timed_completion_tokens: int,
     total_response_time_ms: int,
     timed_requests: int,
 ) -> ProviderThroughputMetrics:
     output_tokens_per_second: Final = (
-        completion_tokens * 1000 / total_response_time_ms if timed_requests > 0 and total_response_time_ms > 0 else None
+        timed_completion_tokens * 1000 / total_response_time_ms
+        if timed_completion_tokens > 0 and timed_requests > 0 and total_response_time_ms > 0
+        else None
     )
     return ProviderThroughputMetrics(
-        completion_tokens=completion_tokens,
+        timed_completion_tokens=timed_completion_tokens,
         total_response_time_ms=total_response_time_ms,
         timed_requests=timed_requests,
         output_tokens_per_second=output_tokens_per_second,
@@ -259,11 +264,14 @@ def _update_provider_throughput(
     record: DailySpendRecord,
 ) -> None:
     existing: Final = target.provider_breakdown.get(provider, ProviderThroughputMetrics())
-    target.provider_breakdown[provider] = _provider_throughput(
-        completion_tokens=existing.completion_tokens + (record.completion_tokens or 0),
-        total_response_time_ms=existing.total_response_time_ms + (record.total_response_time_ms or 0),
-        timed_requests=existing.timed_requests + (record.timed_requests or 0),
-    )
+    target.provider_breakdown = {
+        **target.provider_breakdown,
+        provider: _provider_throughput(
+            timed_completion_tokens=existing.timed_completion_tokens + (record.timed_completion_tokens or 0),
+            total_response_time_ms=existing.total_response_time_ms + (record.total_response_time_ms or 0),
+            timed_requests=existing.timed_requests + (record.timed_requests or 0),
+        ),
+    }
 
 
 def _is_user_agent_tag(tag: str | None) -> bool:
@@ -827,7 +835,7 @@ def _aggregate_grouping_sets_records_sync(
         target: dict[str, MetricWithMetadata],
         parent_key: str,
         provider: str,
-        metrics: SpendMetrics,
+        record: GroupingSetsRow,
     ) -> None:
         parent: Final = target.get(parent_key)
         if parent is None:
@@ -836,18 +844,21 @@ def _aggregate_grouping_sets_records_sync(
                 metadata={},
                 provider_breakdown={
                     provider: _provider_throughput(
-                        metrics.completion_tokens,
-                        metrics.total_response_time_ms,
-                        metrics.timed_requests,
+                        record.timed_completion_tokens or 0,
+                        record.total_response_time_ms or 0,
+                        record.timed_requests or 0,
                     )
                 },
             )
             return
-        parent.provider_breakdown[provider] = _provider_throughput(
-            metrics.completion_tokens,
-            metrics.total_response_time_ms,
-            metrics.timed_requests,
-        )
+        parent.provider_breakdown = {
+            **parent.provider_breakdown,
+            provider: _provider_throughput(
+                record.timed_completion_tokens or 0,
+                record.total_response_time_ms or 0,
+                record.timed_requests or 0,
+            ),
+        }
 
     for record in records:
         level = record.group_level
@@ -882,7 +893,7 @@ def _aggregate_grouping_sets_records_sync(
                     breakdown.models,
                     record.model,
                     record.custom_llm_provider or "unknown",
-                    metrics,
+                    record,
                 )
         elif level == _GROUP_DATE_MODEL_GROUP:
             if record.model_group:
@@ -901,7 +912,7 @@ def _aggregate_grouping_sets_records_sync(
                     breakdown.model_groups,
                     record.model_group,
                     record.custom_llm_provider or "unknown",
-                    metrics,
+                    record,
                 )
         elif level == _GROUP_DATE_PROVIDER:
             # Only PTU sentinel rows carry ptu_flat_cost and they have no provider, so at
