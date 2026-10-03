@@ -23,11 +23,13 @@ import {
   Metric,
   ModelInsightsResponse,
   ModelInsightTasksResponse,
+  TaskClassifierStatus,
   TaskSummary,
   modelOrder,
   rankModels,
   RankedModel,
 } from "./modelInsightsData";
+import TaskClassifierSetup from "./TaskClassifierSetup";
 
 const PALETTE = [
   "#ec4899",
@@ -121,6 +123,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   const [taskMetric, setTaskMetric] = React.useState<Metric>("spend");
   const [taskData, setTaskData] = React.useState<ModelInsightTasksResponse | null>(null);
   const [taskError, setTaskError] = React.useState<string | null>(null);
+  const [classifier, setClassifier] = React.useState<TaskClassifierStatus | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -158,6 +161,20 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
       cancelled = true;
     };
   }, [accessToken, taskMetric]);
+
+  React.useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    apiClient
+      .get<TaskClassifierStatus>("/model-insights/task-classifier", { accessToken })
+      .then((response) => {
+        if (!cancelled) setClassifier(response);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
 
   const data = loaded?.response ?? null;
   const shown = loaded?.metric ?? metric;
@@ -345,14 +362,25 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
               <AlertDescription>{taskError}</AlertDescription>
             </Alert>
           )}
-          <ChartContainer config={{}} className="h-[360px] w-full aspect-auto">
-            <Treemap
-              data={tiles.map((tile) => ({ ...tile, name: tile.task_type }))}
-              dataKey="value"
-              isAnimationActive={false}
-              content={<TaskTileContent {...({} as TileProps)} />}
-            />
-          </ChartContainer>
+          {accessToken && classifier && (
+            <TaskClassifierSetup accessToken={accessToken} status={classifier} onChange={setClassifier} />
+          )}
+          {taskData && tiles.length === 0 ? (
+            <div className="flex h-[360px] items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+              {classifier?.configured
+                ? "No requests classified yet. New requests show up here after the next background batch"
+                : "No task data yet"}
+            </div>
+          ) : (
+            <ChartContainer config={{}} className="h-[360px] w-full aspect-auto">
+              <Treemap
+                data={tiles.map((tile) => ({ ...tile, name: tile.task_type }))}
+                dataKey="value"
+                isAnimationActive={false}
+                content={<TaskTileContent {...({} as TileProps)} />}
+              />
+            </ChartContainer>
+          )}
           <ul className="flex flex-wrap gap-x-6 gap-y-2">
             {categoryShares.map(({ category, share }) => (
               <li key={category} className="flex items-center gap-2 text-sm">
