@@ -151,3 +151,6 @@ litellm.log
 
 .coverage-rust
 coverage-rust.xml
+
+# make lens-dev worker token, generated config and logs
+.lens-dev/
