@@ -156,11 +156,50 @@ def test_usage_anthropic_cache_creation_maps_to_cache_write_tokens():
 
 
 def test_prompt_tokens_details_no_cache_write_tokens_when_absent():
-    """A read-only cache hit (no cache write) must not surface cache-write fields."""
+    """A read-only cache hit (no cache write) must not surface cache-write fields
+    in the serialized payload; direct reads of deleted fields return the declared
+    defaults instead of raising AttributeError (issue #43756)."""
     details = PromptTokensDetailsWrapper(cached_tokens=800)
     assert details.cached_tokens == 800
-    assert not hasattr(details, "cache_write_tokens")
-    assert not hasattr(details, "cache_creation_tokens")
+    assert details.cache_write_tokens is None
+    assert details.cache_creation_tokens is None
+    dumped = details.model_dump()
+    assert "cache_write_tokens" not in dumped
+    assert "cache_creation_tokens" not in dumped
+
+
+def test_prompt_tokens_details_none_cache_fields_read_as_none():
+    """Direct reads of deleted None-valued fields must return the declared
+    defaults instead of raising AttributeError (issue #43756)."""
+    wrapper = PromptTokensDetailsWrapper(
+        prompt_tokens=100,
+        cache_creation_tokens=None,
+        cache_read_input_tokens=None,
+        cache_write_tokens=None,
+    )
+    assert wrapper.cache_creation_tokens is None
+    assert wrapper.cache_write_tokens is None
+
+
+def test_prompt_tokens_details_accepted_extra_stays_readable():
+    """Undeclared (extra) kwargs like DashScope's cache_creation_input_tokens
+    must stay readable after construction — __getattr__ only answers for
+    declared fields and falls through to pydantic for extras."""
+    wrapper = PromptTokensDetailsWrapper(prompt_tokens=100, cache_creation_input_tokens=2048)
+    assert wrapper.cache_creation_input_tokens == 2048
+
+
+def test_prompt_tokens_details_dump_excludes_deleted_none_fields():
+    """Payload hygiene survives: deleted None fields stay out of model_dump."""
+    wrapper = PromptTokensDetailsWrapper(
+        prompt_tokens=100,
+        cache_creation_tokens=None,
+        cache_read_input_tokens=None,
+        cache_write_tokens=None,
+    )
+    dumped = wrapper.model_dump()
+    assert "cache_write_tokens" not in dumped
+    assert "cache_creation_tokens" not in dumped
 
 
 def test_prompt_tokens_details_cache_write_creation_stay_in_sync_on_assignment():
