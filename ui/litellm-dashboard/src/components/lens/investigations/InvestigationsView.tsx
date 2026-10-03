@@ -25,16 +25,25 @@ import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
 import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
+import { HeaderActions } from "./HeaderActions";
+import { RunNowDialog } from "./detail/RunNowDialog";
+import { FindingsInbox } from "./FindingsInbox";
+import { findingAgents, sampledExecutions, type InboxRow } from "../model/inbox";
+import { WatchAllBanner } from "./WatchAllBanner";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
 import { InvestigationsWelcome } from "./InvestigationsWelcome";
 import { workerConnected, readiness } from "../model/status";
 import { type Finding, type Settings } from "../model/types";
 
 export function InvestigationsView({
+  view = "findings",
+  active = true,
   accessToken,
   readOnly = false,
   onDemo,
 }: {
+  view?: "findings" | "investigations";
+  active?: boolean;
   accessToken: string;
   readOnly?: boolean;
   onDemo?: () => void;
@@ -50,11 +59,17 @@ export function InvestigationsView({
   const query = useQuery(lensQueries.list(api, !!demo, workerSetup));
   const models = useQuery(lensQueries.models(api));
   const modelDetails = useQuery(lensQueries.modelDetails(api));
+  const [agentsAsOf] = useState(() => new Date().toISOString());
+  const agents = useQuery(lensQueries.agents(api, agentsAsOf, "traces"));
   const [liveSelected, setLiveSelected] = useQueryState("lens", parseAsString.withOptions({ history: "push" }));
   const [demoSelected, setDemoSelected] = useState<string | null>(null);
   const selected = demo ? demoSelected : liveSelected;
   const setSelected = demo ? setDemoSelected : setLiveSelected;
   const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
+  const [peek, setPeek] = useState(false);
+  const [peeked, setPeeked] = useState<InboxRow | null>(null);
+  const [runNowId, setRunNowId] = useState<string | null>(null);
+  const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const lenses = [...(query.data?.lenses ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
@@ -113,15 +128,17 @@ export function InvestigationsView({
     void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
     void client.invalidateQueries({ queryKey: lensKeys.histories() });
   };
-  const update = async (write: LensWrite) => {
+  const update = async (write: LensWrite): Promise<boolean> => {
     setBusy(true);
     setError("");
     try {
       await updateLens.mutateAsync(write);
-      await client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not update lens");
+      return false;
     } finally {
+      await client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
       setBusy(false);
     }
   };
@@ -131,18 +148,51 @@ export function InvestigationsView({
     if (editing !== "edit" && !ready)
       throw new Error("Wait for recorded activity and a connected worker before starting an investigation");
     const saved = await saveLens.mutateAsync({ id: editing === "edit" ? lens?.id : undefined, settings });
-    selectLens(saved.id);
+    selectLens(peek ? null : saved.id);
+    setPeek(false);
     setEditing(null);
     refresh();
   };
+  const editFromTable = (id: string) => {
+    setPeek(true);
+    selectLens(id);
+    setEditing("edit");
+  };
+  const openFinding = (row: InboxRow) => {
+    setPeek(true);
+    setPeeked(row);
+    selectLens(row.sources[0].lens.id);
+  };
+  const closeFinding = () => {
+    setFindingId(null);
+    setPeeked(null);
+    if (!peek) return;
+    setPeek(false);
+    selectLens(null);
+  };
   const changeFinding = async (status: Finding["status"], reason: string) => {
+    if (peeked) {
+      const saved = await update((current) =>
+        Promise.all(peeked.sources.map((s) => current.reviewFinding(s.lens.id, s.finding.id, status, reason))),
+      );
+      if (saved) closeFinding();
+      return;
+    }
     if (!lens || !finding) return;
     await update((current) => current.reviewFinding(lens.id, finding.id, status, reason));
   };
+  const sheetFinding = peeked ? peeked.sources[0].finding : finding;
+  const sheetRuns = peeked ? peeked.sources.flatMap((s) => sampledExecutions(s.lens)) : sampledRuns;
+  const detailAgents = lens && finding ? findingAgents(lens, finding) : [];
+  const sheetAgents = peeked ? peeked.agents : detailAgents;
 
+  const onDetail = !!selected && !peek;
+  const showDetailNav = onDetail && !showEmpty;
+  const showTables = !onDetail && lenses.length > 0;
+  const showMissing = missingSelection && !lens && !peek;
   return (
-    <section aria-label="Investigations" className="w-full min-w-0 space-y-6">
-      {!showEmpty && (
+    <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
+      {showDetailNav && (
         <InvestigationNavigation
           lens={lens}
           showActions={showActions}
@@ -173,12 +223,51 @@ export function InvestigationsView({
           onDemo={activity.isSuccess && !ready ? onDemo : undefined}
         />
       )}
-      {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} />}
-      {!selected && lenses.length > 0 && (
-        <InvestigationList lenses={lenses} connected={connected} onSelect={selectLens} />
+      {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
+      {showTables && (
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          {active && (
+            <HeaderActions>
+              {!readOnly && (
+                <WatchAllBanner
+                  lenses={lenses}
+                  busy={busy}
+                  skipped={skipped}
+                  onWatchAll={() =>
+                    update(async (api) => {
+                      const result = await api.watchAll();
+                      setSkipped(result.skipped);
+                    })
+                  }
+                />
+              )}
+              <InvestigationNavigation
+                lens={undefined}
+                showActions={showActions}
+                activityReady={activityReady}
+                connected={connected}
+                ready={ready}
+                selectLens={selectLens}
+                setWorkerSetup={setWorkerSetup}
+                setEditing={setEditing}
+              />
+            </HeaderActions>
+          )}
+          {view === "findings" ? (
+            <FindingsInbox lenses={lenses} onOpen={openFinding} />
+          ) : (
+            <InvestigationList
+              lenses={lenses}
+              connected={connected}
+              readOnly={readOnly}
+              onEdit={editFromTable}
+              onRunNow={(id) => setRunNowId(id)}
+            />
+          )}
+        </div>
       )}
-      {missingSelection && !lens && <InvestigationMissing selectLens={selectLens} />}
-      {lens && (
+      {showMissing && <InvestigationMissing selectLens={selectLens} />}
+      {lens && !peek && (
         <InvestigationDetail
           lens={lens}
           readOnly={readOnly}
@@ -189,6 +278,7 @@ export function InvestigationsView({
           update={update}
           connected={connected}
           results={results}
+          agents={Array.isArray(agents.data) ? agents.data : []}
         />
       )}
       {editing && (
@@ -203,8 +293,26 @@ export function InvestigationsView({
           modelsLoading={models.isLoading}
           modelsError={models.error?.message}
           accessToken={accessToken}
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null);
+            if (peek) {
+              setPeek(false);
+              selectLens(null);
+            }
+          }}
           onSave={save}
+        />
+      )}
+      {runNowId && (
+        <RunNowDialog
+          lens={lenses.find((l) => l.id === runNowId) ?? lenses[0]}
+          agents={Array.isArray(agents.data) ? agents.data : []}
+          busy={busy}
+          onClose={() => setRunNowId(null)}
+          onRun={async (request) => {
+            await update((api) => api.startRun(runNowId, request));
+            setRunNowId(null);
+          }}
         />
       )}
       {workerSetup && (
@@ -235,11 +343,12 @@ export function InvestigationsView({
         />
       )}
       <FindingSheet
-        finding={finding}
-        sampledRuns={sampledRuns}
+        finding={sheetFinding}
+        agents={sheetAgents}
+        sampledRuns={sheetRuns}
         readOnly={readOnly}
         busy={busy}
-        onClose={() => setFindingId(null)}
+        onClose={closeFinding}
         changeFinding={changeFinding}
         onEvidence={(value) => {
           setRequestOffset(0);

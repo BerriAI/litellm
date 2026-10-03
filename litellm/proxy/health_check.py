@@ -83,7 +83,7 @@ def _native_health_check_mode(model: str, provider_param: object) -> str | None:
     return native_health_check_mode(model=resolved_model, custom_llm_provider=custom_llm_provider)
 
 
-def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
+def resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
     """
     Effective mode for a deployment's health-check probe.
 
@@ -533,7 +533,7 @@ async def _run_model_health_check(model: dict):
     if _is_strategy_router_deployment(litellm_params):
         return {}
 
-    mode: Final = _resolve_health_check_mode(
+    mode: Final = resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
     )
@@ -783,7 +783,7 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
     """
-    mode: Final = _resolve_health_check_mode(
+    mode: Final = resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
     )

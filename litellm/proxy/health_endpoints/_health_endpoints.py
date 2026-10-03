@@ -55,11 +55,11 @@ from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
-    _resolve_health_check_mode,
     _update_litellm_params_for_health_check,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
+    resolve_health_check_mode,
     run_with_timeout,
 )
 from litellm.proxy.middleware.admission_control_middleware import (
@@ -2239,7 +2239,7 @@ async def test_model_connection(
         probe_mode: Final = (
             mode
             or _string_mode_or_bad_request(raw_params_mode)
-            or _resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
+            or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
 
         result: Final = await run_with_timeout(

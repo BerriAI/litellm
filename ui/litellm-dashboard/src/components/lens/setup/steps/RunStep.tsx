@@ -34,6 +34,26 @@ export function RunStep({
   const repeat = useWatch({ control, name: "repeat" });
   return (
     <>
+      <div className="space-y-3">
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" className="size-4 rounded border-input accent-foreground" {...register("repeat")} />
+          Keep watching for new traces
+        </label>
+        {repeat && (
+          <Controller
+            control={control}
+            name="interval"
+            render={({ field }) => (
+              <DurationInput label="Check every" value={field.value} onChange={field.onChange} base="minutes" />
+            )}
+          />
+        )}
+        {errors.interval?.message && (
+          <p role="alert" className="text-sm text-destructive">
+            {errors.interval.message}
+          </p>
+        )}
+      </div>
       <details open={!modelValid || undefined}>
         <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
         <div className="mt-4 space-y-5">
@@ -80,43 +100,13 @@ export function RunStep({
           <div className="grid gap-5 sm:grid-cols-2">
             <label className="grid content-start gap-2 text-sm font-medium">
               Monthly limit (USD)
-              <Input {...register("budget", { valueAsNumber: true })} type="number" min="0.01" max="100000" step="1" />
+              <Input {...register("budget", { valueAsNumber: true })} type="number" min="0.01" step="1" />
               {errors.budget?.message && (
                 <p role="alert" className="text-sm text-destructive">
                   {errors.budget.message}
                 </p>
               )}
             </label>
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  className="size-4 rounded border-input accent-foreground"
-                  {...register("repeat")}
-                />
-                Repeat this investigation
-              </label>
-              {repeat && (
-                <Controller
-                  control={control}
-                  name="interval"
-                  render={({ field }) => (
-                    <DurationInput
-                      label="Repeat every"
-                      value={field.value}
-                      onChange={field.onChange}
-                      base="minutes"
-                      max={10080}
-                    />
-                  )}
-                />
-              )}
-              {errors.interval?.message && (
-                <p role="alert" className="text-sm text-destructive">
-                  {errors.interval.message}
-                </p>
-              )}
-            </div>
           </div>
         </div>
       </details>

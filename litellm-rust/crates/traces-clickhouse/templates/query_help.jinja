@@ -60,14 +60,7 @@ Recent normalized LLM spans
 {%- endblock %}
 
 {% block recent_spans_sql -%}
-SELECT
-    TraceId, SpanId, Model, InputTokens, OutputTokens,
-    Duration / 1000000 AS duration_ms
-FROM otel_traces
-WHERE Timestamp >= now() - INTERVAL 1 DAY
-    AND ObservationType = 'llm'
-ORDER BY Timestamp DESC
-LIMIT 100
+{% include "../query/help/recent_spans.sql" %}
 {%- endblock %}
 
 {% block custom_metadata_name -%}
@@ -75,14 +68,7 @@ Find calls by custom metadata
 {%- endblock %}
 
 {% block custom_metadata_sql -%}
-SELECT
-    request_id, response_id, model, spend, JSONExtractString(metadata, 'project') AS project
-FROM spend_logs FINAL
-WHERE start_time >= now() - INTERVAL 1 DAY
-    AND JSONHas(metadata, 'project')
-    AND JSONExtractString(metadata, 'project') = 'example'
-ORDER BY start_time DESC
-LIMIT 100
+{% include "../query/help/custom_metadata.sql" %}
 {%- endblock %}
 
 {% block nested_metadata_name -%}
@@ -90,14 +76,7 @@ Nested metadata with unknown types
 {%- endblock %}
 
 {% block nested_metadata_sql -%}
-SELECT
-    request_id,
-    JSONType(metadata, 'labels', 'priority') AS type,
-    JSONExtractRaw(metadata, 'labels', 'priority') AS value
-FROM spend_logs FINAL
-WHERE start_time >= now() - INTERVAL 1 DAY
-    AND JSONHas(metadata, 'labels', 'priority')
-LIMIT 100
+{% include "../query/help/nested_metadata.sql" %}
 {%- endblock %}
 
 {% block correlated_calls_name -%}
@@ -105,20 +84,7 @@ Traces correlated with LLM call metadata
 {%- endblock %}
 
 {% block correlated_calls_sql -%}
-SELECT t.TraceId, t.SpanId, s.request_id, s.spend, s.metadata
-FROM otel_traces AS t
-INNER JOIN (
-    SELECT *
-    FROM spend_logs FINAL
-    WHERE start_time >= now() - INTERVAL 1 DAY
-) AS s
-    ON t.LiteLLMRequestId = s.response_id
-    AND t.TeamId = s.team_id
-    AND ((t.UserId != '' AND t.UserId = s.user)
-        OR (t.ApiKeyHash != '' AND t.ApiKeyHash = s.api_key))
-WHERE t.Timestamp >= now() - INTERVAL 1 DAY
-    AND t.LiteLLMRequestId != ''
-LIMIT 100
+{% include "../query/help/correlated_calls.sql" %}
 {%- endblock %}
 
 {% block discover_keys_name -%}
@@ -126,12 +92,7 @@ Discover metadata keys over a different window
 {%- endblock %}
 
 {% block discover_keys_sql -%}
-SELECT
-    DISTINCT arrayJoin(JSONExtractKeys(metadata)) AS key
-FROM spend_logs FINAL
-WHERE start_time >= now() - INTERVAL 30 DAY
-ORDER BY key
-LIMIT 200
+{% include "../query/help/discover_keys.sql" %}
 {%- endblock %}
 
 {% block recent_spend_name -%}
@@ -139,14 +100,7 @@ Recent spend records
 {%- endblock %}
 
 {% block recent_spend_sql -%}
-SELECT
-    request_id, response_id, trace_id, span_id, model, spend,
-    prompt_tokens, completion_tokens, status,
-    JSONExtractBool(metadata, 'synthetic_spend') AS synthetic_spend
-FROM spend_logs FINAL
-WHERE start_time >= now() - INTERVAL 1 DAY
-ORDER BY start_time DESC, request_id
-LIMIT 100
+{% include "../query/help/recent_spend.sql" %}
 {%- endblock %}
 
 {% block model_spend_name -%}
@@ -154,23 +108,7 @@ Spend and tokens by model
 {%- endblock %}
 
 {% block model_spend_sql -%}
-SELECT
-    team_id, model, requests, unknown_cost_requests,
-    if(unknown_cost_requests = 0, recorded_spend, NULL) AS spend,
-    input_tokens, output_tokens
-FROM (
-    SELECT
-        team_id, model, count() AS requests,
-        countIf(isNull(spend) OR NOT isFinite(spend)) AS unknown_cost_requests,
-        sum(spend) AS recorded_spend,
-        sum(prompt_tokens) AS input_tokens,
-        sum(completion_tokens) AS output_tokens
-    FROM spend_logs FINAL
-    WHERE start_time >= now() - INTERVAL 1 DAY
-    GROUP BY team_id, model
-)
-ORDER BY team_id, model
-LIMIT 100
+{% include "../query/help/model_spend.sql" %}
 {%- endblock %}
 
 {% block trace_spend_name -%}
@@ -178,16 +116,7 @@ Recorded spend by trace
 {%- endblock %}
 
 {% block trace_spend_sql -%}
-SELECT
-    team_id, api_key, trace_id, count() AS requests,
-    countIf(isNull(spend) OR NOT isFinite(spend)) AS unknown_cost_requests,
-    if(unknown_cost_requests = 0, sum(spend), NULL) AS recorded_spend
-FROM spend_logs FINAL
-WHERE start_time >= now() - INTERVAL 1 DAY
-    AND trace_id != ''
-GROUP BY team_id, api_key, trace_id
-ORDER BY team_id, api_key, trace_id
-LIMIT 100
+{% include "../query/help/trace_spend.sql" %}
 {%- endblock %}
 
 {% block unmatched_spans_name -%}
@@ -195,24 +124,31 @@ LLM spans without a direct spend match
 {%- endblock %}
 
 {% block unmatched_spans_sql -%}
-SELECT
-    t.TraceId, t.SpanId, t.Model, t.LiteLLMRequestId,
-    t.InputTokens, t.OutputTokens
-FROM otel_traces AS t
-LEFT ANTI JOIN (
-    SELECT *
-    FROM spend_logs FINAL
-    WHERE start_time >= now() - INTERVAL 1 DAY
-) AS s
-    ON t.TeamId = s.team_id
-    AND ((t.UserId != '' AND t.UserId = s.user)
-        OR (t.ApiKeyHash != '' AND t.ApiKeyHash = s.api_key))
-    AND t.LiteLLMRequestId != ''
-    AND (t.LiteLLMRequestId = s.response_id OR t.LiteLLMRequestId = s.request_id)
-WHERE t.Timestamp >= now() - INTERVAL 1 DAY
-    AND t.ObservationType = 'llm'
-ORDER BY t.Timestamp DESC, t.SpanId
-LIMIT 100
+{% include "../query/help/unmatched_spans.sql" %}
+{%- endblock %}
+
+{% block trace_summary_name -%}
+Trace summaries with tokens and errors
+{%- endblock %}
+
+{% block trace_summary_sql -%}
+{% include "../query/help/trace_summary.sql" %}
+{%- endblock %}
+
+{% block failed_spans_name -%}
+Recent failed spans
+{%- endblock %}
+
+{% block failed_spans_sql -%}
+{% include "../query/help/failed_spans.sql" %}
+{%- endblock %}
+
+{% block metadata_filter_name -%}
+Filter calls by nested metadata
+{%- endblock %}
+
+{% block metadata_filter_sql -%}
+{% include "../query/help/metadata_filter.sql" %}
 {%- endblock %}
 
 {% block time_window -%}
