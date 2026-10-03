@@ -34,7 +34,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Build Lens worker
-        run: docker build -f deploy/lens/Dockerfile -t lens-worker:${{ github.sha }} .
+        run: docker build --build-arg LITELLM_RELEASE_TAG=sha-${{ github.sha }} -f deploy/lens/Dockerfile -t lens-worker:${{ github.sha }} .
       - name: Verify standalone imports with a read-only filesystem
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,size=1g \

@@ -159,13 +159,14 @@ def test_invalid_explicit_execution_ids_are_rejected(identity: str) -> None:
     assert error.value.status_code == 422
 
 
+@pytest.mark.parametrize("protocol_version", (1, 2, 3))
 @pytest.mark.asyncio
-async def test_incompatible_worker_is_rejected_before_claiming_work() -> None:
+async def test_incompatible_worker_is_rejected_before_claiming_work(protocol_version: int) -> None:
     from litellm.proxy.lens.endpoints import claim
     from tests.unit.proxy.lens.test_state import worker
 
     with pytest.raises(HTTPException) as error:
-        await claim(worker(), protocol_version=1)
+        await claim(worker(), protocol_version=protocol_version)
     assert error.value.status_code == 409
     assert "Upgrade" in error.value.detail
 
@@ -291,3 +292,20 @@ async def test_preview_reports_calendar_overflow_as_a_validation_error() -> None
         await preview_sample(body, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), None)
     assert error.value.status_code == 422
     assert "supported calendar range" in error.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("worker_release", ("", "v1.2.2", "branch-main-old"))
+async def test_different_release_is_rejected_before_accessing_jobs(
+    monkeypatch: pytest.MonkeyPatch, worker_release: str
+) -> None:
+    from litellm.proxy.lens.endpoints import claim
+    from litellm.proxy.lens.release import PROTOCOL_VERSION
+    from tests.unit.proxy.lens.test_state import worker
+
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
+    monkeypatch.delenv("LENS_WORKER_IMAGE", raising=False)
+    with pytest.raises(HTTPException) as error:
+        await claim(worker(), protocol_version=PROTOCOL_VERSION, worker_release=worker_release)
+    assert error.value.status_code == 409
+    assert "ghcr.io/berriai/litellm-lens-worker:v1.2.3" in error.value.detail

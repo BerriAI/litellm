@@ -192,7 +192,7 @@ async def analyze(
             current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
         ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
 
-    def settle(e: Lens, cost: float) -> Lens:
+    def settle(e: Lens, cost: float, step: Step | None = None) -> Lens:
         charged: Final = next((j for j in e.jobs if j.id == job.id), None)
         adjusted: Final = (
             e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
@@ -201,12 +201,10 @@ async def analyze(
         )
         if charged is None:
             return adjusted
+        settled: Final = charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
         return replace_job(
             adjusted,
-            add_step(
-                charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)})),
-                model_step(response, body, job.settings.model, cost),
-            ),
+            add_step(settled, step) if step else settled,
         )
 
     @asynccontextmanager
@@ -243,7 +241,8 @@ async def analyze(
         response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
 
-    await repo.update(lens.id, lambda e: settle(e, cost))
+    step: Final = model_step(response, body, job.settings.model, cost)
+    await repo.update(lens.id, lambda e: settle(e, cost, step))
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     choice: Final = parsed.choices[0]
     return ModelResult(
