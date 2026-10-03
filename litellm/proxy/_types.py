@@ -2719,6 +2719,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -3007,7 +3010,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
     )
     responses_websocket_session_limit_seconds: float = Field(
-        default=3600.0,
+        default=DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS,
         ge=60,
         le=7200,
         description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",

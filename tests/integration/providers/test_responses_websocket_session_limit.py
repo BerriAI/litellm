@@ -7,12 +7,14 @@ import ssl
 import threading
 import time
 import uuid
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
+from types import MappingProxyType
 from typing import Final, TypeVar
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -34,6 +36,9 @@ pytestmark: Final = pytest.mark.timeout(360)
 
 PROVIDER_MODEL: Final = "ws-peer-model"
 STALL_PROVIDER_MODEL: Final = "ws-stall-peer-model"
+DEAF_PROVIDER_MODEL: Final = "ws-deaf-peer-model"
+DEAF_RESPONSE_DELAY_SECONDS: Final = 10
+DEAF_READ_PAUSE_SECONDS: Final = 20
 PEER_TEXT: Final = "responses websocket peer"
 TERMINAL: Final = frozenset({"response.completed", "response.failed", "error"})
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -51,7 +56,7 @@ class PeerConnection:
 class ResponsesPeer:
     url: str
     connections: SimpleQueue[PeerConnection]
-    closed: SimpleQueue[PeerConnection]
+    connections_by_model: Mapping[str, SimpleQueue[PeerConnection]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +135,7 @@ class CapResults:
     idle: CloseResult
     active: ActiveResult
     mid: MidResult
+    deaf: MidResult
     provider: tuple[PeerSnapshot, ...]
 
 
@@ -209,17 +215,24 @@ def _events(response_id: str, model: str, text: str, *, stall: bool = False) -> 
     )
 
 
+def _path_model(path: str) -> str | None:
+    values: Final = parse_qs(urlsplit(path).query).get("model")
+    return values[0] if values else None
+
+
 async def _peer_handler(connection: ServerConnection, peer: ResponsesPeer) -> None:
     path: Final = connection.request.path if connection.request is not None else ""
     record: Final = PeerConnection(path, SimpleQueue(), SimpleQueue())
     peer.connections.put(record)
+    model: Final = _path_model(path)
+    if model is not None and model in peer.connections_by_model:
+        peer.connections_by_model[model].put(record)
     turns: Final = itertools.count(1)
     try:
         async for raw in connection:
             await _peer_frame(raw, connection, record, turns)
     finally:
         record.closed.put(time.monotonic())
-        peer.closed.put(record)
 
 
 async def _peer_frame(
@@ -233,9 +246,19 @@ async def _peer_frame(
     if frame.get("type") != "response.create":
         return
     model: Final = _string(frame.get("model", ""))
-    stall: Final = model == STALL_PROVIDER_MODEL
+    stall: Final = model in (STALL_PROVIDER_MODEL, DEAF_PROVIDER_MODEL)
+    if model == DEAF_PROVIDER_MODEL:
+        await asyncio.sleep(DEAF_RESPONSE_DELAY_SECONDS)
     for event in _events(f"resp_peer_{next(turns)}", model, PEER_TEXT, stall=stall):
         await connection.send(json.dumps(event))
+    if model == DEAF_PROVIDER_MODEL:
+        transport: Final = connection.transport
+        assert transport is not None
+        transport.pause_reading()
+        try:
+            await asyncio.sleep(DEAF_READ_PAUSE_SECONDS)
+        finally:
+            transport.resume_reading()
 
 
 async def _serve_peer(
@@ -256,7 +279,10 @@ def responses_peer(cert: tuple[Path, Path]) -> Generator[ResponsesPeer, None, No
     loop: Final = asyncio.new_event_loop()
     stop: Final = asyncio.Event()
     ports: Final = SimpleQueue[int]()
-    peer: Final = ResponsesPeer("", SimpleQueue(), SimpleQueue())
+    connections_by_model: Final[Mapping[str, SimpleQueue[PeerConnection]]] = MappingProxyType(
+        {model: SimpleQueue[PeerConnection]() for model in (PROVIDER_MODEL, STALL_PROVIDER_MODEL, DEAF_PROVIDER_MODEL)}
+    )
+    peer: Final = ResponsesPeer("", SimpleQueue(), connections_by_model)
     thread: Final = threading.Thread(
         target=loop.run_until_complete,
         args=(_serve_peer(server_context(*cert), peer, ports, stop),),
@@ -265,7 +291,7 @@ def responses_peer(cert: tuple[Path, Path]) -> Generator[ResponsesPeer, None, No
     thread.start()
     try:
         port: Final = ports.get(timeout=10)
-        yield ResponsesPeer(f"https://127.0.0.1:{port}/v1", peer.connections, peer.closed)
+        yield ResponsesPeer(f"https://127.0.0.1:{port}/v1", peer.connections, peer.connections_by_model)
     finally:
         loop.call_soon_threadsafe(stop.set)
         thread.join(timeout=10)
@@ -523,7 +549,7 @@ async def _active_session(candidate: Gateway, key: str, model: str, peer: Respon
             turn, turn_error = await _turn_result(connection, _create(model, f"active-{uuid.uuid4().hex}"))
             remaining: Final = max(0, 75 - (time.monotonic() - started))
             close: Final = CloseResult(await _wait_for_close(connection, remaining), time.monotonic() - started)
-            provider_closed: Final = _provider_closed_within(peer, 5)
+            provider_closed: Final = _provider_closed_within(peer, PROVIDER_MODEL, 5)
             return ActiveResult(turn, turn_error, close, provider_closed)
     except (ConnectionClosed, asyncio.TimeoutError) as error:
         code, reason = _auth_close(error) if isinstance(error, ConnectionClosed) else (None, None)
@@ -535,9 +561,18 @@ async def _active_session(candidate: Gateway, key: str, model: str, peer: Respon
         )
 
 
-def _provider_closed_within(peer: ResponsesPeer, seconds: float) -> bool:
+def _provider_closed_within(peer: ResponsesPeer, model: str, seconds: float) -> bool:
+    deadline: Final = time.monotonic() + seconds
     try:
-        eventually(lambda: peer.closed.qsize(), lambda count: count >= 1, seconds=seconds)
+        record: Final = peer.connections_by_model[model].get(timeout=seconds)
+    except Empty:
+        return False
+    try:
+        eventually(
+            lambda: record.closed.qsize(),
+            lambda count: count >= 1,
+            seconds=max(0, deadline - time.monotonic()),
+        )
     except AssertionError:
         return False
     return True
@@ -602,7 +637,20 @@ async def _mid_response(
     peer: ResponsesPeer,
 ) -> MidResult:
     created, turn_error, close = await _mid_session(candidate, key, stall_model)
-    provider_closed: Final = _provider_closed_within(peer, 5)
+    provider_closed: Final = _provider_closed_within(peer, STALL_PROVIDER_MODEL, 5)
+    fresh_completed, fresh_error = await _fresh_session(candidate, key, normal_model)
+    return MidResult(created, turn_error, close, provider_closed, fresh_completed, fresh_error)
+
+
+async def _deaf_response(
+    candidate: Gateway,
+    key: str,
+    normal_model: str,
+    deaf_model: str,
+    peer: ResponsesPeer,
+) -> MidResult:
+    created, turn_error, close = await _mid_session(candidate, key, deaf_model)
+    provider_closed: Final = _provider_closed_within(peer, DEAF_PROVIDER_MODEL, 30)
     fresh_completed, fresh_error = await _fresh_session(candidate, key, normal_model)
     return MidResult(created, turn_error, close, provider_closed, fresh_completed, fresh_error)
 
@@ -612,14 +660,16 @@ async def _cap_workload(
     key: str,
     normal_model: str,
     stall_model: str,
+    deaf_model: str,
     peer: ResponsesPeer,
-) -> tuple[CloseResult, ActiveResult, MidResult]:
-    idle, active, mid = await asyncio.gather(
+) -> tuple[CloseResult, ActiveResult, MidResult, MidResult]:
+    idle, active, mid, deaf = await asyncio.gather(
         _close_at_limit(candidate, key, normal_model),
         _active_session(candidate, key, normal_model, peer),
         _mid_response(candidate, key, normal_model, stall_model, peer),
+        _deaf_response(candidate, key, normal_model, deaf_model, peer),
     )
-    return idle, active, mid
+    return idle, active, mid, deaf
 
 
 def _session_config(path: Path, seconds: int) -> Path:
@@ -788,10 +838,11 @@ def cap_results(
         ):
             normal: Final = scenario.model(model=f"openai/{PROVIDER_MODEL}", api_base=peer.url)
             stall: Final = scenario.model(model=f"openai/{STALL_PROVIDER_MODEL}", api_base=peer.url)
-            key: Final = scenario.key(models=[normal, stall])
-            idle, active, mid = asyncio.run(_cap_workload(candidate, key, normal, stall, peer))
+            deaf: Final = scenario.model(model=f"openai/{DEAF_PROVIDER_MODEL}", api_base=peer.url)
+            key: Final = scenario.key(models=[normal, stall, deaf])
+            idle, active, mid, deaf_result = asyncio.run(_cap_workload(candidate, key, normal, stall, deaf, peer))
             provider: Final = _available_snapshots(peer)
-            yield CapResults(idle, active, mid, provider)
+            yield CapResults(idle, active, mid, deaf_result, provider)
 
 
 @pytest.fixture(scope="module")
@@ -945,6 +996,18 @@ def test_session_cap_closes_mid_response_and_allows_new_session(cap_results: Cap
     assert cap_results.mid.provider_closed, cap_results.mid
     assert cap_results.mid.fresh_error is None, cap_results.mid
     assert cap_results.mid.fresh_completed, cap_results.mid
+
+
+def test_session_cap_closes_client_promptly_when_provider_ignores_close(cap_results: CapResults) -> None:
+    assert cap_results.deaf.created, cap_results.deaf
+    assert cap_results.deaf.turn_error is None, cap_results.deaf
+    assert cap_results.deaf.close.outcome.closed, cap_results.deaf
+    assert cap_results.deaf.close.outcome.close_code == 1000, cap_results.deaf
+    assert cap_results.deaf.close.outcome.close_reason == "Session duration limit reached", cap_results.deaf
+    assert 59 <= cap_results.deaf.close.elapsed <= 63, cap_results.deaf
+    assert cap_results.deaf.provider_closed, cap_results.deaf
+    assert cap_results.deaf.fresh_error is None, cap_results.deaf
+    assert cap_results.deaf.fresh_completed, cap_results.deaf
 
 
 def test_invalid_session_cap_falls_back_to_default(invalid_results: InvalidResult) -> None:

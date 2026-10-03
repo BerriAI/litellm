@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 router: Final = APIRouter()
+_RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -1317,15 +1318,15 @@ def _resolve_responses_ws_session_limit_seconds() -> float:
     from litellm.proxy.proxy_server import general_settings
 
     field: Final = "responses_websocket_session_limit_seconds"
-    raw: Final = general_settings.get(field)
+    raw: Final = _RESPONSES_WS_CONFIG_VALUE_ADAPTER.validate_python(general_settings.get(field))
     try:
         return ConfigGeneralSettings.model_validate(
             {} if raw is None else {field: raw}
         ).responses_websocket_session_limit_seconds
     except ValidationError as e:
-        default: Final = ConfigGeneralSettings.model_fields[field].default
+        default: Final = DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS
         verbose_proxy_logger.warning("invalid general_settings.%s=%r (%s); using default %ss", field, raw, e, default)
-        return float(default)
+        return default
 
 
 async def _read_ws_model_from_first_frame(
