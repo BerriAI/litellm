@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from functools import partial
 from http.client import responses
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, assert_never
+from typing import Annotated, Final, Literal
+from typing_extensions import assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
