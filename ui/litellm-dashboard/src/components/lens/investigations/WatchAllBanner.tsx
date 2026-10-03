@@ -2,7 +2,6 @@
 
 import type { Lens } from "../model/types";
 
-/** A quiet one-line nudge to switch paused investigations onto their schedule. */
 export function WatchAllBanner({
   lenses,
   busy,
