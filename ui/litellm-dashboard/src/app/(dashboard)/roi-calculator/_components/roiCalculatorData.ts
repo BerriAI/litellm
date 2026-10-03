@@ -25,8 +25,14 @@ const SYNCED_AT_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
 
 export const formatMoney = (value: number | null | undefined): string => {
   if (value == null) return "—";
-  if (value > 0 && value < 0.01) return "<$0.01";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
+  if (value > 0 && value < 0.000001) return "<$0.000001";
+  const options: Intl.NumberFormatOptions = {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: Math.abs(value) > 0 && Math.abs(value) < 0.01 ? 6 : 2,
+  };
+  return new Intl.NumberFormat("en-US", options).format(value);
 };
 
 export const formatNumber = (value: number | null | undefined): string =>

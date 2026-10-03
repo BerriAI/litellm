@@ -32,28 +32,34 @@ export function PullReasoningDialog({
   const titleRef = React.useRef<HTMLHeadingElement>(null);
   return (
     <Dialog open={Boolean(pull)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-xl" initialFocus={titleRef}>
+      <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl" initialFocus={titleRef}>
         {pull && (
           <>
             <DialogHeader>
-              <DialogTitle ref={titleRef} tabIndex={-1}>
+              <DialogTitle ref={titleRef} tabIndex={-1} className="pr-8 text-lg leading-6">
                 {pull.title}
               </DialogTitle>
               <DialogDescription>
                 {pull.repo} #{pull.number} · {pull.login}
               </DialogDescription>
             </DialogHeader>
-            <div>
-              <p className="text-sm text-muted-foreground">Estimated engineering hours</p>
-              <p className="mt-2 text-3xl font-semibold tabular-nums">{estimateLabel(pull.estimate)}</p>
-              <p className="mt-2 text-xs text-muted-foreground">
+            <div className="space-y-3">
+              <dl className="grid grid-cols-2 gap-4 rounded-lg border bg-muted/20 p-4">
+                <div className="space-y-2">
+                  <dt className="text-xs text-muted-foreground">Estimated effort</dt>
+                  <dd className="text-2xl font-semibold tabular-nums">{estimateLabel(pull.estimate)}</dd>
+                </div>
+                <div className="space-y-2">
+                  <dt className="text-xs text-muted-foreground">Recorded AI cost</dt>
+                  <dd className="text-xl font-semibold tabular-nums">{branchCostLabel(pull)}</dd>
+                  {pull.branch_cost?.status === "matched" && (
+                    <dd className="text-xs text-muted-foreground">{pull.branch_cost.requests} requests</dd>
+                  )}
+                </div>
+              </dl>
+              <p className="text-xs leading-5 text-muted-foreground">
                 {effortNote(pull.estimate.effort_basis ?? summary?.effort_basis)}
               </p>
-              {pull.estimate.evidence_source === "pr_metadata" && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Based on descriptions, file change counts, and commit metadata.
-                </p>
-              )}
             </div>
             <section>
               <h3 className="mb-2 font-medium">Reasoning</h3>
@@ -70,7 +76,7 @@ export function PullReasoningDialog({
               <dd>{pull.email || "Not matched"}</dd>
             </dl>
             <section className="space-y-2 border-t pt-4 text-sm">
-              <h3 className="font-medium">Branch spend · {branchCostLabel(pull)}</h3>
+              <h3 className="font-medium">Track costs for this branch</h3>
               {pull.branch_cost?.status === "matched" && (
                 <p className="text-muted-foreground">
                   {pull.branch_cost.spend?.toFixed(8)} USD across {pull.branch_cost.requests} requests

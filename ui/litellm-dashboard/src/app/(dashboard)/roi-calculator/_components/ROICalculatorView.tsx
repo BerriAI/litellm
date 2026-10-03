@@ -58,6 +58,7 @@ export default function ROICalculatorView({
   const readOnly = adminReadOnly || sampleSummary !== null;
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [view, setView] = React.useState<View>("overview");
+  const [costView, setCostView] = React.useState<"people" | "branches">("people");
   const [settings, setSettings] = React.useState<ROISettings | null>(null);
   const [liveSummary, setSummary] = React.useState<ROISummary | null>(null);
   const summary = sampleSummary ?? liveSummary;
@@ -216,15 +217,14 @@ export default function ROICalculatorView({
     statusRef.current = IDLE_STATUS;
   };
   const showLiveStatus = !sampleSummary && !status.running;
-  const scheduleLabel = settings.update_interval_minutes ? "Automatic updates enabled" : "Manual updates";
   const progress = status.total > 0 ? Math.min(100, (status.done / status.total) * 100) : 0;
   const statusIsIdleOrComplete = status.phase === "idle" || status.phase === "complete";
   const syncIsUpToDate = !status.running && statusIsIdleOrComplete;
   const syncedAt = syncIsUpToDate ? summary?.synced_at : null;
 
   return (
-    <Page className="p-6 md:p-8">
-      <PageHeader>
+    <Page className="gap-6">
+      <PageHeader className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <PageHeaderTitle>
             <Calculator />
@@ -250,26 +250,20 @@ export default function ROICalculatorView({
             </Button>
           )}
         </div>
-        <PageHeaderDescription>
-          {summary
-            ? `${summary.start} through ${summary.end} · UTC`
-            : "Compare gateway spend with estimated engineering effort for merged pull and merge requests"}
+        <PageHeaderDescription className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span>
+            {summary
+              ? `${summary.start} through ${summary.end} · UTC`
+              : "Compare AI costs with estimated engineering effort"}
+          </span>
           {syncedAt && (
-            <span className="mt-1 block text-xs text-muted-foreground" role="status">
+            <span className="text-xs" role="status">
               Last synced {formatSyncedAt(syncedAt)}
-              {!status.running && status.phase === "complete" && status.reused > 0
-                ? ` · ${status.reused} of ${status.total} estimates reused`
-                : ""}
             </span>
           )}
         </PageHeaderDescription>
       </PageHeader>
       {sampleSummary && <DemoNotice onExit={() => setSampleSummary(null)} />}
-      {liveSummary && showLiveStatus && (
-        <p className="text-xs text-muted-foreground">
-          {status.next_update ? `Next update ${formatSyncedAt(status.next_update)}` : scheduleLabel}
-        </p>
-      )}
       {adminReadOnly && (
         <p className="text-sm text-muted-foreground" role="note">
           Read-only access. Settings, analysis runs, and email matches are unavailable.
@@ -348,6 +342,8 @@ export default function ROICalculatorView({
       {view === "overview" && summary && (
         <ROIOverview
           summary={summary}
+          costView={costView}
+          onCostViewChange={setCostView}
           pulls={filteredPulls}
           query={query}
           onQueryChange={setQuery}

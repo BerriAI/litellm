@@ -237,12 +237,13 @@ export default function ROISettingsPanel({
         <form className="space-y-5" onSubmit={(event) => void submit(event)}>
           <fieldset disabled={busy || syncDisabled || readOnly} className="space-y-5">
             {(!onboarding || step === 0) && (
-              <>
+              <section className="space-y-4">
+                {!onboarding && <h3 className="font-semibold">Connection</h3>}
                 <div className="grid gap-2">
                   <Label htmlFor="roi-source">Repository source</Label>
                   <select
                     id="roi-source"
-                    className="h-9 rounded-md border bg-background px-3 text-sm"
+                    className="h-9 min-w-0 rounded-md border bg-background pl-3 pr-9 text-sm"
                     value={provider}
                     onChange={(event) => changeProvider(event.target.value as "github" | "gitlab")}
                   >
@@ -302,11 +303,14 @@ export default function ROISettingsPanel({
                     </label>
                   )}
                 </div>
-              </>
+              </section>
             )}
             {(!onboarding || step === 1) && (
-              <div className="grid gap-2">
-                <Label htmlFor="roi-repository-search">Repositories</Label>
+              <section className={onboarding ? "space-y-4" : "space-y-4 border-t pt-5"}>
+                <h3 className="font-semibold">Repositories</h3>
+                <Label className="sr-only" htmlFor="roi-repository-search">
+                  Search repositories
+                </Label>
                 <div className="flex gap-2">
                   <Input
                     id="roi-repository-search"
@@ -403,15 +407,16 @@ export default function ROISettingsPanel({
                     Load more repositories
                   </Button>
                 )}
-              </div>
+              </section>
             )}
             {(!onboarding || step === 2) && (
-              <>
+              <section className={onboarding ? "space-y-4" : "space-y-4 border-t pt-5"}>
+                {!onboarding && <h3 className="font-semibold">Estimation and updates</h3>}
                 <div className="grid gap-2">
                   <Label htmlFor="roi-estimator-model">Estimator model</Label>
                   <select
                     id="roi-estimator-model"
-                    className="h-9 rounded-md border bg-background px-3 text-sm"
+                    className="h-9 min-w-0 rounded-md border bg-background pl-3 pr-9 text-sm"
                     disabled={readOnly}
                     value={model}
                     onChange={(event) => setModel(event.target.value)}
@@ -440,33 +445,35 @@ export default function ROISettingsPanel({
                     />
                   </div>
                 </details>
-                <div className="grid max-w-xs gap-2">
-                  <Label htmlFor="roi-backfill-days">Backfill days</Label>
-                  <Input
-                    id="roi-backfill-days"
-                    min={1}
-                    max={3650}
-                    type="number"
-                    disabled={readOnly}
-                    value={backfillDays}
-                    onChange={(event) => setBackfillDays(event.target.value)}
-                  />
-                </div>
-                <div className="grid max-w-xs gap-2">
-                  <Label htmlFor="roi-interval">Update interval (hours)</Label>
-                  <Input
-                    id="roi-interval"
-                    type="number"
-                    min={0}
-                    max={720}
-                    step="any"
-                    required
-                    value={intervalHours}
-                    onChange={(e) => setIntervalHours(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    0 for manual updates; otherwise at least 5 minutes. Updates run while the gateway is running.
-                  </p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid content-start gap-2">
+                    <Label htmlFor="roi-backfill-days">Backfill days</Label>
+                    <Input
+                      id="roi-backfill-days"
+                      min={1}
+                      max={3650}
+                      type="number"
+                      disabled={readOnly}
+                      value={backfillDays}
+                      onChange={(event) => setBackfillDays(event.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="roi-interval">Update interval (hours)</Label>
+                    <Input
+                      id="roi-interval"
+                      type="number"
+                      min={0}
+                      max={720}
+                      step="any"
+                      required
+                      value={intervalHours}
+                      onChange={(e) => setIntervalHours(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Use 0 for manual updates. Automatic updates require at least 5 minutes and a running gateway.
+                    </p>
+                  </div>
                 </div>
                 <details>
                   <summary className="cursor-pointer text-sm text-muted-foreground">Advanced settings</summary>
@@ -511,10 +518,10 @@ export default function ROISettingsPanel({
                   Estimates use descriptions, file counts, and commit messages, without source code. Hours represent
                   estimated effort without AI, not measured hours saved.
                 </p>
-              </>
+              </section>
             )}
             {!readOnly && (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 border-t pt-5">
                 {onboarding && step > 0 && (
                   <Button
                     type="button"

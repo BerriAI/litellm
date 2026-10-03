@@ -145,7 +145,7 @@ describe("ROICalculatorView", () => {
   it("shows the spend summary and opens an accessible pull reasoning dialog", async () => {
     render(<ROICalculatorView accessToken="token" />);
 
-    expect(await screen.findByText("Spend / estimated hour")).toBeInTheDocument();
+    expect(await screen.findByText("Cost / estimated hour")).toBeInTheDocument();
     expect(screen.getByText("$3.00")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" }));
 
@@ -155,6 +155,19 @@ describe("ROICalculatorView", () => {
       "href",
       "https://github.com/org/repo/pull/42",
     );
+  });
+
+  it("keeps the selected cost view when reviewing people and returning to the overview", async () => {
+    render(<ROICalculatorView accessToken="token" />);
+
+    fireEvent.click(await screen.findByRole("radio", { name: "By branch" }));
+    expect(screen.getByRole("heading", { name: "Costs by branch" })).toBeVisible();
+    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
+    fireEvent.click(screen.getByRole("tab", { name: "People" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.getByRole("radio", { name: "By branch" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "By person" }));
+    expect(screen.getByText("$3.00")).toBeVisible();
   });
 
   it("shows incomplete repository results without a spend-per-hour figure", async () => {
@@ -179,7 +192,7 @@ describe("ROICalculatorView", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(warning);
     expect(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" })).toBeInTheDocument();
     expect(screen.queryByText("$3.00")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("Calculation details"));
+    fireEvent.click(screen.getByText("How this is calculated"));
     expect(
       screen.getByText("Spend per estimated hour is unavailable until all selected repositories can be read."),
     ).toBeVisible();
@@ -201,7 +214,7 @@ describe("ROICalculatorView", () => {
 
     render(<ROICalculatorView accessToken="token" userRole="Admin" isViewOnly />);
 
-    expect(await screen.findByText("Spend / estimated hour")).toBeInTheDocument();
+    expect(await screen.findByText("Cost / estimated hour")).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("Read-only access");
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel sync" })).not.toBeInTheDocument();
@@ -266,7 +279,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
-    expect(screen.getByText("Spend / estimated hour")).toBeVisible();
+    expect(screen.getByText("Cost / estimated hour")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
 
@@ -302,10 +315,9 @@ describe("ROICalculatorView", () => {
     render(<ROICalculatorView accessToken="token" />);
 
     expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
-    expect(await screen.findByText("Spend / estimated hour", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText("Cost / estimated hour", {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Last synced Sep 30, 2026, 12:00 PM UTC");
-    expect(screen.getByRole("status")).toHaveTextContent("57 of 57 estimates reused");
   });
 
   it("shows the sync error returned by the status endpoint", async () => {
@@ -383,7 +395,7 @@ describe("ROICalculatorView", () => {
     expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(
       "The sync status could not be loaded.",
     );
-    expect(await screen.findByText("Spend / estimated hour", {}, { timeout: 7000 })).toBeInTheDocument();
+    expect(await screen.findByText("Cost / estimated hour", {}, { timeout: 7000 })).toBeInTheDocument();
     expect(screen.queryByText("The sync status could not be loaded.")).not.toBeInTheDocument();
   });
   it("saves the edited schedule before running from Settings", async () => {
