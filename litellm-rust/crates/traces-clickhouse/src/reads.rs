@@ -1,6 +1,6 @@
 //! Scoped trace reads: the trace list, one trace resolved with its spend, and span payloads.
 
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE};
@@ -12,9 +12,8 @@ use litellm_traces::{
     SpanDetail, SpanErrorPage, SpendLookup, Trace, TracePage, listed_summary,
     query::named as contracts, resolve_trace, to_ui_content,
 };
-use moka::future::Cache;
+use litellm_traces_cache::{SnapshotCache, SnapshotKey};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::{
     Connection, Error,
@@ -38,17 +37,11 @@ impl Query for RunCandidates {
 }
 
 // Cursor pages share a bounded snapshot so advancing does not resolve the whole graph again.
-static TRACE_SNAPSHOTS: LazyLock<Cache<String, Arc<Trace>>> = LazyLock::new(|| {
-    Cache::builder()
-        .max_capacity((2 * crate::span_batches::MAX_GRAPH_BYTES) as u64)
-        .weigher(|_: &String, trace: &Arc<Trace>| {
-            serde_json::to_vec(trace.as_ref())
-                .ok()
-                .and_then(|bytes| u32::try_from(bytes.len().saturating_mul(2)).ok())
-                .unwrap_or(u32::MAX)
-        })
-        .time_to_live(Duration::from_secs(120))
-        .build()
+static TRACE_SNAPSHOTS: LazyLock<SnapshotCache> = LazyLock::new(|| {
+    SnapshotCache::new(
+        crate::span_batches::MAX_GRAPH_BYTES,
+        Duration::from_secs(120),
+    )
 });
 
 const NANOS_PER_MS: i64 = 1_000_000;
@@ -339,74 +332,57 @@ pub async fn get_trace_page(
             version: String::new(),
         },
     };
-    let key_bytes = serde_json::to_vec(&(
+    let key = SnapshotKey::new(
         connection.url().as_str(),
         access,
         trace_id,
         &trace_ref,
         position.snapshot_ms,
-    ))
+    )
     .map_err(|_| Error::InvalidParameters)?;
-    let key = format!("{:x}", Sha256::digest(key_bytes));
-    let snapshot = if let Some(trace) = TRACE_SNAPSHOTS.get(&key).await {
-        trace
-    } else {
-        let params = TraceSpansParams {
-            access: access.clone(),
-            trace_id: trace_id.to_owned(),
-            trace_ref: trace_ref.clone(),
-        };
-        let rows =
-            crate::span_batches::read_spans(client, connection, params, position.snapshot_ms)
-                .await?;
-        let spend_rows = spend(client, connection, access, &rows).await;
-        let Some(trace) = resolve_trace(trace_id, &trace_ref, &rows, &spend_rows) else {
-            return Ok(None);
-        };
-        if serde_json::to_vec(&trace)
-            .map_err(|_| Error::InvalidResponse)?
-            .len()
-            > crate::span_batches::MAX_GRAPH_BYTES
-        {
-            return Err(Error::ReadTooLarge);
+    let snapshot = match TRACE_SNAPSHOTS.get(&key).await {
+        Some(snapshot) => snapshot,
+        None => {
+            let params = TraceSpansParams {
+                access: access.clone(),
+                trace_id: trace_id.to_owned(),
+                trace_ref: trace_ref.clone(),
+            };
+            let rows =
+                crate::span_batches::read_spans(client, connection, params, position.snapshot_ms)
+                    .await?;
+            let spend_rows = spend(client, connection, access, &rows).await;
+            let Some(trace) = resolve_trace(trace_id, &trace_ref, &rows, &spend_rows) else {
+                return Ok(None);
+            };
+            TRACE_SNAPSHOTS.insert(key, trace).await?
         }
-        let trace = Arc::new(trace);
-        TRACE_SNAPSHOTS.insert(key, Arc::clone(&trace)).await;
-        trace
     };
-    let span_ids: Vec<&str> = snapshot
-        .spans
-        .iter()
-        .map(|span| span.span_id.as_str())
-        .collect();
-    let version = format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(&span_ids).map_err(|_| Error::InvalidResponse)?)
-    );
-    if cursor.is_some() && position.version != version {
+    let spans = &snapshot.trace().spans;
+    if cursor.is_some() && position.version != snapshot.version() {
         return Err(Error::TraceChanged);
     }
     let mut trace = Trace {
-        summary: snapshot.summary.clone(),
-        agents: snapshot.agents.clone(),
+        summary: snapshot.trace().summary.clone(),
+        agents: snapshot.trace().agents.clone(),
         spans: Vec::new(),
         next_cursor: None,
     };
-    if position.offset > snapshot.spans.len() {
+    if position.offset > spans.len() {
         return Err(Error::InvalidCursor("span"));
     }
     let end = position
         .offset
         .saturating_add(page_size as usize)
-        .min(snapshot.spans.len());
-    trace.next_cursor = (end < snapshot.spans.len()).then(|| {
+        .min(spans.len());
+    trace.next_cursor = (end < spans.len()).then(|| {
         encode_cursor(&SpanPosition {
             offset: end,
-            version: version.clone(),
+            version: snapshot.version().to_owned(),
             ..position
         })
     });
-    trace.spans = snapshot.spans[position.offset..end].to_vec();
+    trace.spans = spans[position.offset..end].to_vec();
     while serde_json::to_vec(&trace)
         .map_err(|_| Error::InvalidResponse)?
         .len()
@@ -420,7 +396,7 @@ pub async fn get_trace_page(
             trace_ref: trace_ref.clone(),
             snapshot_ms: position.snapshot_ms,
             offset: position.offset + trace.spans.len(),
-            version: version.clone(),
+            version: snapshot.version().to_owned(),
         }));
     }
     Ok(Some(trace))

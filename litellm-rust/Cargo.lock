@@ -4470,6 +4470,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-traces-cache"
+version = "0.1.0"
+dependencies = [
+ "litellm-traces",
+ "moka",
+ "rstest",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-traces-clickhouse"
 version = "0.1.0"
 dependencies = [
@@ -4484,6 +4497,7 @@ dependencies = [
  "litellm-migrate",
  "litellm-storage-clickhouse",
  "litellm-traces",
+ "litellm-traces-cache",
  "macro_rules_attribute",
  "moka",
  "rstest",
