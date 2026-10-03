@@ -691,7 +691,7 @@ def test_exclude_only_hardcoded_label_drops_all_labels(reset_prometheus_exclude_
 def test_exclude_labels_does_not_touch_unrelated_metrics(reset_prometheus_exclude_settings):
     """A metric that never declares the excluded label is left as a plain prometheus metric,
     not wrapped, so no behavior changes for it."""
-    from litellm.integrations.prometheus import _ExcludedLabelMetric
+    from litellm.integrations.prometheus import _LabeledMetric
 
     clear_prometheus_registry()
     litellm.prometheus_metrics_config = None
@@ -700,9 +700,9 @@ def test_exclude_labels_does_not_touch_unrelated_metrics(reset_prometheus_exclud
 
     logger = PrometheusLogger()
 
-    assert not isinstance(logger.litellm_spend_metric, _ExcludedLabelMetric)
-    assert not isinstance(logger.litellm_provider_remaining_budget_metric, _ExcludedLabelMetric)
-    assert isinstance(logger.litellm_guardrail_latency_metric, _ExcludedLabelMetric)
+    assert not isinstance(logger.litellm_spend_metric, _LabeledMetric)
+    assert not isinstance(logger.litellm_provider_remaining_budget_metric, _LabeledMetric)
+    assert isinstance(logger.litellm_guardrail_latency_metric, _LabeledMetric)
 
 
 # ==============================================================================
