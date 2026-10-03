@@ -3240,9 +3240,8 @@ class Router:
 
         Full parity with the chat-completions path:
           - Pre-first-chunk: retry with the original input unchanged.
-          - Partial content: inject a developer instruction + prior
-            assistant message carrying the generated text so the fallback
-            model continues rather than restarts.
+          - Delivered output: surface the original error rather than
+            restarting an output item or tool call on a fallback.
           - Usage combining: merge partial-stream usage onto the fallback's
             response.completed event so accounting reflects both attempts.
           - Stream cleanup: shielded aclose() on both source and fallback
@@ -3372,6 +3371,7 @@ class Router:
 
         async def stream_with_fallbacks():
             held_lifecycle_events: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
+            has_forwarded_output = False  # rebind-ok: updated as output events reach the client
             try:
                 async for item in source_iterator:
                     if _responses_stream_holds_event(item, len(held_lifecycle_events)):
@@ -3380,10 +3380,17 @@ class Router:
                     for held_event in held_lifecycle_events:
                         yield held_event
                     held_lifecycle_events = ()
+                    if isinstance(getattr(item, "output_index", None), int) or (
+                        getattr(item, "type", None)
+                        == _openai_types.ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+                    ):
+                        has_forwarded_output = True
                     yield item
                 for held_event in held_lifecycle_events:
                     yield held_event
             except MidStreamFallbackError as e:
+                if has_forwarded_output:
+                    raise e.original_exception or e
                 async with contextlib.aclosing(
                     self._aresponses_fallback_attempt(
                         e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
