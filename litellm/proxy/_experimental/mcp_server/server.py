@@ -2072,10 +2072,13 @@ if MCP_AVAILABLE:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
                 toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
-            session_header_present: Final = _get_session_id_from_scope(scope) is not None
+            named_session_id: Final = _get_session_id_from_scope(scope)
+            names_live_session: Final = named_session_id is not None and (
+                named_session_id in _stateful_session_owners or named_session_id in _stateful_server_instances()
+            )
             consumed_messages, connect_body = (
                 await _read_request_body_for_routing(receive)
-                if scope.get("method") == "POST" and not session_header_present
+                if scope.get("method") == "POST" and not names_live_session
                 else ([], b"")
             )
             connecting: Final = _is_initialize_request(connect_body)
@@ -2176,7 +2179,7 @@ if MCP_AVAILABLE:
 
             session_messages, session_body = (
                 await _read_request_body_for_routing(receive)
-                if scope.get("method") == "POST" and session_header_present
+                if scope.get("method") == "POST" and names_live_session
                 else ([], b"")
             )
             consumed_messages.extend(session_messages)
