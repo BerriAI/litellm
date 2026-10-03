@@ -2703,10 +2703,6 @@ class AmazonConverseConfig(BaseConfig):
         _message: Final = Message(**chat_completion_message)
         mapped_finish_reason: Final = map_finish_reason(completion_response["stopReason"])
 
-        # When json_mode filtered out all synthetic tool calls the response
-        # is plain content, not a pending tool invocation. Downgrade the
-        # tool_calls stop reason so callers (e.g. OpenAI SDK) don't
-        # misinterpret it; keep truncation signals like "length".
         initial_finish_reason: Final = (
             "stop"
             if resolved_json_mode and not filtered_tools and tools and mapped_finish_reason == "tool_calls"

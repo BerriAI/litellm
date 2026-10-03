@@ -2276,8 +2276,6 @@ class LiteLLMCompletionResponsesConfig:
             The corresponding responses API status value (one of ResponsesAPIStatus)
         """
         if finish_reason is None:
-            # No finish signal (empty choices, or a provider that never sent
-            # one) means we cannot claim the response completed.
             return "incomplete"
 
         # Map finish reasons to status
@@ -2299,8 +2297,6 @@ class LiteLLMCompletionResponsesConfig:
         if existing is not None:
             return existing
         if finish_reason is None:
-            # With no finish signal we cannot name a reason, but output at the
-            # requested cap was almost certainly truncated by it.
             hit_cap: Final = (
                 completion_tokens is not None
                 and max_output_tokens is not None
@@ -2426,9 +2422,6 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
-        # A chat completion response never carries the request's sampling and
-        # config fields (temperature would always read 0), so they echo from
-        # the request instead.
         echoed: Final = cast(  # cast-ok: same dict, narrowed to the fields the response echoes
             "_EchoedResponsesRequestParams", responses_api_request
         )
