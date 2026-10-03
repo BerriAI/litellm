@@ -24,9 +24,22 @@ AttachmentType: TypeAlias = Literal["image", "audio", "file"]
 
 _REMOTE_URI_SCHEMES: Final = ("http://", "https://")
 _URL_SAFE_TO_STANDARD: Final = str.maketrans("-_", "+/")
-_ATTACHMENT_BLOCK_TYPES: Final = frozenset(
-    ("image_url", "input_image", "input_audio", "file", "input_file", "image", "document", "video_url", "search_result")
+# Per attachment type, the fields the file check sends; the text check keeps every other field, as the model reads them
+_FILE_CHECKED_FIELDS: Final = MappingProxyType(
+    {
+        "image_url": frozenset(("image_url", "url")),
+        "input_image": frozenset(("image_url", "url", "file_id")),
+        "input_audio": frozenset(("input_audio",)),
+        "video_url": frozenset(("video_url",)),
+        "file": frozenset(("file",)),
+        "input_file": frozenset(("file_data", "file_url", "file_id")),
+        "image": frozenset(("source",)),
+        "document": frozenset(("source", "title", "context")),
+        "search_result": frozenset(("content", "source", "title")),
+    }
 )
+_FILE_SOURCE_FIELDS: Final = frozenset(("file_data", "file_id"))
+_ATTACHMENT_BLOCK_TYPES: Final = frozenset(_FILE_CHECKED_FIELDS)
 _OBJECT_MAPPING: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 _T: Final = TypeVar("_T")
@@ -69,7 +82,8 @@ class _ImageURL(_Model):
 
 class _ImageURLBlock(_Model):
     type: Literal["image_url"]
-    image_url: _ImageURL | str
+    image_url: _ImageURL | str | None = None
+    url: _ImageURL | str | None = None
 
 
 class _VideoURLBlock(_Model):
@@ -79,7 +93,8 @@ class _VideoURLBlock(_Model):
 
 class _InputImageBlock(_Model):
     type: Literal["input_image"]
-    image_url: str | None = None
+    image_url: _ImageURL | str | None = None
+    url: _ImageURL | str | None = None
     file_id: str | None = None
 
 
@@ -134,10 +149,12 @@ class _DocumentBlock(_Model):
     type: Literal["document"]
     source: _Source
     title: _Metadata = None
+    context: _Metadata = None
 
 
 class _SearchResultBlock(_Model):
     type: Literal["search_result"]
+    source: _Metadata = None
     title: _Metadata = None
     content: object = None
 
@@ -229,7 +246,7 @@ def _block(item: object) -> _Block | None:
     if parsed is not None:
         return parsed
     block_type: Final = (_parse(_OBJECT_MAPPING, item) or {}).get("type")
-    return _MalformedBlock() if block_type in _ATTACHMENT_BLOCK_TYPES else None
+    return _MalformedBlock() if isinstance(block_type, str) and block_type in _ATTACHMENT_BLOCK_TYPES else None
 
 
 def _block_attachments(block: _Block, index: int) -> tuple[_Classified, ...]:
@@ -239,8 +256,17 @@ def _block_attachments(block: _Block, index: int) -> tuple[_Classified, ...]:
             return _file_sources((block.file.file_data,), block.file.file_id, block.file.filename, index)
         case _InputFileBlock():
             return _file_sources((block.file_data, block.file_url), block.file_id, block.filename, index)
+        case _ImageURLBlock():
+            return _file_sources((_url(block.image_url), _url(block.url)), None, None, index, "image")
         case _InputImageBlock():
-            return _file_sources((block.image_url,), block.file_id, None, index, "image")
+            return _file_sources((_url(block.image_url), _url(block.url)), block.file_id, None, index, "image")
+        case _DocumentBlock():
+            prompt_text: Final = _lines((block.title, block.context))
+            described: Final = (_text_file(prompt_text, None, index, "file"),) if prompt_text else ()
+            return (_from_source(block.source, block.title, index, "file"), *described)
+        case _SearchResultBlock():
+            text: Final = _lines((block.source, block.title, _joined_text(block.content)))
+            return (_text_file(text, block.title, index, "file") if text else _NOT_AN_ATTACHMENT,)
         case _:
             return (_classify_block(block, index),)
 
@@ -263,8 +289,6 @@ def _from_file_id(file_id: str, name: str | None, index: int, kind: AttachmentTy
 
 def _classify_block(block: _Block, index: int) -> _Classified:
     match block:
-        case _ImageURLBlock():
-            return _from_uri(_url(block.image_url), None, index, "image")
         case _VideoURLBlock():
             return _from_uri(_url(block.video_url), None, index, "file")
         case _InputAudioBlock(input_audio=_InputAudio(data=str(data), format=audio_format)):
@@ -274,13 +298,12 @@ def _classify_block(block: _Block, index: int) -> _Classified:
             return _UNSENDABLE
         case _ImageBlock(source=source):
             return _from_source(source, None, index, "image")
-        case _DocumentBlock(source=source, title=title):
-            return _from_source(source, title, index, "file")
-        case _SearchResultBlock():
-            text: Final = _joined_text(block.content)
-            return _text_file(text, block.title, index, "file") if text else _NOT_AN_ATTACHMENT
         case _:
             return _NOT_AN_ATTACHMENT
+
+
+def _lines(parts: tuple[str | None, ...]) -> str:
+    return "\n".join(part for part in parts if part)
 
 
 def _url(value: _ImageURL | str | None) -> str | None:
@@ -391,14 +414,18 @@ def _without_content(value: object, key: str) -> object:
 
 
 def _block_without_content(block: object) -> object:
-    block_type: Final = (_parse(_OBJECT_MAPPING, block) or {}).get("type")
-    if block_type == "document":
-        # Title and context are prompt text the model reads, so they stay in the checked payload
-        document: Final = _parse(_OBJECT_MAPPING, block) or {}
-        return {key: document[key] for key in ("type", "title", "context") if key in document}
-    if block_type in _ATTACHMENT_BLOCK_TYPES:
-        return {"type": block_type}
-    return _without_content(block, "content") if block_type == "tool_result" else block
+    mapping: Final = _parse(_OBJECT_MAPPING, block) or {}
+    block_type: Final = mapping.get("type")
+    if block_type == "tool_result":
+        return _without_content(block, "content")
+    dropped: Final = _FILE_CHECKED_FIELDS.get(block_type) if isinstance(block_type, str) else None
+    if dropped is None:
+        return block
+    kept: Final = {key: value for key, value in mapping.items() if key not in dropped}
+    file: Final = _parse(_OBJECT_MAPPING, mapping.get("file")) if block_type == "file" else None
+    if file is None:
+        return kept
+    return {**kept, "file": {key: value for key, value in file.items() if key not in _FILE_SOURCE_FIELDS}}
 
 
 def _parse(adapter: TypeAdapter[_T], value: object) -> _T | None:

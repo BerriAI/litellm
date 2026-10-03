@@ -1326,7 +1326,10 @@ async def test_text_check_sends_attachment_types_but_not_their_content(akto_pre_
     text_check = next(c for c in akto_pre_call.async_handler.post.call_args_list if c not in _file_calls(akto_pre_call))
     body = json.loads(json.loads(json.loads(text_check.kwargs["data"])["requestPayload"])["body"])
     assert body["messages"] == [
-        {"role": "user", "content": [{"type": "text", "text": "summarise this"}, {"type": "file"}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "summarise this"}, {"type": "file", "file": {"filename": "c.pdf"}}],
+        },
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "image"}]}]},
     ], "attachment bytes go only to the file check, so a large file cannot make the text check time out"
 
