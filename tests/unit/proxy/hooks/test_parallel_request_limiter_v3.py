@@ -7562,6 +7562,28 @@ async def test_a_one_ptu_share_admits_four_uncapped_requests_a_minute_and_reject
 
 
 @pytest.mark.asyncio
+async def test_an_uncapped_prompt_longer_than_the_output_floor_reserves_the_cap_the_proxy_writes():
+    """Without a cap the output budget defaults to the prompt's own length, so a long prompt would be
+    reserved twice, weighted 4:1, and refused on an empty window. The ceiling counts the cap the proxy
+    writes into the request instead, the same output the deployment can produce."""
+    cache = DualCache()
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=3000, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+    data = {"model": "test-model", "messages": [{"role": "user", "content": "word " * 1200}]}
+
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=data, call_type="acompletion")
+
+    stash = get_request_stash()
+    assert stash is not None
+    assert data["max_tokens"] * 4 <= 3000 // 4
+    assert stash.ptu_reserved_tokens == stash.reserved_tokens + 3 * data["max_tokens"]
+    assert stash.ptu_reserved_tokens <= 3000
+
+
+@pytest.mark.asyncio
 async def test_the_ptu_counter_holds_the_normalized_reservation_beside_the_raw_one():
     cache = DualCache()
     resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)

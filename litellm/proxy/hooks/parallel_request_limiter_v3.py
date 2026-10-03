@@ -4236,9 +4236,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         min_configured_tpm_limit,
                     )
 
+                capped_request: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
                 ptu_estimated_tokens: Final = self._estimate_ptu_tokens_for_request(
                     ceiling=stash.ptu_ceiling,
-                    data=request_data,
+                    data=capped_request,
                     min_configured_tpm_limit=min_configured_tpm_limit,
                     call_type=call_type,
                     configured_output_tokens=configured_output_tokens,
