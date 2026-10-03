@@ -4,23 +4,30 @@ from datetime import datetime
 from itertools import chain
 from pathlib import Path
 from typing import Final
+from unittest.mock import AsyncMock
 
+import httpx
 import pytest
-from prisma import Json
+from prisma import Json, Prisma
 from pydantic import InstanceOf, TypeAdapter
 
-from litellm.rust_bridge.trace.storage import span_rows
+from litellm.rust_bridge.trace.storage import Tenant, span_rows
 from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,
+    TenantIdentity,
+    bulk_span_rows,
     fixture_capture,
     fixture_replays,
     postgres_row,
     rebase,
     rebase_spend,
+    replay_batches,
     response_ids,
     response_pattern,
+    seed_arguments,
+    seed_batch,
     seed_id,
     spend_fixtures,
     timestamps,
@@ -184,7 +191,7 @@ def test_captured_spend_replay_preserves_real_cost_and_call_identity(
         if before["litellm_call_id"]:
             assert after["litellm_call_id"] != before["litellm_call_id"]
         identities: Final = frozenset(f"provider_response:{identity}" for identity in response_ids((after,))) | {
-            f"litellm_request:{after["litellm_call_id"]}"
+            f"litellm_request:{after['litellm_call_id']}"
         }
         assert bool(identities & keys) is capture.spend_linked
 
@@ -199,3 +206,76 @@ def test_spend_fixture_loading_preserves_gateway_ids_and_defaults_legacy_rows(
     (tmp_path / "example_spend_logs.jsonl").write_text(json.dumps(supplied) + "\n")
     loaded: Final = spend_fixtures(tmp_path)
     assert loaded == (("example", ({**original, "litellm_call_id": call_id or ""},)),)
+
+
+@pytest.mark.requires_rust_extension
+def test_bulk_export_preserves_all_spans_and_disjoint_copy_ids() -> None:
+    first: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "copy-1", re.compile(r"(?!)"))
+    second: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_001_000, "copy-2", re.compile(r"(?!)"))
+    merged: Final = bulk_span_rows(first + second, Tenant("", ""))
+    separate: Final = tuple(
+        span for replay in first + second for span in span_rows(json.dumps(replay.export).encode(), "application/json")
+    )
+    assert tuple(merged) == separate
+    first_ids: Final = frozenset(span["TraceId"] for span in bulk_span_rows(first, Tenant("", "")))
+    second_ids: Final = frozenset(span["TraceId"] for span in bulk_span_rows(second, Tenant("", "")))
+    assert first_ids.isdisjoint(second_ids)
+    assert len(merged) > 1000
+
+
+@pytest.mark.requires_rust_extension
+@pytest.mark.asyncio
+async def test_bulk_seed_stamps_authenticated_tenant_and_writes_both_stores() -> None:
+    from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
+
+    fixtures: Final = spend_fixtures()
+    pattern: Final = response_pattern(tuple(chain.from_iterable(rows for _, rows in fixtures)))
+    replays: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "bulk", pattern)
+    storage: Final = AsyncMock(spec=ClickHouseStorage)
+    database: Final = AsyncMock(spec=Prisma, litellm_spendlogs=AsyncMock())
+    tenant: Final = TenantIdentity(team_id="local-team", api_key="local-hash", user="admin")
+    async with httpx.AsyncClient() as client:
+        result: Final = await seed_batch(client, storage, database, replays, fixtures, pattern, tenant, False)
+    assert result == tenant
+    trace_table, trace_rows = storage.insert_rows.call_args_list[0].args
+    assert trace_table == "otel_traces"
+    assert trace_rows == bulk_span_rows(replays, Tenant("local-team", "local-hash", user_id="admin"))
+    table, rows = storage.insert_rows.call_args_list[1].args
+    assert table == "spend_logs"
+    assert len(rows) == sum(len(original) for _, original in fixtures)
+    assert all((row["team_id"], row["api_key"], row["user"]) == ("local-team", "local-hash", "admin") for row in rows)
+    saved: Final = database.litellm_spendlogs.create_many.call_args.kwargs["data"]
+    assert tuple(row["request_id"] for row in saved) == tuple(row["request_id"] for row in rows)
+    assert tuple(row["spend"] for row in saved) == tuple(row["spend"] for row in rows)
+    storage.query_sql.assert_not_called()
+
+
+def test_seed_cli_rejects_nonpositive_copies() -> None:
+    with pytest.raises(SystemExit) as error:
+        seed_arguments(["--copies", "0"])
+    assert error.value.code == 2
+    assert seed_arguments(["--profile", "large", "--copies", "5"]).copies == 5
+
+
+def test_bulk_batches_cover_every_copy_including_partial_tail() -> None:
+    batches: Final = tuple(replay_batches(8, 1_800_000_000_000, "batch", re.compile(r"(?!)"), 3))
+    assert tuple(stop for stop, _ in batches) == (4, 7, 8)
+    expected: Final = tuple(
+        tuple(fixture_replays(TRACE_FIXTURES, 1_800_000_000_000 - index * 1000, f"batch-{index}", re.compile(r"(?!)")))
+        for index in range(1, 8)
+    )
+    assert tuple(chain.from_iterable(replays for _, replays in batches)) == tuple(chain.from_iterable(expected))
+
+
+def test_seed_cli_rejects_nonpositive_batch_size() -> None:
+    with pytest.raises(SystemExit) as error:
+        seed_arguments(["--batch-copies", "0"])
+    assert error.value.code == 2
+    assert seed_arguments(["--batch-copies", "2"]).batch_copies == 2
+
+
+@pytest.mark.parametrize("timeout", ("0", "-1", "inf", "nan"))
+def test_seed_cli_rejects_invalid_http_timeouts(timeout: str) -> None:
+    with pytest.raises(SystemExit) as error:
+        seed_arguments(["--timeout-seconds", timeout])
+    assert error.value.code == 2

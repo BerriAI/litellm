@@ -313,7 +313,7 @@ rust-sqlx-prepare:
 	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
 
 lens-dev:
-	./scripts/lens_dev.sh
+	LENS_DEV_SEED="$(or $(SEED),$(LENS_DEV_SEED))" ./scripts/lens_dev.sh
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/

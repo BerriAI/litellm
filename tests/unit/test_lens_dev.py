@@ -149,3 +149,40 @@ def test_cleanup_kills_child_process_trees(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "lens-dev: stopping" in proc.stdout
     assert proc.stdout.strip().endswith("CLEAN")
+
+
+def test_seed_only_uses_local_credentials_and_profile(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        "parse_args --seed-only --seed large --copies 7; master_key=sk-local; "
+        'py() { env; printf "%s\\n" "$@"; }; py=py; seed_data',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "LITELLM_MASTER_KEY=sk-local" in proc.stdout
+    assert "PROXY_BASE_URL=http://localhost:4000" in proc.stdout
+    assert "CLICKHOUSE_DATABASE=litellm" in proc.stdout
+    assert "--profile\nlarge\n--copies\n7" in proc.stdout
+
+
+def test_seed_arguments_reject_invalid_counts_before_startup(tmp_path: Path) -> None:
+    proc = _run(tmp_path, "parse_args --seed large --copies 0")
+    assert proc.returncode == 1
+    assert "positive integer" in proc.stderr
+
+
+def test_seed_only_defaults_to_small_profile(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'parse_args --seed-only; echo "$seed_profile $seed_only"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "default 1"
+
+
+def test_seed_only_with_no_cli_count_preserves_env_controls(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        "parse_args --seed-only; master_key=sk-local; py() { "
+        'printf "%s %s %s\\n" "$LENS_DEV_SEED_COPIES" "$LENS_DEV_SEED_BATCH_COPIES" "$@"; }; py=py; seed_data',
+        LENS_DEV_SEED_COPIES="3",
+        LENS_DEV_SEED_BATCH_COPIES="1",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.startswith("3 1 -m")

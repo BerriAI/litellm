@@ -182,13 +182,54 @@ cleanup() {
   for pid in "${pids[@]}"; do kill -KILL -- "-$pid" 2>/dev/null || true; done
 }
 
+seed_data() {
+  (
+    proxy_env ""
+    "$py" -m scripts.seed_tracing_fixtures --profile "$seed_profile" ${seed_options[@]+"${seed_options[@]}"}
+  )
+}
+
+parse_args() {
+  seed_profile="${LENS_DEV_SEED:-}"
+  seed_only=0
+  seed_options=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --seed)
+        seed_profile=default
+        if [ "${2:-}" = default ] || [ "${2:-}" = large ]; then seed_profile="$2"; shift; fi
+        ;;
+      --copies)
+        [ "$#" -ge 2 ] && [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "--copies requires a positive integer"
+        seed_options=(--copies "$2"); shift ;;
+      --seed-only) seed_only=1 ;;
+      --help)
+        echo "Usage: $0 [--seed [default|large]] [--copies N] [--seed-only]"
+        exit 0 ;;
+      *) die "unknown argument: $1 (use --help)" ;;
+    esac
+    shift
+  done
+  if [ "$seed_only" = 1 ] && [ -z "$seed_profile" ]; then seed_profile=default; fi
+  case "$seed_profile" in ""|default|large) ;; *) die "seed profile must be default or large" ;; esac
+  [ "${#seed_options[@]}" = 0 ] || [ -n "$seed_profile" ] || die "--copies requires --seed"
+}
+
 main() {
   local config_file exports proxy_pid pid key_hint
+  parse_args "$@"
   if [ -n "${LENS_DEV_CONFIG:-}" ]; then
     [ -f "$LENS_DEV_CONFIG" ] || die "LENS_DEV_CONFIG not found: $LENS_DEV_CONFIG"
     config_file="$(cd "$(dirname "$LENS_DEV_CONFIG")" && pwd)/$(basename "$LENS_DEV_CONFIG")"
   fi
   cd "$repo_root"
+
+  if [ "$seed_only" = 1 ]; then
+    [ -s "$key_file" ] || [ -n "${LENS_DEV_MASTER_KEY:-}" ] || die "start make lens-dev before --seed-only"
+    load_master_key
+    seed_data
+    return
+  fi
 
   listening "$proxy_port" && die "port $proxy_port is in use; set LENS_DEV_PROXY_PORT"
   listening "$ui_port" && die "port $ui_port is in use; set LENS_DEV_UI_PORT"
@@ -235,6 +276,7 @@ main() {
 
   wait_for_proxy "$proxy_pid"
   ensure_worker_token
+  if [ -n "$seed_profile" ]; then seed_data; fi
 
   LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
     "$py" -c "import asyncio, logging; from litellm.proxy.lens.worker import main; logging.basicConfig(level=logging.INFO); asyncio.run(main())" \
