@@ -6,6 +6,7 @@ ServiceLogger() then sends DB logs to Prometheus, OTEL, Datadog etc
 
 import asyncio
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
 from typing import Final
@@ -23,6 +24,40 @@ def _safe_db_event_metadata(kwargs: dict) -> dict[str, str] | None:
     """
     table_name: Final = kwargs.get("table_name")
     return {"table_name": table_name} if isinstance(table_name, str) else None
+
+
+class _DbIoWitness:
+    """Activity an inner decorated call already reported stays with it; only unreported activity reaches the enclosing call."""
+
+    __slots__ = ("_parent", "_reported", "_touched")
+
+    def __init__(self, parent: "_DbIoWitness | None") -> None:
+        self._parent: Final = parent
+        self._touched = False
+        self._reported = False
+
+    @property
+    def touched(self) -> bool:
+        return self._touched
+
+    def mark(self) -> None:
+        self._touched = True
+
+    def report(self) -> None:
+        self._reported = True
+
+    def close(self) -> None:
+        if self._touched and not self._reported and self._parent is not None:
+            self._parent.mark()
+
+
+_db_io_witness: Final[ContextVar["_DbIoWitness | None"]] = ContextVar("litellm_db_io_witness", default=None)
+
+
+def record_db_io() -> None:
+    witness: Final = _db_io_witness.get()
+    if witness is not None:
+        witness.mark()
 
 
 def log_db_metrics(func):
@@ -46,6 +81,8 @@ def log_db_metrics(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         start_time: Final[datetime] = datetime.now()
+        witness: Final = _DbIoWitness(parent=_db_io_witness.get())
+        witness_token: Final = _db_io_witness.set(witness)
 
         try:
             result: Final = await func(*args, **kwargs)
@@ -53,6 +90,8 @@ def log_db_metrics(func):
             from litellm.proxy.proxy_server import proxy_logging_obj
 
             if "PROXY" not in func.__name__:
+                if not witness.touched:
+                    return result
                 asyncio.create_task(
                     proxy_logging_obj.service_logging_obj.async_service_success_hook(
                         service=ServiceTypes.DB,
@@ -64,6 +103,7 @@ def log_db_metrics(func):
                         event_metadata=_safe_db_event_metadata(kwargs),
                     )
                 )
+                witness.report()
             elif (
                 # in litellm custom callbacks kwargs is passed as arg[0]
                 # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
@@ -90,15 +130,19 @@ def log_db_metrics(func):
             return result
         except Exception as e:
             end_time: datetime = datetime.now()
-            await _handle_logging_db_exception(
+            if await _handle_logging_db_exception(
                 e=e,
                 func=func,
                 kwargs=kwargs,
                 args=args,
                 start_time=start_time,
                 end_time=end_time,
-            )
+            ):
+                witness.report()
             raise e
+        finally:
+            witness.close()
+            _db_io_witness.reset(witness_token)
 
     return wrapper
 
@@ -121,12 +165,12 @@ async def _handle_logging_db_exception(
     args: tuple,
     start_time: datetime,
     end_time: datetime,
-) -> None:
+) -> bool:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     # don't log this as a DB Service Failure, if the DB did not raise an exception
     if _is_exception_related_to_db(e) is not True:
-        return
+        return False
 
     await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
         error=e,
@@ -138,3 +182,4 @@ async def _handle_logging_db_exception(
         end_time=end_time,
         event_metadata=_safe_db_event_metadata(kwargs),
     )
+    return True
