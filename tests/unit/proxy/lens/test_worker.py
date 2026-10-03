@@ -297,7 +297,8 @@ def test_response_validation_diagnostics_omit_input_values_and_unexpected_field_
 
 
 @pytest.mark.asyncio
-async def test_losing_the_lease_interrupts_an_in_flight_model_request() -> None:
+@pytest.mark.parametrize("heartbeat_status", (401, 403, 409))
+async def test_losing_the_lease_interrupts_an_in_flight_model_request(heartbeat_status: int) -> None:
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     execution: Final = Execution(
         id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
@@ -335,7 +336,7 @@ async def test_losing_the_lease_interrupts_an_in_flight_model_request() -> None:
                     cancelled.set()
                 pytest.fail("The cancelled model request must not finish")
             case "heartbeat":
-                return httpx.Response(409)
+                return httpx.Response(heartbeat_status)
             case "progress":
                 return httpx.Response(200, json=True)
             case "result":
@@ -349,5 +350,70 @@ async def test_losing_the_lease_interrupts_an_in_flight_model_request() -> None:
     ) as client:
         assert await LensWorker(client, heartbeat_wait=heartbeat_wait).run_once()
     assert cancelled.is_set()
-    assert "no longer owns the run" in saved.get_nowait().error
+    assert f"HTTP {heartbeat_status}" in saved.get_nowait().error
     assert saved.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", (429, 500, 502, 503, 504, "connection", "timeout"))
+async def test_transient_heartbeat_failure_recovers_without_cancelling_analysis(failure: int | str) -> None:
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    started: Final = asyncio.Event()
+    recovered: Final = asyncio.Event()
+    never: Final = asyncio.Event()
+    attempts: Final = SimpleQueue[str]()
+    saved: Final = SimpleQueue[Result]()
+
+    async def heartbeat_wait(_seconds: float) -> None:
+        await started.wait()
+        if attempts.qsize() >= 2:
+            await never.wait()
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        match request.url.path.rsplit("/", 1)[-1]:
+            case "claim":
+                return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "sample":
+                return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
+            case "content":
+                return httpx.Response(
+                    200,
+                    json=ExecutionContent(
+                        execution=execution,
+                        parts=(
+                            TracePart(execution_id="run", span_id="span", name="step", kind="tool", content="evidence"),
+                        ),
+                    ).model_dump(),
+                )
+            case "model":
+                started.set()
+                await recovered.wait()
+                return httpx.Response(200, json={"content": '{"observations":[],"cannot_assess":false}', "cost": 0.01})
+            case "heartbeat":
+                attempts.put(request.url.path)
+                if attempts.qsize() == 1:
+                    if failure == "connection":
+                        raise httpx.ConnectError("temporary connection failure", request=request)
+                    if failure == "timeout":
+                        raise httpx.ReadTimeout("temporary response timeout", request=request)
+                    assert isinstance(failure, int)
+                    return httpx.Response(failure)
+                recovered.set()
+                return httpx.Response(200, json=True)
+            case "progress":
+                return httpx.Response(200, json=True)
+            case "result":
+                saved.put(Result.model_validate_json(request.content))
+                return httpx.Response(200, json=True)
+            case _:
+                pytest.fail(f"Unexpected worker request: {request.url.path}")
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert await LensWorker(client, heartbeat_wait=heartbeat_wait).run_once()
+    result: Final = saved.get_nowait()
+    assert result.error == ""
+    assert result.coverage.screened == 1 and result.coverage.unassessable == 0
+    assert attempts.qsize() == 2 and saved.empty()

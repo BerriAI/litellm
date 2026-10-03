@@ -169,7 +169,14 @@ class LensWorker:
         async def heartbeat() -> None:
             while True:
                 await self.heartbeat_wait(30)
-                (await self.client.post(prefix + "/heartbeat")).raise_for_status()
+                try:
+                    (await self.client.post(prefix + "/heartbeat")).raise_for_status()
+                except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                    if isinstance(exc, httpx.HTTPStatusError) and (
+                        exc.response.status_code < 500 and exc.response.status_code != 429
+                    ):
+                        raise
+                    logger.warning("Analysis %s heartbeat will retry (%s)", claim.job.id, type(exc).__name__)
 
         async def investigate() -> None:
             data: Final = await self.client.get(prefix + "/sample")
