@@ -16,6 +16,7 @@ Response shape:
 }
 """
 
+import re
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -53,6 +54,8 @@ LEGACY_IMAGE_CONFIG_FIELDS: Final = MappingProxyType({"aspect_ratio": "aspect_ra
 NON_BODY_PARAMS: Final = frozenset(
     {"model", "prompt", "messages", "modalities", "stream", "image_config", "extra_headers"}
 )
+PIXEL_SIZE: Final = re.compile(r"\d+x\d+")
+SIZE_OVERRIDING_FIELDS: Final = frozenset({"aspect_ratio", "resolution"})
 
 
 class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
@@ -180,9 +183,12 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         """
         image_config is the request shape of the older chat-based path. Its fields map onto the
         /images names so existing configs keep working, and explicit top-level values win
+
+        A configured aspect_ratio or resolution wins over an OpenAI pixel size, the way image_config
+        won over size on the chat path, because /images answers that pair with a 400
         """
         legacy_image_config: Final = optional_params.get("image_config") or {}
-        return {
+        body: Final[dict[str, object]] = {
             "model": model,
             "prompt": prompt,
             **{
@@ -192,6 +198,10 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             },
             **{key: value for key, value in optional_params.items() if key not in NON_BODY_PARAMS},
         }
+        drop_pixel_size: Final = not SIZE_OVERRIDING_FIELDS.isdisjoint(body) and (
+            PIXEL_SIZE.fullmatch(str(body.get("size", ""))) is not None
+        )
+        return {key: value for key, value in body.items() if not (drop_pixel_size and key == "size")}
 
     def transform_image_generation_response(
         self,

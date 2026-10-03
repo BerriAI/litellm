@@ -236,6 +236,33 @@ def test_transform_request_maps_legacy_image_config_and_explicit_fields_win(
     assert body == {"model": HYBRID_MODEL, "prompt": PROMPT, **expected_fields}
 
 
+# On 2026-10-03 POST https://openrouter.ai/api/v1/images returned 400 for size "1024x1024" with aspect_ratio
+# "3:2" (openai/gpt-image-1-mini) and with resolution "2K" (google/gemini-2.5-flash-image). The size field in
+# https://openrouter.ai/openapi.json says a tier size such as "2K" combines with aspect_ratio
+@pytest.mark.parametrize(
+    ("optional_params", "expected_fields"),
+    [
+        ({"size": "1024x1024", "image_config": {"aspect_ratio": "16:9"}}, {"aspect_ratio": "16:9"}),
+        ({"size": "1024x1024", "resolution": "4K"}, {"resolution": "4K"}),
+        ({"size": "1024x1024", "aspect_ratio": "1:1"}, {"aspect_ratio": "1:1"}),
+        ({"size": "2K", "aspect_ratio": "16:9"}, {"size": "2K", "aspect_ratio": "16:9"}),
+        ({"size": "1024x1024"}, {"size": "1024x1024"}),
+    ],
+)
+def test_transform_request_lets_aspect_ratio_or_resolution_win_over_a_pixel_size(
+    optional_params: dict[str, object], expected_fields: dict[str, object]
+):
+    body = CONFIG.transform_image_generation_request(
+        model=HYBRID_MODEL,
+        prompt=PROMPT,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert body == {"model": HYBRID_MODEL, "prompt": PROMPT, **expected_fields}
+
+
 def test_transform_response_returns_every_image_in_order():
     response = _transform_response(httpx.Response(200, json=_images_response("aW1hZ2Ux", "aW1hZ2Uy")))
 
@@ -330,6 +357,22 @@ def test_hybrid_image_text_model_uses_the_same_images_endpoint():
     (request,) = recorder.requests
     assert str(request.url) == IMAGES_URL
     assert json.loads(request.content) == {"model": HYBRID_MODEL, "prompt": PROMPT}
+
+
+def test_legacy_image_config_with_an_openai_pixel_size_sends_only_the_aspect_ratio():
+    recorder = RequestRecorder(_images_response("aW1hZ2Ux"))
+
+    litellm.image_generation(
+        model=f"openrouter/{HYBRID_MODEL}",
+        prompt=PROMPT,
+        size="1024x1024",
+        image_config={"aspect_ratio": "16:9"},
+        api_key="sk-test",
+        client=_client(recorder),
+    )
+
+    (request,) = recorder.requests
+    assert json.loads(request.content) == {"model": HYBRID_MODEL, "prompt": PROMPT, "aspect_ratio": "16:9"}
 
 
 def test_legacy_chat_completions_api_base_still_reaches_the_images_endpoint():
