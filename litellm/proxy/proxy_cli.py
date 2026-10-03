@@ -1015,7 +1015,7 @@ class ProxyInitializationHelpers:
     envvar="PROMETHEUS_METRICS_PORT",
 )
 def run_server(
-    cli_args,
+    cli_args: tuple[str, ...],
     host,
     port,
     api_base,
@@ -1068,10 +1068,17 @@ def run_server(
     prometheus_metrics_port: int | None,
 ):
     if cli_args:
-        if cli_args == ("xai-oauth", "login"):
-            from litellm.llms.xai.oauth import XAIOAuthAuthenticator
+        if cli_args[:2] == ("xai-oauth", "login") and len(cli_args) <= 3:
+            from litellm.llms.xai.oauth import (
+                XAIOAuthAuthenticator,
+                oauth_auth_file_for_account,
+            )
 
-            authenticator: Final = XAIOAuthAuthenticator()
+            try:
+                auth_file: Final = oauth_auth_file_for_account(cli_args[2]) if len(cli_args) == 3 else None
+            except ValueError as exc:
+                raise click.UsageError(str(exc)) from exc
+            authenticator: Final = XAIOAuthAuthenticator(auth_file=auth_file)
             auth_data: Final = authenticator.login()
             click.echo(f"xAI OAuth login successful. Credentials saved to {authenticator.auth_file}.")
             if auth_data.get("expires_at"):

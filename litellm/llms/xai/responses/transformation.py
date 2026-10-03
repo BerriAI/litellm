@@ -9,8 +9,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_error_status_code, xai_reported_cost_in_usd
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
@@ -209,7 +210,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             if should_use_xai_oauth(litellm_params.model_dump()):
                 try:
-                    api_key = XAIOAuthAuthenticator().get_access_token()
+                    api_key = XAIOAuthAuthenticator(auth_file=litellm_params.xai_oauth_token_file).get_access_token()
                 except XAIOAuthError as exc:
                     raise AuthenticationError(
                         model=model,
@@ -253,6 +254,15 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
+        return super().get_error_class(
+            error_message=error_message,
+            status_code=xai_error_status_code(status_code, error_message),
+            headers=headers,
+        )
 
     def transform_response_api_response(
         self,

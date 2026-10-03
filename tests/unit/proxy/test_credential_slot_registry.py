@@ -117,6 +117,7 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "aws_secret_access_key": Secret("B4"),
         "aws_session_token": Unplanted(),
         "aws_web_identity_token": Unplanted(),
+        "xai_oauth_token_file": Unplanted(),
         "s3_access_key_id": Unplanted(),
         "s3_secret_access_key": Unplanted(),
         "s3_encryption_key_id": NotSecret("KMS key identifier, not key material"),
