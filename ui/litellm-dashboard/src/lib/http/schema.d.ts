@@ -27257,7 +27257,7 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
+             * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode, then the mode the provider requires for that model, then the model cost map.
              */
             mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr") | null;
             /**
