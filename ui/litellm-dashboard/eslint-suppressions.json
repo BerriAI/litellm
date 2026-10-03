@@ -1140,7 +1140,7 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {

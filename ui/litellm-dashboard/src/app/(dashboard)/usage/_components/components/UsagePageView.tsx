@@ -6,7 +6,8 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Info, Link2, Sparkles, X } from "lucide-react";
+import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -23,13 +24,16 @@ import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { toast } from "@/lib/toast";
 import { hasCapability } from "@/utils/capabilities";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
+import type { EntityType } from "@/components/EntityUsageExport/types";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
@@ -65,7 +69,21 @@ import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
 import UsageAIChatPanel from "./UsageAIChatPanel";
-import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import UserRecordLink from "./UserRecordLink";
+import {
+  cleanUsageUrl,
+  dateRangeFromParams,
+  dateRangePatch,
+  entitySelectionPatch,
+  selectedEntitiesFromParams,
+  DEFAULT_USAGE_VIEW,
+  usageTabFromParams,
+  usageTabPatch,
+  usageUrlParsers,
+  usageViewFromParams,
+  usageViewPatch,
+} from "../usageUrlState";
 
 interface UsagePageProps {
   teams: Team[];
@@ -86,11 +104,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const initialFromDate = useMemo(() => new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), []);
   const initialToDate = useMemo(() => new Date(), []);
 
-  // Single date state that directly triggers data fetching
-  const [dateValue, setDateValue] = useState<DateRangePickerValue>({
-    from: initialFromDate,
-    to: initialToDate,
-  });
+  const [urlParams, setUrlParams] = useQueryStates(usageUrlParsers);
+  const { range, from, to } = urlParams;
+  const dateValue = useMemo<DateRangePickerValue>(
+    () => dateRangeFromParams({ range, from, to }) ?? { from: initialFromDate, to: initialToDate },
+    [range, from, to, initialFromDate, initialToDate],
+  );
 
   const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
   // No [] default: an unresolved query must stay undefined so the customer
@@ -101,37 +120,42 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
-  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
+  const allowedViews = useMemo(
+    () => allowedUsageOptions(userRole, canViewTagUsage, isOrgAdmin),
+    [userRole, canViewTagUsage, isOrgAdmin],
+  );
 
-  // For admins: null means global view (all users), a string means filter by that user
-  // For non-admins: always set to their own user ID
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(isAdmin ? null : userID || null);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
-  // Org-admin membership is read from the server, so unlike the other usage
-  // views this one can be revoked while the page is open. Derive the view in
-  // render rather than storing it, so the fallback lands on the same paint and
-  // the selector never holds a value it no longer offers.
-  const usageView: UsageOption =
-    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+  const selectedUsageView = usageViewFromParams(urlParams);
+  const selectedTab = usageTabFromParams(urlParams);
+  const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
-  // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
-  useEffect(() => {
-    if (!isAdmin && userID) {
-      setSelectedUserId(userID);
-    }
-  }, [isAdmin, userID]);
-
   // For non-admins or "my-usage" view, always pass their own user_id
-  const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
+  const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
+
+  const { isLoading: organizationsLoading } = useOrganizations();
+  const accessSettled = userRole !== null && !organizationsLoading;
+  useEffect(() => {
+    if (!accessSettled) return;
+    const cleanup = cleanUsageUrl(urlParams, { allowedViews, isAdmin });
+    if (!cleanup) return;
+    if (cleanup.deniedAccess)
+      toast.warning("You don't have access to that usage view", { id: "usage-url-access-denied" });
+    void setUrlParams(cleanup.patch);
+  }, [accessSettled, urlParams, allowedViews, isAdmin, setUrlParams]);
+
+  const entitySelection = (entityType: EntityType) => ({
+    selectedEntities: selectedEntitiesFromParams(urlParams, entityType),
+    onSelectedEntitiesChange: (ids: readonly string[]) => void setUrlParams(entitySelectionPatch(entityType, ids)),
+  });
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -243,13 +267,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [loading]);
 
   // Super responsive date change handler
-  const handleDateChange = useCallback((newValue: DateRangePickerValue) => {
-    // Instant visual feedback
-    setIsDateChanging(true);
+  const handleDateChange = useCallback(
+    (newValue: DateRangePickerValue, presetShortLabel: string | null) => {
+      // Instant visual feedback
+      setIsDateChanging(true);
 
-    // Update date immediately for UI responsiveness
-    setDateValue(newValue);
-  }, []);
+      void setUrlParams(dateRangePatch(newValue, presetShortLabel));
+    },
+    [setUrlParams],
+  );
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
@@ -453,12 +479,22 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           <div className="flex items-end justify-between gap-6 mb-4 w-full">
             <UsageViewSelect
               value={usageView}
-              onChange={(value) => setUsageView(value)}
+              onChange={(value) => void setUrlParams(usageViewPatch(value))}
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <div className="flex items-center gap-2">
+              <AdvancedDatePicker
+                value={dateValue}
+                onValueChange={handleDateChange}
+                presetShortLabel={urlParams.range}
+              />
+              <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
+                <Link2 />
+                Copy Share Link
+              </Button>
+            </div>
           </div>
           {aggregatedFailed && (
             <Alert variant="error" className="mb-2">
@@ -474,10 +510,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               {isAdmin && usageView === "global" && (
                 <div className="mb-4">
                   <p className="mb-2 text-sm text-foreground">Filter by user</p>
-                  <UserDropdown value={selectedUserId} onChange={setSelectedUserId} />
+                  <div className="flex items-center gap-3">
+                    <UserDropdown value={urlParams.user} onChange={(user) => void setUrlParams({ user })} />
+                    {urlParams.user && <UserRecordLink userId={urlParams.user} />}
+                  </div>
                 </div>
               )}
-              <Tabs defaultValue="cost">
+              <Tabs value={selectedTab} onValueChange={(tab: string) => void setUrlParams(usageTabPatch(tab))}>
                 <div className="flex justify-between items-center">
                   <TabsList className="mt-1">
                     <TabsTrigger value="cost" className="flex-none px-3">
@@ -894,10 +933,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* Organization Usage Panel */}
 
-          {usageView === "organization" && canViewOrganizationUsage && (
+          {usageView === "organization" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="organization"
+              {...entitySelection("organization")}
               userID={userID}
               userRole={userRole}
               isOrgAdmin={isOrgAdmin}
@@ -917,6 +957,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="team"
+              {...entitySelection("team")}
               userID={userID}
               userRole={userRole}
               entityList={
@@ -935,6 +976,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="customer"
+              {...entitySelection("customer")}
               userID={userID}
               userRole={userRole}
               entityList={
@@ -973,6 +1015,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               <EntityUsage
                 accessToken={accessToken}
                 entityType="tag"
+                {...entitySelection("tag")}
                 userID={userID}
                 userRole={userRole}
                 entityList={allTags}
@@ -985,6 +1028,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="agent"
+              {...entitySelection("agent")}
               userID={userID}
               userRole={userRole}
               entityList={
@@ -999,6 +1043,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             <EntityUsage
               accessToken={accessToken}
               entityType="user"
+              {...entitySelection("user")}
               userID={userID}
               userRole={userRole}
               entityList={null}

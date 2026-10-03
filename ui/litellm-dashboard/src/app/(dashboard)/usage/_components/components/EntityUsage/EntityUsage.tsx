@@ -23,6 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import React, { type ReactNode, useCallback, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
+import UserRecordLink from "../UserRecordLink";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
@@ -74,6 +75,8 @@ interface EntityUsageProps {
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
   isOrgAdmin?: boolean;
+  selectedEntities: readonly string[];
+  onSelectedEntitiesChange: (ids: readonly string[]) => void;
 }
 
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
@@ -89,10 +92,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   userRole,
   dateValue,
   isOrgAdmin = false,
+  selectedEntities: selectedTags,
+  onSelectedEntitiesChange: setSelectedTags,
 }) => {
   const { teams } = useTeams();
   const teamList = useMemo(() => teams ?? [], [teams]);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
@@ -292,7 +296,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
     team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
     user: (
-      <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
+      <div className="flex items-center gap-3">
+        <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
+        {selectedTags.length === 1 && <UserRecordLink userId={selectedTags[0]} />}
+      </div>
     ),
   };
   const filterSlot = entityFilterSlots[entityType];
