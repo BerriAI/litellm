@@ -118,6 +118,24 @@ _INCOMPLETE_REASON_BY_FINISH_REASON: Final[Mapping[str, Literal["max_output_toke
 )
 
 
+class _EchoedResponsesRequestParams(TypedDict, total=False):
+    """Responses API request fields that the response object echoes back."""
+
+    instructions: ReadOnly[str]
+    metadata: ReadOnly[dict[str, object]]
+    parallel_tool_calls: ReadOnly[bool]
+    temperature: ReadOnly[float]
+    tools: ReadOnly[list[dict[str, object]]]
+    top_p: ReadOnly[float]
+    max_output_tokens: ReadOnly[int]
+    previous_response_id: ReadOnly[str]
+    reasoning: ReadOnly[dict[str, object]]
+    text: ReadOnly[dict[str, object]]
+    truncation: ReadOnly[Literal["auto", "disabled"]]
+    user: ReadOnly[str]
+    store: ReadOnly[bool]
+
+
 @dataclass(frozen=True, slots=True)
 class ResponsesToolChatForm:
     chat_tools: tuple[ChatToolParam, ...]
@@ -2408,12 +2426,18 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
+        # A chat completion response never carries the request's sampling and
+        # config fields (temperature would always read 0), so they echo from
+        # the request instead.
+        echoed: Final = cast(  # cast-ok: same dict, narrowed to the fields the response echoes
+            "_EchoedResponsesRequestParams", responses_api_request
+        )
         chat_usage: Final = getattr(chat_completion_response, "usage", None)
         incomplete_details: Final = LiteLLMCompletionResponsesConfig._incomplete_details_for_finish_reason(
             finish_reason=finish_reason,
             existing=getattr(chat_completion_response, "incomplete_details", None),
             completion_tokens=getattr(chat_usage, "completion_tokens", None),
-            max_output_tokens=responses_api_request.get("max_output_tokens"),
+            max_output_tokens=echoed.get("max_output_tokens"),
         )
 
         responses_api_response: Final[ResponsesAPIResponse] = ResponsesAPIResponse(
@@ -2423,32 +2447,33 @@ class LiteLLMCompletionResponsesConfig:
             object="response",
             error=getattr(chat_completion_response, "error", None),
             incomplete_details=incomplete_details,
-            instructions=getattr(chat_completion_response, "instructions", None),
-            metadata=getattr(chat_completion_response, "metadata", {}),
+            instructions=echoed.get("instructions"),
+            metadata=echoed.get("metadata") or {},
             output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
                 chat_completion_response=chat_completion_response,
                 choices=getattr(chat_completion_response, "choices", []),
                 responses_api_request=responses_api_request,
             ),
-            parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
-            temperature=getattr(chat_completion_response, "temperature", 0),
+            parallel_tool_calls=echoed.get("parallel_tool_calls", False),
+            temperature=echoed.get("temperature"),
             tool_choice=LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
                 responses_api_request.get("tool_choice")
             ),
-            tools=getattr(chat_completion_response, "tools", []),
-            top_p=getattr(chat_completion_response, "top_p", None),
-            max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
-            previous_response_id=getattr(chat_completion_response, "previous_response_id", None),
-            reasoning=None,
+            tools=echoed.get("tools") or [],
+            top_p=echoed.get("top_p"),
+            max_output_tokens=echoed.get("max_output_tokens"),
+            previous_response_id=echoed.get("previous_response_id"),
+            reasoning=echoed.get("reasoning"),
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),
-            text={},
-            truncation=getattr(chat_completion_response, "truncation", None),
+            text=echoed.get("text") or {},
+            truncation=echoed.get("truncation"),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response
             ),
-            user=getattr(chat_completion_response, "user", None),
+            user=echoed.get("user"),
+            store=echoed.get("store"),
         )
         responses_api_response._hidden_params = getattr(chat_completion_response, "_hidden_params", {})
 

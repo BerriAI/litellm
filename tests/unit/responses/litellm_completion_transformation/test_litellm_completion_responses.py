@@ -5219,6 +5219,55 @@ def test_transform_chat_completion_response_null_finish_reason_is_incomplete():
     assert result_empty.status == "incomplete"
 
 
+def test_transform_chat_completion_response_echoes_request_params():
+    """
+    A chat completion response never carries the caller's request fields, so
+    the bridged response echoes them from the request. Before this fix
+    temperature reported 0 and the rest reported None or empty defaults.
+    """
+    resp = ModelResponse(
+        id="resp-echo",
+        choices=[Choices(index=0, finish_reason="stop", message=Message(content="hi", role="assistant"))],
+        model="gpt-4o",
+    )
+    result = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "max_output_tokens": 128,
+            "instructions": "be terse",
+            "metadata": {"trace": "abc"},
+            "user": "user-123",
+            "truncation": "disabled",
+            "store": True,
+            "parallel_tool_calls": True,
+        },
+        chat_completion_response=resp,
+    )
+    assert result.temperature == 0.7
+    assert result.top_p == 0.9
+    assert result.max_output_tokens == 128
+    assert result.instructions == "be terse"
+    assert result.metadata == {"trace": "abc"}
+    assert result.user == "user-123"
+    assert result.truncation == "disabled"
+    assert result.store is True
+    assert result.parallel_tool_calls is True
+
+    # Fields the request never set fall back to the response defaults.
+    result_unset = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp,
+    )
+    assert result_unset.temperature is None
+    assert result_unset.metadata == {}
+    assert result_unset.parallel_tool_calls is False
+    assert result_unset.tools == []
+    assert result_unset.text == {}
+
+
 @pytest.mark.parametrize("stream", [True, False])
 async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool):
     with pytest.raises(litellm.BadRequestError) as exc_info:
