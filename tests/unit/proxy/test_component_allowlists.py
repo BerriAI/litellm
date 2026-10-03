@@ -88,7 +88,7 @@ _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
 from gateway.main import _gateway_lifespan, _is_gateway_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
-from backend.main import _backend_lifespan
+from backend.main import _backend_lifespan, _is_backend_route
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
@@ -283,9 +283,19 @@ def test_backend_keeps_swagger_mount():
 
 
 def test_backend_drops_non_allowlisted_mounts():
-    routes: Final = [Mount(path, app=Starlette()) for path in ("/swagger", "/ui", "/_next")]
-    retained: Final = {route.path for route in routes if route.path in BACKEND_MOUNT_PATHS}
-    assert retained == {"/swagger"}
+    registered_mounts: Final = [route for route in app.router.routes if isinstance(route, Mount)]
+    swagger: Final = next(route for route in registered_mounts if route.path == "/swagger")
+    registered_paths: Final = {route.path for route in registered_mounts}
+    routes: Final = [
+        *app.router.routes,
+        *(Mount(path, app=Starlette()) for path in ("/ui", "/_next") if path not in registered_paths),
+    ]
+    retained: Final = [route for route in routes if _is_backend_route(route)]
+    assert swagger in retained
+    assert {route.path for route in routes if isinstance(route, Mount)} >= {"/swagger", "/ui", "/_next"}
+    for route in routes:
+        if isinstance(route, Mount) and route.path not in BACKEND_MOUNT_PATHS:
+            assert route not in retained, f"Non-backend mount {route.path} survived route filtering"
 
 
 def test_gateway_mount_paths_defined():
