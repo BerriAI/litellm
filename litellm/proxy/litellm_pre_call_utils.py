@@ -3506,6 +3506,7 @@ _ANTHROPIC_API_HEADER_PROVIDERS: Final = ",".join(
         LlmProviders.ANTHROPIC.value,
         LlmProviders.BEDROCK.value,
         LlmProviders.BEDROCK_MANTLE.value,
+        LlmProviders.GITHUB_COPILOT.value,
         LlmProviders.VERTEX_AI.value,
     )
 )
