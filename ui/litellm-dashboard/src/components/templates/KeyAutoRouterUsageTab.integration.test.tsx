@@ -39,7 +39,6 @@ const stats = {
   saved_spend: 8.75,
   baseline_spend: 10,
   saved_pct: 87.5,
-  saved_per_session: 4.375,
   cache,
 };
 

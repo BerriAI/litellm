@@ -18,3 +18,4 @@ url.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 tokio.workspace = true
+wiremock.workspace = true

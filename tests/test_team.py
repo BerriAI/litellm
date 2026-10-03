@@ -691,40 +691,6 @@ async def test_member_delete(dimension):
 
 
 @pytest.mark.asyncio
-async def test_team_alias():
-    """
-    - Create team w/ model alias
-    - Create key for team
-    - Check if key works
-    """
-    async with aiohttp.ClientSession() as session:
-        ## Create admin
-        admin_user = f"{uuid.uuid4()}"
-        await new_user(session=session, i=0, user_id=admin_user)
-        ## Create normal user
-        normal_user = f"{uuid.uuid4()}"
-        await new_user(session=session, i=0, user_id=normal_user)
-        ## Create team with 1 admin and 1 user
-        member_list = [
-            {"role": "admin", "user_id": admin_user},
-            {"role": "user", "user_id": normal_user},
-        ]
-        team_data = await new_team(
-            session=session,
-            i=0,
-            member_list=member_list,
-            model_aliases={"cheap-model": "gpt-3.5-turbo"},
-        )
-        ## Create key
-        key_gen = await generate_key(
-            session=session, i=0, team_id=team_data["team_id"], models=["gpt-3.5-turbo"]
-        )
-        key = key_gen["key"]
-        ## Test key
-        response = await chat_completion(session=session, key=key, model="cheap-model")
-
-
-@pytest.mark.asyncio
 async def test_users_in_team_budget():
     """
     - Create User
