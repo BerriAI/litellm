@@ -347,7 +347,7 @@ def test_cache_hit_replays_the_answer_from_one_upstream_call_and_never_doubles_t
         assert second.status_code == 200, second.text
         second_deltas: Final = deltas_of(chunks_of(second.text))
         assert content_text(second_deltas) == answer(marker), second.text
-        assert all(block == thinking_block(THINKING, SIGNATURE) for block in accumulate(second_deltas)), second.text
+        assert accumulate(second_deltas) in ((), (thinking_block(THINKING, SIGNATURE),)), second.text
         assert len(wire.drain()) == 1, second.text
 
 
