@@ -38,7 +38,7 @@ export function InvestigationDetail({
   busy: boolean;
   setEditing: (mode: "new" | "edit" | "duplicate") => void;
   setMonitoring: (open: boolean) => void;
-  update: (write: LensWrite) => Promise<void>;
+  update: (write: LensWrite) => Promise<unknown>;
   connected: boolean;
   results: ReturnType<typeof useInvestigationResults>;
   agents?: readonly string[];
