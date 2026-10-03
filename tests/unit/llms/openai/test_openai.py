@@ -350,3 +350,107 @@ async def test_async_audio_speech_records_provider_response_headers():
         )
 
     _assert_provider_headers_recorded(response)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_acompletion_raises_after_unstructured_422_retry_exhaustion(stream: bool) -> None:
+    litellm.drop_params = True  # test-quality-ok: TQ005 global API under test; conftest restores
+    outbound: Final = asyncio.Queue()
+
+    def reject(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(request)
+        return httpx.Response(422, json={"message": "request rejected"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reject)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
+        with pytest.raises(litellm.BadRequestError) as error:
+            await litellm.acompletion(
+                model="openai/gpt-5.6",
+                messages=[{"role": "user", "content": "retry exhaustion"}],
+                client=client,
+                api_key="transport-only",
+                timeout=5,
+                stream=stream,
+                num_retries=0,
+                max_retries=0,
+            )
+
+    assert error.value.status_code == 422
+    assert outbound.qsize() == 2
+
+
+def test_completion_raises_after_unstructured_422_retry_exhaustion() -> None:
+    litellm.drop_params = True  # test-quality-ok: TQ005 global API under test; conftest restores
+    outbound: Final = asyncio.Queue()
+
+    def reject(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(request)
+        return httpx.Response(422, json={"message": "request rejected"})
+
+    with httpx.Client(transport=httpx.MockTransport(reject)) as http_client:
+        client: Final = OpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
+        with pytest.raises(litellm.BadRequestError) as error:
+            litellm.completion(
+                model="openai/gpt-5.6",
+                messages=[{"role": "user", "content": "retry exhaustion"}],
+                client=client,
+                api_key="transport-only",
+                timeout=5,
+                num_retries=0,
+                max_retries=0,
+            )
+
+    assert error.value.status_code == 422
+    assert outbound.qsize() == 2
+
+
+def test_completion_recovers_after_dropping_structured_422_parameter() -> None:
+    litellm.drop_params = True  # test-quality-ok: TQ005 global API under test; conftest restores
+    outbound: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(json.loads(request.content))
+        if outbound.qsize() == 1:
+            return httpx.Response(422, json={"message": {"detail": [{"loc": ["body", "seed"]}]}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-recovered",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "recovered"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = OpenAI(api_key="transport-only", http_client=http_client, max_retries=0)
+        response: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "recover rejected seed"}],
+            client=client,
+            api_key="transport-only",
+            timeout=5,
+            seed=42,
+            num_retries=0,
+            max_retries=0,
+        )
+
+    assert response.choices[0].message.content == "recovered"
+    assert outbound.qsize() == 2
+    first: Final = outbound.get_nowait()
+    second: Final = outbound.get_nowait()
+    assert first["seed"] == 42
+    assert second == {key: value for key, value in first.items() if key != "seed"}
