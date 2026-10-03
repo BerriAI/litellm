@@ -3779,8 +3779,12 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
+ "rstest",
+ "schemars 1.2.2",
  "serde",
+ "serde_json",
  "sqlx",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT $1::text AS first, $2::int8 AS second\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "first",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "second",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "34720197d10a6ea8fd4339bd40ccd6b77a6d9d4f3df9e4ecac85056709996254"
+}

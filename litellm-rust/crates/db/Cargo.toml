@@ -5,6 +5,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+schema = ["dep:schemars", "dep:serde_json", "dep:thiserror"]
+
+[[bin]]
+name = "gen-python"
+required-features = ["schema"]
+
 [dependencies]
+schemars = { workspace = true, optional = true, features = ["chrono04"] }
 serde.workspace = true
+serde_json = { workspace = true, optional = true }
 sqlx.workspace = true
+thiserror = { workspace = true, optional = true }
+
+[dev-dependencies]
+rstest.workspace = true
