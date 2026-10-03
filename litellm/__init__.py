@@ -1647,6 +1647,9 @@ if TYPE_CHECKING:
     from .llms.jina_ai.rerank.transformation import (
         JinaAIRerankConfig as JinaAIRerankConfig,
     )
+    from .llms.scaleway.rerank.transformation import (
+        ScalewayRerankConfig as ScalewayRerankConfig,
+    )
     from .llms.deepinfra.rerank.transformation import (
         DeepinfraRerankConfig as DeepinfraRerankConfig,
     )

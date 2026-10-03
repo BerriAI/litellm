@@ -74,6 +74,13 @@ def get_workload_identity_bearer_token(config: OpenAIWorkloadIdentityConfig) -> 
     return _workload_identity_auth(config).get_token()
 
 
+async def get_workload_identity_bearer_token_for_api_base(api_base: str) -> str | None:
+    config: Final = resolve_openai_workload_identity_config(api_key=None, api_base=api_base)
+    if config is None:
+        return None
+    return await _workload_identity_auth(config).get_token_async()
+
+
 def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, env_name: str) -> str | None:
     param_value: Final = litellm_params.get(param_key) if litellm_params is not None else None
     if isinstance(param_value, str) and param_value:
