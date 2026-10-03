@@ -178,6 +178,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/.well-known/oauth-authorization-server/oauth/api": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Oauth Authorization Server Api */
+        get: operations["oauth_authorization_server_api__well_known_oauth_authorization_server_oauth_api_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/oauth-authorization-server/{mcp_server_name}": {
         parameters: {
             query?: never;
@@ -14228,7 +14245,7 @@ export interface paths {
          * Revoke Endpoint
          * @description RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known
          *     client whatever the token's state, 503 when the shared single-use record cannot be written;
-         *     access tokens expire on their own.
+         *     native/MCP access tokens expire normally; delegated access is revoked immediately.
          */
         post: operations["revoke_endpoint_revoke_post"];
         delete?: never;
@@ -50367,6 +50384,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oauth_authorization_server_api__well_known_oauth_authorization_server_oauth_api_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string | string[];
+                    };
                 };
             };
         };

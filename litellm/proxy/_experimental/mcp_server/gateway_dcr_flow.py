@@ -26,8 +26,8 @@ this track) and then walks the flow implemented here:
    :mod:`.outbound_credentials.session_token`, re-validating that the litellm user is
    still active first; the ``refresh_token`` grant rotates the pair the same way.
 
-Nothing here stores state server-side except the single-use code guard (a TTL cache
-entry). Every sealed value is authenticated encryption over the proxy salt/master key
+Server-side state consists of single-use markers and delegated application token families.
+Every sealed value is authenticated encryption over the proxy salt/master key
 family, opened totally (bad input maps to an OAuth error, never a raise), and every
 identity is a stable reference re-validated live at mint, refresh, and (in the admission
 PR) tool-call time. Upstream server credentials never appear anywhere in this flow; they
@@ -72,6 +72,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_ISSUER,
     SESSION_REFRESH_TTL_SECONDS,
+    DelegatedGrant,
     MintedSessionToken,
     OpenedSessionToken,
     SessionAudience,
@@ -83,6 +84,14 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     mint_session_token,
     open_session_refresh_token,
     open_session_token,
+)
+from litellm.proxy.auth.delegated_oauth import (
+    delegated_identity,
+    delegated_user,
+    delegation_active,
+    is_delegated_callback,
+    issue_delegated_tokens,
+    revoke_delegation,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -302,6 +311,7 @@ class _ConnectFlow(BaseModel):
     exp: int
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
+    delegation: DelegatedGrant | None = None
 
 
 class _GatewayAuthCode(BaseModel):
@@ -321,6 +331,7 @@ class _GatewayAuthCode(BaseModel):
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
     team_id: str | None = None
+    delegation: DelegatedGrant | None = None
 
 
 def is_gateway_dcr_client_id(client_id: str | None) -> bool:
@@ -563,24 +574,30 @@ async def native_client_authorize(
     response_type: str | None,
     session_user_id: str | None,
     lookup_consent_teams: LookupConsentTeams,
+    scope: str | None = None,
 ) -> Response:
-    """The authorize verb for a native client that named the proxy API itself as its
-    RFC 8707 ``resource``: the same client, redirect, PKCE, and sign-in checks as the
-    aggregate verb plus a loopback-only redirect (the credential this grant mints is the
-    user's personal proxy key, which belongs on their own machine and never behind a hosted
-    callback), then the consent page rendered right here (no connect-page interlude, since
-    there is no per-server vaulting to do) with the flow sealed into the per-flow cookie
-    and its handle carried only in the form, never in a URL."""
+    """Authorize the proxy API through existing sign-in and consent. Native clients use
+    loopback callbacks; explicit admin delegation requires an approved hosted callback."""
     rejected: Final = _rejected_authorize_request(
         client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
     )
     if rejected is not None:
         return rejected
-    if not is_loopback_redirect_host(urlparse(redirect_uri)):
+    delegated: Final = scope == "proxy:admin"
+    if scope not in (None, "", "proxy:admin"):
+        return _oauth_error(400, "invalid_scope", "unsupported proxy API scope")
+    if delegated and not is_delegated_callback(redirect_uri):
+        return _oauth_error(400, "invalid_request", "the application callback is not approved by this gateway")
+    if not delegated and not is_loopback_redirect_host(urlparse(redirect_uri)):
         return _oauth_error(400, "invalid_request", "a proxy-API grant may only redirect to a loopback address")
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
+    if delegated:
+        try:
+            await delegated_user(session_user_id)
+        except HTTPException as exc:
+            return _oauth_error(exc.status_code, "access_denied", str(exc.detail))
     teams: Final = await lookup_consent_teams(session_user_id)
     if not isinstance(teams, tuple):
         return _consent_lookup_failure_response(teams)
@@ -593,6 +610,16 @@ async def native_client_authorize(
         code_challenge=code_challenge or "",
         resource_server_id=None,
         audience=PROXY_API_AUDIENCE,
+        delegation=(
+            DelegatedGrant(
+                grant_id=secrets.token_urlsafe(24),
+                resource=canonicalize_url_identity(base_url),
+                redirect_uri=redirect_uri,
+                expires_at=int(datetime.now(timezone.utc).timestamp()) + SESSION_REFRESH_TTL_SECONDS,
+            )
+            if delegated
+            else None
+        ),
     )
     page: Final = render_native_client_consent_page(
         client_origin=_origin_only(redirect_uri),
@@ -600,6 +627,7 @@ async def native_client_authorize(
         teams=tuple((team.team_id, team.team_alias or team.team_id) for team in teams),
         flow_handle=handle,
         complete_url=f"{base_url}/authorize/complete",
+        delegated=delegated,
     )
     response: Final = HTMLResponse(page, headers=_CONSENT_PAGE_HEADERS)
     _set_flow_cookie(response, request, handle, flow)
@@ -705,6 +733,7 @@ def _new_connect_flow(
     code_challenge: str,
     resource_server_id: str | None,
     audience: SessionAudience | None,
+    delegation: DelegatedGrant | None = None,
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
     return _ConnectFlow(
@@ -717,6 +746,7 @@ def _new_connect_flow(
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
         resource_server_id=resource_server_id,
         audience=audience,
+        delegation=delegation,
     )
 
 
@@ -876,6 +906,8 @@ async def complete_connect_flow(
     opened: Final = _open_flow_for(request, flow_handle, session_user_id, now)
     if isinstance(opened, Response):
         return opened
+    if opened.delegation is not None and decision is None:
+        return _oauth_error(400, "invalid_request", "an explicit approval or denial is required")
     if decision != "deny":
         described: Final = await _describe_opened_flow(opened, lookup_vendor_credential, lookup_server_reachability)
         if isinstance(described, Response):
@@ -927,6 +959,7 @@ def _approved_flow_response(flow: _ConnectFlow, delivery: str | None, team_id: s
             resource_server_id=flow.resource_server_id,
             audience=flow.audience,
             team_id=(team_id or None) if flow.audience == PROXY_API_AUDIENCE else None,
+            delegation=flow.delegation,
         ),
     )
     callback_url: Final = _append_query_params(flow.redirect_uri, (("code", code), *_state_param(flow)))
@@ -1256,8 +1289,8 @@ async def aggregate_token(
 class _GrantIssuer:
     """The tail every grant shares once its own proof (code + PKCE, or a refresh token)
     has checked out: revalidate the user live, claim the single-use marker, mint. The
-    claim comes AFTER revalidation and minting so a transient DB 503 never burns a
-    still-valid code or refresh token, and fails closed when it cannot be recorded."""
+    Native and MCP grants claim after revalidation. Delegated grants atomically create
+    a revocable token family as their single-use admission."""
 
     def __init__(
         self,
@@ -1280,6 +1313,11 @@ class _GrantIssuer:
     async def __call__(
         self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
     ) -> Response:
+        if principal.delegation is not None:
+            target_refusal: Final = self._delegated_target_refusal(principal)
+            if target_refusal is not None:
+                return target_refusal
+            return await issue_delegated_tokens(principal, self._keys, self._now)
         match principal.audience:
             case None:
                 return await self._issue_session_pair(principal, claim_key, claim_ttl_seconds, replayed)
@@ -1287,6 +1325,20 @@ class _GrantIssuer:
                 return await self._issue_proxy_credential(principal, claim_key, claim_ttl_seconds, replayed)
             case _:
                 assert_never(principal.audience)
+
+    def _delegated_target_refusal(self, principal: SessionPrincipal) -> Response | None:
+        if principal.delegation is None or (
+            principal.audience != PROXY_API_AUDIENCE
+            or principal.delegation.resource != canonicalize_url_identity(get_request_base_url(self._request))
+        ):
+            return _oauth_error(400, "invalid_target", "the grant belongs to a different gateway")
+        return self._proxy_api_target_refusal()
+
+    async def refresh_delegation(self, principal: SessionPrincipal, jti: str) -> Response:
+        refusal: Final = self._delegated_target_refusal(principal)
+        if refusal is not None:
+            return refusal
+        return await issue_delegated_tokens(principal, self._keys, self._now, previous_refresh_jti=jti)
 
     async def _issue_session_pair(
         self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
@@ -1380,6 +1432,7 @@ async def _authorization_code_grant(
             resource_server_id=parsed.resource_server_id,
             audience=parsed.audience,
             team_id=parsed.team_id,
+            delegation=parsed.delegation,
         ),
         claim_key=f"{_USED_CODE_CACHE_PREFIX}{parsed.jti}",
         claim_ttl_seconds=parsed.exp - int(now.timestamp()) + _CLAIM_TTL_BUFFER_SECONDS,
@@ -1403,6 +1456,8 @@ async def _refresh_token_grant(
         return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
     if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
         return _oauth_error(400, "invalid_target", "resource does not match the scope this token was issued for")
+    if opened.principal.delegation is not None:
+        return await issue.refresh_delegation(opened.principal, opened.jti)
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is
     # single-use, so a captured or replayed refresh token cannot mint a second pair after the
     # legitimate holder rotated.
@@ -1441,14 +1496,8 @@ async def _token_exchange_grant(
 
 
 async def revoke_refresh_token(token: str, client_id: str, master_key: str | None, cache: DualCache) -> Response:
-    """RFC 7009 revocation for the gateway's refresh tokens: burn the presented token's
-    ``jti`` so neither the holder nor a thief can rotate it again. Access tokens are
-    stateless and expire on their own (the proxy-API credential within
-    ``CLI_JWT_EXPIRATION_HOURS``), so per RFC 7009 section 2.2 an unrecognized or already
-    dead token still answers 200; only an unknown client is refused. A live token whose
-    burn could not be recorded in the shared backend answers 503 (section 2.2.1), so the
-    client knows the token still stands and retries instead of reporting a logout that
-    never happened."""
+    """RFC 7009: revoke a delegated family or burn a native/MCP refresh token's JTI.
+    Invalid tokens return 200; unavailable shared storage returns 503 for retry."""
     if not is_gateway_dcr_client_id(client_id) or open_gateway_dcr_client(client_id) is None:
         return _oauth_error(401, "invalid_client", "unknown or malformed client_id")
     if master_key is None:
@@ -1459,6 +1508,18 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
         verbose_logger.error("mcp_gateway_dcr revoke rejected: %s", keys.detail)
         return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
+    candidate: Final = (
+        open_session_token(token, keys, now, for_revocation=True)
+        if is_session_token(token)
+        else open_session_refresh_token(token, keys, now, for_revocation=True)
+    )
+    if isinstance(candidate, OpenedSessionToken) and candidate.principal.delegation is not None:
+        if candidate.principal.client_id == client_id:
+            try:
+                await revoke_delegation(candidate.principal)
+            except HTTPException as exc:
+                return _oauth_error(exc.status_code, "temporarily_unavailable", str(exc.detail))
+        return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
     opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
         burned: Final = await _SingleUseGuard(cache).claim(
@@ -1485,6 +1546,8 @@ def _active_introspection_response(opened: OpenedSessionToken) -> Response:
             ("team_id", principal.team_id),
             ("resource_server_id", principal.resource_server_id),
             ("audience", principal.audience),
+            ("scope", principal.delegation.scope if principal.delegation is not None else None),
+            ("aud", principal.delegation.resource if principal.delegation is not None else None),
         )
         if value is not None
     }
@@ -1492,7 +1555,7 @@ def _active_introspection_response(opened: OpenedSessionToken) -> Response:
         status_code=200,
         content={
             "active": True,
-            "iss": SESSION_ISSUER,
+            "iss": f"{principal.delegation.resource}/oauth/api" if principal.delegation is not None else SESSION_ISSUER,
             "sub": principal.user_id,
             "client_id": principal.client_id,
             "jti": opened.jti,
@@ -1535,6 +1598,16 @@ async def introspect_gateway_token(
         return _inactive_introspection_response()
     if not isinstance(opened, OpenedSessionToken):
         return _inactive_introspection_response()
+    if opened.principal.delegation is not None:
+        try:
+            if not await delegation_active(opened.principal, opened.jti if opened.kind == "session_refresh" else None):
+                return _inactive_introspection_response()
+            await delegated_identity(opened.principal)
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                return _oauth_error(503, "temporarily_unavailable", str(exc.detail))
+            return _inactive_introspection_response()
+        return _active_introspection_response(opened)
     if opened.kind == "session_refresh":
         peeked: Final = await _SingleUseGuard(cache).peek(f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}")
         if peeked == "unavailable":

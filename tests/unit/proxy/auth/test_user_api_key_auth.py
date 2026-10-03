@@ -5,7 +5,7 @@
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
@@ -21,6 +21,32 @@ from litellm.proxy.auth.user_api_key_auth import (
 from fastapi import WebSocket, HTTPException, status
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential", ("llm_session_custom-token", "llm_srefresh_custom-token"))
+async def test_custom_auth_owns_credentials_with_delegated_prefixes(
+    monkeypatch: pytest.MonkeyPatch, credential: str
+) -> None:
+    from typing import Final
+
+    from fastapi import Request as HttpRequest
+
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    async def custom_auth(request: HttpRequest, api_key: str) -> UserAPIKeyAuth:
+        assert api_key == credential
+        return UserAPIKeyAuth(user_id="custom-user")
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_custom_auth", custom_auth)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", False, raising=False)
+    request: Final = HttpRequest({"type": "http", "method": "GET", "path": "/key/info", "headers": []})
+    identity: Final = await _user_api_key_auth_builder(
+        request, f"Bearer {credential}", "", None, None, None, {}
+    )
+    assert identity.user_id == "custom-user"
+    assert identity.authenticated_by_custom_auth is True
 
 
 class Request:
@@ -883,31 +909,41 @@ async def test_user_api_key_auth_websocket():
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_websocket_carries_asgi_path():
+async def test_user_api_key_auth_websocket_carries_asgi_path() -> None:
     """
     The synthetic Request must carry the ASGI scope's ``path`` so
     ``get_request_route`` returns the real WebSocket path, not a value
     reconstructed from the (Host-poisonable) ``websocket.url``.
     """
+    from litellm.proxy.auth.auth_utils import request_dispatched_to_provider_pass_through
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import openai_websocket_proxy_route, router
 
+    provider_route: Final = next(route for route in router.routes if route.endpoint is openai_websocket_proxy_route)
     mock_websocket = MagicMock(spec=WebSocket)
     mock_websocket.query_params = {"model": "some_model"}
     mock_websocket.headers = {"authorization": "Bearer some_api_key"}
     mock_websocket.scope = {
         "type": "websocket",
-        "path": "/v1/realtime",
+        "path": "/openai/v1/responses",
         "root_path": "",
         "headers": [(b"authorization", b"Bearer some_api_key")],
+        "endpoint": provider_route.endpoint,
+        "path_params": {"endpoint": "v1/responses"},
+        "route": provider_route,
     }
-    mock_websocket.url = URL(url="/v1/realtime")
+    mock_websocket.url = URL(url="/openai/v1/responses")
 
     with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
         await user_api_key_auth_websocket(mock_websocket)
 
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
-        assert request_arg.scope.get("path") == "/v1/realtime"
+        assert request_arg.scope.get("path") == "/openai/v1/responses"
         assert request_arg.scope.get("root_path") == ""
+        assert request_arg.scope["endpoint"] is provider_route.endpoint
+        assert request_arg.scope["path_params"] == {"endpoint": "v1/responses"}
+        assert request_arg.scope["route"] is provider_route
+        assert request_dispatched_to_provider_pass_through(request_arg)
 
 
 @pytest.mark.parametrize("enforce_rbac", [True, False])

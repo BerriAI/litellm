@@ -89,7 +89,7 @@ from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
+from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key, mark_provider_pass_through_routes
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     create_pass_through_route,
@@ -4178,3 +4178,6 @@ async def watsonx_proxy_route(
         fastapi_response,
         user_api_key_dict,
     )
+
+
+mark_provider_pass_through_routes(router)

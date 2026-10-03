@@ -155,6 +155,7 @@ class UserAPIKeyAuthExceptionHandler:
 
         if (
             PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            and not (resolved_identity is not None and resolved_identity.requires_fresh_policy)
             and PrismaDBExceptionHandler.is_database_connection_error(e)
         ):
             # log this as a DB failure on prometheus

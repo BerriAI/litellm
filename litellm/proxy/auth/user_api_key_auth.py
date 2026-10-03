@@ -662,7 +662,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
         "path": ws_scope.get("path", ""),
         "state": ws_scope.setdefault("state", {}),
     }
-    for key in ("root_path", "app_root_path"):
+    for key in ("root_path", "app_root_path", "endpoint", "path_params", "route"):
         if key in ws_scope:
             synthetic_scope[key] = ws_scope[key]
     request: Final = Request(scope=synthetic_scope)
@@ -1667,7 +1667,15 @@ async def _user_api_key_auth_builder(
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)
 
-        if general_settings.get("enable_jwt_auth", False) is True:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+            is_session_bearer_shaped,
+        )
+        from litellm.proxy.auth.delegated_oauth import authenticate_delegated_request
+
+        if api_key is not None and is_session_bearer_shaped(api_key):
+            valid_token = await authenticate_delegated_request(request, api_key, route)
+
+        if valid_token is None and general_settings.get("enable_jwt_auth", False) is True:
             is_jwt = jwt_handler.is_jwt(token=api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
@@ -1899,7 +1907,7 @@ async def _user_api_key_auth_builder(
 
         #### ELSE ####
         ## CHECK PASS-THROUGH ENDPOINTS ##
-        if not custom_auth_api_key:
+        if not custom_auth_api_key and not (valid_token is not None and valid_token.requires_fresh_policy):
             response = await check_api_key_for_custom_headers_or_pass_through_endpoints(
                 request=request,
                 route=route,
@@ -2051,6 +2059,7 @@ async def _user_api_key_auth_builder(
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
+            and not valid_token.requires_fresh_policy
         ):
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
@@ -2086,6 +2095,7 @@ async def _user_api_key_auth_builder(
             and isinstance(valid_token, UserAPIKeyAuth)
             and valid_token.team_id is not None
             and valid_token.team_id != UI_TEAM_ID
+            and not valid_token.requires_fresh_policy
         ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
             try:
@@ -2317,8 +2327,11 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         user_id_upsert=False,
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
+                        check_db_only=valid_token.requires_fresh_policy,
                     )
             except Exception as e:
+                if valid_token.requires_fresh_policy:
+                    raise
                 verbose_logger.debug(
                     "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - %s",
                     e,
@@ -2363,11 +2376,12 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             if prisma_client is not None and _user_id is not None and _team_id is not None:
                 _cache_key: Final = team_membership_auth_cache_key(team_id=_team_id, user_id=_user_id)
 
-                team_member_info = await user_api_key_cache.async_get_cache(
-                    key=_cache_key,
-                    model_type=LiteLLM_TeamMembership,
+                team_member_info = (
+                    await get_team_membership(_user_id, _team_id, prisma_client, user_api_key_cache, check_db_only=True)
+                    if valid_token.requires_fresh_policy
+                    else await user_api_key_cache.async_get_cache(key=_cache_key, model_type=LiteLLM_TeamMembership)
                 )
-                if team_member_info is None:
+                if team_member_info is None and not valid_token.requires_fresh_policy:
                     # read from DB
                     _db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
                         where={
@@ -2551,8 +2565,11 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         user_api_key_cache=user_api_key_cache,
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
+                        check_db_only=valid_token.requires_fresh_policy,
                     )
             except HTTPException:
+                if valid_token.requires_fresh_policy:
+                    raise
                 token_team_models: Final = _token_team_models(valid_token)
                 _team_obj = LiteLLM_TeamTableCachedObj(
                     team_id=valid_token.team_id,
@@ -2660,11 +2677,12 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
             route=route,
             start_time=start_time,
         )
-        virtual_key_auth_obj.via_virtual_key = True
+        virtual_key_auth_obj.requires_fresh_policy = valid_token.requires_fresh_policy
+        virtual_key_auth_obj.via_virtual_key = not valid_token.requires_fresh_policy
         return virtual_key_auth_obj
 
 
-async def _safe_fetch(label: str, awaitable):
+async def _safe_fetch(label: str, awaitable, *, fail_closed: bool = False):
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
     BudgetExceededError) so they propagate to the caller.
@@ -2684,6 +2702,8 @@ async def _safe_fetch(label: str, awaitable):
         )
         raise
     except Exception as e:
+        if fail_closed:
+            raise
         verbose_proxy_logger.debug(
             "centralized auth: %s fetch swallowed (%s: %s)",
             label,
@@ -2899,7 +2919,9 @@ async def _run_centralized_common_checks(
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    check_db_only=user_api_key_auth_obj.requires_fresh_policy,
                 ),
+                fail_closed=user_api_key_auth_obj.requires_fresh_policy,
             )
         )
     else:
@@ -2916,7 +2938,9 @@ async def _run_centralized_common_checks(
                     user_id_upsert=False,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    check_db_only=user_api_key_auth_obj.requires_fresh_policy,
                 ),
+                fail_closed=user_api_key_auth_obj.requires_fresh_policy,
             )
         )
     else:
@@ -2932,6 +2956,7 @@ async def _run_centralized_common_checks(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 ),
+                fail_closed=user_api_key_auth_obj.requires_fresh_policy,
             )
         )
     else:
@@ -2951,6 +2976,7 @@ async def _run_centralized_common_checks(
                     token_end_user_max_budget=user_api_key_auth_obj.end_user_max_budget,
                     key_end_user_budget_id=key_end_user_budget_id,
                 ),
+                fail_closed=user_api_key_auth_obj.requires_fresh_policy,
             )
         )
     else:
@@ -2966,6 +2992,7 @@ async def _run_centralized_common_checks(
                 token=user_api_key_auth_obj.token or "",
                 proxy_logging_obj=proxy_logging_obj,
             ),
+            fail_closed=user_api_key_auth_obj.requires_fresh_policy,
         )
     )
 
@@ -2995,6 +3022,8 @@ async def _run_centralized_common_checks(
         end_user_result,
         global_spend_result,
     ):
+        if user_api_key_auth_obj.requires_fresh_policy and isinstance(r, BaseException):
+            raise r
         if isinstance(r, (ProxyException, litellm.BudgetExceededError)):
             raise r
 
@@ -3049,7 +3078,10 @@ async def _run_centralized_common_checks(
     # caller. The token is the source of truth for these paths — force
     # the admin user_object whenever the token says PROXY_ADMIN, even
     # if a DB row was fetched.
-    if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
+    if (
+        user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN
+        and not user_api_key_auth_obj.requires_fresh_policy
+    ):
         user_object = LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,

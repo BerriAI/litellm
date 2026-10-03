@@ -23,6 +23,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+from litellm.proxy.pass_through_endpoints.common_utils import mark_provider_pass_through_routes
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
@@ -225,3 +226,6 @@ async def langfuse_proxy_route(
     )
 
     return received_value
+
+
+mark_provider_pass_through_routes(router)

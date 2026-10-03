@@ -21,6 +21,7 @@ LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_thro
 # custom path that collides with a built-in route never suppresses model-access checks:
 # on a collision FastAPI dispatches the built-in handler, which does not carry this flag.
 LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__"
+LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_provider_pass_through_endpoint__"
 
 
 class EndpointType(str, Enum):

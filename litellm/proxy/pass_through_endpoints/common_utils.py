@@ -1,6 +1,15 @@
 from typing import Final
 
-from fastapi import Request
+from fastapi import APIRouter, Request
+from fastapi.routing import APIRoute, APIWebSocketRoute
+
+from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER
+
+
+def mark_provider_pass_through_routes(router: APIRouter) -> None:
+    for route in router.routes:
+        if isinstance(route, (APIRoute, APIWebSocketRoute)):
+            setattr(route.endpoint, LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER, True)
 
 
 def get_litellm_virtual_key(request: Request) -> str:

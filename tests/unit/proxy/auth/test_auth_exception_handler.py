@@ -1,6 +1,7 @@
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final
 
 import httpx
 import pytest
@@ -43,6 +44,19 @@ class _EngineHttp500:
     """The response half of an EngineRequestError: the query engine answered a request with HTTP 500."""
 
     status = 500
+
+
+@pytest.mark.asyncio
+async def test_authoritative_policy_cannot_fall_back_during_database_outage() -> None:
+    identity: Final = UserAPIKeyAuth(user_id="admin")
+    identity.requires_fresh_policy = True
+    request: Final = Request({"type": "http", "method": "POST", "path": "/key/generate", "headers": []})
+    with patch("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": True}):
+        with pytest.raises(ProxyException) as error:
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                httpx.ConnectError("Database unavailable"), request, {}, "/key/generate", None, "", identity
+            )
+    assert error.value.code == "503"
 
 
 @pytest.mark.asyncio
