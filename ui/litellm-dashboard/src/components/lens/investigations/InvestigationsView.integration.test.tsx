@@ -521,7 +521,7 @@ it("shows the actual saved failure and run context without opening backend logs"
   });
   renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
   const failure = within(await screen.findByRole("alert"));
-  expect(failure.getByLabelText("Investigation error")).toHaveTextContent(error.replace("\n", " "));
+  expect(failure.getByLabelText("Investigation error")).toHaveTextContent(error.replaceAll("\n", " "));
   expect(failure.getByText("failed-run")).toBeVisible();
   expect(failure.getByText(job.settings.model)).toBeVisible();
   expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();

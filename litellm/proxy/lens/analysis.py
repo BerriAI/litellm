@@ -64,7 +64,7 @@ class Clusters(Record):
 
 
 class Decision(Record):
-    action: Literal["read", "observations", "catalog", "feedback", "submit", "inconclusive"]
+    action: Literal["read", "evidence", "observations", "catalog", "feedback", "submit", "inconclusive"]
     page: int = Field(default=0, ge=0)
     execution_id: str | None = None
     cursor: str = ""
@@ -431,6 +431,8 @@ async def investigate_stored(
     navigation: ExecutionContent | None = None  # rebind-ok: last fetched page
     reads: tuple[Decision, ...] = ()  # rebind-ok: track completed tool requests to detect loops
     observation_page = 0  # rebind-ok: model controls navigation through observations
+    evidence_page = 0  # rebind-ok: navigate all content in the fetched evidence batch
+    evidence_seen = frozenset((0,))  # rebind-ok: reset navigation history when evidence changes
     catalog_page = 0  # rebind-ok: model controls navigation through the run catalog
     feedback_page = 0  # rebind-ok: navigate bounded prior finding pages
     feedback: Final = feedback_pages(claim, candidate.check_id)
@@ -441,6 +443,7 @@ async def investigate_stored(
         navigation: ExecutionContent | None,
         reads: tuple[Decision, ...],
         observation_page: int,
+        evidence_page: int,
         catalog_page: int,
         feedback_page: int,
         stalled: bool,
@@ -471,7 +474,7 @@ async def investigate_stored(
             )
         )
         bounded: Final = partition_content(prioritized, 30000)
-        evidence: Final = bounded[0] if bounded else ()
+        evidence: Final = bounded[evidence_page] if evidence_page < len(bounded) else ()
         catalog_batches: Final = partition_items(
             (*relevant, *(item for item in examined if item not in relevant)),
             lambda item: len(item.execution.model_dump_json()),
@@ -512,6 +515,8 @@ async def investigate_stored(
                 "feedback_page": feedback_page,
                 "feedback_pages": len(feedback),
                 "evidence": tuple(p.model_dump() for p in evidence),
+                "evidence_page": evidence_page,
+                "evidence_pages": len(bounded),
                 "must_decide": stalled,
                 "last_read": navigation.model_dump(exclude=MappingProxyType({"parts": True})) if navigation else None,
             },
@@ -537,11 +542,12 @@ async def investigate_stored(
                 )
             ):
                 return Investigation(finding=finding, parts=evidence)
-        if stalled or decision.action not in ("read", "observations", "catalog", "feedback"):
+        if stalled or decision.action not in ("read", "evidence", "observations", "catalog", "feedback"):
             return Investigation(finding=None, parts=evidence)
         page_count: Final = MappingProxyType(
             {
                 "observations": len(supporting_batches),
+                "evidence": len(bounded),
                 "catalog": len(catalog_batches),
                 "feedback": len(feedback),
             }
@@ -555,13 +561,20 @@ async def investigate_stored(
     )
     while True:
         step_result = await decide(
-            additional, navigation, reads, observation_page, catalog_page, feedback_page, stalled
+            additional, navigation, reads, observation_page, evidence_page, catalog_page, feedback_page, stalled
         )
         if isinstance(step_result, Decision) and step_result.action == "inconclusive":
             stalled = True
             continue
         if isinstance(step_result, Investigation):
             return step_result
+        if step_result.action == "evidence":
+            if step_result.page in evidence_seen:
+                stalled = True
+            else:
+                evidence_page = step_result.page
+                evidence_seen = evidence_seen | frozenset((evidence_page,))
+            continue
         if any(
             (r.action, r.execution_id, r.cursor, r.offset, r.page)
             == (step_result.action, step_result.execution_id, step_result.cursor, step_result.offset, step_result.page)
@@ -572,6 +585,8 @@ async def investigate_stored(
         reads = (*reads, step_result)
         if step_result.action == "observations":
             observation_page = step_result.page
+            evidence_page = 0
+            evidence_seen = frozenset((0,))
         elif step_result.action == "catalog":
             catalog_page = step_result.page
         elif step_result.action == "feedback":
@@ -582,6 +597,8 @@ async def investigate_stored(
                 stalled = True
             store.add_reads(navigation.parts)
             additional = navigation.parts
+            evidence_page = 0
+            evidence_seen = frozenset((0,))
         else:
             return Investigation(finding=None, parts=additional)
 

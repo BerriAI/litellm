@@ -10,6 +10,8 @@ Return action='read' with execution_id, cursor (span ID; default empty), offset 
 Reads return up to 40 spans; advance cursor from next_cursor for more spans or offset by 8000 for longer content; offset=1 reads original beginning after an abbreviated excerpt.
 Read any execution in the supplied catalog.
 Use action='catalog' or 'observations' with page to fetch another page of runs or supporting observations.
+Use action='evidence' with page to read the remaining content in a fetched batch; evidence_pages includes every supplied span.
+Read needed evidence pages before advancing the span cursor. Evidence pages reset to zero after a read or observation-page change.
 Use action=feedback to read prior findings and dismissal reasons only when feedback_pages>1.
 The current page is already supplied; feedback_pages=0 means no prior findings or feedback exist, so do not request feedback.
 Request only page numbers below the corresponding page count.

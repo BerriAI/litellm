@@ -1132,3 +1132,65 @@ async def test_reviewer_can_read_every_offset_of_a_long_span_before_deciding() -
     assert tuple(offsets.get_nowait() for _ in range(offsets.qsize())) == (0, *range(1, len(original) + 1, 8000))
     assert result.observations[0].evidence[0].quote == "late verified failure"
     assert not result.cannot_assess
+
+
+@pytest.mark.asyncio
+async def test_investigator_can_read_all_evidence_pages_across_successive_span_batches() -> None:
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=80
+    )
+    parts: Final = tuple(
+        TracePart(
+            execution_id="run",
+            span_id=f"span{i:03}",
+            parent_span_id="root",
+            name=f"Step {i}",
+            kind="tool",
+            content="recorded evidence " * 400 + ("timeout" if i == 79 else "complete"),
+        )
+        for i in range(80)
+    )
+    seen: Final = SimpleQueue[str]()
+    read_cursors: Final = SimpleQueue[str]()
+    expected: Final = finding("run").model_copy(
+        update={"evidence": (Evidence(execution_id="run", span_id="span079", quote="timeout"),)}
+    )
+
+    async def read(_identity: str, cursor: str, _offset: int) -> ExecutionContent:
+        read_cursors.put(cursor)
+        assert cursor in ("", "span039")
+        return ExecutionContent(
+            execution=execution,
+            parts=parts[:40] if not cursor else parts[40:],
+            next_cursor="span039" if not cursor else None,
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = json.loads(request.prompt)
+        if not payload["completed_read_count"]:
+            return ModelResult(content=json.dumps({"action": "read", "execution_id": "run"}), cost=0)
+        for part in payload["evidence"]:
+            seen.put(part["span_id"])
+        if payload["evidence_page"] + 1 < payload["evidence_pages"]:
+            return ModelResult(content=json.dumps({"action": "evidence", "page": payload["evidence_page"] + 1}), cost=0)
+        if payload["last_read"]["next_cursor"]:
+            return ModelResult(
+                content=json.dumps(
+                    {"action": "read", "execution_id": "run", "cursor": payload["last_read"]["next_cursor"]}
+                ),
+                cost=0,
+            )
+        return ModelResult(content=json.dumps({"action": "submit", "finding": expected.model_dump()}), cost=0)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await investigate(
+        claim,
+        Candidate(check_id="retries", title="Failure", hypothesis="Failure", execution_ids=("run",)),
+        (Examined(execution=execution, observations=(), parts=(), partial=False, cannot_assess=False),),
+        read,
+        model,
+    )
+    assert result.finding == expected
+    assert result.error == ""
+    assert tuple(seen.get_nowait() for _ in range(seen.qsize())) == tuple(p.span_id for p in parts)
+    assert tuple(read_cursors.get_nowait() for _ in range(read_cursors.qsize())) == ("", "span039")
