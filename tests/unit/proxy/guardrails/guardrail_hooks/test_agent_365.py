@@ -39,6 +39,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
+    Mode,
     SupportedGuardrailIntegrations,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -179,6 +180,7 @@ def _make_guardrail(
     exchanger: StubTokenExchanger | None = None,
     unreachable_fallback: str = "fail_closed",
     default_on: bool = True,
+    event_hook: str | Mode = "pre_mcp_call",
 ) -> Agent365Guardrail:
     return Agent365Guardrail(
         guardrail_name="agent-365-guard",
@@ -188,7 +190,7 @@ def _make_guardrail(
         unreachable_fallback=unreachable_fallback,
         async_handler=handler,
         token_exchanger=exchanger if exchanger is not None else StubTokenExchanger(_obo_ok()),
-        event_hook="pre_mcp_call",
+        event_hook=event_hook,
         default_on=default_on,
     )
 
@@ -1402,6 +1404,22 @@ class TestCallerSignIn:
         assert guardrail.caller_sign_in(_server(), opted_out_team) is None
         assert guardrail.caller_sign_in(_server(), UserAPIKeyAuth(api_key="k", user_id="u-1")) is not None
         assert guardrail.caller_sign_in(_server(), None) is not None
+
+    def test_tag_mode_advertises_entra_only_when_it_gates_a_tagless_connect(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+        plain_key: Final = UserAPIKeyAuth(api_key="k", user_id="u-1")
+        tag_only: Final = _make_guardrail(FakeHandler([]), event_hook=Mode(tags={"a365": "pre_mcp_call"}))
+        assert tag_only.caller_sign_in(_server(), plain_key) is None
+        assert tag_only.caller_sign_in(_server(), None) is None
+        with_default: Final = _make_guardrail(
+            FakeHandler([]), event_hook=Mode(tags={"a365": "pre_mcp_call"}, default="pre_mcp_call")
+        )
+        expected: Final = CallerSignIn(
+            issuers=("https://login.microsoftonline.com/tenant-abc/v2.0",),
+            scopes=("api://client-xyz/access_as_user",),
+        )
+        assert with_default.caller_sign_in(_server(), plain_key) == expected
+        assert with_default.caller_sign_in(_server(), None) == expected
 
     def test_obo_server_with_provider_advertises_both_issuers_and_the_server_scopes(self, monkeypatch):
         monkeypatch.setenv("JWT_ISSUER", "https://jwt-idp.test")

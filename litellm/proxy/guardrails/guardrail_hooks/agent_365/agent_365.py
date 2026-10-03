@@ -480,27 +480,27 @@ class Agent365Guardrail(CustomGuardrail):
         return str(uuid.uuid4())
 
     def caller_sign_in(self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> CallerSignIn | None:
-        """The Entra sign-in this guardrail requires of callers: only a ``default_on`` guardrail the caller's
-        key or team has not opted out of, because the anonymous metadata fetch that follows a challenge cannot
-        see which key selected a guardrail and would advertise the wrong issuer. Only servers that leave the
-        caller's top-level ``Authorization`` with the gateway qualify: a forwarded API-key header travels
-        upstream in its own slot and does not displace the Entra assertion."""
+        """The Entra sign-in this guardrail requires of callers: only a ``default_on`` guardrail whose mode gates a
+        tagless MCP connect and that the caller's key or team has not opted out of, because the anonymous
+        metadata fetch that follows a challenge cannot see which key selected a guardrail and would advertise
+        the wrong issuer. Only servers that leave the caller's top-level ``Authorization`` with the gateway
+        qualify: a forwarded API-key header travels upstream in its own slot and does not displace the Entra
+        assertion."""
         if not (self.default_on and server.keeps_caller_authorization):
             return None
-        if user_api_key_auth is not None:
-            probe: Final[_AdmissionProbe] = {
-                "metadata": {
-                    "user_api_key_metadata": user_api_key_auth.metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a raw dict
-                    "user_api_key_team_metadata": user_api_key_auth.team_metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.team_metadata is a raw dict
-                }
+        probe: Final[_AdmissionProbe] = {
+            "metadata": {
+                "user_api_key_metadata": user_api_key_auth.metadata if user_api_key_auth else None,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a raw dict
+                "user_api_key_team_metadata": user_api_key_auth.team_metadata if user_api_key_auth else None,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.team_metadata is a raw dict
             }
-            if (
-                self.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # should_run_guardrail takes an untyped data dict
-                    data=probe, event_type=GuardrailEventHooks.pre_mcp_call
-                )
-                is not True
-            ):
-                return None
+        }
+        if (
+            self.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # should_run_guardrail takes an untyped data dict
+                data=probe, event_type=GuardrailEventHooks.pre_mcp_call
+            )
+            is not True
+        ):
+            return None
         return CallerSignIn(
             issuers=(ENTRA_ISSUER_TEMPLATE.format(tenant_id=self.tenant_id),),
             scopes=tuple(server.scopes)
