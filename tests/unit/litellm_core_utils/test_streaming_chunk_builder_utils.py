@@ -1855,7 +1855,6 @@ def test_stream_chunk_builder_omits_service_tier_when_no_chunk_carried_one():
 
 def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
     """Test that ChunkProcessor.get_combined_tool_content concatenates tool call name and id when streamed in multiple fragments (#44392)."""
-    # Test with ModelResponseStream objects
     chunks = [
         ModelResponseStream(
             id="chatcmpl-test-1",
@@ -1918,7 +1917,6 @@ def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
     assert tool_calls[0].function.name == "get_weather"
     assert tool_calls[0].function.arguments == '{"city": "Paris"}'
 
-    # Test with raw dict format
     dict_chunks = [
         {
             "choices": [
@@ -1962,3 +1960,149 @@ def test_get_combined_tool_content_rebuilds_fragmented_name_and_id():
     assert dict_tool_calls[0].id == "call_abc1"
     assert dict_tool_calls[0].function.name == "get_data"
     assert dict_tool_calls[0].function.arguments == '{"query": "AI"}'
+
+    dict_with_object_func_chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_",
+                                "type": "function",
+                                "function": Function(name="search_", arguments=""),
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "web1",
+                                "type": "function",
+                                "function": Function(name="docs", arguments='{"q": "litellm"}'),
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    ]
+    obj_func_tool_calls = processor.get_combined_tool_content(dict_with_object_func_chunks)
+    assert len(obj_func_tool_calls) == 1
+    assert obj_func_tool_calls[0].id == "call_web1"
+    assert obj_func_tool_calls[0].function.name == "search_docs"
+    assert obj_func_tool_calls[0].function.arguments == '{"q": "litellm"}'
+
+    dict_custom_chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "custom_call_1",
+                                "custom": {"name": "custom_"},
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "_part2",
+                                "custom": {"name": "action"},
+                            }
+                        ],
+                    },
+                }
+            ]
+        },
+    ]
+    custom_dict_calls = processor.get_combined_tool_content(dict_custom_chunks)
+    assert len(custom_dict_calls) == 1
+    assert custom_dict_calls[0].id == "custom_call_1_part2"
+    assert custom_dict_calls[0].custom.name == "custom_action"
+
+    class _CustomPayload:
+        def __init__(self, name: str):
+            self.name = name
+
+    class _CustomDeltaToolCall:
+        def __init__(self, id: str, custom: _CustomPayload, index: int = 0):
+            self.id = id
+            self.custom = custom
+            self.index = index
+
+    object_custom_chunks = [
+        ModelResponseStream(
+            id="chatcmpl-test-custom-1",
+            created=1744771914,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            _CustomDeltaToolCall(
+                                id="call_c_",
+                                custom=_CustomPayload(name="mcp_"),
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-test-custom-2",
+            created=1744771915,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            _CustomDeltaToolCall(
+                                id="99",
+                                custom=_CustomPayload(name="runner"),
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+    ]
+    object_custom_calls = processor.get_combined_tool_content(object_custom_chunks)
+    assert len(object_custom_calls) == 1
+    assert object_custom_calls[0].id == "call_c_99"
+    assert object_custom_calls[0].custom.name == "mcp_runner"
