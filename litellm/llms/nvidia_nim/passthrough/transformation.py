@@ -106,7 +106,7 @@ class NvidiaNimPassthroughConfig(BasePassthroughConfig):
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: base class contract returns dict for httpx
         if api_key is None:
-            return dict(headers)  # mutable-ok: base class contract returns dict for httpx
+            return dict(headers)
         return {
             **headers,
             "Authorization": f"Bearer {api_key}",

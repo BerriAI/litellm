@@ -19,10 +19,12 @@ import openai
 import pytest
 import respx
 from fastapi import HTTPException
+from opentelemetry import trace
 
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -45,9 +47,10 @@ from litellm.router import (
     _anthropic_stream_forwards_ping_live,
     _anthropic_stream_raised_error_status,
     _anthropic_stream_should_decline_fallback,
-    _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
+    _without_line_breaks,
+    Span,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -4170,7 +4173,7 @@ def _make_router_with_fallback(primary="gpt-4", secondary="gpt-3.5-turbo"):
 
 class _InjectedFallbackRouter(Router):
     def __init__(self, fallback_response: object) -> None:
-        super().__init__(model_list=[])
+        super().__init__(model_list=[], fallbacks=[{"primary": ["fallback"]}])
         self._fallback_response: Final = fallback_response
 
     async def async_function_with_fallbacks_common_utils(
@@ -11516,15 +11519,16 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         }
 
     @pytest.mark.asyncio
-    async def test_subagent_concrete_model_uses_the_main_sessions_router(self):
+    @pytest.mark.parametrize("app", ["cli", "cli-bg"])
+    async def test_subagent_concrete_model_uses_the_main_sessions_router(self, app):
         router = self._router()
 
         await router.acompletion(
             model="smart-router",
             messages=[{"role": "user", "content": "main turn"}],
-            **self._request_kwargs(),
+            **self._request_kwargs(app=app),
         )
-        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+        subagent_kwargs = self._request_kwargs(app=app, agent_id="agent-1234")
 
         response = await router.acompletion(
             model="expensive-model",
@@ -13696,7 +13700,8 @@ def _anthropic_messages_make_wrapper() -> FallbackAwareAnthropicMessagesStream:
     return FallbackAwareAnthropicMessagesStream(_anthropic_messages_empty_generator(), object())
 
 
-def _anthropic_messages_make_router() -> Router:
+def _anthropic_messages_make_router(**router_kwargs) -> Router:
+    router_kwargs.setdefault("fallbacks", [{"primary": ["fallback"]}])
     return Router(
         model_list=[
             {
@@ -13712,7 +13717,8 @@ def _anthropic_messages_make_router() -> Router:
                     "model": "bedrock/anthropic.claude-sonnet-4-5",
                 },
             },
-        ]
+        ],
+        **router_kwargs,
     )
 
 
@@ -13900,24 +13906,286 @@ async def test_anthropic_messages_content_coalesced_with_error_in_one_physical_c
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_dropped():
-    """Bugbot regression: a `ping` keepalive behind buffered lifecycle frames
-    carries no content and is dropped outright rather than buffered -
-    otherwise a slow-starting connection sending many pings could grow the
-    pre-content buffer without bound."""
-    router = _anthropic_messages_make_router()
+async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_forwarded_live():
+    """A `ping` behind buffered lifecycle frames still reaches the client
+    live: it carries no lifecycle, so it cannot create overlapping
+    lifecycles, and it keeps the connection alive while a fallback-able
+    stream holds message_start back through a long thinking pass."""
+    router = _anthropic_messages_make_router(fallbacks=[{"primary": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        yield _anthropic_messages_ping_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_ping_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [
+        _anthropic_messages_message_start_chunk(),
+        _anthropic_messages_content_chunk("hi"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_split_ping_stays_in_order_behind_buffered_lifecycle_frame():
+    """A ping the transport splits across two reads is not a whole frame, so
+    neither fragment may jump ahead of the buffered message_start: yielding
+    the head live and flushing the tail behind message_start would splice a
+    lifecycle frame into the middle of the ping on the wire."""
+    router = _anthropic_messages_make_router(fallbacks=[{"primary": ["fallback"]}])
+    ping_head, ping_tail = b'event: ping\ndata: {"ty', b'pe": "ping"}\n\n'
     source = _AnthropicMessagesFakeByteStream(
-        [
-            _anthropic_messages_message_start_chunk(),
-            _anthropic_messages_ping_chunk(),
-            _anthropic_messages_content_chunk("hi"),
-        ]
+        [_anthropic_messages_message_start_chunk(), ping_head, ping_tail, _anthropic_messages_content_chunk("hi")]
     )
 
     wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
-    collected = [chunk async for chunk in wrapped]
 
-    assert collected == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("hi")]
+    assert [chunk async for chunk in wrapped] == [
+        _anthropic_messages_message_start_chunk(),
+        ping_head,
+        ping_tail,
+        _anthropic_messages_content_chunk("hi"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_no_fallback_message_start_reaches_client_before_content():
+    """With no fallback able to take over, the stream is committed from the
+    first frame: message_start reaches the client live instead of waiting
+    behind the buffer for content that may be a whole thinking pass away."""
+    router = _anthropic_messages_make_router(fallbacks=None)
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_disabled_fallbacks_message_start_reaches_client_before_content():
+    """A router with fallbacks configured cannot take over a request that
+    opted out with disable_fallbacks=True, so its lifecycle frames reach
+    the client live exactly like a no-fallback router's."""
+    router = _anthropic_messages_make_router(fallbacks=[{"primary": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary", "disable_fallbacks": True}
+    )
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_no_fallback_error_frame_reaches_client_verbatim():
+    """With no fallback able to take over, a retriable provider error frame
+    is forwarded verbatim instead of triggering a fallback that does not
+    exist, and the frames already received stay in order ahead of it."""
+    router = _anthropic_messages_make_router(fallbacks=None)
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_AnthropicMessagesFallbackByteStream([])),
+    ) as mock_fallback:
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source, initial_kwargs={"model": "primary"}
+        )
+        collected = [chunk async for chunk in wrapped]
+
+    assert collected == [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_default_wildcard_fallback_still_buffers_lifecycle_frames():
+    """A "*" default fallback can take over for any group, so lifecycle
+    frames are still held back until real content commits the primary."""
+    router = _anthropic_messages_make_router(fallbacks=[{"*": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    pending = asyncio.ensure_future(wrapped.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+def _anthropic_messages_two_order_primary_model_list() -> list:
+    return [
+        {
+            "model_name": "primary",
+            "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": 1},
+        },
+        {
+            "model_name": "primary",
+            "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-4-5", "order": 2},
+        },
+        {
+            "model_name": "fallback",
+            "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-4-5"},
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "router_kwargs,request_kwargs,expected",
+    [
+        pytest.param({"fallbacks": None}, {"model": "primary"}, False, id="no-fallbacks"),
+        pytest.param({"fallbacks": [{"primary": ["fallback"]}]}, {"model": "primary"}, True, id="group-fallback"),
+        pytest.param({"fallbacks": [{"other": ["fallback"]}]}, {"model": "primary"}, False, id="unrelated-group"),
+        pytest.param(
+            {"fallbacks": [{"*": ["fallback"]}]},
+            {"model": "primary", "fallbacks": None},
+            False,
+            id="wildcard-overridden-by-request-none",
+        ),
+        pytest.param({"fallbacks": [{"*": ["fallback"]}]}, {"model": "primary"}, True, id="wildcard"),
+        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": [{"model": "fallback"}]}, True, id="request-dict-fallback"),
+        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": ["fallback"]}, True, id="request-list-fallback"),
+        pytest.param(
+            {"fallbacks": [{"primary": ["fallback"]}]},
+            {"model": "primary", "disable_fallbacks": True},
+            False,
+            id="disable-fallbacks",
+        ),
+        pytest.param(
+            {"fallbacks": None, "content_policy_fallbacks": [{"primary": ["fallback"]}]},
+            {"model": "primary"},
+            True,
+            id="content-policy-fallback",
+        ),
+        pytest.param({"fallbacks": None, "enable_weighted_failover": True}, {"model": "primary"}, True, id="weighted-failover"),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
+    router = _anthropic_messages_make_router(**router_kwargs)
+    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+
+
+@pytest.mark.parametrize(
+    "orders,expected",
+    [
+        pytest.param([1, 2], True, id="distinct-orders-can-fall-back"),
+        pytest.param([1, 1], False, id="same-order-cannot-fall-back"),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": order},
+            }
+            for order in orders
+        ],
+        fallbacks=None,
+    )
+    assert router._anthropic_messages_stream_can_fall_back("primary", {"model": "primary"}) is expected
+
+
+@pytest.mark.parametrize(
+    "request_kwargs,expected",
+    [
+        pytest.param({"model": "primary"}, True, id="no-target-order"),
+        pytest.param({"model": "primary", "_target_order": 1}, True, id="higher-order-remains"),
+        pytest.param({"model": "primary", "_target_order": 2}, False, id="top-order-no-order-fallback"),
+        pytest.param(
+            {"model": "primary", "_target_order": 2, "fallbacks": [{"primary": ["fallback"]}]},
+            True,
+            id="top-order-external-fallback",
+        ),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_order_target(request_kwargs, expected):
+    router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
+    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+
+
+def test_anthropic_messages_order_levels_direct_call():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": order},
+            }
+            for order in (2, 1, None)
+        ],
+        fallbacks=None,
+    )
+    assert router._anthropic_messages_order_levels("primary", {"model": "primary"}) == (1, 2)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_order_fallback_still_buffers_lifecycle_frames():
+    """Two order levels in one group are a real fallback target for the
+    dispatcher, so lifecycle frames stay buffered until content commits."""
+    router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    pending = asyncio.ensure_future(wrapped.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_request_fallbacks_none_forwards_message_start_live():
+    """A per-request fallbacks=None override disables the router's wildcard
+    fallback, so lifecycle frames reach the client live before content."""
+    router = _anthropic_messages_make_router(fallbacks=[{"*": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary", "fallbacks": None}
+    )
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
 
 
 @pytest.mark.asyncio
@@ -14320,21 +14588,12 @@ def test_merge_fallback_hidden_params_direct_call():
     }
 
 
-def test_anthropic_stream_should_drop_pre_content_ping_direct_call():
-    ping = _anthropic_messages_ping_chunk()
-    content = _anthropic_messages_content_chunk("hi")
-    assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=False) is True
-    assert _anthropic_stream_should_drop_pre_content_ping(ping, has_generated_content=True) is False
-    assert _anthropic_stream_should_drop_pre_content_ping(content, has_generated_content=False) is False
-
-
 def test_anthropic_stream_forwards_ping_live_direct_call():
     ping = _anthropic_messages_ping_chunk()
     content = _anthropic_messages_content_chunk("hi")
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=0) is True
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False, buffered_chunk_count=1) is False
-    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True, buffered_chunk_count=0) is False
-    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False, buffered_chunk_count=0) is False
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=False) is True
+    assert _anthropic_stream_forwards_ping_live(ping, has_generated_content=True) is False
+    assert _anthropic_stream_forwards_ping_live(content, has_generated_content=False) is False
 
 
 def test_anthropic_stream_error_is_gateway_verdict_direct_call():
@@ -18548,3 +18807,315 @@ async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: E
             await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("gpt-4\r\nERROR forged entry\n", "gpt-4ERROR forged entry"),
+        (RuntimeError("no deployments\r\nfor gpt-4"), "no deploymentsfor gpt-4"),
+        ("gpt-4", "gpt-4"),
+    ],
+)
+def test_without_line_breaks_drops_every_cr_and_lf_from_the_logged_value(value: object, expected: str) -> None:
+    assert _without_line_breaks(value) == expected
+
+
+def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_breaks(monkeypatch, caplog) -> None:
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "k"}}]
+    )
+    forged_model: Final = "gpt-4\r\nERROR forged entry\n"
+
+    def fail_lookup(model_name: str | None = None, team_id: str | None = None) -> None:
+        raise RuntimeError(f"no deployments for {model_name}")
+
+    monkeypatch.setattr(router, "get_model_list", fail_lookup)
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        router.arm_routing_read_prefetch(forged_model, {})
+
+    messages: Final = [r.getMessage() for r in caplog.records if "routing read prefetch not armed" in r.getMessage()]
+    assert messages == [
+        "routing read prefetch not armed for gpt-4ERROR forged entry: no deployments for gpt-4ERROR forged entry"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["simple-shuffle", "usage-based-routing-v2", "least-busy", "latency-based-routing"],
+)
+async def test_router_subclass_overriding_async_get_healthy_deployments_with_the_old_signature_still_routes(
+    routing_strategy: str,
+) -> None:
+    class OldSignatureRouter(litellm.Router):
+        async def async_get_healthy_deployments(
+            self,
+            model: str,
+            request_kwargs: dict,
+            messages: list[dict[str, str]] | None = None,
+            input: str | list | None = None,
+            specific_deployment: bool | None = False,
+            parent_otel_span: Span | None = None,
+            health_check_probe: bool = False,
+        ):
+            return await super().async_get_healthy_deployments(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+                parent_otel_span=parent_otel_span,
+                health_check_probe=health_check_probe,
+            )
+
+    router: Final = OldSignatureRouter(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x", "mock_response": "hi"},
+            }
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
+
+    assert response.choices[0].message.content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_failure_rpm_increment_declares_the_router_usage_key_family():
+    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
+    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
+    from unittest.mock import AsyncMock
+
+    from litellm._internal_context import current_service_target
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+    seen: list[str | None] = []
+
+    async def _increment(**_kwargs):
+        seen.append(current_service_target())
+
+    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
+        await router.async_deployment_callback_on_failure(
+            kwargs={
+                "call_type": "acompletion",
+                "litellm_params": {
+                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                    "model_info": {"id": "dep-1"},
+                },
+            },
+            completion_response=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert seen == ["router_usage"]
+    assert current_service_target() is None
+
+class _SpanRecordingInMemoryCache(InMemoryCache):
+    """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_span_names: list[str] = []
+
+    async def async_batch_get_cache(self, keys, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_batch_get_cache(keys, **kwargs)
+
+    async def async_get_cache(self, key, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_get_cache(key, **kwargs)
+
+
+@pytest.fixture
+def v2_span_exporter(monkeypatch):
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+    from litellm.proxy import proxy_server
+
+    config = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    return exporter
+
+
+@pytest.mark.asyncio
+async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(v2_span_exporter):
+    """Picking a deployment opens ``route {model_group}`` (the requested group, not the deployment
+    it picks) under the server span, and the cooldown reads it issues run inside it, so their Redis
+    spans nest there instead of lying flat under the request."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "a"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_key": "fake", "mock_response": "b"},
+                "model_info": {"id": "dep-b"},
+            },
+        ]
+    )
+    recording_cache = _SpanRecordingInMemoryCache()
+    router.cache.in_memory_cache = recording_cache
+    router.cooldown_cache.cooldown_store.in_memory_cache = recording_cache
+
+    with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
+        deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    (route_span,) = v2_span_exporter.get_finished_spans()
+    assert route_span.name == "route gpt-group"
+    assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
+    assert route_span.end_time is not None
+    assert recording_cache.active_span_names and set(recording_cache.active_span_names) == {"route gpt-group"}
+
+
+def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str | int]]]:
+    events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
+
+    def record(name: str, attributes: dict[str, str | int]) -> None:
+        events.append((name, dict(attributes)))
+
+    monkeypatch.setattr(litellm.router, "phase_event", record)
+    return events
+
+
+def _pick(model_group: str, reason: str, attempt: int) -> tuple[str, dict[str, str | int]]:
+    return (
+        "litellm.request.deployment_selected",
+        {
+            "litellm.deployment.attempt": attempt,
+            "litellm.deployment.reason": reason,
+            "litellm.deployment.model_group": model_group,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "request_kwargs, expected_reason, expected_attempt",
+    [
+        (None, "initial", 1),
+        ({"metadata": {"attempted_retries": 0}, "fallback_depth": 0}, "initial", 1),
+        ({"metadata": {"attempted_retries": 2}}, "retry", 3),
+        ({"litellm_metadata": {"attempted_retries": 1}, "metadata": {"attempted_retries": 4}}, "retry", 2),
+        ({"metadata": {}, "fallback_depth": 1}, "fallback", 1),
+        ({"metadata": {"attempted_retries": 1}, "fallback_depth": 1}, "retry", 2),
+    ],
+)
+def test_deployment_pick_attributes_derive_attempt_and_reason(
+    request_kwargs: dict[str, object] | None, expected_reason: str, expected_attempt: int
+):
+    attributes: Final = litellm.router._deployment_pick_attributes("gpt-4o", request_kwargs)
+
+    assert dict(attributes) == {
+        "litellm.deployment.attempt": expected_attempt,
+        "litellm.deployment.reason": expected_reason,
+        "litellm.deployment.model_group": "gpt-4o",
+    }
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_deployment_selected_once(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    await router.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("gpt-4o", "initial", 1)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_every_retry_pick(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flaky",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+
+    with pytest.raises(Exception, match="boom"):
+        await router.acompletion(model="flaky", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("flaky", "initial", 1), _pick("flaky", "retry", 2), _pick("flaky", "retry", 3)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_fallback_pick_with_its_model_group(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": "hi"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "hi"
+    assert events == [_pick("primary", "initial", 1), _pick("backup", "fallback", 1)]
+
+
+@pytest.mark.asyncio
+async def test_non_chat_surfaces_mark_their_deployment_pick(monkeypatch: pytest.MonkeyPatch):
+    """The event is emitted where the router picks, so embeddings and the sync path report it too."""
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "fake", "mock_response": [0.1]},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            },
+        ]
+    )
+
+    await router.aembedding(model="embed", input="hi")
+    router.completion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("embed", "initial", 1), _pick("gpt-4o", "initial", 1)]
