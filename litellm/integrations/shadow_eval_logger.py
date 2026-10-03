@@ -822,7 +822,7 @@ def shadow_eval_snapshot_needed(jobs_cache: InMemoryCache = _jobs_cache) -> bool
     cached: Final = jobs_cache.get_cache(_JOBS_CACHE_KEY)
     if cached is None:
         return True
-    return True if cached else False
+    return not isinstance(cached, Mapping) or len(cached) > 0
 
 
 class ShadowEvalLogger(CustomLogger):
