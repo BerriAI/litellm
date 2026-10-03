@@ -113,5 +113,5 @@ class OracleRouterPostCallHook(CustomLogger):
                 )
             if metadata.get(PROGRAM_DONE_KEY):
                 self.oracle_router.complete(program_id, score=_score(metadata), owner=owner)
-        except Exception as error:  # noqa: BLE001  # a logging callback must never fail the request it observes
-            verbose_router_logger.exception("OracleRouterPostCallHook: failed to record request: %s", error)
+        except Exception:  # noqa: BLE001  # a logging callback must never fail the request it observes
+            verbose_router_logger.exception("OracleRouterPostCallHook: failed to record a request")

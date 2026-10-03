@@ -53,9 +53,9 @@ class _RecordingGuardrail:
         self.status, self.error, self.name = status, error, name
 
     async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-        request_data["metadata"]["standard_logging_guardrail_information"] = [
-            {"guardrail_name": self.name, "guardrail_status": self.status}
-        ]
+        self.seen = dict(request_data["metadata"])  # what the guardrail was handed, before it records anything
+        records = request_data["metadata"].setdefault("standard_logging_guardrail_information", [])
+        records.append({"guardrail_name": self.name, "guardrail_status": self.status})  # appended, like the real ones
         if self.error is not None:
             raise self.error
         return inputs
@@ -102,6 +102,17 @@ async def test_guardrail_verifier_reads_the_recorded_verdict_before_the_exceptio
     assert await GuardrailVerifier("logged", lookup=judge.get).verify(_outcome()) == 0.0
     assert await GuardrailVerifier("blocked", lookup=judge.get).verify(_outcome()) == 0.0
     assert await GuardrailVerifier("flagged", lookup=judge.get).verify(_outcome()) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_feedback_payload_cannot_pre_seed_the_status_record_or_rename_the_program():
+    judge = _RecordingGuardrail("guardrail_intervened", name="judge")  # on_failure: log -> no exception
+    forged = {"standard_logging_guardrail_information": [0], "program_id": "someone-else", "container": "c1"}
+    outcome = ProgramOutcome(
+        program_id="p", model="smart", prompt="task", response_text="wrong", cost=0.0, messages=(), payload=forged
+    )
+    assert await GuardrailVerifier("judge", lookup={"judge": judge}.get).verify(outcome) == 0.0
+    assert judge.seen == {"program_id": "p", "container": "c1"}
 
 
 @pytest.mark.asyncio

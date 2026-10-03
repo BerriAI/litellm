@@ -82,6 +82,19 @@ def find_guardrail(name: str) -> CustomGuardrail | None:
     return next((guardrail for guardrail in guardrails if guardrail.guardrail_name == name), None)
 
 
+def _verifier_metadata(outcome: ProgramOutcome) -> dict[str, object]:  # mutable-ok: the guardrail writes into it
+    """The feedback payload as the guardrail's request metadata.
+
+    The verdict is read from the status record the guardrail writes here, so the caller's payload must not
+    pre-seed that key (a non-record entry would make the whole list unreadable and hide a rejection), and
+    it cannot rename the program.
+    """
+    return {
+        **{key: value for key, value in outcome.payload.items() if key != _STATUS_RECORD_KEY},
+        "program_id": outcome.program_id,
+    }
+
+
 def _status_records(bucket: object) -> Sequence[Mapping[str, object]]:
     """The ``standard_logging_guardrail_information`` records of one metadata bucket, or none."""
     try:
@@ -163,7 +176,7 @@ class GuardrailVerifier:
         )
         request_data: Final[dict[str, object]] = {  # mutable-ok: the guardrail records its status into it
             "model": outcome.model,
-            "metadata": {"program_id": outcome.program_id, **outcome.payload},
+            "metadata": _verifier_metadata(outcome),
         }
         verdict_error: Final = await _apply(guardrail, inputs, request_data)
         status: Final = recorded_status(request_data, self._name)

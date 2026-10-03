@@ -265,12 +265,8 @@ class OracleRouter:
         chosen_model, request_type = await self._decide(program_id, prompt, _api_key_hash(request_kwargs))
         _stamp_internal(request_kwargs, CHOSEN_MODEL_METADATA_KEY, chosen_model)
         _stamp_internal(request_kwargs, PROGRAM_ID_METADATA_KEY, program_id)
-        verbose_router_logger.debug(  # caller-supplied program ids stay out of the log
-            "OracleRouter[%s]: %s request, request_type=%s -> %s",
-            self.router_name,
-            "program" if program_id else "stateless",
-            request_type.value,
-            chosen_model,
+        verbose_router_logger.debug(  # nothing request-derived is logged; the decision is on the request's metadata
+            "OracleRouter: routed a %s request", "program" if program_id else "stateless"
         )
         return PreRoutingHookResponse(
             model=chosen_model,
@@ -340,15 +336,9 @@ class OracleRouter:
     async def _verify_and_learn(self, binding: ProgramBinding, outcome: ProgramOutcome) -> float:
         try:
             score: Final = clamp_score(await self.verifier.verify(outcome))
-        except Exception as error:  # noqa: BLE001  # any verifier failure is counted and must not break the feedback loop
+        except Exception:  # noqa: BLE001  # any verifier failure is counted and must not break the feedback loop
             self.verifications_failed += 1
-            verbose_router_logger.exception(
-                "OracleRouter[%s]: verification of a %s program on %s failed: %s",
-                self.router_name,
-                binding.context.request_type.value,
-                binding.model,
-                error,
-            )
+            verbose_router_logger.exception("OracleRouter: a verification failed")
             return float("nan")
         async with self._update_lock:
             self.decision_maker.update(binding.context, binding.model, score)
