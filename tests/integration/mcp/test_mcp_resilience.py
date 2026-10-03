@@ -319,7 +319,9 @@ def _logged_nonces(key: str, count: int) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((str(row["status"]), str(row["nonce"])) for row in rows))
 
 
-def test_peer_outage_during_a_bounded_burst_recovers_without_hidden_retries(gateway: Gateway, peer: Gateway) -> None:
+def test_peer_outage_during_a_bounded_burst_fails_exactly_the_outage_calls_and_lands_each_call_once(
+    gateway: Gateway, peer: Gateway
+) -> None:
     with scripted_peer(_outage_echo("echo", _OUTAGE)) as upstream, gateway.scenario() as scenario:
         alias: Final = "burst" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, upstream, alias)
@@ -334,13 +336,11 @@ def test_peer_outage_during_a_bounded_burst_recovers_without_hidden_retries(gate
             outcomes: Final = tuple(pool.map(_echo_call, itertools.cycle(callers), itertools.repeat(name), nonces))
         raws: Final = [outcome.raw for outcome in outcomes]
         failed: Final = tuple(nonce for nonce, outcome in zip(nonces, outcomes) if outcome.error is not None)
-        assert _OUTAGE <= len(failed) < _BURST, raws
+        assert len(failed) == _OUTAGE, raws
         assert all(outcome.error is not None or outcome.text == nonce for nonce, outcome in zip(nonces, outcomes)), raws
         assert all(_rpc_reply(outcome.raw).id == 1 for outcome in outcomes), raws
         burst_calls: Final = tool_calls(upstream.drain())
-        landed: Final = sorted(_call_nonce(call) for call in burst_calls)
-        assert len(landed) == len(set(landed)) and set(landed) <= set(nonces), burst_calls
-        assert set(nonces) - set(failed) <= set(landed), (failed, landed)
+        assert sorted(_call_nonce(call) for call in burst_calls) == sorted(nonces), burst_calls
         assert all(_call_params(call)["arguments"] == {"nonce": _call_nonce(call)} for call in burst_calls), burst_calls
         assert all(set(_call_params(call)) - {"_meta"} == {"name", "arguments"} for call in burst_calls), burst_calls
         recovered: Final = tuple(
