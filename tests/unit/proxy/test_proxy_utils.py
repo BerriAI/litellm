@@ -765,17 +765,19 @@ async def test_prepare_key_update_data():
         ({"NO_REDOC": "True"}, None),  # Redoc disabled
     ],
 )
-def test_get_redoc_url(env_vars, expected_url):
-    # Clear relevant environment variables
-    for key in ["REDOC_URL", "NO_REDOC"]:
-        os.environ.pop(key, None)
+def test_get_redoc_url(env_vars: dict[str, str], expected_url: str | None) -> None:
+    original_url: Final = _get_redoc_url()
+    with pytest.MonkeyPatch.context() as environment:
+        for key in ("REDOC_URL", "NO_REDOC"):
+            environment.delenv(key, raising=False)
 
-    # Set test environment variables
-    for key, value in env_vars.items():
-        os.environ[key] = value
+        for key, value in env_vars.items():
+            environment.setenv(key, value)
 
-    result = _get_redoc_url()
-    assert result == expected_url
+        result: Final = _get_redoc_url()
+        assert result == expected_url
+
+    assert _get_redoc_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -790,17 +792,19 @@ def test_get_redoc_url(env_vars, expected_url):
         ({"NO_DOCS": "True"}, None),  # docs disabled
     ],
 )
-def test_get_docs_url(env_vars, expected_url):
-    # Clear relevant environment variables
-    for key in ["DOCS_URL", "NO_DOCS"]:
-        os.environ.pop(key, None)
+def test_get_docs_url(env_vars: dict[str, str], expected_url: str | None) -> None:
+    original_url: Final = _get_docs_url()
+    with pytest.MonkeyPatch.context() as environment:
+        for key in ("DOCS_URL", "NO_DOCS"):
+            environment.delenv(key, raising=False)
 
-    # Set test environment variables
-    for key, value in env_vars.items():
-        os.environ[key] = value
+        for key, value in env_vars.items():
+            environment.setenv(key, value)
 
-    result = _get_docs_url()
-    assert result == expected_url
+        result: Final = _get_docs_url()
+        assert result == expected_url
+
+    assert _get_docs_url() == original_url
 
 
 @pytest.mark.parametrize(
@@ -815,17 +819,19 @@ def test_get_docs_url(env_vars, expected_url):
         ({"NO_OPENAPI": "True"}, None),  # openapi disabled
     ],
 )
-def test_get_openapi_url(env_vars, expected_url):
-    # Clear relevant environment variables
-    for key in ["OPENAPI_URL", "NO_OPENAPI"]:
-        os.environ.pop(key, None)
+def test_get_openapi_url(env_vars: dict[str, str], expected_url: str | None) -> None:
+    original_url: Final = _get_openapi_url()
+    with pytest.MonkeyPatch.context() as environment:
+        for key in ("OPENAPI_URL", "NO_OPENAPI"):
+            environment.delenv(key, raising=False)
 
-    # Set test environment variables
-    for key, value in env_vars.items():
-        os.environ[key] = value
+        for key, value in env_vars.items():
+            environment.setenv(key, value)
 
-    result = _get_openapi_url()
-    assert result == expected_url
+        result: Final = _get_openapi_url()
+        assert result == expected_url
+
+    assert _get_openapi_url() == original_url
 
 
 @pytest.mark.parametrize(
