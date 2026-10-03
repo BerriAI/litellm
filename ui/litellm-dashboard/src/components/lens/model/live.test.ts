@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  analysisModel,
   conclusions,
   liveStats,
   modelName,
@@ -46,6 +47,12 @@ describe("provider from model", () => {
   it("has no provider for a bare model alias", () => {
     expect(providerOf("analysis")).toBe("");
     expect(providerOf("/weird")).toBe("");
+  });
+
+  it("prefers a model that names its provider over a bare alias", () => {
+    expect(analysisModel(["analysis", "", "cerebras/gpt-oss-120b"])).toBe("cerebras/gpt-oss-120b");
+    expect(analysisModel(["", "analysis"])).toBe("analysis");
+    expect(analysisModel([])).toBe("");
   });
 
   it("drops only the provider prefix from the model name", () => {
@@ -102,11 +109,11 @@ describe("conclusions", () => {
 
 describe("playback pacing", () => {
   it("slows to a full window for one review and speeds up as the backlog grows", () => {
-    expect(stepDuration(1)).toBe(3200);
-    expect(stepDuration(4)).toBe(800);
+    expect(stepDuration(1)).toBe(4200);
+    expect(stepDuration(4)).toBe(1050);
     expect(stepDuration(10)).toBeLessThan(stepDuration(4));
     expect(stepDuration(10_000)).toBe(140);
-    expect(stepDuration(0)).toBe(3200);
+    expect(stepDuration(0)).toBe(4200);
   });
 
   it("highlights spans one at a time, then types reasoning, then shows the verdict", () => {

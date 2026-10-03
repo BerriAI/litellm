@@ -23,7 +23,7 @@ export interface LiveStats {
   elapsedSeconds: number;
 }
 
-const PACE_WINDOW_MS = 3200;
+const PACE_WINDOW_MS = 4200;
 const MIN_STEP_MS = 140;
 const COMPACT_STEP_MS = 700;
 const READ_SHARE = 0.35;
@@ -69,8 +69,16 @@ export function stepDuration(backlog: number): number {
   return Math.max(MIN_STEP_MS, Math.min(PACE_WINDOW_MS, Math.round(PACE_WINDOW_MS / Math.max(1, backlog))));
 }
 
+export function isCompact(duration: number): boolean {
+  return duration < COMPACT_STEP_MS;
+}
+
+export function analysisModel(candidates: readonly string[]): string {
+  return candidates.find((model) => providerOf(model)) ?? candidates.find(Boolean) ?? "";
+}
+
 export function playbackPhase(elapsed: number, duration: number, spans: number, chars: number): Phase {
-  if (duration < COMPACT_STEP_MS) return { span: -1, typed: chars, verdict: true };
+  if (isCompact(duration)) return { span: -1, typed: chars, verdict: true };
   const t = Math.max(0, elapsed) / duration;
   const reading = t < READ_SHARE;
   const span = reading && spans > 0 ? Math.min(spans - 1, Math.floor((t / READ_SHARE) * spans)) : -1;
