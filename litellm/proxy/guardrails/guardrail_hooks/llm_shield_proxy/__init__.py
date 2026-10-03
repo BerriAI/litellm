@@ -23,11 +23,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _llm_shield_guardrail_callback
 
 
-guardrail_initializer_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.LLM_SHIELD_PROXY.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry: Final = {  # mutable-ok: module-level registry, built once and never mutated
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.LLM_SHIELD_PROXY.value: LLMShieldProxyGuardrail,
 }
