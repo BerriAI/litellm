@@ -1,130 +1,14 @@
-use std::{collections::BTreeMap, io};
+use std::collections::BTreeMap;
 
-use indexmap::IndexMap;
-use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
-use serde_json::{Value, ser::Formatter};
+use serde::{Deserialize, Deserializer, de::DeserializeOwned};
+use serde_json::Value;
 
-use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, usage_tokens};
-use crate::{Error, otlp::DecodedEvent};
-
-pub(super) struct LangSmithNormalizer;
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum MessageContent {
-    Text(String),
-    Blocks(Vec<ContentBlock>),
-    Other(Value),
-}
-
-impl MessageContent {
-    fn display_text(&self) -> String {
-        match self {
-            Self::Text(text) => text.clone(),
-            Self::Blocks(blocks) => blocks
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    ContentBlock::Hidden(kind) => match kind {
-                        HiddenBlock::Reasoning
-                        | HiddenBlock::Thinking
-                        | HiddenBlock::RedactedThinking
-                        | HiddenBlock::FunctionCall
-                        | HiddenBlock::ToolUse
-                        | HiddenBlock::ToolCall => None,
-                    },
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-            Self::Other(value) => encode(value),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ContentBlock {
-    Text { text: String },
-    Hidden(HiddenBlock),
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum HiddenBlock {
-    Reasoning,
-    Thinking,
-    RedactedThinking,
-    FunctionCall,
-    ToolUse,
-    ToolCall,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(transparent)]
-struct RawToolCall(IndexMap<String, Value>);
-
-#[derive(Deserialize)]
-struct ResponseMetadata {
-    id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RawMessage {
-    kwargs: Option<Box<RawMessage>>,
-    #[serde(rename = "type")]
-    kind: Option<String>,
-    role: Option<String>,
-    content: Option<MessageContent>,
-    tool_calls: Option<Vec<RawToolCall>>,
-    name: Option<Value>,
-    response_metadata: Option<ResponseMetadata>,
-}
-
-impl RawMessage {
-    fn unwrapped(&self) -> &Self {
-        self.kwargs.as_deref().unwrap_or(self)
-    }
-
-    fn normalized(&self) -> NormalizedMessage<'_> {
-        let fields = self.unwrapped();
-        let raw_role = fields
-            .kind
-            .as_deref()
-            .filter(|role| !role.is_empty())
-            .or_else(|| fields.role.as_deref().filter(|role| !role.is_empty()))
-            .unwrap_or_default();
-        let role = match raw_role {
-            "human" => "user",
-            "ai" => "assistant",
-            other => other,
-        };
-        NormalizedMessage {
-            role,
-            content: fields
-                .content
-                .as_ref()
-                .map_or_else(String::new, MessageContent::display_text),
-            tool_calls: fields
-                .tool_calls
-                .as_deref()
-                .filter(|calls| !calls.is_empty()),
-            name: (role == "tool")
-                .then_some(fields.name.as_ref())
-                .flatten()
-                .filter(|name| !name.is_null() && name != &&Value::String(String::new())),
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct NormalizedMessage<'a> {
-    role: &'a str,
-    content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<&'a [RawToolCall]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<&'a Value>,
-}
+use super::{
+    CallEvidence, Extraction, ObservationType, RoleEvidence, SpanContext, SpanFacts, attr,
+    messages::{RawMessage, encode, langchain_result},
+    usage_tokens,
+};
+use crate::Error;
 
 enum MessageBatch {
     Flat(Vec<RawMessage>),
@@ -180,22 +64,10 @@ impl MessageBatch {
     }
 }
 
-#[derive(Deserialize)]
-struct GenerationMessage {
-    kwargs: Option<RawMessage>,
-}
-
-#[derive(Deserialize)]
-struct Generation {
-    message: Option<GenerationMessage>,
-}
-
 #[derive(Default, Deserialize)]
 struct Payload {
     #[serde(default, deserialize_with = "lenient")]
     messages: Option<MessageBatch>,
-    #[serde(default, deserialize_with = "lenient")]
-    generations: Option<Vec<Vec<Generation>>>,
 }
 
 #[derive(Deserialize)]
@@ -216,48 +88,7 @@ struct ContentValue {
 struct SpanIo {
     input: String,
     output: String,
-    request_id: String,
-}
-
-struct PythonJsonFormatter;
-
-impl Formatter for PythonJsonFormatter {
-    fn begin_array_value<W: ?Sized + io::Write>(
-        &mut self,
-        writer: &mut W,
-        first: bool,
-    ) -> io::Result<()> {
-        if first {
-            Ok(())
-        } else {
-            writer.write_all(b", ")
-        }
-    }
-
-    fn begin_object_key<W: ?Sized + io::Write>(
-        &mut self,
-        writer: &mut W,
-        first: bool,
-    ) -> io::Result<()> {
-        if first {
-            Ok(())
-        } else {
-            writer.write_all(b", ")
-        }
-    }
-
-    fn begin_object_value<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b": ")
-    }
-}
-
-fn encode<T: Serialize>(value: &T) -> String {
-    let mut output = Vec::new();
-    let mut serializer = serde_json::Serializer::with_formatter(&mut output, PythonJsonFormatter);
-    if value.serialize(&mut serializer).is_err() {
-        return String::new();
-    }
-    String::from_utf8(output).unwrap_or_default()
+    calls: CallEvidence,
 }
 
 fn normalized_messages(messages: &[RawMessage]) -> String {
@@ -274,9 +105,8 @@ fn span_type(
     parent_span_id: &str,
     attributes: &BTreeMap<String, String>,
 ) -> ObservationType {
-    match attr(attributes, "langsmith.span.kind") {
-        "llm" => ObservationType::Llm,
-        "tool" => ObservationType::Tool,
+    match ObservationType::try_from(attr(attributes, "langsmith.span.kind")) {
+        Ok(kind) if kind != ObservationType::Chain => kind,
         _ if parent_span_id.is_empty()
             || name == attr(attributes, "langsmith.metadata.lc_agent_name") =>
         {
@@ -327,37 +157,27 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
             || "[]".to_owned(),
             |messages| normalized_messages(messages.first_batch()),
         );
-        let generation = completion
-            .generations
-            .as_ref()
-            .and_then(|batches| batches.first())
-            .and_then(|batch| batch.first())
-            .and_then(|generation| generation.message.as_ref())
-            .and_then(|message| message.kwargs.as_ref());
-        if let Some(generation) = generation {
-            let id = generation
-                .response_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.id.as_deref())
-                .unwrap_or_default()
-                .to_owned();
-            return SpanIo {
+        let result = serde_json::from_str::<Value>(raw_completion)
+            .ok()
+            .and_then(|value| langchain_result(&value));
+        return match result {
+            Some(result) if result.first.is_some() => SpanIo {
                 input,
-                output: encode(&generation.normalized()),
-                request_id: id,
-            };
-        }
-        return SpanIo {
-            input,
-            output: raw_completion.to_owned(),
-            request_id: String::new(),
+                output: result.first.as_ref().map(encode).unwrap_or_default(),
+                calls: result.calls,
+            },
+            _ => SpanIo {
+                input,
+                output: raw_completion.to_owned(),
+                calls: result.map_or(CallEvidence::Unknown, |result| result.calls),
+            },
         };
     }
     if kind == ObservationType::Tool {
         return SpanIo {
             input: raw_prompt.to_owned(),
             output: tool_output(raw_completion),
-            request_id: String::new(),
+            calls: CallEvidence::Unknown,
         };
     }
     if kind == ObservationType::Agent {
@@ -380,47 +200,45 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
         return SpanIo {
             input,
             output,
-            request_id: String::new(),
+            calls: CallEvidence::Unknown,
         };
     }
     SpanIo {
         input: raw_prompt.to_owned(),
         output: raw_completion.to_owned(),
-        request_id: String::new(),
+        calls: CallEvidence::Unknown,
     }
 }
 
-impl SpanNormalizer for LangSmithNormalizer {
-    fn matches(&self, scope_name: &str, attributes: &BTreeMap<String, String>) -> bool {
-        scope_name == "langsmith" || attributes.contains_key("langsmith.span.kind")
-    }
+pub(super) fn matches(context: &SpanContext<'_>) -> bool {
+    context.scope == "langsmith" || context.attributes.contains_key("langsmith.span.kind")
+}
 
-    fn consumed_attributes(&self, _attributes: &BTreeMap<String, String>) -> [&'static str; 2] {
-        ["gen_ai.prompt", "gen_ai.completion"]
-    }
-
-    fn normalize(
-        &self,
-        name: &str,
-        parent_span_id: &str,
-        attributes: &BTreeMap<String, String>,
-        _events: &[DecodedEvent],
-    ) -> Result<NormalizedSpan, Error> {
-        let (input_tokens, output_tokens) = usage_tokens(attributes)?;
-        let observation_type = span_type(name, parent_span_id, attributes);
-        let io = span_io(observation_type, attributes);
-        Ok(NormalizedSpan {
-            observation_type,
-            agent_name: attr(attributes, "langsmith.metadata.lc_agent_name").to_owned(),
-            framework: String::new(),
-            litellm_request_id: io.request_id,
-            model: attr(attributes, "gen_ai.request.model").to_owned(),
+pub(super) fn extract(context: &SpanContext<'_>) -> Result<Extraction, Error> {
+    let attributes = context.attributes;
+    let (input_tokens, output_tokens) = usage_tokens(attributes)?;
+    let observation_type = span_type(context.name, context.parent_span_id, attributes);
+    let io = span_io(observation_type, attributes);
+    let agent_name = attr(attributes, "langsmith.metadata.lc_agent_name");
+    let model = attr(attributes, "gen_ai.request.model");
+    Ok(Extraction {
+        facts: SpanFacts {
+            role: Some(RoleEvidence::Declared(observation_type)),
+            agent_name: (!agent_name.is_empty()).then(|| agent_name.to_owned()),
+            model: (!model.is_empty()).then(|| model.to_owned()),
             input_tokens,
             output_tokens,
             input: io.input,
             output: io.output,
-        })
-    }
+            calls: io.calls,
+            ..SpanFacts::default()
+        },
+        display_name: None,
+        consumed_attributes: ["gen_ai.prompt", "gen_ai.completion"]
+            .into_iter()
+            .filter(|key| attributes.contains_key(*key))
+            .collect(),
+    })
 }
 
 #[cfg(test)]
@@ -430,7 +248,8 @@ mod tests {
     use rstest::rstest;
     use serde_json::Value;
 
-    use super::{ObservationType, span_io};
+    use super::{CallEvidence, ObservationType, span_io};
+    use crate::normalize::CallKey;
 
     #[rstest]
     fn malformed_messages_preserve_valid_input_and_response_id() {
@@ -448,7 +267,10 @@ mod tests {
         let input: Value = serde_json::from_str(&io.input).expect("normalized input");
         assert_eq!(input.as_array().expect("messages").len(), 1);
         assert_eq!(input[0]["content"], "hello");
-        assert_eq!(io.request_id, "response-1");
+        assert_eq!(
+            io.calls,
+            CallEvidence::complete(CallKey::ProviderResponse("response-1".to_owned()))
+        );
     }
 
     #[rstest]

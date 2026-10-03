@@ -172,6 +172,7 @@ fn decoded_span(
             + normalized.output.len()
             + normalized.agent_name.len()
             + normalized.framework.len()
+            + normalized.agent_metadata.byte_len()
             + normalized.litellm_request_id.len()
             + normalized.model.len()
             + normalization.display_name.as_ref().map_or(0, String::len),

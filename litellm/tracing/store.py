@@ -5,7 +5,6 @@ import binascii
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from itertools import chain
 from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 
@@ -22,6 +21,7 @@ from litellm.rust_bridge.trace_queries import (
     SPAN_ERROR,
     SPEND_BY_RESPONSE_IDS,
     TRACE_IDENTITY,
+    TRACE_PAGE_SPANS,
     TRACE_SPANS,
     ListTracesParams,
     ListTracesRow,
@@ -30,13 +30,13 @@ from litellm.rust_bridge.trace_queries import (
     SpendByResponseIdsParams,
     SpendRow,
     TraceIdentityParams,
+    TracePageSpansParams,
     TraceSpansParams,
     TraceSpansRow,
 )
 from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.tracing.attribution import resolve_trace, spend_lookup_ids
 from litellm.tracing.types import (
-    AgentNode,
-    Span,
     SpanDetail,
     SpanErrorPage,
     SpanRow,
@@ -67,31 +67,6 @@ class AmbiguousTraceError(ValueError):
     pass
 
 
-def _spend_for(
-    request_id: str, team_id: str, api_key_hash: str, user_id: str, rows: Sequence[SpendRow]
-) -> float | None:
-    if not request_id:
-        return None
-    matches: Final = tuple(
-        row
-        for row in rows
-        if row.response_id == request_id
-        and row.team_id == team_id
-        and (bool(user_id and row.user == user_id) or bool(api_key_hash and row.api_key == api_key_hash))
-    )
-    return matches[0].spend if len(matches) == 1 else None
-
-
-def _trace_spend(
-    request_ids: Sequence[str], team_id: str, api_key_hash: str, user_id: str, rows: Sequence[SpendRow]
-) -> float | None:
-    if not request_ids or any(not request_id for request_id in request_ids):
-        return None
-    ids: Final = frozenset(request_ids)
-    costs: Final = tuple(_spend_for(request_id, team_id, api_key_hash, user_id, rows) for request_id in ids)
-    return sum(cost for cost in costs if cost is not None) if all(cost is not None for cost in costs) else None
-
-
 def encode_cursor(start_ms: int, trace_id: str) -> str:
     return base64.urlsafe_b64encode(json.dumps((start_ms, trace_id)).encode()).decode()
 
@@ -113,7 +88,8 @@ def _status(code: str) -> SpanStatus:
     return _STATUS.get(code, "unset")
 
 
-def trace_summary_from_row(row: ListTracesRow, spend_rows: Sequence[SpendRow] = ()) -> TraceSummary:
+def trace_summary_from_row(row: ListTracesRow) -> TraceSummary:
+    """A listed trace whose spans could not be read: rollup counts only, cost unknown."""
     return TraceSummary(
         trace_id=row["trace_id"],
         trace_ref=row.get("trace_ref", ""),
@@ -134,153 +110,7 @@ def trace_summary_from_row(row: ListTracesRow, spend_rows: Sequence[SpendRow] = 
         input_tokens=int(row["input_tokens"]),
         output_tokens=int(row["output_tokens"]),
         models=tuple(row["models"]),
-        spend=_trace_spend(
-            row.get("request_ids") or (),
-            row.get("team_id") or "",
-            row.get("api_key_hash") or "",
-            row.get("user_id") or "",
-            spend_rows,
-        ),
-    )
-
-
-def span_from_row(row: TraceSpansRow, trace_start_ns: int, spend_rows: Sequence[SpendRow] = ()) -> Span:
-    return Span(
-        span_id=row["span_id"],
-        parent_span_id=row["parent_span_id"] or None,
-        name=row["name"],
-        type=row["type"],
-        agent=row["agent"],
-        framework=row.get("framework") or "",
-        start_offset_ms=(int(row["start_ns"]) - trace_start_ns) / NANOS_PER_MS,
-        duration_ms=int(row["duration_ns"]) / NANOS_PER_MS,
-        status=_status(row["status"]),
-        error=row.get("status_message") or None,
-        error_truncated=bool(row.get("error_truncated", False)),
-        input_preview=row["input_preview"],
-        model=row["model"] or None,
-        input_tokens=int(row["input_tokens"]),
-        output_tokens=int(row["output_tokens"]),
-        litellm_request_id=row["litellm_request_id"] or None,
-        spend=(
-            _spend_for(
-                row["litellm_request_id"],
-                row.get("team_id") or "",
-                row.get("api_key_hash") or "",
-                row.get("user_id") or "",
-                spend_rows,
-            )
-            if row["litellm_request_id"]
-            else None
-        ),
-    )
-
-
-def _parent_agent_of(span: Span, by_id: Mapping[str, Span]) -> str | None:
-    parent_id = span["parent_span_id"]
-    for _ in by_id:
-        if parent_id is None or parent_id not in by_id or parent_id == span["span_id"]:
-            return None
-        parent = by_id[parent_id]
-        if parent["type"] == "agent" and (parent["agent"] or parent["name"]) != (span["agent"] or span["name"]):
-            return parent["agent"] or parent["name"]
-        parent_id = parent["parent_span_id"]
-    return None
-
-
-def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
-    """One node per distinct agent name (200 `researcher` invocations = 1 node), with who invoked it."""
-    by_id: Final = MappingProxyType({s["span_id"]: s for s in spans})
-    agents: dict[str, AgentNode] = {}  # mutable-ok: linear-time aggregation updates counters per agent
-    for span in spans:
-        if span["type"] != "agent":
-            continue
-        node = agents.setdefault(
-            span["agent"] or span["name"],
-            AgentNode(
-                name=span["agent"] or span["name"],
-                parent_agent=_parent_agent_of(span, by_id),
-                invocations=0,
-                llm_calls=0,
-                tool_calls=0,
-                duration_ms=0.0,
-                spend=None,
-            ),
-        )
-        node["invocations"] += 1
-        node["duration_ms"] += span["duration_ms"]
-    for span in spans:
-        owner = agents.get(span["agent"])
-        if owner is None:
-            continue
-        if span["type"] == "llm":
-            owner["llm_calls"] += 1
-        elif span["type"] == "tool":
-            owner["tool_calls"] += 1
-    return tuple(
-        AgentNode(
-            name=agent["name"],
-            parent_agent=agent["parent_agent"],
-            invocations=agent["invocations"],
-            llm_calls=agent["llm_calls"],
-            tool_calls=agent["tool_calls"],
-            duration_ms=agent["duration_ms"],
-            spend=_agent_spend(spans, agent["name"]),
-        )
-        for agent in agents.values()
-    )
-
-
-def _agent_spend(spans: Sequence[Span], agent_name: str) -> float | None:
-    llm_spans: Final = tuple(span for span in spans if span["type"] == "llm" and span["agent"] == agent_name)
-    if any(not span["litellm_request_id"] or span["spend"] is None for span in llm_spans):
-        return None
-    by_request: Final = MappingProxyType({span["litellm_request_id"]: span["spend"] for span in llm_spans})
-    return sum(cost for cost in by_request.values() if cost is not None) if by_request else None
-
-
-def trace_from_rows(
-    trace_id: str, rows: Sequence[TraceSpansRow], trace_ref: str = "", spend_rows: Sequence[SpendRow] = ()
-) -> Trace | None:
-    if not rows:
-        return None
-    trace_start_ns: Final = min(int(r["start_ns"]) for r in rows)
-    trace_end_ns: Final = max(int(r["start_ns"]) + int(r["duration_ns"]) for r in rows)
-    spans: Final = tuple(span_from_row(r, trace_start_ns, spend_rows) for r in rows)
-    root: Final = next((s for s in spans if s["parent_span_id"] is None), spans[0])
-    agents: Final = agent_nodes(spans)
-    llm_spans: Final = tuple(s for s in spans if s["type"] == "llm")
-    return Trace(
-        summary=TraceSummary(
-            trace_id=trace_id,
-            trace_ref=trace_ref,
-            name=root["name"],
-            service=rows[0]["service"],
-            agent_names=tuple(sorted(frozenset(s["agent"] for s in spans if s["agent"]))),
-            frameworks=tuple(sorted(frozenset(s["framework"] for s in spans if s["framework"]))),
-            input_preview=root["input_preview"],
-            start_time=_iso(trace_start_ns // NANOS_PER_MS),
-            duration_ms=(trace_end_ns - trace_start_ns) / NANOS_PER_MS,
-            status=root["status"],
-            span_count=len(spans),
-            agent_count=len(agents),
-            agent_invocations=sum(a["invocations"] for a in agents),
-            llm_calls=len(llm_spans),
-            tool_calls=sum(1 for s in spans if s["type"] == "tool"),
-            error_count=sum(1 for s in spans if s["status"] == "error"),
-            input_tokens=sum(s["input_tokens"] for s in spans),
-            output_tokens=sum(s["output_tokens"] for s in spans),
-            models=tuple(sorted(frozenset(s["model"] for s in llm_spans if s["model"]))),
-            spend=_trace_spend(
-                tuple(row["litellm_request_id"] for row in rows if row["type"] == "llm" or row["litellm_request_id"]),
-                rows[0].get("team_id") or "",
-                rows[0].get("api_key_hash") or "",
-                rows[0].get("user_id") or "",
-                spend_rows,
-            ),
-        ),
-        agents=agents,
-        spans=spans,
+        spend=None,
     )
 
 
@@ -301,18 +131,20 @@ class TraceStore:
             raise AmbiguousTraceError("Multiple traces have this ID; provide trace_ref")
         return identities[0].trace_ref if identities else None
 
-    async def _spend_rows(
-        self, scope: TraceScope, request_ids: Sequence[str], start_ms: int, end_ms: int
-    ) -> tuple[SpendRow, ...]:
-        ids: Final = tuple(sorted(frozenset(request_id for request_id in request_ids if request_id)))
-        if not ids:
+    async def _spend_rows(self, scope: TraceScope, rows: Sequence[TraceSpansRow]) -> tuple[SpendRow, ...]:
+        response_ids, request_ids, trace_ids = spend_lookup_ids(rows)
+        if not (response_ids or request_ids or trace_ids):
             return ()
+        start_ms: Final = min(int(row["start_ns"]) // NANOS_PER_MS for row in rows)
+        end_ms: Final = max((int(row["start_ns"]) + int(row["duration_ns"])) // NANOS_PER_MS for row in rows)
         try:
-            rows: Final = await self.storage.query(
+            spend: Final = await self.storage.query(
                 SPEND_BY_RESPONSE_IDS,
                 SpendByResponseIdsParams(
                     **scope,
-                    response_ids=ids,
+                    response_ids=response_ids,
+                    request_ids=request_ids,
+                    trace_ids=trace_ids,
                     start_ms=start_ms - SPEND_WINDOW_MS,
                     end_ms=end_ms + SPEND_WINDOW_MS,
                 ),
@@ -320,7 +152,7 @@ class TraceStore:
         except RuntimeError as error:
             verbose_logger.warning("Trace spend lookup unavailable: %s", error)
             return ()
-        return tuple(rows)
+        return tuple(spend)
 
     async def list_traces(
         self,
@@ -331,7 +163,7 @@ class TraceStore:
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
     ) -> TracePage:
         cursor_ms, cursor_trace_id = decode_cursor(cursor)
-        rows: Final = await self.storage.query(
+        page: Final = await self.storage.query(
             LIST_TRACES,
             ListTracesParams(
                 **scope,
@@ -342,16 +174,31 @@ class TraceStore:
                 limit=limit,
             ),
         )
-        spend_rows: Final = await self._spend_rows(
-            scope,
-            tuple(chain.from_iterable(row.get("request_ids") or () for row in rows)),
-            min((int(row["start_ms"]) for row in rows), default=start_ms),
-            max((int(row["start_ms"]) + int(row["duration_ms"]) for row in rows), default=end_ms),
-        )
         next_cursor: Final = (
-            encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_ref"]) if len(rows) == limit else None
+            encode_cursor(int(page[-1]["start_ms"]), page[-1]["trace_ref"]) if len(page) == limit else None
         )
-        return TracePage(data=tuple(trace_summary_from_row(r, spend_rows) for r in rows), next_cursor=next_cursor)
+        if not page:
+            return TracePage(data=(), next_cursor=next_cursor)
+        span_rows: Final = await self.storage.query(
+            TRACE_PAGE_SPANS,
+            TracePageSpansParams(
+                **scope,
+                trace_refs=tuple(row["trace_ref"] for row in page),
+                start_ms=min(int(row["start_ms"]) for row in page),
+                end_ms=max(int(row["start_ms"]) + int(row["duration_ms"]) for row in page) + 1,
+            ),
+        )
+        spend_rows: Final = await self._spend_rows(scope, span_rows)
+        by_trace: dict[tuple[str, str, str], list[TraceSpansRow]] = {}  # mutable-ok: group page spans
+        for span in span_rows:
+            by_trace.setdefault((span["team_id"], span["api_key_hash"], span.get("trace_id", "")), []).append(span)
+
+        def summary(row: ListTracesRow) -> TraceSummary:
+            spans = by_trace.get((row["team_id"], row["api_key_hash"], row["trace_id"]), [])
+            trace = resolve_trace(row["trace_id"], spans, row["trace_ref"], spend_rows)
+            return trace["summary"] if trace is not None else trace_summary_from_row(row)
+
+        return TracePage(data=tuple(summary(row) for row in page), next_cursor=next_cursor)
 
     async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
         reference: Final = await self._reference(trace_id, scope, trace_ref)
@@ -360,13 +207,9 @@ class TraceStore:
         rows: Final = await self.storage.query(
             TRACE_SPANS, TraceSpansParams(**scope, trace_id=trace_id, trace_ref=reference)
         )
-        spend_rows: Final = await self._spend_rows(
-            scope,
-            tuple(row["litellm_request_id"] for row in rows),
-            min((int(row["start_ns"]) // NANOS_PER_MS for row in rows), default=0),
-            max(((int(row["start_ns"]) + int(row["duration_ns"])) // NANOS_PER_MS for row in rows), default=0),
-        )
-        return trace_from_rows(trace_id, rows, reference, spend_rows)
+        if not rows:
+            return None
+        return resolve_trace(trace_id, rows, reference, await self._spend_rows(scope, rows))
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         reference: Final = await self._reference(trace_id, scope, trace_ref)

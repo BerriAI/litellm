@@ -1,6 +1,19 @@
 "use client";
 
-import { Bot, BrainCircuit, Link2, Network, Wrench } from "lucide-react";
+import {
+  ArrowDownUp,
+  Bot,
+  BrainCircuit,
+  ClipboardCheck,
+  FileText,
+  Layers,
+  Link2,
+  Network,
+  Search,
+  ShieldCheck,
+  Split,
+  Wrench,
+} from "lucide-react";
 
 import { Logo } from "@/components/molecules/logo/Logo";
 import { cn } from "@/lib/cva.config";
@@ -32,6 +45,13 @@ const TYPE_GLYPH: Record<SpanType, typeof Bot> = {
   tool: Wrench,
   chain: Link2,
   framework: Network,
+  retriever: Search,
+  embedding: Layers,
+  reranker: ArrowDownUp,
+  guardrail: ShieldCheck,
+  evaluator: ClipboardCheck,
+  prompt: FileText,
+  decision: Split,
 };
 
 const tileTone = (type: SpanType, error: boolean): string => {

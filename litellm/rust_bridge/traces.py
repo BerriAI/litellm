@@ -25,6 +25,7 @@ from litellm.rust_bridge.trace_queries import (
     ReadQuery,
     ReadQueryName,
     RowT,
+    SpanType,
 )
 from litellm.rust_bridge.trace_query_responses import TraceQueryHelp, TraceSQLResponse
 
@@ -34,18 +35,46 @@ class DecodedEvent(TypedDict):
     attributes: ReadOnly[dict[str, str]]
 
 
+class AgentMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    lc_agent_name: str | None = None
+    ls_integration: str | None = None
+    ls_agent_type: Literal["root", "subagent", "middleware", "compaction"] | None = None
+    ls_agent_purpose: str | None = None
+    ls_agent_runtime: str | None = None
+    ls_agent_version: str | None = None
+    ls_trace_schema_version: str | None = None
+    thread_id: str | None = None
+    ls_subagent_id: str | None = None
+    ls_subagent_type: str | None = None
+    ls_tool_name: str | None = None
+    ls_model_name: str | None = None
+    ls_provider: str | None = None
+    git_branch: str | None = None
+    git_commit_sha: str | None = None
+    git_repo_url: str | None = None
+    working_directory: str | None = None
+
+
 class NormalizedSpan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    observation_type: Literal["agent", "llm", "tool", "chain", "framework"]
+    observation_type: SpanType
+    wrapper_candidate: bool
     agent_name: str
     framework: str
+    agent_metadata: AgentMetadata
     litellm_request_id: str
+    call_keys: tuple[str, ...]
+    call_evidence: Literal["complete", "partial", "unknown"]
     model: str
     input_tokens: int = Field(ge=0, le=2**32 - 1)
     output_tokens: int = Field(ge=0, le=2**32 - 1)
     input: str
+    input_preview: str
     output: str
+    tool_call_id: str
 
 
 class NormalizedFieldDefinition(BaseModel):
@@ -74,7 +103,7 @@ class DecodedSpan(TypedDict):
     status_message: ReadOnly[str]
     events: ReadOnly[list[DecodedEvent]]
     normalized: ReadOnly[NormalizedSpan]
-    consumed_attributes: ReadOnly[tuple[str, str]]
+    consumed_attributes: ReadOnly[tuple[str, ...]]
 
 
 class AllQueryScope(TypedDict):

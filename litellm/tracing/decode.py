@@ -179,14 +179,20 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         ApiKeyHash="",
         UserId="",
         ObservationType=normalized.observation_type,
+        WrapperCandidate=normalized.wrapper_candidate,
         AgentName=normalized.agent_name,
         Framework=normalized.framework,
+        AgentMetadata=normalized.agent_metadata.model_dump_json(exclude_none=True),
         Model=normalized.model,
-        LiteLLMRequestId=attributes.get("gen_ai.response.id") or normalized.litellm_request_id,
+        LiteLLMRequestId=normalized.litellm_request_id,
+        CallKeys=normalized.call_keys,
+        CallEvidence=normalized.call_evidence,
         InputTokens=normalized.input_tokens,
         OutputTokens=normalized.output_tokens,
         Input=_truncate_payload(normalized.input),
+        InputPreview=normalized.input_preview,
         Output=_truncate(normalized.output),
+        ToolCallId=normalized.tool_call_id,
     )
 
 

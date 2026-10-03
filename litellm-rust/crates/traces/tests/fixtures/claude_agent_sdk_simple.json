@@ -1,0 +1,564 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "gen_ai.agent.name",
+            "value": {
+              "stringValue": "research_agent"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "lens-claude-agent-sdk-simple"
+            }
+          },
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "os.type",
+            "value": {
+              "stringValue": "darwin"
+            }
+          },
+          {
+            "key": "os.version",
+            "value": {
+              "stringValue": "25.6.0"
+            }
+          },
+          {
+            "key": "service.version",
+            "value": {
+              "stringValue": "2.1.286"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.tracing",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "93d08cb0c8425745745fc0d827794745",
+              "spanId": "b3381f1fade17a59",
+              "parentSpanId": "e42a957cd06d7e4d",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1790997770610000000",
+              "endTimeUnixNano": "1790997777058637833",
+              "attributes": [
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "fake-user-id-1"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000002"
+                  }
+                },
+                {
+                  "key": "terminal.type",
+                  "value": {
+                    "stringValue": "xterm-256color"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm_request.context",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "speed",
+                  "value": {
+                    "stringValue": "normal"
+                  }
+                },
+                {
+                  "key": "query_source",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "sdk"
+                  }
+                },
+                {
+                  "key": "system_prompt_hash",
+                  "value": {
+                    "stringValue": "sp_900a80ee886b"
+                  }
+                },
+                {
+                  "key": "system_prompt_preview",
+                  "value": {
+                    "stringValue": "x-anthropic-billing-header: cc_version=2.1.286.bd3; cc_entrypoint=sdk-py;\n\nYou are a Claude agent, built on Anthropic's Claude Agent SDK."
+                  }
+                },
+                {
+                  "key": "system_prompt_length",
+                  "value": {
+                    "intValue": "137"
+                  }
+                },
+                {
+                  "key": "tools",
+                  "value": {
+                    "stringValue": "[]"
+                  }
+                },
+                {
+                  "key": "tools_count",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "new_context_message_count",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "system_reminders_count",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[USER]\nWhat is an agent trace?"
+                  }
+                },
+                {
+                  "key": "system_reminders",
+                  "value": {
+                    "stringValue": "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: /home/user/litellm-lens-example/claude-agent-sdk\n - Is a git repository: true\n - Platform: darwin\n - Shell: zsh\n - OS Version: Darwin 25.6.0\n\nYou are powered by the model openai/gpt-6-luna.\n\n<total_tokens>15000000 tokens left</total_tokens>\n\nToday's date is 2026-10-02."
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "6448"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "171"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "392"
+                  }
+                },
+                {
+                  "key": "cache_read_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "cache_creation_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "attempt",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "response.has_tool_call",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "ttft_ms",
+                  "value": {
+                    "intValue": "502"
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "3450"
+                  }
+                },
+                {
+                  "key": "effort",
+                  "value": {
+                    "stringValue": "high"
+                  }
+                },
+                {
+                  "key": "response.model_output",
+                  "value": {
+                    "stringValue": "An **agent trace** is a structured record of what happened during an agent run. It typically shows the sequence of events, such as:\n\n1. The user’s request  \n2. The agent’s model calls  \n3. Tool calls and their results  \n4. The agent’s final response  \n5. Metadata such as timing, token usage, or errors\n\nFor example: *user asks for the weather → agent calls a weather tool → tool returns conditions → agent replies.*\n\nA trace helps developers debug behavior, measure performance, and understand tool usage. It’s related to a conversation transcript, but often includes operational details too. It doesn’t necessarily contain the agent’s private reasoning; what’s recorded depends on the system."
+                  }
+                },
+                {
+                  "key": "stop_reason",
+                  "value": {
+                    "stringValue": "end_turn"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "end_turn"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1790997770613191083",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": [
+                    {
+                      "key": "attempt",
+                      "value": {
+                        "intValue": "1"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "93d08cb0c8425745745fc0d827794745",
+              "spanId": "e42a957cd06d7e4d",
+              "parentSpanId": "3ba06bbbceed7acd",
+              "name": "claude_code.interaction",
+              "kind": 1,
+              "startTimeUnixNano": "1790997770558000000",
+              "endTimeUnixNano": "1790997777063275792",
+              "attributes": [
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "fake-user-id-1"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000002"
+                  }
+                },
+                {
+                  "key": "terminal.type",
+                  "value": {
+                    "stringValue": "xterm-256color"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "user_prompt",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "user_prompt_length",
+                  "value": {
+                    "intValue": "23"
+                  }
+                },
+                {
+                  "key": "interaction.sequence",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "parent.source",
+                  "value": {
+                    "stringValue": "env"
+                  }
+                },
+                {
+                  "key": "queued_sends",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "new_context",
+                  "value": {
+                    "stringValue": "[USER PROMPT]\nWhat is an agent trace?"
+                  }
+                },
+                {
+                  "key": "interaction.duration_ms",
+                  "value": {
+                    "intValue": "6505"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 769
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "5574e4c6-81b6-4da4-9cdb-b710efe04b93"
+            }
+          },
+          {
+            "key": "gen_ai.agent.name",
+            "value": {
+              "stringValue": "research_agent"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "lens-claude-agent-sdk-simple"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "openinference.instrumentation.claude_agent_sdk",
+            "version": "0.1.20"
+          },
+          "spans": [
+            {
+              "traceId": "93d08cb0c8425745745fc0d827794745",
+              "spanId": "3ba06bbbceed7acd",
+              "name": "ClaudeAgentSDK.query",
+              "kind": 1,
+              "startTimeUnixNano": "1790997770080971000",
+              "endTimeUnixNano": "1790997777079269000",
+              "attributes": [
+                {
+                  "key": "llm.system",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "llm.provider",
+                  "value": {
+                    "stringValue": "anthropic"
+                  }
+                },
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "text/plain"
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.content.0",
+                  "value": {
+                    "stringValue": "An **agent trace** is a structured record of what happened during an agent run. It typically shows the sequence of events, such as:\n\n1. The user’s request  \n2. The agent’s model calls  \n3. Tool calls and their results  \n4. The agent’s final response  \n5. Metadata such as timing, token usage, or errors\n\nFor example: *user asks for the weather → agent calls a weather tool → tool returns conditions → agent replies.*\n\nA trace helps developers debug behavior, measure performance, and understand tool usage. It’s related to a conversation transcript, but often includes operational details too. It doesn’t necessarily contain the agent’s private reasoning; what’s recorded depends on the system."
+                  }
+                },
+                {
+                  "key": "llm.output_messages.0.message.role",
+                  "value": {
+                    "stringValue": "assistant"
+                  }
+                },
+                {
+                  "key": "llm.finish_reason",
+                  "value": {
+                    "stringValue": "end_turn"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "An **agent trace** is a structured record of what happened during an agent run. It typically shows the sequence of events, such as:\n\n1. The user’s request  \n2. The agent’s model calls  \n3. Tool calls and their results  \n4. The agent’s final response  \n5. Metadata such as timing, token usage, or errors\n\nFor example: *user asks for the weather → agent calls a weather tool → tool returns conditions → agent replies.*\n\nA trace helps developers debug behavior, measure performance, and understand tool usage. It’s related to a conversation transcript, but often includes operational details too. It doesn’t necessarily contain the agent’s private reasoning; what’s recorded depends on the system."
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "text/plain"
+                  }
+                },
+                {
+                  "key": "llm.model_name",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt",
+                  "value": {
+                    "intValue": "171"
+                  }
+                },
+                {
+                  "key": "llm.token_count.completion",
+                  "value": {
+                    "intValue": "392"
+                  }
+                },
+                {
+                  "key": "llm.token_count.total",
+                  "value": {
+                    "intValue": "563"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_read",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.token_count.prompt_details.cache_write",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "llm.cost.total",
+                  "value": {
+                    "doubleValue": 0.008524
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "00000000-0000-0000-0000-000000000002"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "AGENT"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -45063,7 +45063,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "agent" | "llm" | "tool" | "chain" | "framework";
+            type: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
         };
         /** SpanDetail */
         SpanDetail: {

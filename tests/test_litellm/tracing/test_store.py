@@ -15,16 +15,19 @@ from litellm.rust_bridge.trace_queries import (
     SpanErrorRow,
     SpendRow,
 )
+from litellm.tracing.attribution import resolve_trace as trace_from_rows
 from litellm.tracing.store import (
     TraceStore,
-    agent_nodes,
     decode_cursor,
     encode_cursor,
-    span_from_row,
-    trace_from_rows,
     trace_summary_from_row,
 )
-from litellm.tracing.types import TraceScope
+from litellm.tracing.types import AgentNode, TraceScope
+
+
+def agent_nodes(rows: list[dict[str, Any]]) -> tuple[AgentNode, ...]:
+    trace = trace_from_rows("t", rows)
+    return trace["agents"] if trace is not None else ()
 
 T0 = 1_790_742_989_000_000_000  # ns
 MS = 1_000_000
@@ -157,8 +160,10 @@ def test_offsets_are_relative_to_trace_start_in_ms():
     assert spans["task"]["parent_span_id"] == "root"
 
 
-def test_span_from_row_optional_fields():
-    span = span_from_row(_row("s", "", "x", "chain", "a", status="STATUS_CODE_UNSET"), T0)
+def test_span_optional_fields():
+    trace = trace_from_rows("t", [_row("s", "", "x", "chain", "a", status="STATUS_CODE_UNSET")])
+    assert trace is not None
+    span = trace["spans"][0]
     assert (span["model"], span["parent_span_id"], span["status"], span["litellm_request_id"]) == (
         None,
         None,
@@ -213,8 +218,7 @@ def test_parent_agent_skips_same_name_ancestors():
         _row("r1", "root", "researcher", "agent", "researcher"),
         _row("r2", "r1", "researcher", "agent", "researcher"),
     ]
-    spans = [span_from_row(r, T0) for r in rows]
-    nodes = {n["name"]: n for n in agent_nodes(spans)}
+    nodes = {n["name"]: n for n in agent_nodes(rows)}
     assert nodes["researcher"]["parent_agent"] == "lead"
     assert nodes["researcher"]["invocations"] == 2
 
@@ -225,13 +229,28 @@ def test_parent_agent_stops_at_cyclic_parents():
         _row("first", "second", "researcher", "agent", "researcher"),
         _row("second", "first", "researcher", "agent", "researcher"),
     ]
-    spans = [span_from_row(row, T0) for row in rows]
-    assert agent_nodes(spans)[0]["parent_agent"] is None
+    assert agent_nodes(rows)[0]["parent_agent"] is None
 
 
-def test_agent_nodes_ignores_spans_of_unknown_agents():
-    spans = [span_from_row(_row("t", "", "tool", "tool", "ghost"), T0)]
-    assert agent_nodes(spans) == ()
+def test_unnamed_llm_and_tool_spans_count_toward_the_nearest_agent_ancestor():
+    """OpenInference LLM-client spans carry no agent name; the enclosing agent span owns them."""
+    rows = [
+        _row("crew", "", "crew.kickoff", "agent", "", wrapper_candidate=True),
+        _row("a", "crew", "researcher._execute_core", "agent", "researcher"),
+        _row("chain", "a", "step", "chain", ""),
+        _llm_row("llm", "chain", "", "req-1"),
+        _row("tool", "a", "search", "tool", ""),
+        _llm_row("orphan", "missing", "", "req-2"),
+    ]
+    nodes = {n["name"]: n for n in agent_nodes(rows)}
+    assert (nodes["researcher"]["llm_calls"], nodes["researcher"]["tool_calls"]) == (1, 1)
+    assert nodes["researcher"]["parent_agent"] is None
+    assert "crew.kickoff" not in nodes
+
+
+def test_agents_named_only_by_their_tools_are_agents():
+    nodes = agent_nodes([_row("t", "", "tool", "tool", "ghost")])
+    assert [(n["name"], n["invocations"], n["tool_calls"]) for n in nodes] == [("ghost", 1, 1)]
 
 
 def test_trace_groups_normalized_names_and_preserves_span_labels():
@@ -324,6 +343,7 @@ def test_trace_summary_from_row():
         }
     ).data
     summary: Final = trace_summary_from_row(rows[0])
+    assert summary["spend"] is None
     assert summary["agent_names"] == ("deep_research_agent",)
     assert summary["frameworks"] == ("claude-agent-sdk", "claude-code")
     assert summary["status"] == "ok"
@@ -331,41 +351,59 @@ def test_trace_summary_from_row():
     assert summary["start_time"] == "2026-09-30T04:36:29.377000+00:00"
 
 
-@pytest.mark.asyncio
-async def test_list_traces_sets_next_cursor_on_full_page():
-    client = MagicMock()
-    row = {
-        "trace_id": "t2",
-        "trace_ref": "ref2",
-        "name": "a",
-        "service": "s",
+def _queries(responses: dict[str, Any]) -> MagicMock:
+    """Storage answering each named query from `responses`."""
+    storage = MagicMock()
+    storage.query = AsyncMock(side_effect=lambda query, _params: responses[query.name])
+    return storage
+
+
+def _page_row(trace_id: str, start_ms: int = 1000, **extra: Any) -> dict[str, Any]:
+    return {
+        "trace_id": trace_id,
+        "trace_ref": f"ref-{trace_id}",
+        "team_id": "team-a",
+        "api_key_hash": "key-a",
+        "name": "agent",
+        "service": "service",
         "input_preview": "",
-        "start_ms": 1000,
-        "duration_ms": 1,
+        "start_ms": start_ms,
+        "duration_ms": 100,
         "status": "STATUS_CODE_OK",
         "span_count": 1,
         "agent_count": 1,
         "llm_calls": 0,
         "tool_calls": 0,
-        "error_count": 0,
         "input_tokens": 0,
         "output_tokens": 0,
         "models": [],
+        **extra,
     }
-    client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "trace_ref": "ref1", "start_ms": 900}])
+
+
+@pytest.mark.asyncio
+async def test_list_traces_sets_next_cursor_on_full_page():
+    client = _queries(
+        {
+            "list_traces": [_page_row("t2"), _page_row("t1", start_ms=900)],
+            "trace_page_spans": [],
+            "spend_by_response_ids": (),
+        }
+    )
     store = TraceStore(client)
     scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",)}
 
     page = await store.list_traces(scope, 0, 2000, limit=2)
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
     assert page["next_cursor"] is not None
-    assert decode_cursor(page["next_cursor"]) == (900, "ref1")
-    params = client.query.call_args.args[1]
+    assert decode_cursor(page["next_cursor"]) == (900, "ref-t1")
+    params = client.query.await_args_list[0].args[1]
     assert params.team_ids == ("team-a",) and params.limit == 2 and params.cursor_ms == 0
+    assert client.query.await_args_list[1].args[1].trace_refs == ("ref-t2", "ref-t1")
 
     page = await store.list_traces(scope, 0, 2000, cursor=page["next_cursor"], limit=3)
     assert page["next_cursor"] is None
-    assert client.query.call_args.args[1].cursor_trace_id == "ref1"
+    assert client.query.await_args_list[2].args[1].cursor_trace_id == "ref-t1"
 
 
 @pytest.mark.asyncio
@@ -437,48 +475,44 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
 
 
 @pytest.mark.asyncio
-async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable():
-    client = MagicMock()
-    rows = [
-        {
-            "trace_id": trace_id,
-            "trace_ref": trace_id,
-            "team_id": "team-a",
-            "api_key_hash": "key-a",
-            "request_ids": [request_id],
-            "name": "agent",
-            "service": "service",
-            "input_preview": "",
-            "start_ms": 1000,
-            "duration_ms": 100,
-            "status": "STATUS_CODE_OK",
-            "span_count": 1,
-            "agent_count": 1,
-            "llm_calls": 1,
-            "tool_calls": 0,
-            "input_tokens": 1,
-            "output_tokens": 1,
-            "models": [],
-        }
-        for trace_id, request_id in (("trace-1", "response-1"), ("trace-2", "response-2"))
+async def test_run_list_resolves_each_trace_from_its_spans():
+    owner: Final = {"team_id": "team-a", "api_key_hash": "key-a"}
+    spans: Final = [
+        span
+        for trace_id, response_id in (("trace-1", "response-1"), ("trace-2", "response-2"))
+        for span in (
+            _row(f"{trace_id}-root", "", "agent", "agent", "agent", trace_id=trace_id, **owner),
+            _llm_row(f"{trace_id}-llm", f"{trace_id}-root", "agent", response_id, trace_id=trace_id, **owner),
+        )
     ]
-    spend = [
+    spend: Final = SpendRow(
+        request_id="request-1",
+        response_id="response-1",
+        team_id="team-a",
+        api_key="key-a",
+        user="",
+        spend=0.25,
+        start_ms=1000,
+    )
+    client = _queries(
         {
-            "request_id": "request-1",
-            "response_id": "response-1",
-            "team_id": "team-a",
-            "api_key": "key-a",
-            "spend": 0.25,
-            "start_ms": 1000,
+            "list_traces": [_page_row("trace-1"), _page_row("trace-2")],
+            "trace_page_spans": spans,
+            "spend_by_response_ids": (spend,),
         }
-    ]
-    client.query = AsyncMock(side_effect=[rows, tuple(SpendRow.model_validate({**row, "user": ""}) for row in spend)])
+    )
     scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",)}
 
     page = await TraceStore(client).list_traces(scope, 0, 2000)
 
     assert [run["spend"] for run in page["data"]] == [0.25, None]
-    assert [call.args[0].name for call in client.query.await_args_list] == ["list_traces", "spend_by_response_ids"]
+    assert [run["llm_calls"] for run in page["data"]] == [1, 1]
+    assert [call.args[0].name for call in client.query.await_args_list] == [
+        "list_traces",
+        "trace_page_spans",
+        "spend_by_response_ids",
+    ]
+    assert client.query.await_args_list[2].args[1].response_ids == ("response-1", "response-2")
 
 
 @pytest.mark.asyncio
@@ -597,30 +631,6 @@ def test_cost_attribution_requires_shared_ownership_after_visibility(
     assert trace["summary"]["spend"] == expected
     assert trace["agents"][0]["spend"] == expected
     assert trace["spans"][1]["spend"] == expected
-    summary: Final = trace_summary_from_row(
-        {
-            "trace_id": "trace",
-            "team_id": trace_team,
-            "user_id": trace_user,
-            "api_key_hash": trace_key,
-            "request_ids": ("response",),
-            "name": "agent",
-            "service": "service",
-            "input_preview": "",
-            "start_ms": T0 // MS,
-            "duration_ms": 10,
-            "status": "STATUS_CODE_OK",
-            "span_count": 2,
-            "agent_count": 1,
-            "llm_calls": 1,
-            "tool_calls": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "models": (),
-        },
-        (spend,),
-    )
-    assert summary["spend"] == expected
 
 
 @pytest.mark.parametrize("failure", ("missing_id", "missing_spend", "duplicate_spend"))

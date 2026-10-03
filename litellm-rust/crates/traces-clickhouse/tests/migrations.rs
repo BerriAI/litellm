@@ -148,6 +148,8 @@ async fn schema_supports_span_rollups_and_spend_joins(
             "response_ids".into(),
             Parameter::Strings(vec!["response-1".into()]),
         ),
+        ("request_ids".into(), Parameter::Strings(Vec::new())),
+        ("trace_ids".into(), Parameter::Strings(Vec::new())),
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
@@ -233,6 +235,36 @@ async fn normalized_fields_match_clickhouse_catalog(
             field.name
         );
     }
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn agent_metadata_is_stored_and_queryable(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let metadata = serde_json::json!({"thread_id": "thread-1", "ls_subagent_id": "agent-1"});
+    insert_rows(
+        &database,
+        "otel_traces",
+        vec![BTreeMap::from([
+            ("Timestamp".into(), time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)?.into()),
+            ("TraceId".into(), "trace-1".into()),
+            ("SpanId".into(), "span-1".into()),
+            ("AgentMetadata".into(), metadata.to_string().into()),
+        ])],
+    )
+    .await?;
+    let response = read_json(
+        &database,
+        "SELECT JSONExtractString(AgentMetadata, 'thread_id') AS thread_id, JSONExtractString(AgentMetadata, 'ls_subagent_id') AS subagent_id FROM trace_test.otel_traces WHERE TraceId = 'trace-1'",
+    ).await?;
+    assert_eq!(response["data"][0]["thread_id"], metadata["thread_id"]);
+    assert_eq!(
+        response["data"][0]["subagent_id"],
+        metadata["ls_subagent_id"]
+    );
     Ok(())
 }
 
@@ -1743,6 +1775,8 @@ async fn named_and_sql_readers_share_request_log_visibility(
                 "api_key_hash": legacy_key.unwrap_or_default(),
             }))?,
             response_ids: vec!["shared-response".into()],
+            request_ids: Vec::new(),
+            trace_ids: Vec::new(),
             start_ms: timestamp / 1_000_000 - 1,
             end_ms: timestamp / 1_000_000 + 1,
         });

@@ -4455,6 +4455,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "indexmap 2.14.0",
+ "litellm-llms-types",
  "opentelemetry-proto",
  "prost",
  "rstest",

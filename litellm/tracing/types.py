@@ -14,9 +14,9 @@ from typing import Literal
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.rust_bridge.trace_queries import SpanType
 from litellm.tracing.ui_format import UIContent
 
-SpanType = Literal["agent", "llm", "tool", "chain", "framework"]
 SpanStatus = Literal["ok", "error", "unset"]
 
 
@@ -132,14 +132,20 @@ class SpanRow(TypedDict):
     ApiKeyHash: ReadOnly[str]
     UserId: ReadOnly[str]
     ObservationType: SpanType
+    WrapperCandidate: ReadOnly[bool]
     AgentName: str
     Framework: ReadOnly[str]
+    AgentMetadata: ReadOnly[str]
     LiteLLMRequestId: str
+    CallKeys: ReadOnly[tuple[str, ...]]
+    CallEvidence: ReadOnly[str]
     Model: str
     InputTokens: int
     OutputTokens: int
     Input: str
+    InputPreview: ReadOnly[str]
     Output: str
+    ToolCallId: ReadOnly[str]
 
 
 class SpendLogRecord(TypedDict):

@@ -14,11 +14,11 @@ SELECT o.TraceId AS trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span
           AS tool_call_id,
        o.UserId AS user_id, o.TeamId AS team_id, o.ApiKeyHash AS api_key_hash
 FROM otel_traces AS o
-WHERE o.TraceId = {trace_id:String}
+WHERE o.Timestamp >= fromUnixTimestamp64Milli({start_ms:Int64})
+  AND o.Timestamp < fromUnixTimestamp64Milli({end_ms:Int64})
   AND ({all_teams:UInt8} = 1
        OR ({user_id:String} != '' AND o.UserId = {user_id:String})
        OR has({team_ids:Array(String)}, o.TeamId))
-  AND ({trace_ref:String} = '' OR
-       hex(SHA256(concat(o.TeamId, char(0), o.ApiKeyHash, char(0), o.TraceId))) = {trace_ref:String})
+  AND hex(SHA256(concat(o.TeamId, char(0), o.ApiKeyHash, char(0), o.TraceId))) IN {trace_refs:Array(String)}
 ORDER BY o.Timestamp, o.EngineReceivedMs, o.StatusMessage
-LIMIT 1 BY o.SpanId
+LIMIT 1 BY o.TeamId, o.ApiKeyHash, o.TraceId, o.SpanId

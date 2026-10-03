@@ -5,9 +5,25 @@ from typing import Annotated, Final, Generic, Literal, TypeAlias, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+SpanType: TypeAlias = Literal[
+    "agent",
+    "llm",
+    "tool",
+    "chain",
+    "framework",
+    "retriever",
+    "embedding",
+    "reranker",
+    "guardrail",
+    "evaluator",
+    "prompt",
+    "decision",
+]
+
 ReadQueryName: TypeAlias = Literal[
     "list_traces",
     "trace_spans",
+    "trace_page_spans",
     "trace_identity",
     "span_detail",
     "span_error",
@@ -46,6 +62,16 @@ class TraceSpansParams(BaseModel):
     trace_ref: str
 
 
+class TracePageSpansParams(BaseModel):
+    model_config = _PARAMETERS_CONFIG
+    all_teams: Literal[0, 1]
+    user_id: str
+    team_ids: tuple[str, ...]
+    trace_refs: tuple[str, ...]
+    start_ms: Int64
+    end_ms: Int64
+
+
 class SpanDetailParams(BaseModel):
     model_config = _PARAMETERS_CONFIG
     all_teams: Literal[0, 1]
@@ -74,6 +100,8 @@ class SpendByResponseIdsParams(BaseModel):
     user_id: str
     team_ids: tuple[str, ...]
     response_ids: tuple[str, ...]
+    request_ids: tuple[str, ...]
+    trace_ids: tuple[str, ...]
     start_ms: Int64
     end_ms: Int64
 
@@ -173,10 +201,12 @@ class ListTracesRow(TypedDict):
 
 
 class TraceSpansRow(TypedDict):
+    trace_id: NotRequired[ReadOnly[str]]
     span_id: ReadOnly[str]
     parent_span_id: ReadOnly[str]
     name: ReadOnly[str]
-    type: ReadOnly[Literal["agent", "llm", "tool", "chain", "framework"]]
+    type: ReadOnly[SpanType]
+    wrapper_candidate: NotRequired[ReadOnly[bool]]
     agent: ReadOnly[str]
     framework: NotRequired[ReadOnly[str]]
     status: ReadOnly[str]
@@ -190,6 +220,9 @@ class TraceSpansRow(TypedDict):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     litellm_request_id: ReadOnly[str]
+    call_keys: NotRequired[ReadOnly[tuple[str, ...]]]
+    call_evidence: NotRequired[ReadOnly[str]]
+    tool_call_id: NotRequired[ReadOnly[str]]
     team_id: ReadOnly[str]
     api_key_hash: ReadOnly[str]
     user_id: ReadOnly[str]
@@ -214,6 +247,9 @@ class SpendRow(BaseModel):
     model_config = ConfigDict(frozen=True)
     request_id: str
     response_id: str
+    upstream_response_id: str = ""
+    trace_id: str = ""
+    span_id: str = ""
     team_id: str
     api_key: str
     user: str
@@ -285,6 +321,9 @@ LIST_TRACES: Final[ReadQuery[ListTracesParams, ListTracesRow]] = ReadQuery(
 )
 TRACE_SPANS: Final[ReadQuery[TraceSpansParams, TraceSpansRow]] = ReadQuery(
     "trace_spans", TraceSpansParams, TypeAdapter(QueryResponse[TraceSpansRow])
+)
+TRACE_PAGE_SPANS: Final[ReadQuery[TracePageSpansParams, TraceSpansRow]] = ReadQuery(
+    "trace_page_spans", TracePageSpansParams, TypeAdapter(QueryResponse[TraceSpansRow])
 )
 SPAN_DETAIL: Final[ReadQuery[SpanDetailParams, SpanDetailRow]] = ReadQuery(
     "span_detail", SpanDetailParams, TypeAdapter(QueryResponse[SpanDetailRow])

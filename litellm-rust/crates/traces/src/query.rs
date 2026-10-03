@@ -5,6 +5,7 @@ pub mod named;
 pub enum ReadQuery {
     ListTraces,
     TraceSpans,
+    TracePageSpans,
     TraceIdentity,
     SpanDetail,
     SpanError,

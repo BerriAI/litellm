@@ -58,11 +58,15 @@ pub struct TraceSpansParams {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TraceSpansRow {
+    #[serde(default)]
+    pub trace_id: String,
     pub span_id: String,
     pub parent_span_id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub kind: String,
+    #[serde(default)]
+    pub wrapper_candidate: u8,
     pub agent: String,
     #[serde(default)]
     pub framework: String,
@@ -77,9 +81,24 @@ pub struct TraceSpansRow {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub litellm_request_id: String,
+    #[serde(default)]
+    pub call_keys: Vec<String>,
+    #[serde(default)]
+    pub call_evidence: String,
+    #[serde(default)]
+    pub tool_call_id: String,
     pub team_id: String,
     pub api_key_hash: String,
     pub user_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TracePageSpansParams {
+    #[serde(flatten)]
+    pub access: ReadAccessParams,
+    pub trace_refs: Vec<String>,
+    pub start_ms: i64,
+    pub end_ms: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -123,6 +142,8 @@ pub struct SpendByResponseIdsParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
     pub response_ids: Vec<String>,
+    pub request_ids: Vec<String>,
+    pub trace_ids: Vec<String>,
     pub start_ms: i64,
     pub end_ms: i64,
 }
@@ -131,6 +152,9 @@ pub struct SpendByResponseIdsParams {
 pub struct SpendByResponseIdsRow {
     pub request_id: String,
     pub response_id: String,
+    pub upstream_response_id: String,
+    pub trace_id: String,
+    pub span_id: String,
     pub team_id: String,
     pub api_key: String,
     pub user: String,

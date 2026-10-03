@@ -1,5 +1,5 @@
 use litellm_traces::decode_otlp;
-use litellm_traces::{ObservationType, Shared};
+use litellm_traces::{AgentType, Integration, ObservationType, Shared};
 use opentelemetry_proto::tonic::trace::v1::Span;
 use rstest::rstest;
 
@@ -458,6 +458,10 @@ fn decode_normalization(
 #[case::completion("text_completion", false, ObservationType::Llm)]
 #[case::content("generate_content", false, ObservationType::Llm)]
 #[case::tool("execute_tool", false, ObservationType::Tool)]
+#[case::embedding("embeddings", true, ObservationType::Embedding)]
+#[case::retrieval("retrieval", false, ObservationType::Retriever)]
+#[case::workflow("invoke_workflow", true, ObservationType::Chain)]
+#[case::create_agent("create_agent", false, ObservationType::Framework)]
 #[case::unknown_root("unknown", true, ObservationType::Agent)]
 #[case::unknown_child("unknown", false, ObservationType::Chain)]
 #[case::missing_root("", true, ObservationType::Agent)]
@@ -478,6 +482,230 @@ fn genai_operations_and_parentage_classify_spans(
     )
     .unwrap();
     assert_eq!(decoded.normalized.observation_type, expected);
+}
+
+#[rstest]
+#[case::retriever("RETRIEVER", ObservationType::Retriever)]
+#[case::embedding("EMBEDDING", ObservationType::Embedding)]
+#[case::reranker("RERANKER", ObservationType::Reranker)]
+#[case::guardrail("GUARDRAIL", ObservationType::Guardrail)]
+#[case::evaluator("EVALUATOR", ObservationType::Evaluator)]
+#[case::prompt("PROMPT", ObservationType::Prompt)]
+#[case::decision("DECISION", ObservationType::Decision)]
+fn openinference_preserves_operation_and_payload_at_any_depth(
+    span: Span,
+    #[case] kind: &str,
+    #[case] expected: ObservationType,
+    #[values(true, false)] root: bool,
+) {
+    let input = r#"{"query":"hello"}"#;
+    let output = r#"[{"id":"doc-1","score":0.9}]"#;
+    let decoded = decode_normalization(
+        Span {
+            parent_span_id: if root { vec![] } else { vec![3; 8] },
+            ..span
+        },
+        "openinference.instrumentation.example",
+        &[
+            ("openinference.span.kind", kind),
+            ("input.value", input),
+            ("output.value", output),
+        ],
+    )
+    .unwrap();
+    assert_eq!(decoded.normalized.observation_type, expected);
+    assert!(!decoded.normalized.wrapper_candidate);
+    assert_eq!(decoded.normalized.input, input);
+    assert_eq!(decoded.normalized.output, output);
+    assert_eq!(decoded.normalized.call_evidence, "unknown");
+}
+
+#[rstest]
+#[case::claude("claude-code", Integration::ClaudeCode)]
+#[case::codex("openai-codex", Integration::OpenaiCodex)]
+#[case::deepagents("deepagents-code", Integration::DeepagentsCode)]
+#[case::cursor("cursor", Integration::Cursor)]
+#[case::pi("pi", Integration::Pi)]
+#[case::opencode("opencode", Integration::Opencode)]
+#[case::copilot("copilot", Integration::Copilot)]
+#[case::extension("future-agent", Integration::Other("future-agent".to_owned()))]
+fn coding_identity_is_independent_of_model_operation(
+    span: Span,
+    #[case] integration: &str,
+    #[case] expected: Integration,
+) {
+    let decoded = decode_normalization(
+        span,
+        "langsmith",
+        &[
+            ("langsmith.span.kind", "llm"),
+            ("langsmith.metadata.ls_agent_type", "subagent"),
+            ("langsmith.metadata.ls_integration", integration),
+            ("langsmith.metadata.thread_id", "thread-1"),
+            ("langsmith.metadata.ls_subagent_id", "agent-1"),
+            ("langsmith.metadata.ls_subagent_type", "researcher"),
+            ("langsmith.metadata.ls_model_name", "test-model"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(decoded.normalized.observation_type, ObservationType::Llm);
+    assert_eq!(decoded.normalized.framework, integration);
+    assert_eq!(decoded.normalized.model, "test-model");
+    assert_eq!(decoded.normalized.agent_name, "researcher");
+    assert_eq!(decoded.normalized.call_evidence, "unknown");
+    assert!(decoded.normalized.call_keys.is_empty());
+    let metadata = &decoded.normalized.agent_metadata;
+    assert_eq!(metadata.ls_integration, Some(expected));
+    assert_eq!(metadata.ls_agent_type, Some(AgentType::Subagent));
+    assert_eq!(metadata.thread_id.as_deref(), Some("thread-1"));
+    assert_eq!(metadata.ls_subagent_id.as_deref(), Some("agent-1"));
+    assert_eq!(
+        serde_json::to_value(metadata).unwrap()["ls_integration"],
+        integration
+    );
+}
+
+#[rstest]
+#[case::subagent("subagent", "chain", ObservationType::Agent)]
+#[case::root("root", "chain", ObservationType::Agent)]
+#[case::middleware("middleware", "chain", ObservationType::Framework)]
+#[case::compaction("compaction", "chain", ObservationType::Framework)]
+#[case::compaction_model("compaction", "llm", ObservationType::Llm)]
+#[case::middleware_tool("middleware", "tool", ObservationType::Tool)]
+#[case::retrieval("root", "retriever", ObservationType::Retriever)]
+fn agent_context_only_refines_container_roles(
+    span: Span,
+    #[case] agent_type: &str,
+    #[case] kind: &str,
+    #[case] expected: ObservationType,
+) {
+    let decoded = decode_normalization(
+        span,
+        "langsmith",
+        &[
+            ("langsmith.span.kind", kind),
+            ("langsmith.metadata.ls_agent_type", agent_type),
+        ],
+    )
+    .unwrap();
+    assert_eq!(decoded.normalized.observation_type, expected);
+    assert!(!decoded.normalized.wrapper_candidate);
+}
+
+#[rstest]
+fn metadata_sources_merge_with_flattened_values_taking_precedence(span: Span) {
+    let decoded = decode_normalization(
+        span,
+        "langsmith",
+        &[
+            ("langsmith.span.kind", "tool"),
+            ("metadata", r#"{"ls_integration":"cursor","thread_id":"nested","ls_agent_type":42,"ls_agent_runtime":"runtime","ls_provider":"test-provider","repository_url":"repo","cwd":"directory","ls_agent_runtime_version":"version"}"#),
+            ("thread_id", "direct"),
+            ("langsmith.metadata.thread_id", "flattened"),
+            ("langsmith.metadata.ls_tool_name", "shell"),
+            ("langsmith.metadata.ls_agent_type", "unknown-context"),
+        ],
+    ).unwrap();
+    let metadata = &decoded.normalized.agent_metadata;
+    assert_eq!(metadata.thread_id.as_deref(), Some("flattened"));
+    assert_eq!(metadata.ls_agent_type, None);
+    assert_eq!(metadata.ls_agent_runtime.as_deref(), Some("runtime"));
+    assert_eq!(metadata.ls_provider.as_deref(), Some("test-provider"));
+    assert_eq!(metadata.git_repo_url.as_deref(), Some("repo"));
+    assert_eq!(metadata.working_directory.as_deref(), Some("directory"));
+    assert_eq!(metadata.ls_agent_version.as_deref(), Some("version"));
+    assert_eq!(decoded.name, "shell");
+    assert_eq!(decoded.normalized.observation_type, ObservationType::Tool);
+    assert_eq!(decoded.normalized.framework, "cursor");
+}
+
+#[rstest]
+fn genai_retrieval_normalizes_query_and_documents(span: Span) {
+    let query = "trace storage";
+    let documents = r#"[{"id":"doc-1","score":0.9}]"#;
+    let decoded = decode_normalization(
+        span,
+        "example",
+        &[
+            ("gen_ai.operation.name", "retrieval"),
+            ("gen_ai.retrieval.query.text", query),
+            ("gen_ai.retrieval.documents", documents),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.normalized.observation_type,
+        ObservationType::Retriever
+    );
+    assert_eq!(decoded.normalized.input, query);
+    assert_eq!(decoded.normalized.output, documents);
+    assert_eq!(decoded.normalized.input_preview, query);
+}
+
+#[rstest]
+#[case::image(serde_json::json!({"type": "image_url", "image_url": {"url": "image"}}))]
+#[case::unknown(serde_json::json!({"type": "unknown", "payload": "opaque"}))]
+#[case::malformed(serde_json::json!({"type": "text", "text": 7}))]
+#[case::scalar(serde_json::json!(7))]
+fn genai_message_blocks_preserve_text_without_exposing_hidden_content(
+    span: Span,
+    #[case] unsupported: serde_json::Value,
+    #[values(
+        "reasoning",
+        "thinking",
+        "redacted_thinking",
+        "function_call",
+        "tool_use",
+        "tool_call"
+    )]
+    hidden_type: &str,
+) {
+    let payload = serde_json::json!([{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "first"},
+            {"type": hidden_type, "text": "hidden", "thinking": "hidden", "input": "hidden"},
+            unsupported,
+            {"text": "second"},
+        ],
+    }])
+    .to_string();
+    let decoded = decode_normalization(
+        span,
+        "",
+        &[
+            ("gen_ai.input.messages", &payload),
+            ("gen_ai.output.messages", &payload),
+        ],
+    )
+    .unwrap();
+    let expected = serde_json::json!([{"role": "user", "content": "first\n\nsecond"}]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&decoded.normalized.input).unwrap(),
+        expected,
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&decoded.normalized.output).unwrap(),
+        expected,
+    );
+}
+
+#[rstest]
+#[case::text(serde_json::json!("hello"), "hello")]
+#[case::object(serde_json::json!({"count": 2}), r#"{"count": 2}"#)]
+#[case::number(serde_json::json!(7), "7")]
+#[case::empty_blocks(serde_json::json!([]), "")]
+fn genai_message_content_preserves_text_and_non_array_fallbacks(
+    span: Span,
+    #[case] content: serde_json::Value,
+    #[case] expected: &str,
+) {
+    let payload = serde_json::json!([{"role": "user", "content": content}]).to_string();
+    let decoded = decode_normalization(span, "", &[("gen_ai.input.messages", &payload)]).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&decoded.normalized.input).unwrap(),
+        serde_json::json!([{"role": "user", "content": expected}]),
+    );
 }
 
 #[rstest]
@@ -567,7 +795,56 @@ fn openinference_fields_override_genai_and_usage_falls_back_per_field(
         (fields.input_tokens, fields.output_tokens),
         (input_tokens, output_tokens)
     );
-    assert_eq!(decoded.consumed_attributes, ["input.value", "output.value"]);
+    assert_eq!(
+        *decoded.consumed_attributes,
+        ["input.value", "output.value"]
+    );
+}
+
+#[rstest]
+#[case::raw_response("LLM", r#"{"id":"chatcmpl-1","choices":[]}"#, &["provider_response:chatcmpl-1"], "complete")]
+#[case::langchain_llm_output("LLM", r#"{"llm_output":{"id":"chatcmpl-2"},"generations":[[{"message":{"kwargs":{"type":"ai","content":"hi"}}}]]}"#, &["provider_response:chatcmpl-2"], "complete")]
+#[case::langchain_generation("LLM", r#"{"generations":[[{"message":{"kwargs":{"response_metadata":{"id":"chatcmpl-3"}}}}]]}"#, &["provider_response:chatcmpl-3"], "complete")]
+#[case::langchain_batch("LLM", r#"{"generations":[[{"message":{"kwargs":{"response_metadata":{"id":"a"}}}}],[{"message":{"kwargs":{}}}]]}"#, &["provider_response:a"], "partial")]
+#[case::malformed_candidate("LLM", r#"{"generations":[[{"message":{"kwargs":{"response_metadata":{"id":"a"}}}},null]]}"#, &["provider_response:a"], "partial")]
+#[case::non_llm("CHAIN", r#"{"id":"task-1"}"#, &[], "unknown")]
+#[case::not_json("LLM", "plain text", &[], "unknown")]
+#[case::non_string_id("LLM", r#"{"id":7}"#, &[], "unknown")]
+fn openinference_llm_output_records_call_evidence(
+    span: Span,
+    #[case] kind: &str,
+    #[case] output: &str,
+    #[case] keys: &[&str],
+    #[case] evidence: &str,
+) {
+    let decoded = decode_normalization(
+        span,
+        "",
+        &[("openinference.span.kind", kind), ("output.value", output)],
+    )
+    .unwrap();
+    let recorded: Vec<String> = decoded
+        .normalized
+        .call_keys
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(recorded, keys);
+    assert_eq!(decoded.normalized.call_evidence, evidence);
+}
+
+#[rstest]
+#[case::crewai("openinference.instrumentation.crewai", "crewai")]
+#[case::multi_word("openinference.instrumentation.claude_agent_sdk", "claude-agent-sdk")]
+#[case::other_scope("other", "")]
+fn openinference_scope_names_the_framework(
+    span: Span,
+    #[case] scope: &str,
+    #[case] framework: &str,
+) {
+    let decoded =
+        decode_normalization(span, scope, &[("openinference.span.kind", "AGENT")]).unwrap();
+    assert_eq!(decoded.normalized.framework, framework);
 }
 
 #[rstest]
@@ -603,7 +880,7 @@ fn langsmith_dispatch_overrides_other_conventions(
         serde_json::json!([{"role": "user", "content": "hello"}]),
     );
     assert_eq!(
-        decoded.consumed_attributes,
+        *decoded.consumed_attributes,
         ["gen_ai.prompt", "gen_ai.completion"]
     );
 }
@@ -622,6 +899,7 @@ fn langsmith_llm_messages_preserve_visible_content_and_tool_calls(
                 {"type": "text", "text": "first"},
                 {"type": "thinking", "thinking": "hidden"},
                 {"type": "tool_use", "id": "call-1"},
+                {"type": "image_url", "image_url": {"url": "image"}},
                 {"type": "text", "text": "second"}
             ],
             "tool_calls": [{"name": "search", "args": {"query": "hello"}, "id": "call-1"}],

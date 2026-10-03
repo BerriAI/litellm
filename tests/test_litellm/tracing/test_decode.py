@@ -9,6 +9,7 @@ import base64
 import gzip
 import json
 from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,41 @@ pytestmark = pytest.mark.requires_rust_extension
 
 FIXTURE = Path(__file__).parent / "fixtures" / "langsmith_deep_agent_export.json"
 TRACE_ID = "4bad42b84e9de3ba46fc870185f8f023"
+
+
+def test_coding_metadata_reaches_the_stored_row() -> None:
+    metadata: Final = {
+        "ls_integration": "openai-codex",
+        "ls_agent_type": "subagent",
+        "ls_subagent_id": "agent-1",
+        "ls_subagent_type": "researcher",
+        "thread_id": "thread-1",
+        "ls_model_name": "test-model",
+    }
+    span: Final = Span(
+        trace_id=bytes.fromhex(TRACE_ID),
+        span_id=b"\x01" * 8,
+        name="model call",
+        attributes=[_kv("gen_ai.operation.name", "chat"), _kv("metadata", json.dumps(metadata))],
+    )
+    row: Final = decode_otlp(_export(span), "application/x-protobuf")[0]
+    assert json.loads(row["AgentMetadata"]) == metadata
+    assert row["ObservationType"] == "llm"
+    assert row["Framework"] == metadata["ls_integration"]
+    assert row["AgentName"] == metadata["ls_subagent_type"]
+    assert row["Model"] == metadata["ls_model_name"]
+
+
+@pytest.mark.parametrize("kind", ("retriever", "embedding", "reranker", "guardrail", "evaluator", "prompt", "decision"))
+def test_specialized_operations_reach_the_stored_row(kind: str) -> None:
+    span: Final = Span(
+        trace_id=bytes.fromhex(TRACE_ID),
+        span_id=b"\x01" * 8,
+        name="operation",
+        attributes=[_kv("openinference.span.kind", kind.upper())],
+    )
+    row: Final = decode_otlp(_export(span), "application/x-protobuf")[0]
+    assert row["ObservationType"] == kind
 
 
 def _fixture_json() -> bytes:
@@ -120,8 +156,11 @@ def test_hermes_resource_name_replaces_only_its_plugin_default(
 @pytest.mark.parametrize("agent_name", ["research_agent", ""])
 def test_openinference_middleware_is_not_a_separate_agent(agent_name: str):
     span = _span(
-        "PatchToolCallsMiddleware.before_agent", b"\x02" * 8, b"\x01" * 8,
-        openinference__span__kind="AGENT", metadata=json.dumps({"lc_agent_name": agent_name}),
+        "PatchToolCallsMiddleware.before_agent",
+        b"\x02" * 8,
+        b"\x01" * 8,
+        openinference__span__kind="AGENT",
+        metadata=json.dumps({"lc_agent_name": agent_name}),
     )
     row = decode_otlp(_export(span, scope="openinference.instrumentation.langchain"), "application/x-protobuf")[0]
     assert (row["ObservationType"], row["AgentName"]) == ("framework", agent_name)

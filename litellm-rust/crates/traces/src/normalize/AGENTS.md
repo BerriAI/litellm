@@ -1,0 +1,2 @@
+- https://github.com/Arize-ai/openinference/tree/main/spec
+- https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/index.md

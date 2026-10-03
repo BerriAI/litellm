@@ -2,14 +2,15 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
 
-use super::{NormalizedSpan, ObservationType, SpanNormalizer, attr, first, tokens};
+use super::{
+    CallEvidence, CallKey, Extraction, ObservationType, RoleEvidence, SpanContext, SpanFacts, attr,
+    first, tokens,
+};
 use crate::{Error, otlp::DecodedEvent};
 
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 const AGENT_SDK_FRAMEWORK: &str = "claude-agent-sdk";
-
-pub(super) struct ClaudeCodeNormalizer;
 
 enum SpanType {
     Interaction,
@@ -33,7 +34,7 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
     }
 }
 
-fn framework(attributes: &BTreeMap<String, String>) -> &'static str {
+pub(super) fn framework(attributes: &BTreeMap<String, String>) -> &'static str {
     if attr(attributes, "query_source_safe") == "sdk"
         || attr(attributes, "system_prompt_preview").contains("cc_entrypoint=sdk")
     {
@@ -41,6 +42,15 @@ fn framework(attributes: &BTreeMap<String, String>) -> &'static str {
     } else {
         CLAUDE_CODE_AGENT
     }
+}
+
+/// `agent:custom:search_agent` -> `search_agent`: the subagent a request ran for.
+fn subagent(attributes: &BTreeMap<String, String>) -> Option<&str> {
+    let mut parts = attr(attributes, "query_source")
+        .strip_prefix("agent:")?
+        .splitn(2, ':');
+    let (_kind, name) = (parts.next()?, parts.next()?);
+    (!name.is_empty()).then_some(name)
 }
 
 fn split_header(text: &str) -> Option<(&str, &str)> {
@@ -154,70 +164,71 @@ fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
         })
 }
 
-impl SpanNormalizer for ClaudeCodeNormalizer {
-    fn matches(&self, scope_name: &str, _attributes: &BTreeMap<String, String>) -> bool {
-        scope_name == CLAUDE_CODE_SCOPE
-    }
-
-    fn consumed_attributes(&self, attributes: &BTreeMap<String, String>) -> [&'static str; 2] {
-        match span_type("", attributes) {
-            SpanType::Interaction => ["user_prompt", ""],
-            SpanType::LlmRequest => ["new_context", "response.model_output"],
-            SpanType::Tool if tool_arguments(attributes).is_some() => ["tool_input", ""],
-            SpanType::Tool | SpanType::Other => ["", ""],
-        }
-    }
-
-    fn display_name(&self, attributes: &BTreeMap<String, String>) -> Option<String> {
-        let tool_name = attr(attributes, "tool_name");
-        (matches!(span_type("", attributes), SpanType::Tool) && !tool_name.is_empty())
-            .then(|| tool_name.to_owned())
-    }
-
-    fn normalize(
-        &self,
-        name: &str,
-        _parent_span_id: &str,
-        attributes: &BTreeMap<String, String>,
-        events: &[DecodedEvent],
-    ) -> Result<NormalizedSpan, Error> {
-        let base = NormalizedSpan {
-            observation_type: ObservationType::Framework,
-            agent_name: CLAUDE_CODE_AGENT.to_owned(),
-            framework: framework(attributes).to_owned(),
-            litellm_request_id: String::new(),
-            model: String::new(),
-            input_tokens: 0,
-            output_tokens: 0,
-            input: String::new(),
-            output: String::new(),
-        };
-        Ok(match span_type(name, attributes) {
-            SpanType::Interaction => NormalizedSpan {
-                observation_type: ObservationType::Agent,
+pub(super) fn extract(context: &SpanContext<'_>) -> Result<Extraction, Error> {
+    let attributes = context.attributes;
+    let kind = span_type(context.name, attributes);
+    let base = SpanFacts {
+        role: Some(RoleEvidence::Declared(ObservationType::Framework)),
+        agent_name: Some(CLAUDE_CODE_AGENT.to_owned()),
+        tool_call_id: Some(attr(attributes, "gen_ai.tool.call.id"))
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
+        ..SpanFacts::default()
+    };
+    let (facts, consumed): (SpanFacts, Vec<&'static str>) = match kind {
+        SpanType::Interaction => (
+            SpanFacts {
+                role: Some(RoleEvidence::Declared(ObservationType::Agent)),
                 input: user_prompt(attributes),
                 ..base
             },
-            SpanType::LlmRequest => NormalizedSpan {
-                observation_type: ObservationType::Llm,
-                litellm_request_id: first(attributes, "gen_ai.response.id", "request_id")
-                    .to_owned(),
-                model: first(attributes, "model", "gen_ai.request.model").to_owned(),
-                input_tokens: input_tokens(attributes)?,
-                output_tokens: tokens(attributes, "output_tokens")?,
-                input: llm_input(attributes),
-                output: llm_output(attributes),
-                ..base
-            },
-            SpanType::Tool => NormalizedSpan {
-                observation_type: ObservationType::Tool,
+            vec!["user_prompt"],
+        ),
+        SpanType::LlmRequest => {
+            let request_id = first(attributes, "gen_ai.response.id", "request_id");
+            (
+                SpanFacts {
+                    role: Some(RoleEvidence::Declared(ObservationType::Llm)),
+                    agent_name: Some(subagent(attributes).unwrap_or(CLAUDE_CODE_AGENT).to_owned()),
+                    model: Some(first(attributes, "model", "gen_ai.request.model"))
+                        .filter(|model| !model.is_empty())
+                        .map(str::to_owned),
+                    input_tokens: input_tokens(attributes)?,
+                    output_tokens: tokens(attributes, "output_tokens")?,
+                    input: llm_input(attributes),
+                    output: llm_output(attributes),
+                    calls: if request_id.is_empty() {
+                        CallEvidence::Unknown
+                    } else {
+                        CallEvidence::complete(CallKey::ProviderResponse(request_id.to_owned()))
+                    },
+                    ..base
+                },
+                vec!["new_context", "response.model_output"],
+            )
+        }
+        SpanType::Tool => (
+            SpanFacts {
+                role: Some(RoleEvidence::Declared(ObservationType::Tool)),
                 input: tool_input(attributes),
-                output: tool_output(attributes, events),
+                output: tool_output(attributes, context.events),
                 ..base
             },
-            SpanType::Other => base,
-        })
-    }
+            if tool_arguments(attributes).is_some() {
+                vec!["tool_input"]
+            } else {
+                Vec::new()
+            },
+        ),
+        SpanType::Other => (base, Vec::new()),
+    };
+    let tool_name = attr(attributes, "tool_name");
+    Ok(Extraction {
+        facts,
+        display_name: (matches!(kind, SpanType::Tool) && !tool_name.is_empty())
+            .then(|| tool_name.to_owned()),
+        consumed_attributes: consumed,
+    })
 }
 
 #[cfg(test)]
@@ -227,8 +238,29 @@ mod tests {
     use rstest::rstest;
     use serde_json::Value;
 
-    use super::{CLAUDE_CODE_SCOPE, ClaudeCodeNormalizer, SpanNormalizer};
-    use crate::{Error, normalize::ObservationType, otlp::DecodedEvent};
+    use super::CLAUDE_CODE_SCOPE;
+    use crate::{
+        Error,
+        normalize::{Normalization, NormalizedSpan, ObservationType},
+        otlp::DecodedEvent,
+    };
+
+    fn normalization(
+        name: &str,
+        attributes: &BTreeMap<String, String>,
+        events: &[DecodedEvent],
+    ) -> Result<Normalization, Error> {
+        crate::normalize::normalize(CLAUDE_CODE_SCOPE, name, "parent", attributes, events)
+    }
+
+    fn normalize(
+        name: &str,
+        _parent: &str,
+        attributes: &BTreeMap<String, String>,
+        events: &[DecodedEvent],
+    ) -> Result<NormalizedSpan, Error> {
+        normalization(name, attributes, events).map(|normalization| normalization.span)
+    }
 
     fn attributes(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -239,19 +271,18 @@ mod tests {
 
     #[rstest]
     fn tool_without_detailed_input_lists_known_arguments() {
-        let span = ClaudeCodeNormalizer
-            .normalize(
-                "claude_code.tool",
-                "parent",
-                &attributes(&[
-                    ("span.type", "tool"),
-                    ("tool_name", "Bash"),
-                    ("full_command", "git status"),
-                    ("bash_argv0", "git"),
-                ]),
-                &[],
-            )
-            .expect("valid span");
+        let span = normalize(
+            "claude_code.tool",
+            "parent",
+            &attributes(&[
+                ("span.type", "tool"),
+                ("tool_name", "Bash"),
+                ("full_command", "git status"),
+                ("bash_argv0", "git"),
+            ]),
+            &[],
+        )
+        .expect("valid span");
         let input: Value = serde_json::from_str(&span.input).expect("argument object");
         assert_eq!(input["command"], "git status");
         assert_eq!(input["bash_argv0"], "git");
@@ -266,14 +297,13 @@ mod tests {
             ("tool_input", "[TOOL INPUT: Read]\nnot json"),
             ("file_path", "/workspace/a.py"),
         ]);
-        let span = ClaudeCodeNormalizer
-            .normalize("claude_code.tool", "parent", &attrs, &[])
-            .expect("valid span");
+        let span = normalize("claude_code.tool", "parent", &attrs, &[]).expect("valid span");
         let input: Value = serde_json::from_str(&span.input).expect("argument object");
         assert_eq!(input["file_path"], "/workspace/a.py");
         assert!(
-            !ClaudeCodeNormalizer
-                .consumed_attributes(&attrs)
+            !normalization("claude_code.tool", &attrs, &[])
+                .expect("valid span")
+                .consumed_attributes
                 .contains(&"tool_input")
         );
     }
@@ -295,33 +325,31 @@ mod tests {
         #[case] events: Vec<DecodedEvent>,
         #[case] expected: &str,
     ) {
-        let span = ClaudeCodeNormalizer
-            .normalize(
-                "claude_code.tool",
-                "parent",
-                &attributes(&[
-                    ("span.type", "tool"),
-                    ("new_context", "[TOOL RESULT: Bash]\n{\"stdout\":\"ctx\"}"),
-                ]),
-                &events,
-            )
-            .expect("valid span");
+        let span = normalize(
+            "claude_code.tool",
+            "parent",
+            &attributes(&[
+                ("span.type", "tool"),
+                ("new_context", "[TOOL RESULT: Bash]\n{\"stdout\":\"ctx\"}"),
+            ]),
+            &events,
+        )
+        .expect("valid span");
         assert_eq!(span.output, expected);
     }
 
     #[rstest]
     fn llm_tool_result_context_becomes_tool_message() {
-        let span = ClaudeCodeNormalizer
-            .normalize(
-                "claude_code.llm_request",
-                "parent",
-                &attributes(&[
-                    ("span.type", "llm_request"),
-                    ("new_context", "[TOOL RESULT: toolu_1]\n1\timport os"),
-                ]),
-                &[],
-            )
-            .expect("valid span");
+        let span = normalize(
+            "claude_code.llm_request",
+            "parent",
+            &attributes(&[
+                ("span.type", "llm_request"),
+                ("new_context", "[TOOL RESULT: toolu_1]\n1\timport os"),
+            ]),
+            &[],
+        )
+        .expect("valid span");
         let input: Value = serde_json::from_str(&span.input).expect("messages");
         assert_eq!(input[0]["role"], "tool");
         assert_eq!(input[0]["content"], "1\timport os");
@@ -331,7 +359,7 @@ mod tests {
 
     #[rstest]
     fn llm_token_sum_overflow_is_rejected() {
-        let result = ClaudeCodeNormalizer.normalize(
+        let result = normalize(
             "claude_code.llm_request",
             "parent",
             &attributes(&[
@@ -358,10 +386,7 @@ mod tests {
         } else {
             attributes(&[("span.type", kind)])
         };
-        let span = ClaudeCodeNormalizer
-            .normalize(name, "parent", &attrs, &[])
-            .expect("valid span");
+        let span = normalize(name, "parent", &attrs, &[]).expect("valid span");
         assert_eq!(span.observation_type, expected);
-        assert!(ClaudeCodeNormalizer.matches(CLAUDE_CODE_SCOPE, &attrs));
     }
 }

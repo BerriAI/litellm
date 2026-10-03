@@ -306,6 +306,26 @@ describe("DetailPane", () => {
 });
 
 describe("SpanHoverCard", () => {
+  it.each([
+    ["retriever", "Retriever"],
+    ["embedding", "Embedding"],
+    ["reranker", "Reranker"],
+    ["guardrail", "Guardrail"],
+    ["evaluator", "Evaluator"],
+    ["prompt", "Prompt"],
+    ["decision", "Decision"],
+  ] as const)("renders the %s operation", async (type, label) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <SpanHoverCard facts={spanFacts(span({ type }))} traceStartMs={Date.parse(trace.summary.start_time)}>
+        <button type="button">row</button>
+      </SpanHoverCard>,
+    );
+    await user.hover(screen.getByRole("button", { name: "row" }));
+    const card = await screen.findByTestId("span-hover-card", {}, { timeout: 2000 });
+    expect(within(card).getByText(label)).toBeInTheDocument();
+  });
+
   it("shows absolute Start / End times and the agent tag after hovering the row", async () => {
     const user = userEvent.setup();
     const traceStartMs = Date.parse(trace.summary.start_time);
