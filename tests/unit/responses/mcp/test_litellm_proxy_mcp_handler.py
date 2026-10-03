@@ -1322,6 +1322,7 @@ async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: py
 
 def _toolset_gateway_manager(toolset_id: str, server_id: str) -> types.SimpleNamespace:
     return types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
