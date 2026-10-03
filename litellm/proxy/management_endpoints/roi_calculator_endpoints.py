@@ -16,6 +16,7 @@ from apscheduler.schedulers.asyncio import (  # pyright: ignore[reportMissingTyp
 )
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from starlette.types import Receive, Scope, Send
 
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -303,7 +304,14 @@ def _gateway_http_client() -> AsyncHTTPHandler:
 
 @lru_cache(maxsize=1)
 def _gateway_transport(app: FastAPI) -> httpx.ASGITransport:
-    return httpx.ASGITransport(app=app)
+    async def estimator_request(scope: Scope, receive: Receive, send: Send) -> None:
+        await app(
+            {**scope, "state": {**scope.get("state", {}), "litellm_roi_estimator": True}},
+            receive,
+            send,
+        )
+
+    return httpx.ASGITransport(app=estimator_request)
 
 
 def _completion_caller(settings: ROISettings) -> CompletionCaller:

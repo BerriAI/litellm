@@ -9,14 +9,16 @@ from typing import Final, cast
 import httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
     _estimator_models_from_deployments,
+    _gateway_transport,
     _next_update,
     get_github_transport,
     get_roi_config_repository,
@@ -26,9 +28,56 @@ from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
 )
 from litellm.proxy.roi_calculator.estimator import estimator_options
 from litellm.proxy.roi_calculator.sample import sample_report
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.roi_calculator import ROIReport, ROISettings, ROISummaryResponse, ROISyncStatus
 
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/v1/chat/completions", "/v1/responses", "/v1/messages"))
+@pytest.mark.parametrize("string_metadata", (False, True))
+async def test_only_internal_estimator_transport_can_mark_persisted_spend(path: str, string_metadata: bool) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    app: Final = FastAPI()
+    tags: Final = ("repo:org/repo", "branch:feature", "litellm-roi-estimator")
+    forged: Final = {"tags": tags, "litellm_roi_estimator": True}
+    metadata: Final = json.dumps(forged) if string_metadata else forged
+    body: Final = {"model": "test-model", "metadata": metadata, "litellm_metadata": metadata}
+    now: Final = datetime(2026, 9, 15, tzinfo=timezone.utc)
+
+    @app.post(path)
+    async def log_request(request: Request) -> Mapping[str, object]:
+        data: Final = await add_litellm_data_to_request(
+            data=await request.json(),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", metadata={"litellm_roi_estimator": True}),
+            proxy_config=ProxyConfig(),
+        )
+        payload: Final = get_logging_payload(
+            kwargs={"model": "test-model", "response_cost": 0.25, "litellm_params": data},
+            response_obj={"id": "test-request", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
+            start_time=now,
+            end_time=now,
+        )
+        return {
+            "metadata": json.loads(payload["metadata"]),
+            "tags": json.loads(payload["request_tags"]),
+            "spend": payload["spend"],
+        }
+
+    async with (
+        httpx.AsyncClient(transport=_gateway_transport(app), base_url="http://test") as internal,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as external,
+    ):
+        for client, expected in ((external, False), (internal, True), (external, False)):
+            response: Final = await client.post(path, json=body, headers={"x-litellm-roi-estimator": "true"})
+            assert response.status_code == 200
+            logged: Final = response.json()
+            assert logged["metadata"].get("litellm_roi_estimator") is expected
+            assert set(logged["tags"]) == set(tags)
+            assert logged["spend"] == 0.25
 
 
 @pytest.mark.asyncio

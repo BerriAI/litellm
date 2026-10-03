@@ -541,7 +541,6 @@ class ROICompletionMessage(TypedDict):
 
 class ROICompletionMetadata(TypedDict):
     tags: ReadOnly[tuple[str, ...]]
-    litellm_roi_estimator: ReadOnly[bool]
 
 
 class ROIResponseFormat(TypedDict):

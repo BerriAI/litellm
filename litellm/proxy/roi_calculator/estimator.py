@@ -133,7 +133,6 @@ class Estimator:
         response_format: Final[ROIResponseFormat] = {"type": "json_object"}
         metadata: Final[ROICompletionMetadata] = {
             "tags": ("litellm-roi-estimator",),
-            "litellm_roi_estimator": True,
         }
         request: Final = ROICompletionRequest(
             model=self.settings.estimator_model,
