@@ -2820,6 +2820,7 @@ class DBSpendUpdateWriter:
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
+                timed_completion_tokens=0 if timed_duration_ms is None else cast(int, payload["completion_tokens"]),
             )
             return daily_transaction
         except Exception as e:

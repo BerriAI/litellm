@@ -31,6 +31,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     KeyMetadata,
     KeyMetricWithMetadata,
     MetricWithMetadata,
+    ProviderThroughputMetrics,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
@@ -160,6 +161,9 @@ class DailySpendRecord(Protocol):
     @property
     def timed_requests(self) -> int: ...
 
+    @property
+    def timed_completion_tokens(self) -> int | None: ...
+
 
 class _KeyMetadataDict(TypedDict, total=False):
     key_alias: ReadOnly[str | None]
@@ -234,6 +238,56 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.total_response_time_ms += record.total_response_time_ms or 0
     existing_metrics.timed_requests += record.timed_requests or 0
     return existing_metrics
+
+
+def _provider_throughput(
+    timed_completion_tokens: int | None,
+    total_response_time_ms: int,
+    timed_requests: int,
+) -> ProviderThroughputMetrics:
+    output_tokens_per_second: Final = (
+        timed_completion_tokens * 1000 / total_response_time_ms
+        if timed_completion_tokens is not None and timed_requests > 0 and total_response_time_ms > 0
+        else None
+    )
+    return ProviderThroughputMetrics(
+        timed_completion_tokens=timed_completion_tokens,
+        total_response_time_ms=total_response_time_ms,
+        timed_requests=timed_requests,
+        output_tokens_per_second=output_tokens_per_second,
+    )
+
+
+def _combined_timed_completion_tokens(
+    existing: ProviderThroughputMetrics | None,
+    current: int | None,
+) -> int | None:
+    if existing is None:
+        return current
+    if existing.timed_completion_tokens is None or current is None:
+        return None
+    return existing.timed_completion_tokens + current
+
+
+def _update_provider_throughput(
+    target: MetricWithMetadata,
+    provider: str,
+    record: DailySpendRecord,
+) -> None:
+    existing: Final = target.provider_breakdown.get(provider)
+    timed_completion_tokens: Final = _combined_timed_completion_tokens(
+        existing,
+        record.timed_completion_tokens,
+    )
+    target.provider_breakdown = {
+        **target.provider_breakdown,
+        provider: _provider_throughput(
+            timed_completion_tokens=timed_completion_tokens,
+            total_response_time_ms=(existing.total_response_time_ms if existing is not None else 0)
+            + (record.total_response_time_ms or 0),
+            timed_requests=(existing.timed_requests if existing is not None else 0) + (record.timed_requests or 0),
+        ),
+    }
 
 
 def _is_user_agent_tag(tag: str | None) -> bool:
@@ -312,6 +366,12 @@ def update_breakdown_metrics(
         breakdown.models[model_key].metrics = update_metrics(breakdown.models[model_key].metrics, record)
 
         if not is_ptu_sentinel:
+            _update_provider_throughput(
+                breakdown.models[model_key],
+                record.custom_llm_provider or "unknown",
+                record,
+            )
+
             # Update API key breakdown for this model
             if record.api_key not in breakdown.models[model_key].api_key_breakdown:
                 breakdown.models[model_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
@@ -336,6 +396,12 @@ def update_breakdown_metrics(
         )
 
         if not is_ptu_sentinel:
+            _update_provider_throughput(
+                breakdown.model_groups[model_group_key],
+                record.custom_llm_provider or "unknown",
+                record,
+            )
+
             # Update API key breakdown for this model
             if record.api_key not in breakdown.model_groups[model_group_key].api_key_breakdown:
                 breakdown.model_groups[model_group_key].api_key_breakdown[record.api_key] = KeyMetricWithMetadata(
@@ -697,8 +763,10 @@ _API_KEY_ROLLED_UP_BIT: Final = 32  # 0b0100000
 _GROUP_DATE_API_KEY: Final = 31  # 0b0011111
 _GROUP_DATE_MODEL: Final = 47  # 0b0101111
 _GROUP_DATE_MODEL_API_KEY: Final = 15  # 0b0001111
+_GROUP_DATE_MODEL_PROVIDER: Final = 43  # 0b0101011
 _GROUP_DATE_MODEL_GROUP: Final = 55  # 0b0110111
 _GROUP_DATE_MODEL_GROUP_API_KEY: Final = 23  # 0b0010111
+_GROUP_DATE_MODEL_GROUP_PROVIDER: Final = 51  # 0b0110011
 _GROUP_DATE_PROVIDER: Final = 59  # 0b0111011
 _GROUP_DATE_PROVIDER_API_KEY: Final = 27  # 0b0011011
 _GROUP_DATE_MCP: Final = 61  # 0b0111101
@@ -779,6 +847,35 @@ def _aggregate_grouping_sets_records_sync(
             metrics=metrics, metadata=_key_metadata(api_key_metadata, api_key)
         )
 
+    def assign_provider_breakdown(
+        target: dict[str, MetricWithMetadata],
+        parent_key: str,
+        provider: str,
+        record: GroupingSetsRow,
+    ) -> None:
+        parent: Final = target.get(parent_key)
+        if parent is None:
+            target[parent_key] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata={},
+                provider_breakdown={
+                    provider: _provider_throughput(
+                        record.timed_completion_tokens,
+                        record.total_response_time_ms or 0,
+                        record.timed_requests or 0,
+                    )
+                },
+            )
+            return
+        parent.provider_breakdown = {
+            **parent.provider_breakdown,
+            provider: _provider_throughput(
+                record.timed_completion_tokens,
+                record.total_response_time_ms or 0,
+                record.timed_requests or 0,
+            ),
+        }
+
     for record in records:
         level = record.group_level
         metrics = _record_to_spend_metrics(record)
@@ -806,6 +903,14 @@ def _aggregate_grouping_sets_records_sync(
         elif level == _GROUP_DATE_MODEL_API_KEY:
             if record.model and record.api_key and not is_ptu_sentinel:
                 assign_api_key_breakdown(breakdown.models, record.model, record.api_key, metrics)
+        elif level == _GROUP_DATE_MODEL_PROVIDER:
+            if record.model:
+                assign_provider_breakdown(
+                    breakdown.models,
+                    record.model,
+                    record.custom_llm_provider or "unknown",
+                    record,
+                )
         elif level == _GROUP_DATE_MODEL_GROUP:
             if record.model_group:
                 assign_metric_with_metadata(breakdown.model_groups, record.model_group, metrics)
@@ -816,6 +921,14 @@ def _aggregate_grouping_sets_records_sync(
                     record.model_group,
                     record.api_key,
                     metrics,
+                )
+        elif level == _GROUP_DATE_MODEL_GROUP_PROVIDER:
+            if record.model_group:
+                assign_provider_breakdown(
+                    breakdown.model_groups,
+                    record.model_group,
+                    record.custom_llm_provider or "unknown",
+                    record,
                 )
         elif level == _GROUP_DATE_PROVIDER:
             # Only PTU sentinel rows carry ptu_flat_cost and they have no provider, so at

@@ -76,6 +76,7 @@ const toMetric = (entry: SchemaMetricWithMetadata): MetricWithMetadata => ({
   api_key_breakdown: Object.fromEntries(
     Object.entries(entry.api_key_breakdown ?? {}).map(([key, value]) => [key, toKeyMetric(value)]),
   ),
+  provider_breakdown: entry.provider_breakdown ?? {},
 });
 
 const toMetricMap = (

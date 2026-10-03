@@ -129,7 +129,13 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests,
             SUM(total_response_time_ms)::bigint AS total_response_time_ms,
-            SUM(timed_requests)::bigint AS timed_requests"""
+            SUM(timed_requests)::bigint AS timed_requests,
+            CASE
+                WHEN COUNT(*) FILTER (
+                    WHERE timed_requests > 0 AND timed_completion_tokens IS NULL
+                ) > 0 THEN NULL::bigint
+                ELSE COALESCE(SUM(timed_completion_tokens), 0)::bigint
+            END AS timed_completion_tokens"""
 
 
 def _validate_api_key_limit(api_key_limit: int) -> None:
@@ -177,7 +183,9 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         GROUP BY GROUPING SETS (
             (date),
             (date, model),
+            (date, model, custom_llm_provider),
             (date, {_MODEL_GROUP_EXPR}),
+            (date, {_MODEL_GROUP_EXPR}, custom_llm_provider),
             (date, custom_llm_provider),
             (date, mcp_namespaced_tool_name),
             (date, endpoint),

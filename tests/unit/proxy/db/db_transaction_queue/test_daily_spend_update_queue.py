@@ -40,6 +40,7 @@ async def test_add_single_update(daily_spend_update_queue):
         "spend": 10.0,
         "prompt_tokens": 100,
         "completion_tokens": 50,
+        "timed_completion_tokens": 50,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -73,6 +74,7 @@ async def test_add_multiple_updates(daily_spend_update_queue):
         "spend": 5.0,
         "prompt_tokens": 200,
         "completion_tokens": 30,
+        "timed_completion_tokens": 0,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -105,9 +107,7 @@ async def test_add_multiple_updates(daily_spend_update_queue):
 @pytest.mark.asyncio
 async def test_aggregated_daily_spend_update_empty(daily_spend_update_queue):
     """Test aggregating updates from an empty queue"""
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     assert result == {}
 
 
@@ -127,9 +127,7 @@ async def test_get_aggregated_daily_spend_update_transactions_single_key():
     updates = [{test_key: test_transaction}]
 
     # Test aggregation
-    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-        updates
-    )
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
 
     assert len(result) == 1
     assert test_key in result
@@ -162,9 +160,7 @@ async def test_get_aggregated_daily_spend_update_transactions_multiple_keys():
     updates = [{test_key1: test_transaction1}, {test_key2: test_transaction2}]
 
     # Test aggregation
-    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-        updates
-    )
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
 
     assert len(result) == 2
     assert test_key1 in result
@@ -181,6 +177,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "spend": 10.0,
         "prompt_tokens": 100,
         "completion_tokens": 50,
+        "timed_completion_tokens": 50,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -190,6 +187,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "spend": 5.0,
         "prompt_tokens": 200,
         "completion_tokens": 30,
+        "timed_completion_tokens": 0,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -199,6 +197,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
         "spend": 15.0,  # 10 + 5
         "prompt_tokens": 300,  # 100 + 200
         "completion_tokens": 80,  # 50 + 30
+        "timed_completion_tokens": 50,
         "api_requests": 2,  # 1 + 1
         "successful_requests": 2,  # 1 + 1
         "failed_requests": 0,  # 0 + 0
@@ -216,9 +215,7 @@ async def test_get_aggregated_daily_spend_update_transactions_same_key():
     updates = [{test_key: test_transaction1}, {test_key: test_transaction2}]
 
     # Test aggregation
-    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
-        updates
-    )
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
 
     assert len(result) == 1
     assert test_key in result
@@ -235,6 +232,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "spend": 10.0,
         "prompt_tokens": 100,
         "completion_tokens": 50,
+        "timed_completion_tokens": 50,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -244,6 +242,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "spend": 5.0,
         "prompt_tokens": 200,
         "completion_tokens": 30,
+        "timed_completion_tokens": 0,
         "api_requests": 1,
         "successful_requests": 1,
         "failed_requests": 0,
@@ -253,6 +252,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
         "spend": 15.0,  # 10 + 5
         "prompt_tokens": 300,  # 100 + 200
         "completion_tokens": 80,  # 50 + 30
+        "timed_completion_tokens": 50,
         "api_requests": 2,  # 1 + 1
         "successful_requests": 2,  # 1 + 1
         "failed_requests": 0,  # 0 + 0
@@ -272,9 +272,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
     await daily_spend_update_queue.add_update({test_key: test_transaction2})
 
     # Flush and get aggregated transactions
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
 
     assert len(result) == 1
     assert test_key in result
@@ -282,9 +280,7 @@ async def test_flush_and_get_aggregated_daily_spend_update_transactions(
 
 
 @pytest.mark.asyncio
-async def test_queue_max_size_triggers_aggregation(
-    monkeypatch, daily_spend_update_queue
-):
+async def test_queue_max_size_triggers_aggregation(monkeypatch, daily_spend_update_queue):
     """Test that reaching MAX_SIZE_IN_MEMORY_QUEUE triggers aggregation"""
     # Override MAX_SIZE_IN_MEMORY_QUEUE for testing
     litellm._turn_on_debug()
@@ -308,9 +304,7 @@ async def test_queue_max_size_triggers_aggregation(
     assert daily_spend_update_queue.update_queue.qsize() == 1
 
     # Verify the aggregated values
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     assert result[test_key]["spend"] == 6.0
     assert result[test_key]["prompt_tokens"] == 600
     assert result[test_key]["completion_tokens"] == 300
@@ -427,9 +421,7 @@ async def test_cache_token_fields_aggregation(daily_spend_update_queue):
 
 
 @pytest.mark.asyncio
-async def test_queue_size_reduction_with_large_volume(
-    monkeypatch, daily_spend_update_queue
-):
+async def test_queue_size_reduction_with_large_volume(monkeypatch, daily_spend_update_queue):
     """Test that queue size is actually reduced when dealing with many items"""
     # Set a smaller MAX_SIZE for testing
     monkeypatch.setattr(daily_spend_update_queue, "MAX_SIZE_IN_MEMORY_QUEUE", 10)
@@ -470,9 +462,7 @@ async def test_queue_size_reduction_with_large_volume(
     assert daily_spend_update_queue.update_queue.qsize() <= 10
 
     # Verify total costs are correct
-    result = (
-        await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
-    )
+    result = await daily_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
     print("RESULT", json.dumps(result, indent=4))
 
     assert result[user1_key]["spend"] == 200 * 0.5  # 10.0
@@ -545,6 +535,7 @@ async def test_every_optional_daily_metric_aggregates(daily_spend_update_queue):
     paths, so the driver reads as zero on the dashboard however much it saved.
     """
     test_key = "user1_2023-01-01_key123_claude-haiku-4-5_anthropic"
+
     def _numeric(annotation):
         # additive metrics may be declared NotRequired[float] for rows queued by a pod
         # running the previous release, so unwrap before matching
@@ -584,7 +575,15 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
 
     await daily_spend_update_queue.add_update({test_key: dict(base)})
     await daily_spend_update_queue.add_update(
-        {test_key: {**base, "autorouter_savings_spend": 0.25, "total_response_time_ms": 900, "timed_requests": 1}}
+        {
+            test_key: {
+                **base,
+                "autorouter_savings_spend": 0.25,
+                "total_response_time_ms": 900,
+                "timed_requests": 1,
+                "timed_completion_tokens": 5,
+            }
+        }
     )
     await daily_spend_update_queue.aggregate_queue_updates()
     updates = await daily_spend_update_queue.flush_all_updates_from_in_memory_queue()
@@ -592,3 +591,22 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
     assert updates[0][test_key]["autorouter_savings_spend"] == pytest.approx(0.25)
     assert updates[0][test_key]["total_response_time_ms"] == 900
     assert updates[0][test_key]["timed_requests"] == 1
+    assert updates[0][test_key]["timed_completion_tokens"] == 5
+
+
+def test_legacy_timed_request_keeps_timed_tokens_unknown():
+    key = "user1_2023-01-01_key123_gpt-4o_openai"
+    base = {
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "timed_requests": 1,
+    }
+    updates = [{key: base}, {key: {**base, "timed_completion_tokens": 5}}]
+
+    aggregated = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
+
+    assert aggregated[key]["timed_completion_tokens"] is None

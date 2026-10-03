@@ -56,10 +56,18 @@ class KeyMetricWithMetadata(MetricBase):
     metadata: KeyMetadata = Field(default_factory=KeyMetadata)
 
 
+class ProviderThroughputMetrics(BaseModel):
+    timed_completion_tokens: int | None = Field(default=None)
+    total_response_time_ms: int = Field(default=0)
+    timed_requests: int = Field(default=0)
+    output_tokens_per_second: float | None = Field(default=None)
+
+
 class MetricWithMetadata(MetricBase):
     metadata: dict[str, Any] = Field(default_factory=dict)
     # API key breakdown for this metric (e.g., which API keys are using this MCP server)
     api_key_breakdown: dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+    provider_breakdown: dict[str, ProviderThroughputMetrics] = Field(default_factory=dict)
 
 
 class BreakdownMetrics(BaseModel):

@@ -4,6 +4,7 @@ import {
   type ChartTooltipProps,
   CustomLegend,
   CustomTooltip,
+  DEFAULT_COLOR_CYCLE,
   formatCategoryName,
   LineChart,
   ValueTooltip,
@@ -18,7 +19,13 @@ import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
 import type { ModelTopKeysResponse } from "./UsagePage/dailyActivityApi";
-import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopModelData } from "./UsagePage/types";
+import {
+  DailyData,
+  KeyMetricWithMetadata,
+  MetricWithMetadata,
+  ModelActivityData,
+  TopModelData,
+} from "./UsagePage/types";
 import { averageResponseTimeMs, formatResponseTime, valueFormatter } from "./UsagePage/utils/value_formatters";
 
 interface ActivityMetricsProps {
@@ -40,6 +47,30 @@ export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProp
     valueFormatter={formatResponseTime}
   />
 );
+
+const formatTokensPerSecond = (value: number): string =>
+  `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} tokens/s`;
+
+export const providerThroughputChartData = (dailyData: ModelActivityData["daily_data"]) => {
+  const providers = Array.from(new Set(dailyData.flatMap((day) => Object.keys(day.provider_throughput ?? {}))))
+    .filter((provider) =>
+      dailyData.some((day) => {
+        const value = day.provider_throughput?.[provider];
+        return typeof value === "number" && Number.isFinite(value);
+      }),
+    )
+    .sort();
+  const data = dailyData.map((day) => ({
+    date: day.date,
+    ...Object.fromEntries(
+      providers.map((provider) => {
+        const value = day.provider_throughput?.[provider];
+        return [provider, typeof value === "number" && Number.isFinite(value) ? value : null];
+      }),
+    ),
+  }));
+  return { providers, data };
+};
 
 const ModelTopKeys = ({
   modelName,
@@ -178,6 +209,8 @@ export const ModelSection = ({
   hidePromptCachingMetrics?: boolean;
   fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
 }) => {
+  const throughputChart = providerThroughputChartData(metrics.daily_data);
+
   return (
     <div className="space-y-2">
       {/* Summary Cards */}
@@ -310,6 +343,27 @@ export const ModelSection = ({
                 valueFormatter={formatResponseTime}
                 customTooltip={ResponseTimeTooltip}
                 connectNulls={true}
+                showLegend={false}
+              />
+            </CardContent>
+          </Card>
+        )}
+
+        {throughputChart.providers.length > 0 && (
+          <Card>
+            <CardContent>
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-medium text-foreground">Output tokens per second of response time</h3>
+                <CustomLegend categories={throughputChart.providers} colors={DEFAULT_COLOR_CYCLE} />
+              </div>
+              <LineChart
+                className="mt-4"
+                data={throughputChart.data}
+                index="date"
+                categories={throughputChart.providers}
+                colors={DEFAULT_COLOR_CYCLE}
+                valueFormatter={formatTokensPerSecond}
+                connectNulls={false}
                 showLegend={false}
               />
             </CardContent>
@@ -683,6 +737,13 @@ export const processActivityData = (
       modelMetrics[model].total_response_time_ms =
         (modelMetrics[model].total_response_time_ms ?? 0) + dayResponseTimeMs;
       modelMetrics[model].total_timed_requests = (modelMetrics[model].total_timed_requests ?? 0) + dayTimedRequests;
+      const providerBreakdown = (modelData as MetricWithMetadata).provider_breakdown ?? {};
+      const providerThroughput = Object.fromEntries(
+        Object.entries(providerBreakdown).map(([provider, providerMetrics]) => [
+          provider,
+          providerMetrics.output_tokens_per_second ?? null,
+        ]),
+      );
 
       // Add daily data
       modelMetrics[model].daily_data.push({
@@ -699,6 +760,7 @@ export const processActivityData = (
           cache_creation_input_tokens: modelData.metrics.cache_creation_input_tokens || 0,
           avg_response_time_ms: averageResponseTimeMs(dayResponseTimeMs, dayTimedRequests),
         },
+        ...(Object.keys(providerThroughput).length > 0 ? { provider_throughput: providerThroughput } : {}),
       });
     });
   });

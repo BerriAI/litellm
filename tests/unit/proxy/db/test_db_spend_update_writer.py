@@ -103,11 +103,21 @@ async def test_update_database_attributes_router_rejected_failure_to_model_group
     )
 
     with (
-        patch("litellm.proxy.proxy_server.disable_spend_logs", True),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
-        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
-        patch("litellm.proxy.proxy_server.llm_router", llm_router),  # test-quality-ok: get_llm_router reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.disable_spend_logs", True
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock()
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.llm_router", llm_router
+        ),  # test-quality-ok: get_llm_router reads this proxy_server module global at call time; no injection seam
     ):
         await db_writer.update_database(
             token="test-token",
@@ -320,7 +330,9 @@ async def test_a_routed_request_reaches_the_auto_router_rollup_whether_or_not_sp
     }
 
     with (
-        patch("litellm.proxy.proxy_server.disable_spend_logs", disable_spend_logs),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch(
+            "litellm.proxy.proxy_server.disable_spend_logs", disable_spend_logs
+        ),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
         patch(
@@ -2912,17 +2924,22 @@ async def test_daily_transaction_carries_compression_saved_tokens():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("estimate, recorded_savings, expected", [
-    pytest.param(None, None, -0.005, id="plain-classifier-cost"),
-    pytest.param({"version": 1, "status": "unknown"}, None, 0.0, id="unknown"),
-    pytest.param({"version": 2, "status": "unknown"}, None, 0.0, id="unknown-v2"),
-    pytest.param({"version": 1, "status": "unknown"}, -0.003, 0.0, id="unknown-stale-value"),
-    pytest.param({"version": 0, "status": "estimated"}, -0.003, 0.0, id="unsupported-version"),
-    pytest.param({"version": 1, "status": "estimated"}, -0.003, -0.003, id="estimated"),
-    pytest.param(None, -0.003, -0.003, id="legacy"),
-])
+@pytest.mark.parametrize(
+    "estimate, recorded_savings, expected",
+    [
+        pytest.param(None, None, -0.005, id="plain-classifier-cost"),
+        pytest.param({"version": 1, "status": "unknown"}, None, 0.0, id="unknown"),
+        pytest.param({"version": 2, "status": "unknown"}, None, 0.0, id="unknown-v2"),
+        pytest.param({"version": 1, "status": "unknown"}, -0.003, 0.0, id="unknown-stale-value"),
+        pytest.param({"version": 0, "status": "estimated"}, -0.003, 0.0, id="unsupported-version"),
+        pytest.param({"version": 1, "status": "estimated"}, -0.003, -0.003, id="estimated"),
+        pytest.param(None, -0.003, -0.003, id="legacy"),
+    ],
+)
 async def test_daily_transaction_compression_saved_tokens_zero_when_absent(
-    estimate: dict[str, object] | None, recorded_savings: float | None, expected: float,
+    estimate: dict[str, object] | None,
+    recorded_savings: float | None,
+    expected: float,
 ) -> None:
     """Requests without any compression metadata produce a zero count."""
     writer = DBSpendUpdateWriter()
@@ -2941,12 +2958,14 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent(
         "prompt_tokens": 100,
         "completion_tokens": 10,
         "spend": 0.01,
-        "metadata": json.dumps({
-            "usage_object": {"prompt_tokens": 100, "completion_tokens": 10},
-            "routing_decision": {"savings_baseline_model": "anthropic/claude-sonnet-5", "classifier_cost": 0.005},
-            "autorouter_savings": recorded_savings,
-            "autorouter_savings_estimate": estimate,
-        }),
+        "metadata": json.dumps(
+            {
+                "usage_object": {"prompt_tokens": 100, "completion_tokens": 10},
+                "routing_decision": {"savings_baseline_model": "anthropic/claude-sonnet-5", "classifier_cost": 0.005},
+                "autorouter_savings": recorded_savings,
+                "autorouter_savings_estimate": estimate,
+            }
+        ),
     }
 
     transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
@@ -3439,9 +3458,7 @@ async def test_failed_per_entity_increment_from_redis_restores_only_what_may_sti
         )
 
     mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
-    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs[
-        "db_spend_update_transactions"
-    ]
+    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs["db_spend_update_transactions"]
     assert restored["user_list_transactions"] is None
     assert restored["team_list_transactions"] == {"team-1": 1.5}
     assert restored["key_list_transactions"] == ({"key-1": 1.5} if safe_to_resend else None)
@@ -3758,6 +3775,7 @@ async def test_daily_transaction_rolls_up_response_time_for_successful_requests(
     assert transaction is not None
     assert transaction["total_response_time_ms"] == request_duration_ms
     assert transaction["timed_requests"] == 1
+    assert transaction["timed_completion_tokens"] == 5
 
 
 @pytest.mark.asyncio
@@ -3790,6 +3808,7 @@ async def test_daily_transaction_excludes_untimed_requests_from_response_time(
     assert transaction is not None
     assert transaction["total_response_time_ms"] == 0
     assert transaction["timed_requests"] == 0
+    assert transaction["timed_completion_tokens"] == 0
 
 
 def _deadlock_error():
