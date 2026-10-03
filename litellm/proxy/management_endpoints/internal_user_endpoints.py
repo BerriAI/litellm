@@ -3007,6 +3007,7 @@ async def get_user_daily_activity(
             detail={"error": f"Failed to fetch analytics: {e}"},
         )
 
+
 @router.get(
     "/user/daily/activity/aggregated",
     tags=["Budget & Spend Tracking", "Internal User management"],
@@ -3055,9 +3056,7 @@ async def get_user_daily_activity_aggregated(
         )
         if isinstance(resolved_entity_ids, ScopeDenied):
             raise_public(resolved_entity_ids)
-        requested_user_id: Final[str | None] = (
-            resolved_entity_ids[0] if resolved_entity_ids is not None else None
-        )
+        requested_user_id: Final[str | None] = resolved_entity_ids[0] if resolved_entity_ids is not None else None
         api_key_filter: Final = (
             api_key
             if requested_user_id is None
