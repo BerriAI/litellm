@@ -9,10 +9,12 @@ import litellm
 from unittest.mock import MagicMock, patch, AsyncMock
 
 
+from datetime import datetime, timezone
 import httpx
 import math
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.proxy.utils import update_spend
+from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+from litellm.proxy.utils import MAX_TOOL_USAGE_TRANSACTIONS_IN_MEMORY, update_spend, update_spend_logs_job
 
 # The flush chunks the queue by BATCH_SIZE and then splits each chunk by the row
 # budget, so statement counts below are derived from both rather than hardcoded.
@@ -31,6 +33,8 @@ class MockPrismaClient:
         self.db = AsyncMock()
         self.db.litellm_spendlogs = AsyncMock()
         self.db.litellm_spendlogs.create_many = AsyncMock()
+        self.db.litellm_spendlogtoolindex = AsyncMock()
+        self.db.litellm_spendlogtoolindex.create_many = AsyncMock()
 
         # Initialize transaction lists
         self.spend_log_transactions = []
@@ -323,3 +327,113 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_transactions_requeued_on_safe_connection_error():
+    """
+    Test that when tool usage flush encounters a safe pre-send connection error,
+    the popped batch is requeued at the head of the queue instead of being permanently dropped.
+    Tests the real flush function using dependency injection without mocking litellm internals.
+    """
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    # Pre-populate tool usage transactions
+    initial_transactions = [
+        ToolUsageTransaction(
+            request_id="req_1",
+            date="2026-09-27",
+            start_time=datetime.now(timezone.utc),
+            tool_names=("calculator",),
+            spend=0.01,
+            total_tokens=100,
+        ),
+        ToolUsageTransaction(
+            request_id="req_2",
+            date="2026-09-27",
+            start_time=datetime.now(timezone.utc),
+            tool_names=("web_search",),
+            spend=0.02,
+            total_tokens=200,
+        ),
+    ]
+    prisma_client.tool_usage_transactions = list(initial_transactions)
+
+    # Fail create_many on the injected database client with ConnectError
+    prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock(
+        side_effect=httpx.ConnectError("Can't reach database server")
+    )
+
+    with patch("asyncio.sleep", AsyncMock(return_value=None)):
+        await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    # Tool usage transactions should be safely requeued at the head of the queue
+    assert len(prisma_client.tool_usage_transactions) == 2
+    assert prisma_client.tool_usage_transactions == initial_transactions
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_transactions_dropped_on_ambiguous_or_data_error():
+    """
+    Test that when tool usage flush fails due to an ambiguous post-send error (e.g. ReadTimeout)
+    or data payload error, the batch is dropped so it does not double-count or loop forever.
+    """
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    prisma_client.tool_usage_transactions = [
+        ToolUsageTransaction(
+            request_id="req_1",
+            date="2026-09-27",
+            start_time=datetime.now(timezone.utc),
+            tool_names=("poison_tool",),
+            spend=0.05,
+            total_tokens=50,
+        ),
+    ]
+
+    # Post-send read timeout is ambiguous: must be dropped to prevent duplicate increments
+    prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock(
+        side_effect=httpx.ReadTimeout("Read timed out")
+    )
+
+    with patch("asyncio.sleep", AsyncMock(return_value=None)):
+        await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    assert len(prisma_client.tool_usage_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_transactions_queue_bounded_on_requeue():
+    """
+    Test that when requeuing tool usage transactions during persistent errors,
+    the queue is capped at MAX_TOOL_USAGE_TRANSACTIONS_IN_MEMORY to prevent memory exhaustion.
+    """
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    # Pre-populate queue to limit
+    now = datetime.now(timezone.utc)
+    base_txn = ToolUsageTransaction(
+        request_id="req_fill",
+        date="2026-09-27",
+        start_time=now,
+        tool_names=("calc",),
+        spend=0.01,
+        total_tokens=10,
+    )
+    prisma_client.tool_usage_transactions = [base_txn] * (MAX_TOOL_USAGE_TRANSACTIONS_IN_MEMORY - 5)
+
+    # Injected database client fails with ConnectError
+    prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
+
+    with patch("asyncio.sleep", AsyncMock(return_value=None)):
+        await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    # Queue must not exceed the bounded memory limit
+    assert len(prisma_client.tool_usage_transactions) <= MAX_TOOL_USAGE_TRANSACTIONS_IN_MEMORY
+
+
