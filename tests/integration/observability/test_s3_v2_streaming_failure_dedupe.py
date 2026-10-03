@@ -43,14 +43,6 @@ def _surface_target(surface: Surface) -> str:
     }[surface]
 
 
-def _expected_upstream_target(surface: Surface) -> str:
-    return {
-        "chat": "/v1/chat/completions",
-        "messages": "/v1/v1/messages",
-        "responses": "/v1/responses",
-    }[surface]
-
-
 def _surface_request(
     candidate: Gateway,
     surface: Surface,
@@ -104,7 +96,7 @@ def _register_models(scenario: Scenario, upstream_url: str) -> tuple[str, str]:
     )
     anthropic_model: Final = scenario.model(
         model="anthropic/claude-sonnet-4-5-20250929",
-        api_base=upstream_url + "/v1",
+        api_base=upstream_url,
         api_key="synthetic-provider-key",
     )
     return openai_model, anthropic_model
@@ -120,7 +112,7 @@ def _request_key(payload: dict[str, JsonValue], response: httpx.Response, marker
 
 
 def _assert_upstream_requests(requests: tuple[Request, ...], surface: Surface, expected: int) -> None:
-    target: Final = _expected_upstream_target(surface)
+    target: Final = _surface_target(surface)
     observed: Final = tuple(request.target for request in requests)
     assert len(requests) == expected, f"expected {expected} upstream POSTs, observed {len(requests)}: {observed}"
     assert all(request.method == "POST" for request in requests), requests
@@ -350,7 +342,7 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             upstream_requests: Final = upstream.drain()
             route_counts: Final = Counter(request.target for request in upstream_requests)
             expected_route_counts: Final = {
-                _expected_upstream_target(surface): 2 * requests_per_variant * 3 for surface in SURFACES
+                _surface_target(surface): 2 * requests_per_variant * 3 for surface in SURFACES
             }
             assert len(upstream_requests) == len(jobs) * 3, (
                 f"expected {len(jobs) * 3} upstream POSTs, observed {len(upstream_requests)}: {route_counts}"
