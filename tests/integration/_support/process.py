@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 import socket
@@ -123,6 +124,30 @@ class _Launch:
     log: Path
 
 
+def _stop_launch(launch: _Launch) -> None:
+    started: Final = time.monotonic()
+    exit_before: Final = launch.process.poll()
+    exception_before: Final = sys.exc_info()[0]
+    try:
+        _stop(launch.process)
+    finally:
+        exception_at_record: Final = sys.exc_info()[0]
+        launch.log.with_suffix(".exit.json").write_text(
+            json.dumps(
+                {
+                    "root_pid": launch.process.pid,
+                    "exit_before_stop": exit_before,
+                    "exit_after_stop": launch.process.poll(),
+                    "exception_before_stop": exception_before.__name__ if exception_before else None,
+                    "exception_at_record": exception_at_record.__name__ if exception_at_record else None,
+                    "cleanup_seconds": time.monotonic() - started,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
+
 def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path) -> _Launch:
     port: Final = _free_port()
     log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
@@ -165,11 +190,11 @@ def _launch_until_bound(
             "Owned proxy exited before readiness"
         )
     except BaseException:
-        _stop(launch.process)
+        _stop_launch(launch)
         raise
     if launch.process.poll() is None:
         return launch
-    _stop(launch.process)
+    _stop_launch(launch)
     return _launch_until_bound(command, root, environment, output, attempts - 1)
 
 
@@ -219,4 +244,4 @@ def owned_proxy_process(
         ) as client:
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log)
     finally:
-        _stop(process)
+        _stop_launch(launch)
