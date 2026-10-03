@@ -10360,9 +10360,6 @@ async def test_authoritative_group_grants_propagate_policy_outages(
         assert await _get_agent_ids_from_access_groups(["group"]) == []
 
 
-# Tag ownership enforcement tests
-
-
 def _ownership_prisma(tag_rows=(), registry_rows=None):
     """Prisma boundary: find_many serves the names-only registry query and the
     per-name batch query. ``registry_rows`` defaults to every row's name."""
