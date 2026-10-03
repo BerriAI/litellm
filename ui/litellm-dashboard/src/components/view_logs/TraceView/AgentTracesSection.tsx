@@ -215,8 +215,11 @@ export function AgentTracesSection({
             live={isLiveTail}
             showLive={!demo}
             onLiveChange={timeControls.onLiveChange}
-            zoomed={zoom !== null}
-            onResetZoom={() => setZoom(null)}
+            onRefresh={() => {
+              setZoom(null);
+              checkTraces();
+            }}
+            refreshing={traces.isFetching}
           />
         )}
       </RunsToolbar>

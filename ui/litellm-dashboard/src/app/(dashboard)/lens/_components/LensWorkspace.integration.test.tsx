@@ -31,6 +31,8 @@ describe("Lens interactive demo", () => {
     expect(screen.getByText("You’re viewing demo data")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Set up tracing" })).not.toBeInTheDocument();
     network.mockClear();
+    await user.click(screen.getByRole("button", { name: "Refresh", exact: true }));
+    expect(screen.getByText("Where is order #1042?")).toBeVisible();
     fireEvent.change(screen.getByPlaceholderText("Search input or trace ID"), { target: { value: "headphones" } });
     expect(screen.getByText("Can I return my headphones?")).toBeVisible();
     expect(screen.queryByText("Where is order #1042?")).not.toBeInTheDocument();
