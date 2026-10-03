@@ -137,6 +137,34 @@ def test_proxy_decisions_dispatches_typesafe_deployment(
     }
 
 
+def test_proxy_decisions_sends_the_env_key_to_the_deployment_api_base(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("PERPLEXITYAI_API_KEY", "server-key")
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {
+                    "model": "perplexity/pplx-decider-v1-27b",
+                    "api_base": "https://egress.example/perplexity",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post("https://egress.example/perplexity/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post("/v1/decisions", json=_REQUEST)
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer server-key"
+
+
 def test_proxy_decisions_unknown_model_is_a_client_error(
     client: TestClient,
     respx_mock: respx.MockRouter,

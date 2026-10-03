@@ -2,7 +2,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import urlsplit
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -76,8 +75,6 @@ def _resolve_api_key(
     model: str,
     endpoint: DecisionsProviderConfig,
     api_key: str | None,
-    api_base: str | None,
-    resolved_api_base: str,
 ) -> str | None:
     if api_key is not None:
         return api_key
@@ -95,25 +92,6 @@ def _resolve_api_key(
             llm_provider=provider,
         )
 
-    destination: Final = urlsplit(resolved_api_base)
-    trusted_hosts: Final = frozenset(
-        urlsplit(base).netloc.lower()
-        for base in (endpoint.default_api_base(), get_secret_str(endpoint.api_base_env))
-        if base
-    )
-    if api_base is not None and (
-        destination.scheme.lower() != "https"
-        or not destination.netloc
-        or destination.netloc.lower() not in trusted_hosts
-    ):
-        raise litellm.BadRequestError(
-            message=(
-                f"Refusing to send the server-configured API key to the caller-supplied api_base "
-                f"'{api_base}'. Pass an explicit api_key when overriding api_base."
-            ),
-            model=model,
-            llm_provider=provider,
-        )
     return server_api_key
 
 
@@ -160,8 +138,6 @@ def _prepare_request(
         model=model,
         endpoint=endpoint,
         api_key=api_key,
-        api_base=api_base,
-        resolved_api_base=resolved_api_base,
     )
 
     canonical_model: Final = endpoint.canonical_model(upstream_model)

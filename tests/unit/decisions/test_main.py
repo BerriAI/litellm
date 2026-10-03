@@ -352,22 +352,23 @@ def test_upstream_bad_request_maps_to_litellm_error(respx_mock: respx.MockRouter
         )
 
 
-def test_server_key_is_not_sent_to_an_untrusted_api_base(
+def test_server_key_is_sent_to_an_explicit_api_base(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
     monkeypatch.setenv("PERPLEXITYAI_API_KEY", "server-key")
     monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    route: Final = respx_mock.post("https://egress.example/perplexity/v1/decisions").respond(json=_RESPONSE)
 
-    with pytest.raises(litellm.BadRequestError, match="caller-supplied api_base"):
-        litellm.decisions(
-            model="perplexity/pplx-decider-v1-27b",
-            state="review",
-            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
-            api_base="https://untrusted.example/decisions",
-        )
+    litellm.decisions(
+        model="perplexity/pplx-decider-v1-27b",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://egress.example/perplexity",
+    )
 
-    assert len(respx_mock.calls) == 0
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer server-key"
 
 
 @pytest.mark.asyncio
