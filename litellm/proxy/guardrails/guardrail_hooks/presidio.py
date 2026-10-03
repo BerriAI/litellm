@@ -859,7 +859,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
         sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
-        seq_map: Final = {}
+        seq_map: Final[dict[tuple[int, int], int]] = {}
         for idx, ar in enumerate(sorted_forward, start=1):
             seq_map[(ar["start"], ar["end"])] = idx
 
