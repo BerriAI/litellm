@@ -714,9 +714,11 @@ def test_default_health_check_mode_falls_back_to_cost_map_then_chat(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode_kwargs", [{}, {"mode": None}], ids=["omitted", "explicit_none"])
 async def test_ahealth_check_probes_mantle_claude_through_messages_without_mode(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    mode_kwargs: dict[str, None],
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -739,8 +741,8 @@ async def test_ahealth_check_probes_mantle_claude_through_messages_without_mode(
             "api_key": "test-bearer",
             "aws_region_name": "us-east-2",
         },
-        mode=None,
         prompt="test from litellm",
+        **mode_kwargs,
     )
 
     assert "error" not in result, result

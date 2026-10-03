@@ -8724,7 +8724,7 @@ def speech(
 
 async def ahealth_check(
     model_params: dict,
-    mode: str | None = "chat",
+    mode: str | None = None,
     prompt: str | None = None,
     input: list | None = None,
 ):
