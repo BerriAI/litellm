@@ -1,11 +1,21 @@
 """Helpers for unauthenticated logo / favicon endpoints."""
 
 import os
+from importlib.resources import files as package_files
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
 LOCAL_IMAGE_HEADER_BYTES: Final = 512
+
+
+def get_packaged_ui_directory() -> str | None:
+    try:
+        return str(package_files("litellm_proxy_extras").joinpath("ui"))
+    except ModuleNotFoundError as error:
+        if error.name != "litellm_proxy_extras":
+            raise
+        return None
 
 
 def detect_local_image_media_type(header: bytes) -> str | None:

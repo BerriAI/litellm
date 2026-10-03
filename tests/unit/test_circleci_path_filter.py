@@ -54,6 +54,7 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("mcp-dependencies", ["litellm/experimental_mcp_client/client.py"], "run"),
         ("mcp-dependencies", ["tests/e2e/mcp/oauth_chat_client.py"], "run"),
         ("mcp-dependencies", ["litellm-proxy-extras/pyproject.toml"], "run"),
+        ("mcp-dependencies", ["litellm-proxy-extras/litellm_proxy_extras/ui/index.html"], "run"),
         ("mcp-dependencies", ["scripts/check_mcp_sdk_install.py"], "run"),
         ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
         ("mcp-dependencies", [".circleci/scripts/classify_changes.sh"], "run"),
