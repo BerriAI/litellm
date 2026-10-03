@@ -188,10 +188,9 @@ _OBJECT_PREFIXES: Final[frozenset[str]] = frozenset({"batch_", "resp_"})
 _MAX_BODY_REWRITE_DEPTH: Final = 64
 
 # Caps the distinct raw-provider-id guard lookups issued per request. A raw
-# file-id guard is an unindexed array-containment scan over
-# LiteLLM_ManagedFileTable (flat_model_file_ids has no index), so a body packed
-# with id-shaped strings could otherwise amplify one request into thousands of
-# full-table scans. Legitimate callers reference managed IDs (resolved via an
+# file-id guard is an array-containment lookup over LiteLLM_ManagedFileTable,
+# so a body packed with id-shaped strings could otherwise amplify one request
+# into thousands of lookups. Legitimate callers reference managed IDs (resolved via an
 # indexed lookup, never the guard), so guarding more raw ids than this only
 # happens under abuse; the request is rejected rather than skipping the guard.
 _MAX_RAW_ID_GUARD_LOOKUPS: Final = 100
