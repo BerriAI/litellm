@@ -22,6 +22,7 @@ func newKeyResourceData(t *testing.T, raw map[string]interface{}) *schema.Resour
 
 func TestMapResourceDataToKeyNewFields(t *testing.T) {
 	d := newKeyResourceData(t, map[string]interface{}{
+		"key_type":                   "llm_api",
 		"budget_id":                  "budget-1",
 		"enforced_params":            []interface{}{"user"},
 		"allowed_routes":             []interface{}{"/chat/completions"},
@@ -36,6 +37,9 @@ func TestMapResourceDataToKeyNewFields(t *testing.T) {
 	key := &Key{}
 	mapResourceDataToKey(d, key)
 
+	if key.KeyType != "llm_api" {
+		t.Errorf("KeyType = %q, want llm_api", key.KeyType)
+	}
 	if key.BudgetID != "budget-1" {
 		t.Errorf("BudgetID = %q, want budget-1", key.BudgetID)
 	}
@@ -139,6 +143,7 @@ func TestParseKeyResponseNewFields(t *testing.T) {
 	client := NewClient("http://localhost:4000", "test-key", true)
 	resp := map[string]interface{}{
 		"key":                        "sk-test",
+		"key_type":                   "llm_api",
 		"budget_id":                  "budget-1",
 		"enforced_params":            []interface{}{"user"},
 		"allowed_routes":             []interface{}{"/chat/completions"},
@@ -153,6 +158,9 @@ func TestParseKeyResponseNewFields(t *testing.T) {
 	key, err := client.parseKeyResponse(resp)
 	if err != nil {
 		t.Fatalf("parseKeyResponse returned error: %v", err)
+	}
+	if key.KeyType != "llm_api" {
+		t.Errorf("KeyType = %q, want llm_api", key.KeyType)
 	}
 	if key.BudgetID != "budget-1" || key.OrganizationID != "org-1" || key.ProjectID != "proj-1" {
 		t.Errorf("string fields not parsed: %+v", key)
@@ -183,7 +191,10 @@ func TestCreateKeySendsConfigSuppliedKey(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-key", true)
-	d := newKeyResourceData(t, map[string]interface{}{"key": "sk-custom"})
+	d := newKeyResourceData(t, map[string]interface{}{
+		"key":      "sk-custom",
+		"key_type": "llm_api",
+	})
 
 	diags := resourceKeyCreate(context.Background(), d, client)
 	if diags.HasError() {
@@ -192,8 +203,60 @@ func TestCreateKeySendsConfigSuppliedKey(t *testing.T) {
 	if captured["key"] != "sk-custom" {
 		t.Errorf("create payload key = %v, want sk-custom", captured["key"])
 	}
+	if captured["key_type"] != "llm_api" {
+		t.Errorf("create payload key_type = %v, want llm_api", captured["key_type"])
+	}
 	if d.Id() != "hash-1" {
 		t.Errorf("resource ID = %q, want hash-1", d.Id())
+	}
+}
+
+func TestKeyTypeRejectsUnknownValue(t *testing.T) {
+	_, errs := resourceKey().Schema["key_type"].ValidateFunc("unrestricted", "key_type")
+	if len(errs) == 0 {
+		t.Fatal("key_type accepted an unknown value")
+	}
+}
+
+func TestKeyTypeChangeForcesReplacement(t *testing.T) {
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{"key_type": "default"})
+	priorData.SetId("hash-1")
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_type": "llm_api"})
+	diff, err := res.Diff(context.Background(), priorData.State(), config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff == nil || !diff.RequiresNew() {
+		t.Fatalf("changing key_type must force replacement, diff = %+v", diff)
+	}
+}
+
+func TestKeyTypePresetRoutesDoNotDrift(t *testing.T) {
+	cases := map[string]struct {
+		read   *Key
+		config map[string]interface{}
+	}{
+		"llm_api preset":    {read: &Key{KeyType: "llm_api", AllowedRoutes: []string{"llm_api_routes"}}, config: map[string]interface{}{"key_type": "llm_api"}},
+		"default no routes": {read: &Key{KeyType: "default"}, config: map[string]interface{}{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			res := resourceKey()
+			priorData := newKeyResourceData(t, map[string]interface{}{})
+			priorData.SetId("hash-1")
+			if err := priorData.Set("server_metadata", serverKeyMetadata(tc.read.Metadata)); err != nil {
+				t.Fatalf("set server_metadata: %v", err)
+			}
+			mapKeyToResourceData(priorData, tc.read)
+			diff, err := res.Diff(context.Background(), priorData.State(), terraform.NewResourceConfigRaw(tc.config), nil)
+			if err != nil {
+				t.Fatalf("diff failed: %v", err)
+			}
+			if diff != nil && !diff.Empty() {
+				t.Fatalf("server-derived allowed_routes must not drift, diff = %+v", diff)
+			}
+		})
 	}
 }
 
@@ -370,6 +433,7 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 		w.Write([]byte(`{
 			"key": "hash-1",
 			"info": {
+				"key_type": "llm_api",
 				"key_alias": "envelope-alias",
 				"models": ["gpt-4o-mini"],
 				"budget_id": "budget-1",
@@ -387,6 +451,9 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 	if key.KeyAlias != "envelope-alias" {
 		t.Errorf("KeyAlias = %q, want envelope-alias (info envelope not unwrapped)", key.KeyAlias)
+	}
+	if key.KeyType != "llm_api" {
+		t.Errorf("KeyType = %q, want llm_api", key.KeyType)
 	}
 	if key.BudgetID != "budget-1" || key.TeamID != "team-1" {
 		t.Errorf("nested fields not parsed: %+v", key)

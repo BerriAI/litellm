@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
 func resourceKey() *schema.Resource {
@@ -33,6 +34,14 @@ func resourceKey() *schema.Resource {
 			"token_id": {
 				Type:     schema.TypeString,
 				Computed: true,
+			},
+			"key_type": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ForceNew:     true,
+				ValidateFunc: validation.StringInSlice([]string{"llm_api", "management", "read_only", "default"}, false),
+				Description:  "Type of key that determines its default allowed routes. Changing it creates a new key",
 			},
 			"models": {
 				Type:     schema.TypeList,
@@ -163,6 +172,7 @@ func resourceKey() *schema.Resource {
 			"allowed_routes": {
 				Type:     schema.TypeList,
 				Optional: true,
+				Computed: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 			"allowed_passthrough_routes": {
@@ -449,6 +459,7 @@ func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{
 }
 
 func mapResourceDataToKey(d *schema.ResourceData, key *Key) {
+	key.KeyType = d.Get("key_type").(string)
 	key.Models = expandStringList(d.Get("models").([]interface{}))
 	if v, ok := d.GetOk("max_budget"); ok {
 		val := v.(float64)
@@ -504,6 +515,9 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 
 	// Note: "key" is write-only and must not be set here (Read operations).
 	// It is only set during Create so it is available during apply.
+	if key.KeyType != "" {
+		d.Set("key_type", key.KeyType)
+	}
 
 	if len(key.Models) > 0 {
 		d.Set("models", key.Models)
@@ -576,9 +590,7 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 	if len(key.EnforcedParams) > 0 {
 		d.Set("enforced_params", key.EnforcedParams)
 	}
-	if len(key.AllowedRoutes) > 0 {
-		d.Set("allowed_routes", key.AllowedRoutes)
-	}
+	d.Set("allowed_routes", append([]string{}, key.AllowedRoutes...))
 	if len(key.AllowedPassthroughRoutes) > 0 {
 		d.Set("allowed_passthrough_routes", key.AllowedPassthroughRoutes)
 	}
