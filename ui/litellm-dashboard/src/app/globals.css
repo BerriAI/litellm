@@ -28,7 +28,6 @@
 }
 
 @utility scrollbar-inset {
-  /* Chromium drops ::-webkit-scrollbar styling once scrollbar-width or scrollbar-color is set */
   @supports not selector(::-webkit-scrollbar) {
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;

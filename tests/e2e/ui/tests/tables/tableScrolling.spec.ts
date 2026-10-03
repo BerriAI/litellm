@@ -10,6 +10,7 @@ const LOG_ROWS = 20;
 const BODY_SCROLL_PX = 500;
 const MAX_FOOTER_GAP_PX = 40;
 const SCROLLBAR_STRIP_PX = 14;
+const CHROMIUM_OVERLAY_SCROLLBARS = { isMobile: true };
 
 interface GeneratedKey {
   key: string;
@@ -126,6 +127,12 @@ const rowsPaintingPastAnAncestor = (page: PlaywrightPage): Promise<string[]> =>
       });
     });
 
+test.use({
+  launchOptions: async ({ launchOptions }, use) => {
+    await use({ ...launchOptions, ignoreDefaultArgs: ["--hide-scrollbars"] });
+  },
+});
+
 test.describe("Admin tables scroll inside the page", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH, viewport: VIEWPORT });
 
@@ -177,33 +184,48 @@ test.describe("Admin tables scroll inside the page", () => {
     await expectBodyIsTheOnlyScroller(page);
   });
 
-  test("Request Logs: the horizontal scrollbar sits in its own strip below the last row", async ({ page, request }) => {
-    const suffix = uniqueSuffix();
-    const ids = await oneAtATime(LOG_ROWS, (i) =>
-      sendChatCompletion(request, { model: CHAT_MODEL_A, prompt: `strip ${suffix} ${i}` }),
-    );
-    await waitForSpendLog(request, ids[ids.length - 1]);
+  test.describe("on a browser with overlay scrollbars", () => {
+    test.use(CHROMIUM_OVERLAY_SCROLLBARS);
 
-    await navigateToPage(page, Page.Logs);
-    await expect(visibleTestId(page, "datatable-search")).toBeVisible({ timeout: 20_000 });
-    await setRowsPerPage(page, "25");
-    await expectRowsAtLeast(page, LOG_ROWS);
+    test("Request Logs: the horizontal scrollbar sits in its own strip below the last row", async ({
+      page,
+      request,
+    }) => {
+      const suffix = uniqueSuffix();
+      const ids = await oneAtATime(LOG_ROWS, (i) =>
+        sendChatCompletion(request, { model: CHAT_MODEL_A, prompt: `strip ${suffix} ${i}` }),
+      );
+      await waitForSpendLog(request, ids[ids.length - 1]);
 
-    const body = visibleTestId(page, "data-table-scroller");
-    const geometry = await body.evaluate((el) => {
-      el.scrollTop = el.scrollHeight;
-      const style = getComputedStyle(el);
-      const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
-      return {
-        overflowsHorizontally: el.scrollWidth > el.clientWidth,
-        strip: (el as HTMLElement).offsetHeight - el.clientHeight - borders,
-        lastRowBottom: Math.round(el.querySelector("tbody tr:last-child")?.getBoundingClientRect().bottom ?? NaN),
-        boxBottom: Math.round(el.getBoundingClientRect().bottom),
-      };
+      await navigateToPage(page, Page.Logs);
+      await expect(visibleTestId(page, "datatable-search")).toBeVisible({ timeout: 20_000 });
+      await setRowsPerPage(page, "25");
+      await expectRowsAtLeast(page, LOG_ROWS);
+
+      const body = visibleTestId(page, "data-table-scroller");
+      const geometry = await body.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+        const style = getComputedStyle(el);
+        const borders = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+        return {
+          overflowsHorizontally: el.scrollWidth > el.clientWidth,
+          strip: (el as HTMLElement).offsetHeight - el.clientHeight - borders,
+          lastRowBottom: Math.round(el.querySelector("tbody tr:last-child")?.getBoundingClientRect().bottom ?? NaN),
+          boxBottom: Math.round(el.getBoundingClientRect().bottom),
+        };
+      });
+      expect(
+        geometry.overflowsHorizontally,
+        "logs table must overflow horizontally for this test to mean anything",
+      ).toBe(true);
+      expect(
+        geometry.strip,
+        "horizontal scrollbar must reserve its own strip instead of overlaying rows",
+      ).toBeGreaterThanOrEqual(SCROLLBAR_STRIP_PX);
+      expect(geometry.lastRowBottom, "last row must end above the scrollbar strip").toBeLessThanOrEqual(
+        geometry.boxBottom - SCROLLBAR_STRIP_PX,
+      );
     });
-    expect(geometry.overflowsHorizontally, "logs table must overflow horizontally for this test to mean anything").toBe(true);
-    expect(geometry.strip, "horizontal scrollbar must reserve its own strip instead of overlaying rows").toBeGreaterThanOrEqual(SCROLLBAR_STRIP_PX);
-    expect(geometry.lastRowBottom, "last row must end above the scrollbar strip").toBeLessThanOrEqual(geometry.boxBottom - SCROLLBAR_STRIP_PX);
   });
 
   test("Tags: no row paints past the box it lives in", async ({ page, request }) => {
