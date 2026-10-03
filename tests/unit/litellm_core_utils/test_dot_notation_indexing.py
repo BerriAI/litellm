@@ -41,6 +41,53 @@ class TestGetNestedValue:
         data = {"user": {"email": "test@example.com"}}
         assert get_nested_value(data, "metadata.user.email") == "test@example.com"
 
+    def test_nested_metadata_object_is_reachable(self):
+        """A token that really nests claims under `metadata` resolves.
+
+        The prefix used to be stripped before traversal, so `metadata.roles`
+        was looked up as `roles` and a genuinely nested claim read as missing.
+        JWT auth then fell back to its defaults, which for get_team_id means
+        `team_id_default` rather than the team the token named.
+        """
+        data = {"metadata": {"roles": ["admin"]}}
+        assert get_nested_value(data, "metadata.roles") == ["admin"]
+
+    def test_nested_metadata_wins_over_top_level(self):
+        """When both shapes exist, the literal path is the one that was asked for."""
+        data = {"metadata": {"roles": ["nested"]}, "roles": ["top-level"]}
+        assert get_nested_value(data, "metadata.roles") == ["nested"]
+
+    def test_metadata_prefix_still_falls_back_to_top_level(self):
+        """The legacy spelling keeps working when there is no nested object."""
+        data = {"roles": ["admin"]}
+        assert get_nested_value(data, "metadata.roles") == ["admin"]
+
+    def test_metadata_prefix_falls_back_to_a_default(self):
+        """With neither shape present the caller's default comes back unchanged."""
+        data = {"other": 1}
+        assert get_nested_value(data, "metadata.roles", "fallback") == "fallback"
+
+    def test_metadata_prefix_applies_only_once(self):
+        """Only a leading `metadata.` is treated as a prefix.
+
+        `metadata.metadata.x` strips one segment, so a key literally named
+        `metadata` inside a `metadata` object is still reachable.
+        """
+        data = {"metadata": {"metadata": {"team_id": "team-1"}}}
+        assert get_nested_value(data, "metadata.metadata.team_id") == "team-1"
+
+    def test_nested_metadata_respects_the_default_type(self):
+        """The caller's default still governs type coercion on the nested read."""
+        data = {"metadata": {"team_id": "team-1"}}
+        assert get_nested_value(data, "metadata.team_id", "fallback") == "team-1"
+        # A default of another type means the nested value is not usable here,
+        # exactly as for a non-prefixed path.
+        assert get_nested_value(data, "metadata.team_id", 1234) == 1234
+
+    def test_bare_metadata_key_is_untouched(self):
+        """A top-level key named `metadata` resolves as written."""
+        assert get_nested_value({"metadata": "value"}, "metadata") == "value"
+
     def test_escaped_dot_in_key(self):
         """Test accessing keys that contain dots using escape sequence."""
         data = {"kubernetes.io": {"namespace": "default"}}
