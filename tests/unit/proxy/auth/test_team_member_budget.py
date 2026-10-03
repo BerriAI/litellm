@@ -373,6 +373,7 @@ async def test_team_member_budget_check_blocks_regenerated_key_after_old_key_exh
             prisma_client=mock_prisma_client,
             user_api_key_cache=mock_user_api_key_cache,
             proxy_logging_obj=mock_proxy_logging_obj,
+            check_db_only=False,
         )
         assert "Budget has been exceeded" in str(exc_info.value)
         assert "test-user-1" in str(exc_info.value)

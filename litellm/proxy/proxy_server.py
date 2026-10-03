@@ -880,6 +880,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     HttpxBinaryResponseContent,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
@@ -12903,6 +12904,8 @@ async def vertex_ai_live_passthrough_endpoint(
         user_api_key_dict=user_api_key_dict,
     )
 
+
+setattr(vertex_ai_live_passthrough_endpoint, LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER, True)
 
 ######################################################################
 

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request
+from starlette.routing import Match
 
 from litellm.proxy._types import (
     LiteLLM_OrganizationMembershipTable,
@@ -15,6 +16,71 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
+
+
+@pytest.mark.parametrize(
+    "route,allowed",
+    [
+        ("/key/generate", True),
+        ("/user/info", True),
+        ("/team/update", True),
+        ("/team/member_add", True),
+        ("/budget/new", True),
+        ("/budget/update", True),
+        ("/budget/info", True),
+        ("/budget/delete", True),
+        ("/organization/new", True),
+        ("/global/spend/logs", True),
+        ("/v1/chat/completions", True),
+        ("/openai/deployments/demo/chat/completions", True),
+        ("/openai/deployments/org/demo/chat/completions", True),
+        ("/laya/v1/systemone", False),
+        ("/deepgram/listen", False),
+        ("/mcp", False),
+        ("/mcp-rest/tools/call", False),
+        ("/v1/mcp/server", False),
+        ("/jwt/key/mapping/new", False),
+        ("/user/auth", False),
+        ("/user/password/change", False),
+        ("/session/logout", False),
+        ("/team/team-id/callback", False),
+        ("/config/yaml", False),
+        ("/global/spend/reset", False),
+        ("/custom/backend", False),
+        ("/key/generate\n", False),
+    ],
+)
+def test_delegated_admin_scope_limits_api_access(route: str, allowed: bool) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router
+    from litellm.proxy.proxy_server import app
+
+    scope: Final = {"type": "websocket" if route == "/deepgram/listen" else "http", "method": "POST", "path": route}
+    matched: Final = next((r for r in (*app.routes, *router.routes) if r.matches(scope)[0] is Match.FULL), None)
+    request: Final = Request({**scope, **(matched.matches(scope)[1] if matched else {}), "type": "http"})
+    inference_paths: Final = [*LiteLLMRoutes.openai_routes.value, "/laya/v1/systemone", "/deepgram/listen"]
+    with patch.object(LiteLLMRoutes.openai_routes, "_value_", inference_paths):
+        assert RouteChecks.is_delegated_admin_route(route, request) is allowed
+
+
+def test_marked_provider_pass_through_without_endpoint_param_keeps_model_alias_dispatch() -> None:
+    from litellm.proxy.auth.auth_utils import (
+        request_dispatched_to_marked_provider_pass_through,
+        request_dispatched_to_provider_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import laya_proxy_route
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/laya/v1/systemone",
+            "endpoint": laya_proxy_route,
+            "path_params": {},
+        }
+    )
+    assert request_dispatched_to_marked_provider_pass_through(request)
+    assert not request_dispatched_to_provider_pass_through(request)
+
 
 DAILY_ACTIVITY_ROUTE_PAIRS: Final[tuple[tuple[str, str], ...]] = (
     ("/user/daily/activity", "/user/daily/activity/aggregated"),

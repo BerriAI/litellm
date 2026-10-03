@@ -1,6 +1,7 @@
 """Tests for the session-token KDF and the edge/token-endpoint resolvers."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -125,6 +126,13 @@ def test_resolve_rejects_refresh_token_at_the_edge():
     result = resolve_session_bearer(f"Bearer {_refresh_token()}", KEYS, NOW)
     assert isinstance(result, SessionBearerInvalid)
     assert result.expired is False
+
+
+def test_mcp_refuses_a_proxy_api_access_token() -> None:
+    principal: Final = SessionPrincipal(user_id="admin", client_id="app", audience="proxy_api")
+    minted: Final = mint_session_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    assert isinstance(resolve_session_bearer(minted.token.get_secret_value(), KEYS, NOW), SessionBearerInvalid)
 
 
 def test_resolve_wrong_master_key_fails_closed():

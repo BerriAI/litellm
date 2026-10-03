@@ -7,9 +7,11 @@ from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from litellm.caching.caching import DualCache
@@ -53,10 +55,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_ISSUER,
     SESSION_REFRESH_PREFIX,
+    OpenedSessionToken,
     SessionPrincipal,
     mint_session_refresh_token,
     mint_session_token,
+    open_session_token,
 )
+from litellm.proxy._types import LiteLLM_UserTable
+from litellm.proxy.auth.delegated_oauth import authenticate_delegated_request
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
@@ -1373,7 +1380,28 @@ async def test_resource_resolution_is_identity_not_ip_filtered_access():
 
 LOOPBACK_REDIRECT_URI = "http://127.0.0.1:51234/callback"
 PROXY_API_RESOURCE = "https://llm.example.com"
+HOSTED_CALLBACK: Final = "https://app.example/callback"
 CONSENT_TEAMS = (ConsentTeam(team_id="team-a", team_alias="Team A"), ConsentTeam(team_id="team-b"))
+
+
+@pytest.fixture
+def delegated_database(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    from litellm.proxy import proxy_server
+
+    database: Final = MagicMock()
+    read: Final = AsyncMock(return_value=LiteLLM_UserTable(user_id="u1", user_role="proxy_admin"))
+    database.writer_db.litellm_usertable.find_unique = read
+    redis: Final = MagicMock()
+    redis.async_register_script.return_value = AsyncMock(return_value=1)
+    redis.async_increment = DualCache().async_increment_cache
+    monkeypatch.setenv("LITELLM_OAUTH_ADMIN_REDIRECT_URIS", HOSTED_CALLBACK)
+    monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", redis)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    return read
 
 
 class _Minter:
@@ -1473,6 +1501,88 @@ def _opened_refresh(refresh_token, client_id):
     )
     assert isinstance(opened, SessionRefreshOpened)
     return opened.principal
+
+
+@pytest.mark.asyncio
+async def test_hosted_consent_and_code_keep_pkce_client_resource_and_delegation_bound(
+    delegated_database: AsyncMock,
+) -> None:
+    client_id: Final = (await _register([HOSTED_CALLBACK]))["client_id"]
+    other_client: Final = (await _register([HOSTED_CALLBACK]))["client_id"]
+    cache: Final = DualCache()
+    consent: Final = await _native_authorize(
+        client_id, redirect_uri=HOSTED_CALLBACK, scope="proxy:admin", lookup=_ConsentTeams(()),
+    )
+    assert consent.status_code == 200
+    omitted: Final = await _complete_consent(consent, cache=cache)
+    assert omitted.status_code == 400
+    approved: Final = await _complete_consent(consent, cache=cache, decision="approve")
+    assert approved.status_code == 303
+    code: Final = _code_from(approved)
+    wire: Final = _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, _AUTH_CODE_DEBUG_KEY)
+    assert wire["delegation"]["scope"] == "proxy:admin"
+    assert wire["delegation"]["resource"] == PROXY_API_RESOURCE
+    assert wire["delegation"]["redirect_uri"] == HOSTED_CALLBACK
+    for presented_client, verifier, resource, callback in (
+        (other_client, CODE_VERIFIER, PROXY_API_RESOURCE, HOSTED_CALLBACK),
+        (client_id, "x" * 43, PROXY_API_RESOURCE, HOSTED_CALLBACK),
+        (client_id, CODE_VERIFIER, "https://other.example", HOSTED_CALLBACK),
+        (client_id, CODE_VERIFIER, PROXY_API_RESOURCE, "https://other.example/callback"),
+    ):
+        refused: Final = await _redeem(
+            code, presented_client, cache=cache, redirect_uri=callback, code_verifier=verifier, resource=resource,
+        )
+        assert refused.status_code == 400
+    issued: Final = await _redeem(
+        code, client_id, cache=cache, redirect_uri=HOSTED_CALLBACK, resource=PROXY_API_RESOURCE,
+    )
+    assert issued.status_code == 200
+    body: Final = json.loads(issued.body)
+    opened: Final = open_session_token(
+        body["access_token"], session_keys_from_master_key(MASTER_KEY), datetime.now(timezone.utc),
+    )
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal.delegation is not None
+    assert opened.principal.delegation.model_dump() == wire["delegation"]
+    assert _opened_refresh(body["refresh_token"], client_id) == opened.principal
+    renewed: Final = await _refresh_native(body["refresh_token"], client_id, None, cache)
+    assert json.loads(renewed.body)["scope"] == "proxy:admin"
+    identity: Final = await authenticate_delegated_request(_request("/user/info"), body["access_token"], "/user/info")
+    assert (identity.user_id, identity.requires_fresh_policy) == ("u1", True)
+    status, claims = await _introspect(body["access_token"])
+    assert (status, claims["active"], claims["sub"]) == (200, True, "u1")
+    with pytest.raises(HTTPException, match=r"403:.*scope"):
+        await authenticate_delegated_request(_request("/mcp"), body["access_token"], "/mcp")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope,callback",
+    ((None, HOSTED_CALLBACK), ("proxy:admin", "https://other.example/cb"), ("admin", HOSTED_CALLBACK)),
+)
+async def test_hosted_authorize_requires_scope_and_exact_approved_callback(
+    delegated_database: AsyncMock, scope: str | None, callback: str,
+) -> None:
+    client_id: Final = (await _register([callback]))["client_id"]
+    response: Final = await _native_authorize(client_id, redirect_uri=callback, scope=scope)
+    assert response.status_code == 400
+    assert "set-cookie" not in response.headers
+    delegated_database.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hosted_authorize_reuses_gateway_sso_and_denies_nonadmins(delegated_database: AsyncMock) -> None:
+    client_id: Final = (await _register([HOSTED_CALLBACK]))["client_id"]
+    login: Final = await _native_authorize(
+        client_id, redirect_uri=HOSTED_CALLBACK, scope="proxy:admin", session_user_id=None,
+    )
+    assert login.status_code == 303
+    assert login.headers["location"].startswith(PROXY_API_RESOURCE + "/sso/key/generate?return_to=")
+    delegated_database.assert_not_awaited()
+    delegated_database.return_value = LiteLLM_UserTable(user_id="u1", user_role="internal_user")
+    denied: Final = await _native_authorize(client_id, redirect_uri=HOSTED_CALLBACK, scope="proxy:admin")
+    assert denied.status_code == 403
+    assert "set-cookie" not in denied.headers
 
 
 @pytest.mark.asyncio

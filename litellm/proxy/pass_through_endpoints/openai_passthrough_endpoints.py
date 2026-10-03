@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.pass_through_endpoints.common_utils import mark_provider_pass_through_routes
 
 router: Final = APIRouter()
 
@@ -42,3 +43,6 @@ async def openai_passthrough_route(
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
     )
+
+
+mark_provider_pass_through_routes(router)

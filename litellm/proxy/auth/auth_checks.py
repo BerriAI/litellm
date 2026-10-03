@@ -970,6 +970,7 @@ async def common_checks(
     )
 
     skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
+    fresh_policy: Final = valid_token is not None and valid_token.requires_fresh_policy
 
     membership_user_id: Final = (
         valid_token.user_id if valid_token is not None and (bool(_model) or not skip_all_budget_checks) else None
@@ -982,6 +983,7 @@ async def common_checks(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=fresh_policy,
         )
         if team_object is not None and membership_user_id is not None
         else None
@@ -1014,6 +1016,7 @@ async def common_checks(
                     llm_router=llm_router,
                     team_model_aliases=(valid_token.team_model_aliases if valid_token else None),
                     key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                    check_db_only=fresh_policy,
                 )
             except ProxyException as team_denial:
                 if team_denial.type != ProxyErrorTypes.team_model_access_denied:
@@ -2358,9 +2361,13 @@ async def _fetch_team_membership_from_db(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    use_writer: bool = False,
 ) -> LiteLLM_TeamMembership | None:
     _ = parent_otel_span, proxy_logging_obj
-    response: Final = await _dictable_table(TeamMembershipRepository(prisma_client), "team_membership").find_unique(
+    response: Final = await _dictable_table(
+        TeamMembershipRepository(prisma_client, use_writer=use_writer), "team_membership"
+    ).find_unique(
         where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
         include={"litellm_budget_table": True},
     )
@@ -2414,12 +2421,20 @@ async def get_team_membership(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    check_db_only: bool = False,
 ) -> Optional["LiteLLM_TeamMembership"]:
     """
     Returns team membership object if user is member of team.
 
     Do a isolated check for team membership vs. doing a combined key + team + user + team-membership check, as key might come in frequently for different users/teams. Larger call will slowdown query time. This way we get to cache the constant (key/team/user info) and only update based on the changing value (team membership).
     """
+    if check_db_only:
+        if prisma_client is None:
+            raise HTTPException(status_code=503, detail="The gateway database is unavailable")
+        return await _fetch_team_membership_from_db(
+            user_id, team_id, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj, use_writer=True
+        )
     if user_id is None or team_id is None:
         return None
 
@@ -3205,7 +3220,7 @@ async def _get_team_object_from_user_api_key_cache(
     use_writer: bool = False,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key: Final = key
-    should_check_db: Final = _should_check_db(
+    should_check_db: Final = use_writer or _should_check_db(
         key=db_access_time_key,
         last_db_access_time=last_db_access_time,
         db_cache_expiry=db_cache_expiry,
@@ -4145,6 +4160,8 @@ async def get_org_object(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     include_budget_table: bool = False,
+    *,
+    check_db_only: bool = False,
 ) -> LiteLLM_OrganizationTable | None:
     """
     - Check if org id in proxy Org Table
@@ -4169,10 +4186,10 @@ async def get_org_object(
     if include_budget_table:
         cache_key = f"org_id:{org_id}:with_budget"
 
-    # check if in cache
-    deserialized_org: Final = await user_api_key_cache.async_get_cache(
-        key=cache_key,
-        model_type=LiteLLM_OrganizationTable,
+    deserialized_org: Final = (
+        None
+        if check_db_only
+        else await user_api_key_cache.async_get_cache(key=cache_key, model_type=LiteLLM_OrganizationTable)
     )
     if deserialized_org is not None:
         return deserialized_org
@@ -4239,6 +4256,7 @@ async def get_org_object_for_request(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
+    check_db_only: bool = False,
 ) -> LiteLLM_OrganizationTable | None:
     try:
         org: Final = await get_org_object(
@@ -4248,10 +4266,13 @@ async def get_org_object_for_request(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
             include_budget_table=True,
+            check_db_only=check_db_only,
         )
     except OrganizationNotFoundError:
         return None
     except Exception as e:
+        if check_db_only:
+            raise
         if not PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
             verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
             return None
@@ -4338,6 +4359,7 @@ async def _get_models_from_access_groups(
     prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
 ) -> list[str]:
     """
     Collect model names from unified access groups.
@@ -4349,6 +4371,7 @@ async def _get_models_from_access_groups(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
     )
 
 
@@ -5162,6 +5185,7 @@ async def can_team_access_model(
     team_model_aliases: dict[str, str] | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
     prisma_client: DatabaseClient | None = None,
+    check_db_only: bool = False,
 ) -> Literal[True]:
     """
     Returns True if the team can access a specific model.
@@ -5186,6 +5210,7 @@ async def can_team_access_model(
             models_from_groups: Final = await _get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
                 prisma_client=prisma_client,
+                check_db_only=check_db_only,
             )
             if models_from_groups:
                 return _can_object_call_model(
@@ -6379,8 +6404,11 @@ async def _organization_max_budget_check(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
             include_budget_table=True,
+            check_db_only=valid_token.requires_fresh_policy,
         )
     except Exception:
+        if valid_token.requires_fresh_policy:
+            raise
         # If organization lookup fails, skip the check
         return
 

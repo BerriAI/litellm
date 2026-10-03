@@ -9386,6 +9386,23 @@ def test_aggregate_wellknown_routes_serve_gateway_metadata():
     assert asm.json()["authorization_endpoint"] == "http://testserver/authorize/mcp-session"
     assert "none" in asm.json()["token_endpoint_auth_methods_supported"]
 
+    api: Final = client.get("/.well-known/oauth-authorization-server/oauth/api")
+    assert api.status_code == 200
+    assert api.json() == {
+        "issuer": "http://testserver/oauth/api",
+        "authorization_endpoint": "http://testserver/authorize",
+        "token_endpoint": "http://testserver/token",
+        "registration_endpoint": "http://testserver/register",
+        "revocation_endpoint": "http://testserver/revoke",
+        "introspection_endpoint": "http://testserver/introspect",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "scopes_supported": ["proxy:admin"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "revocation_endpoint_auth_methods_supported": ["none"],
+    }
+
 
 def test_as_aggregate_route_reserves_mcp_for_the_aggregate():
     """The single-segment /.well-known/oauth-authorization-server/mcp is reserved for the

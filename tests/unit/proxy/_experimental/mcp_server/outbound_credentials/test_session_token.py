@@ -1,6 +1,7 @@
 """Tests for the identity-only gateway session token (mint/open, hostile-input totality)."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import jwt
 import pytest
@@ -17,6 +18,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     SESSION_TOKEN_PREFIX,
     SESSION_TTL_SECONDS,
     AsymmetricSessionKeys,
+    DelegatedGrant,
     MintedSessionToken,
     NotASessionToken,
     OpenedSessionToken,
@@ -111,6 +113,55 @@ def test_refresh_round_trip_recovers_principal_and_caps_ttl():
     opened = open_session_refresh_token(token, KEYS, NOW)
     assert isinstance(opened, OpenedSessionToken)
     assert opened.principal == PRINCIPAL
+
+
+@pytest.mark.parametrize("refresh", (False, True))
+def test_delegated_tokens_preserve_consent_and_cannot_outlive_it(refresh: bool) -> None:
+    deadline: Final = NOW + timedelta(seconds=30)
+    principal: Final = SessionPrincipal(
+        user_id="user-123", client_id="llm_client_abc", audience="proxy_api", team_id="team-b",
+        delegation=DelegatedGrant(
+            grant_id="grant-1", resource="https://gateway.example", redirect_uri="https://app.example/callback",
+            expires_at=int(deadline.timestamp()),
+        ),
+    )
+    mint: Final = mint_session_refresh_token if refresh else mint_session_token
+    opener: Final = open_session_refresh_token if refresh else open_session_token
+    minted: Final = mint(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    assert minted.expires_at == deadline
+    opened: Final = opener(minted.token.get_secret_value(), KEYS, NOW)
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == principal
+    assert isinstance(opener(minted.token.get_secret_value(), KEYS, deadline), SessionExpired)
+
+
+def test_revocation_accepts_expired_delegated_access_only_until_consent_expires() -> None:
+    deadline: Final = NOW + timedelta(seconds=SESSION_TTL_SECONDS * 2)
+    delegation: Final = DelegatedGrant(
+        grant_id="grant-1", resource="https://gateway.example", redirect_uri="https://app.example/callback",
+        expires_at=int(deadline.timestamp()),
+    )
+    principal: Final = SessionPrincipal(user_id="u1", client_id="c1", audience="proxy_api", delegation=delegation)
+    minted: Final = mint_session_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    token: Final = minted.token.get_secret_value()
+    expired: Final = NOW + timedelta(seconds=SESSION_TTL_SECONDS)
+    assert isinstance(open_session_token(token, KEYS, expired), SessionExpired)
+    assert isinstance(open_session_token(token, KEYS, expired, for_revocation=True), OpenedSessionToken)
+    assert isinstance(open_session_token(token, KEYS, deadline, for_revocation=True), SessionExpired)
+    assert isinstance(open_session_token(_corrupt_signature(token), KEYS, expired, for_revocation=True), SessionBadSignature)
+    assert isinstance(open_session_token(_mint_access(), KEYS, expired, for_revocation=True), SessionExpired)
+
+
+@pytest.mark.parametrize("audience,server", ((None, None), ("proxy_api", "mcp-server")))
+def test_delegation_cannot_be_reused_as_an_mcp_grant(audience: str | None, server: str | None) -> None:
+    claims: Final = _valid_claims(
+        audience=audience, resource_server_id=server,
+        delegation={"grant_id": "g", "resource": "https://gateway.example", "redirect_uri": "https://app.example/cb",
+                    "expires_at": int(NOW.timestamp()) + 600, "scope": "proxy:admin"},
+    )
+    assert isinstance(open_session_token(_sign_claims(claims), KEYS, NOW), SessionMalformed)
 
 
 def test_access_token_reprefixed_as_refresh_is_rejected_by_signed_kind():

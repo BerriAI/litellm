@@ -33,6 +33,7 @@ from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER,
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment
 from litellm.types.utils import CustomPricingLiteLLMParams
@@ -1985,6 +1986,10 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
 def request_dispatched_to_provider_pass_through(request: Request) -> bool:
     """Built-in provider pass-through handlers (``/anthropic/{endpoint:path}``, ...) bind ``endpoint``."""
     return "endpoint" in request.path_params
+
+
+def request_dispatched_to_marked_provider_pass_through(request: Request) -> bool:
+    return getattr(request.scope.get("endpoint"), LITELLM_PROVIDER_PASS_THROUGH_ENDPOINT_MARKER, False) is True
 
 
 def get_model_from_request(

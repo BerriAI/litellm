@@ -233,7 +233,7 @@ def resolve_session_bearer(
     if not is_session_token(candidate):
         return NotSessionBearer()
     opened: Final = open_session_token(candidate, keys, now)
-    if isinstance(opened, OpenedSessionToken):
+    if isinstance(opened, OpenedSessionToken) and opened.principal.audience is None:
         return SessionBearerAdmitted(principal=opened.principal)
     return SessionBearerInvalid(expired=isinstance(opened, SessionExpired))
 

@@ -1974,7 +1974,10 @@ async def authorize(
                 response_type=response_type,
                 session_user_id=_session_cookie_user_id(request),
                 lookup_consent_teams=lookup_consent_teams,
+                scope=scope,
             )
+        if scope == "proxy:admin":
+            raise HTTPException(400, "proxy:admin requires the gateway URL as its resource")
         return aggregate_authorize(
             request=request,
             client_id=client_id,
@@ -2159,7 +2162,7 @@ async def authorize_complete(
 async def revoke_endpoint(request: Request, token: str = Form(...), client_id: str = Form(...)) -> Response:
     """RFC 7009 revocation for the gateway's refresh tokens (``lite logout``): 200 for a known
     client whatever the token's state, 503 when the shared single-use record cannot be written;
-    access tokens expire on their own."""
+    native/MCP access tokens expire normally; delegated access is revoked immediately."""
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
         master_key,
         user_api_key_cache,
@@ -2646,6 +2649,25 @@ def _jwt_auth_issuers() -> list:
         if issuer and issuer not in issuers:
             issuers.append(issuer)
     return issuers
+
+
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/oauth/api")
+def oauth_authorization_server_api(request: Request) -> dict[str, str | tuple[str, ...]]:
+    base: Final = get_request_base_url(request)
+    return {
+        "issuer": f"{base}/oauth/api",
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "registration_endpoint": f"{base}/register",
+        "revocation_endpoint": f"{base}/revoke",
+        "introspection_endpoint": f"{base}/introspect",
+        "response_types_supported": ("code",),
+        "grant_types_supported": ("authorization_code", "refresh_token"),
+        "scopes_supported": ("proxy:admin",),
+        "code_challenge_methods_supported": ("S256",),
+        "token_endpoint_auth_methods_supported": ("none",),
+        "revocation_endpoint_auth_methods_supported": ("none",),
+    }
 
 
 @router.get("/.well-known/oauth-protected-resource")

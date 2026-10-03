@@ -1,4 +1,4 @@
-"""Identity-only session tokens for the gateway-level (aggregate ``/mcp``) DCR front door.
+"""Identity-only session tokens for gateway OAuth clients.
 
 A DCR client that signs in through LiteLLM SSO holds ONE bearer that carries ONLY a
 litellm identity; unlike the :mod:`.envelope` bridge bearer it seals no upstream
@@ -6,7 +6,7 @@ credential, because the custody model vaults every upstream token server-side in
 ``LiteLLM_MCPUserCredentials`` and egress resolves them by user at call time. The token
 is therefore a stable REFERENCE, not an authorization: admission reloads the live user
 record and policy on every request, so deactivating the user (or their team) kills
-outstanding sessions immediately without a revocation store.
+outstanding sessions immediately. Delegated API sessions additionally require a live grant family.
 
 Wire shape: ``llm_session_`` (access) / ``llm_srefresh_`` (refresh) + a JWT signed with
 the injected key material: HS256 under the default master-key-derived secret (the same
@@ -90,11 +90,17 @@ on open, so a signature-valid token of one kind cannot be replayed as the other 
 wire prefix is swapped (the prefix is not part of the signed payload; this claim is)."""
 
 SessionAudience = Literal["proxy_api"]
-"""The non-MCP audience a session REFRESH token can be minted for. ``None`` (the default and
-the only value ever on an MCP wire) means the aggregate MCP gateway; ``"proxy_api"`` means the
-refresh grant re-mints the proxy-API CLI credential instead of an MCP session pair. The audience
-is read only from the signed claims, never from the request, so a token of one audience can
-never be redeemed as the other."""
+"""``None`` identifies MCP sessions. ``proxy_api`` identifies native CLI refresh grants
+or delegated API token pairs. Admission and renewal use only this signed audience."""
+
+
+class DelegatedGrant(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+    grant_id: str = Field(min_length=1)
+    resource: str = Field(min_length=1)
+    redirect_uri: str = Field(min_length=1)
+    expires_at: int
+    scope: Literal["proxy:admin"] = "proxy:admin"
 
 
 class SessionPrincipal(BaseModel):
@@ -119,6 +125,7 @@ class SessionPrincipal(BaseModel):
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
     team_id: str | None = None
+    delegation: DelegatedGrant | None = None
 
 
 class SessionKeys(BaseModel):
@@ -302,6 +309,7 @@ class _SessionClaims(BaseModel):
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
     team_id: str | None = None
+    delegation: DelegatedGrant | None = None
 
 
 def is_session_token(candidate: str) -> bool:
@@ -361,19 +369,30 @@ def open_session_token(
     candidate: str,
     keys: SessionSigningKeys,
     now: datetime,
+    *,
+    for_revocation: bool = False,
 ) -> OpenedSessionToken | SessionTokenOpenError:
     """Validate a session ACCESS ``candidate`` and recover the principal.
 
     Never raises for bad input: every invalid, expired, tampered, or wrong-kind candidate
     maps to a distinct ``SessionTokenOpenError`` variant.
     """
-    return _open(candidate, prefix=SESSION_TOKEN_PREFIX, expected_kind="session", keys=keys, now=now)
+    return _open(
+        candidate,
+        prefix=SESSION_TOKEN_PREFIX,
+        expected_kind="session",
+        keys=keys,
+        now=now,
+        for_revocation=for_revocation,
+    )
 
 
 def open_session_refresh_token(
     candidate: str,
     keys: SessionSigningKeys,
     now: datetime,
+    *,
+    for_revocation: bool = False,
 ) -> OpenedSessionToken | SessionTokenOpenError:
     """Validate a session REFRESH ``candidate`` and recover the principal.
 
@@ -381,7 +400,14 @@ def open_session_refresh_token(
     ``kind="session_refresh"`` claim is required, so an access token re-prefixed as a
     refresh one is rejected as ``SessionMalformed``.
     """
-    return _open(candidate, prefix=SESSION_REFRESH_PREFIX, expected_kind="session_refresh", keys=keys, now=now)
+    return _open(
+        candidate,
+        prefix=SESSION_REFRESH_PREFIX,
+        expected_kind="session_refresh",
+        keys=keys,
+        now=now,
+        for_revocation=for_revocation,
+    )
 
 
 def _mint(
@@ -394,10 +420,15 @@ def _mint(
 ) -> MintedSessionToken | SessionTokenTooLarge:
     """Sign the claims for either token kind and enforce the size cap. Shared by both mints
     so the JWT shape, issuer, and size guard cannot drift between access and refresh."""
+    bounded_expiry: Final = (
+        min(expires_at, datetime.fromtimestamp(principal.delegation.expires_at, tz=now.tzinfo))
+        if principal.delegation is not None
+        else expires_at
+    )
     claims: Final = _SessionClaims(
         iss=SESSION_ISSUER,
         iat=int(now.timestamp()),
-        exp=int(expires_at.timestamp()),
+        exp=int(bounded_expiry.timestamp()),
         jti=secrets.token_urlsafe(16),
         kind=kind,
         user_id=principal.user_id,
@@ -405,12 +436,13 @@ def _mint(
         resource_server_id=principal.resource_server_id,
         audience=principal.audience,
         team_id=principal.team_id,
+        delegation=principal.delegation,
     )
     token: Final = prefix + _sign_claims(claims, keys)
     size_bytes: Final = len(token.encode("utf-8"))
     if size_bytes > MAX_SESSION_TOKEN_BYTES:
         return SessionTokenTooLarge(size_bytes=size_bytes, max_bytes=MAX_SESSION_TOKEN_BYTES)
-    return MintedSessionToken(token=SecretStr(token), expires_at=expires_at)
+    return MintedSessionToken(token=SecretStr(token), expires_at=bounded_expiry)
 
 
 def _sign_claims(claims: _SessionClaims, keys: SessionSigningKeys) -> str:
@@ -434,6 +466,7 @@ def _open(
     expected_kind: SessionTokenKind,
     keys: SessionSigningKeys,
     now: datetime,
+    for_revocation: bool = False,
 ) -> OpenedSessionToken | SessionTokenOpenError:
     """Prefix-route, size-bound, signature-verify, kind-check, and expiry-check an
     attacker-controlled candidate, shared by both openers so the security gate is identical
@@ -452,7 +485,11 @@ def _open(
         return claims
     if claims.kind != expected_kind:
         return SessionMalformed()
-    if now.timestamp() >= claims.exp:
+    if claims.delegation is not None and (claims.audience != "proxy_api" or claims.resource_server_id is not None):
+        return SessionMalformed()
+    if claims.delegation is not None and now.timestamp() >= claims.delegation.expires_at:
+        return SessionExpired()
+    if now.timestamp() >= claims.exp and not (for_revocation and claims.delegation is not None):
         return SessionExpired()
     return OpenedSessionToken(
         principal=SessionPrincipal(
@@ -461,6 +498,7 @@ def _open(
             resource_server_id=claims.resource_server_id,
             audience=claims.audience,
             team_id=claims.team_id,
+            delegation=claims.delegation,
         ),
         jti=claims.jti,
         kind=claims.kind,
