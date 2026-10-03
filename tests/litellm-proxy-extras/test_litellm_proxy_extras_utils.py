@@ -16,6 +16,7 @@ sys.path.insert(
 from litellm_proxy_extras.utils import (
     PARTITIONED_SPEND_LOGS_PUSH_ERROR,
     ProxyExtrasDBManager,
+    filter_hand_built_spend_logs_index_diff,
     filter_partitioned_spend_logs_diff,
 )
 
@@ -538,7 +539,7 @@ class _FakeCompleted:
 
 
 class TestResolveAllMigrationsLedger:
-    def _run(self, monkeypatch, tmp_path, partitioned, execute_fails):
+    def _run(self, monkeypatch, tmp_path, partitioned, execute_fails, drift_sql=_PARTITIONED_DRIFT_SQL):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
@@ -558,7 +559,7 @@ class TestResolveAllMigrationsLedger:
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             if "diff" in cmd:
-                kwargs["stdout"].write(_PARTITIONED_DRIFT_SQL)
+                kwargs["stdout"].write(drift_sql)
                 return _FakeCompleted()
             if "execute" in cmd:
                 executed_sql = open(cmd[cmd.index("--file") + 1]).read()
@@ -598,6 +599,59 @@ class TestResolveAllMigrationsLedger:
     def test_unpartitioned_spend_logs_drift_script_is_untouched(self, monkeypatch, tmp_path):
         calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=False)
         assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
+
+    @pytest.mark.parametrize("partitioned", [False, True])
+    def test_hand_built_spend_logs_indexes_never_reach_the_database(self, monkeypatch, tmp_path, partitioned):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=partitioned, execute_fails=False, drift_sql=_HAND_BUILT_INDEX_DRIFT_SQL
+        )
+        executed_sql = self._executed_sql(calls)
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in executed_sql
+        assert "LiteLLM_SpendLogs_api_key_startTime_idx" not in executed_sql
+        assert 'CREATE INDEX "LiteLLM_TeamTable_name_idx" ON "LiteLLM_TeamTable"("name");' in executed_sql
+
+    def test_drift_of_only_hand_built_indexes_executes_nothing(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch, tmp_path, partitioned=False, execute_fails=False, drift_sql=_ONLY_HAND_BUILT_INDEXES_DRIFT_SQL
+        )
+        assert not any(isinstance(c, list) and "execute" in c for c in calls)
+        assert len(self._resolved(calls)) == 1
+
+
+_ONLY_HAND_BUILT_INDEXES_DRIFT_SQL = """-- CreateIndex
+CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id");
+
+-- CreateIndex
+CREATE INDEX "LiteLLM_SpendLogs_api_key_startTime_idx" ON "LiteLLM_SpendLogs"("api_key", "startTime");
+"""
+
+_HAND_BUILT_INDEX_DRIFT_SQL = (
+    _ONLY_HAND_BUILT_INDEXES_DRIFT_SQL
+    + """
+-- CreateIndex
+CREATE INDEX "LiteLLM_TeamTable_name_idx" ON "LiteLLM_TeamTable"("name");
+"""
+)
+
+
+class TestHandBuiltSpendLogsIndexDriftFilter:
+    @pytest.mark.parametrize(
+        "statement",
+        [
+            'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id")',
+            'CREATE INDEX CONCURRENTLY IF NOT EXISTS "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id")',
+            'create index if not exists "LiteLLM_SpendLogs_api_key_startTime_idx" on "LiteLLM_SpendLogs"("api_key", "startTime")',
+        ],
+    )
+    def test_hand_built_index_creation_is_removed(self, statement):
+        assert filter_hand_built_spend_logs_index_diff(f"-- CreateIndex\n{statement};\n") == ""
+
+    def test_other_spend_logs_indexes_and_statements_are_kept_verbatim(self):
+        kept = (
+            'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx" ON "LiteLLM_SpendLogs"("session_id");\n'
+            'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;\n'
+        )
+        assert filter_hand_built_spend_logs_index_diff(kept) == kept
 
 
 class TestPartitionedSpendLogsPushGuard:

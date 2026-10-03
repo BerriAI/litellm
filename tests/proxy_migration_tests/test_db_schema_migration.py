@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from litellm_proxy_extras.utils import filter_hand_built_spend_logs_index_diff
 
 
 @pytest.mark.skipif(
@@ -59,12 +60,12 @@ def test_schema_migration_in_sync():
             text=True,
         )
 
-        if diff.returncode == 2:
+        if diff.returncode == 2 and filter_hand_built_spend_logs_index_diff(diff.stdout).strip():
             pytest.fail(
                 "Schema changes detected that no migration captures. Run "
                 "`python litellm/ci_cd/run_migration.py <migration_name>`.\n\n"
                 + diff.stdout
             )
-        assert diff.returncode == 0, f"prisma migrate diff errored: {diff.stderr}"
+        assert diff.returncode in (0, 2), f"prisma migrate diff errored: {diff.stderr}"
     finally:
         shutil.rmtree(temp_base, ignore_errors=True)
