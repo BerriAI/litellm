@@ -2469,29 +2469,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     value=provider_name,
                 )
 
-            # The maximum number of tokens the LLM generates for a request.
-            if optional_params.get("max_tokens"):
-                self.safe_set_attribute(
-                    span=span,
-                    key=SpanAttributes.LLM_REQUEST_MAX_TOKENS.value,
-                    value=optional_params.get("max_tokens"),
-                )
-
-            # The temperature setting for the LLM request.
-            if optional_params.get("temperature"):
-                self.safe_set_attribute(
-                    span=span,
-                    key=SpanAttributes.LLM_REQUEST_TEMPERATURE.value,
-                    value=optional_params.get("temperature"),
-                )
-
-            # The top_p sampling setting for the LLM request.
-            if optional_params.get("top_p"):
-                self.safe_set_attribute(
-                    span=span,
-                    key=SpanAttributes.LLM_REQUEST_TOP_P.value,
-                    value=optional_params.get("top_p"),
-                )
+            for source_key, request_attribute in (
+                ("max_tokens", SpanAttributes.LLM_REQUEST_MAX_TOKENS.value),
+                ("temperature", SpanAttributes.LLM_REQUEST_TEMPERATURE.value),
+                ("top_p", SpanAttributes.LLM_REQUEST_TOP_P.value),
+            ):
+                request_value = optional_params.get(source_key)
+                if request_value is not None:
+                    self.safe_set_attribute(span=span, key=request_attribute, value=request_value)
 
             if self._gen_ai_semconv_latest_experimental:
                 # Semconv emits gen_ai.request.stream (only when streaming) via
