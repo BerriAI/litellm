@@ -171,7 +171,7 @@ def test_set_cache_stores_scoped_doc_with_embedding(monkeypatch):
     scope = ValkeySemanticCache._scope_tag("cache-key")
     assert mapping[ValkeySemanticCache.CACHE_KEY_FIELD_NAME] == scope
     assert mapping["prompt"] == "What is the capital of France?"
-    assert mapping["response"] == "{'content': 'Paris'}"
+    assert mapping["response"] == '{"content": "Paris"}'
     assert mapping["embedding"] == struct.pack("<3f", 0.1, 0.2, 0.3)
     assert doc_key.startswith(f"test_index:{scope}:")
 

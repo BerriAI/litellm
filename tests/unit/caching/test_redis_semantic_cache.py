@@ -172,7 +172,7 @@ def test_redis_semantic_cache_set_cache_stores_cache_key_filter(monkeypatch):
 
         redis_semantic_cache.llmcache.store.assert_called_once_with(
             "What is the capital of France?",
-            "{'content': 'Paris'}",
+            "{\"content\": \"Paris\"}",
             vector=[0.1, 0.2, 0.3],
             filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
             ttl=60,
@@ -460,7 +460,7 @@ async def test_redis_semantic_cache_async_set_cache_stores_cache_key_filter(
 
         redis_semantic_cache.llmcache.astore.assert_called_once_with(
             "What is the capital of France?",
-            "{'content': 'Paris'}",
+            "{\"content\": \"Paris\"}",
             vector=[0.1, 0.2, 0.3],
             filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
             ttl=60,
@@ -486,7 +486,7 @@ def test_redis_semantic_cache_set_cache_uses_responses_string_input():
 
     redis_semantic_cache.llmcache.store.assert_called_once_with(
         "What is the capital of France?",
-        "{'content': 'Paris'}",
+        "{\"content\": \"Paris\"}",
         vector=[0.1, 0.2, 0.3],
         filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
     )
@@ -562,7 +562,7 @@ def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
 
     redis_semantic_cache.llmcache.store.assert_called_once_with(
         "What is the capital of France?\nAnswer briefly.",
-        "{'content': 'Paris'}",
+        "{\"content\": \"Paris\"}",
         vector=[0.1, 0.2, 0.3],
         filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
     )
@@ -755,7 +755,7 @@ async def test_redis_semantic_cache_async_paths_use_responses_string_input():
 
     redis_semantic_cache.llmcache.astore.assert_called_once_with(
         "What is the capital of France?",
-        "{'content': 'Paris'}",
+        "{\"content\": \"Paris\"}",
         vector=[0.1, 0.2, 0.3],
         filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
     )
@@ -1020,7 +1020,7 @@ def test_redis_sync_set_cache_passes_precomputed_vector():
     cache._get_embedding.assert_called_once()
     cache.llmcache.store.assert_called_once_with(
         "What is the capital of France?",
-        "{'content': 'Paris'}",
+        "{\"content\": \"Paris\"}",
         vector=[0.1, 0.2, 0.3],
         filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
     )
@@ -1416,3 +1416,21 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     assert embedding == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
     assert_loop_stayed_free(took, lags)
+
+
+def test_redis_semantic_cache_get_cache_treats_non_json_response_as_miss(monkeypatch):
+    """A stored value that is not JSON is a cache miss instead of being parsed as a Python literal"""
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
+
+        assert redis_semantic_cache._get_cache_logic(cached_response="(1, {'role': 'assistant'})") is None
+        assert redis_semantic_cache._get_cache_logic(cached_response='{"content": "Paris"}') == {"content": "Paris"}

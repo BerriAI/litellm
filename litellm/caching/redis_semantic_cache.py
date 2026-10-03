@@ -9,7 +9,6 @@ This implementation uses RedisVL's SemanticCache to find semantically similar pr
 and their cached responses.
 """
 
-import ast
 import asyncio
 import json
 import os
@@ -395,11 +394,7 @@ class RedisSemanticCache(BaseCache):
         try:
             cached_response = json.loads(cached_response)
         except json.JSONDecodeError:
-            try:
-                cached_response = ast.literal_eval(cached_response)
-            except (ValueError, SyntaxError) as e:
-                print_verbose(f"Error parsing cached response: {e}")
-                return None
+            return None
 
         return cached_response
 
@@ -422,7 +417,7 @@ class RedisSemanticCache(BaseCache):
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            value_str = str(value)
+            value_str = json.dumps(value)
 
             prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
@@ -567,7 +562,7 @@ class RedisSemanticCache(BaseCache):
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            value_str: Final = str(value)
+            value_str: Final = json.dumps(value)
 
             # Generate embedding for the value (response) to cache
             prompt_embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
