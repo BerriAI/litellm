@@ -84,3 +84,42 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
             control: Final = call_tool(gateway, key, identity, names["add"], {"a": 3, "b": 5})
             assert control.status_code == 200 and control.json()["isError"] is False, control.text
             assert control.json()["content"][0]["text"] == "8"
+
+
+@pytest.mark.parametrize("ingress", ("http", "sse"))
+def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_control(
+    gateway: Gateway, tmp_path, ingress: str
+) -> None:
+    import asyncio
+    from pathlib import Path
+
+    import yaml
+    from integration._support.mcp import mcp_peer
+    from integration._support.process import owned_proxy
+    from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.types.mcp import MCPTransport
+    from mcp import MCPError
+    from mcp.types import CallToolRequestParams
+
+    with mcp_peer() as upstream, gateway.scenario() as scenario:
+        alias: Final = "restricted" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["general_settings"]["mcp_advertised_versions"] = ["2024-11-05"]
+        config_path: Final = tmp_path / "restricted.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {"DISABLE_SCHEMA_UPDATE": "true"}, config=config_path) as restricted:
+            endpoint: Final = str(restricted.client.base_url).rstrip("/") + ("/mcp/sse" if ingress == "sse" else "/mcp")
+            headers: Final = {"Authorization": f"Bearer {key}", "x-mcp-servers": identity}
+            denied: Final = MCPClient(server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version="2025-11-25", extra_headers=headers)
+            allowed: Final = MCPClient(server_url=endpoint, transport_type=MCPTransport(ingress), protocol_version="2024-11-05", extra_headers=headers)
+
+            async def exercise() -> None:
+                with pytest.raises(MCPError, match="Unsupported MCP protocol version"):
+                    await denied.list_tools(raise_on_error=True)
+                assert f"{alias}-add" in tuple(tool.name for tool in await allowed.list_tools(raise_on_error=True))
+                result: Final = await allowed.call_tool(CallToolRequestParams(name=f"{alias}-add", arguments={"a": 2, "b": 5}))
+                assert result.is_error is False and result.content[0].text == "7"
+
+            asyncio.run(exercise())

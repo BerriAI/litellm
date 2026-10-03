@@ -9,12 +9,12 @@ use crate::{
         error::Error,
         handler::OcrClient,
         transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrEnvironment,
-            OcrRequestContext, OcrResponseFormat, PreparedOcrRequest,
+            BaseOcrConfig, OcrConnection, OcrEnvironment, OcrRequestContext, PreparedOcrRequest,
         },
     },
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 const DEFAULT_LOCATION: &str = "us-central1";
 
@@ -130,7 +130,8 @@ impl VertexAiOcrConfig {
     ) -> Result<vertex::VertexEnvironment, Error> {
         validate_destination(connection)?;
         client
-            .vertex_auth()
+            .auth()
+            .gcp
             .validate_environment(
                 connection.extra_headers.clone(),
                 connection

@@ -124,7 +124,7 @@ class MCPRequestContext:
                     )
                 ),
                 "guardrail_config": deepcopy(
-                    {  # mutable-ok: per-request guardrail configuration is a mutable JSON object in existing callbacks
+                    {
                         key: value
                         for source in sources
                         for key, value in TypeAdapter(dict[str, object])

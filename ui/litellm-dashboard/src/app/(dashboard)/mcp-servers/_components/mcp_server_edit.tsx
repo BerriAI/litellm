@@ -44,6 +44,7 @@ import TruePassthroughWarning from "./TruePassthroughWarning";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import { StdioDisabledBanner, TransportSelectItems } from "./StdioAvailability";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
@@ -51,6 +52,7 @@ import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
 import { EditServerFormValues, buildEditServerPayload, editPayloadErrorMessage } from "./editServerPayload";
+import { DUPLICATE_IDENTIFIER_MESSAGE, findDuplicateMcpServer, mcpSubmitErrorReason } from "./duplicateServerCheck";
 import { toast } from "@/lib/toast";
 import { getEditToolPreview } from "./editToolPreview";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -88,6 +90,8 @@ interface MCPServerEditProps {
   onCancel: () => void;
   onSuccess: (server: MCPServer) => void;
   availableAccessGroups: string[];
+  existingServers?: MCPServer[];
+  stdioEnabled?: boolean;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
@@ -100,6 +104,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   onCancel,
   onSuccess,
   availableAccessGroups,
+  existingServers,
+  stdioEnabled = true,
 }) => {
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
@@ -724,6 +730,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   const handleSave = async (values: EditServerFormValues) => {
     if (!accessToken) return;
+    const duplicate = findDuplicateMcpServer(
+      existingServers,
+      values.server_name || mcpServer.server_name,
+      (values.alias ?? mcpServer.alias) || null,
+      mcpServer.server_id,
+    );
+    if (duplicate) {
+      form.setError(duplicate.field, { type: "duplicate", message: DUPLICATE_IDENTIFIER_MESSAGE });
+      toast.fromError(DUPLICATE_IDENTIFIER_MESSAGE);
+      return;
+    }
     try {
       const built = buildEditServerPayload(values, {
         mcpServer,
@@ -783,7 +800,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       setAppMayNotMatchUpstream(false);
       onSuccess(updated);
     } catch (error: any) {
-      toast.fromError("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
+      const reason = mcpSubmitErrorReason(error);
+      toast.fromError("Failed to update MCP Server" + (reason ? `: ${reason}` : ""));
     }
   };
 
@@ -807,6 +825,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   void submitForm();
                 }}
               >
+                {isStdioTransport && !stdioEnabled && <StdioDisabledBanner />}
                 <MountedFormField
                   label="MCP Server Name"
                   name="server_name"
@@ -860,11 +879,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {TRANSPORT_ITEMS.map((item) => (
-                          <SelectItem key={item.value} value={item.value}>
-                            {item.label}
-                          </SelectItem>
-                        ))}
+                        <TransportSelectItems stdioEnabled={stdioEnabled} />
                       </SelectContent>
                     </Select>
                   )}

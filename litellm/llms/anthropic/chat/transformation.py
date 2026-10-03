@@ -31,13 +31,17 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
-    AllAnthropicMessageValues,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
     AnthropicComputerTool,
@@ -87,6 +91,7 @@ from litellm.utils import (
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_mid_conversation_system,
     supports_reasoning,
     token_counter,
 )
@@ -1743,10 +1748,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def add_code_execution_tool(
         self,
-        messages: list[AllAnthropicMessageValues],
+        messages: list[AllAnthropicPassThroughMessageValues],
         tools: list[AllAnthropicToolsValues | dict],
     ) -> list[AllAnthropicToolsValues | dict]:
-        """if 'container_upload' in messages, add code_execution tool"""
+        """if 'container_upload' in messages, add code_execution tool
+
+        Takes the pass-through union because the translator emits ``role: "system"``
+        in ``messages`` for models that accept it; only ``content`` is read here."""
         add_code_execution_tool = False
         for message in messages:
             message_content = message.get("content", None)
@@ -1966,16 +1974,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
-        # Separate system prompt from rest of message
-        anthropic_system_message_list: Final = self.translate_system_message(messages=messages)
+        # Only the leading system run becomes the top-level system prompt. A later
+        # system message stays in the conversation: hoisting it rewrites the cached
+        # prefix and re-bills the whole history at cache-write pricing (#36559).
+        leading_system_run, later_messages = split_leading_system_run(messages)
+        anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
+        conversation: Final = place_mid_conversation_system(
+            later_messages,
+            supports_mid_conversation_system=supports_mid_conversation_system(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ),
+        )
         # Format rest of message according to anthropic guidelines
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=messages,
+                messages=list(conversation),
                 llm_provider=self._resolved_provider,
             )
         except Exception as e:
@@ -2089,7 +2106,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params.pop("output_config", None)
                 data.pop("output_config", None)
                 return
-            format_only: Final = {"format": preserved_format}  # mutable-ok: json body
+            format_only: Final = {"format": preserved_format}
             optional_params["output_config"] = format_only  # rebind-ok: out-param store
             data["output_config"] = format_only  # rebind-ok: out-param store
             return
@@ -2496,7 +2513,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> list[object]:
         content: Final = completion_response.get("content")
         blocks: Final = content if isinstance(content, Sequence) else ()
-        inputs: Final = {  # mutable-ok: indexes provider server inputs
+        inputs: Final = {
             call_id: tool_input
             for block in blocks
             if isinstance(block, Mapping)
@@ -2505,10 +2522,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and isinstance((call_id := block.get("id")), str)
             and isinstance((tool_input := block.get("input")), Mapping)
         }
-        return [  # mutable-ok: provider-neutral response items
+        return [
             build_web_search_call(
                 tool_id=tool_use_id,
-                tool_input=inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+                tool_input=inputs.get(tool_use_id, {}),
                 result=result,
             )
             for result in web_search_results

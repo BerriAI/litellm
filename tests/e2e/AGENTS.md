@@ -43,9 +43,10 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `mcp/` - the MCP server surface over api_key auth against the real Datadog remote MCP server (see "MCP suite: real Datadog only" below); plus the gateway-managed OAuth (authorization_code) path exercised through `/chat/completions` in `test_mcp_chat_completion_oauth_e2e.py` and direct MCP protocol operations in `test_mcp_oauth_happy_path_e2e.py`, the one behavior Datadog's static-header auth cannot reach, seeding the per-user upstream token via the interactive authorize dance driven with the mcp SDK's own OAuth client (headless-browser consent from a saved session) and asserting the completion or protocol call lists and executes the server's tools with the stored per-user token
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
-- `router/` - routing and reliability behavior (fallbacks, cooldowns) plus the memory regression test (`test_reliability_memory_e2e.py`: a few hundred failing requests with retries and fallbacks must not grow proxy RSS past a fixed budget nor store a request snapshot past a fixed size, the release-gate check for the v1.100.0 retry-breadcrumb leak)
+- `router/` - routing and reliability behavior (fallbacks, cooldowns) plus the memory tests (`test_reliability_memory_e2e.py`: every worker's RSS as read at collection time, before any test traffic, must sit under a fixed idle budget, the release-gate check for a DB-backed boot that idles near the pod limit the way v1.100.x did; and a few hundred failing requests with retries and fallbacks must not grow proxy RSS past a fixed budget nor store a request snapshot past a fixed size, the release-gate check for the v1.100.0 retry-breadcrumb leak)
 - `load/` - performance-category tests, kept OUT of the main suite: throughput/load SLO tests are a different testing category from functional e2e (variance-driven, historically flaky) and live outside this suite until re-implemented as their own pipeline (LIT-5163); do not add a live load test that runs in the default collection. What lives here: the weekly session-anomaly test (`test_weekly_session_anomaly_e2e.py`, Claude Code-shaped multi-turn sessions against real providers with ceilings on error rate, cache read/write, turn time, and spend; marked `weekly` and deselected unless `E2E_WEEKLY_ANOMALY` is set, driven by `.github/workflows/weekly_load_anomaly.yml`), the Redis chaos test (`test_redis_chaos_e2e.py`, locust load against mock deployments split round robin over `/chat/completions` and `/v1/messages`, one endpoint per simulated user, with `CLIENT PAUSE ALL` on the proxy's Redis mid-run to simulate it being down outright, asserting zero failed requests on every endpoint, budgeting RSS and CPU-per-request as ratios against the same run's healthy phase, and holding p50/p90/p99 latency and log-bytes-per-request to flat ceilings (a ratio cannot bound those two: an open breaker skips Redis instead of waiting on it, so the chaos phase can measure cheaper than baseline while still being far slower than a user should see); needs a proxy booted from `gateway/redis_chaos_ci_config.yml` on the same host with `E2E_PROXY_PID` and `E2E_PROXY_LOG` set, marked `redis_chaos`, deselected unless `E2E_REDIS_CHAOS` is set and excluded from the per-PR selector like the rest of `load/`, driven by `.github/workflows/test-e2e-redis-chaos.yml` and by the Buildkite `e2e-redis-chaos` step in project-releaser, which runs the proxy, Postgres and Valkey co-located with pytest in one pod and sets the opt-in), and markerless harness unit tests for the locust, process-usage, and session-anomaly aggregation logic
 - `other/` - the holding-pen suite for the `other.*` registry cluster with no home of its own yet: the master-key auth gate, JWT auth (access tokens issued by a real Keycloak realm, `idp.py` plus `idp_realm.json`, whose JWKS the proxy's `JWT_PUBLIC_KEY_URL` points at; see CONTRIBUTING.md for the start command and config block), and the process-lifecycle health probes (liveness, public readiness, authenticated readiness diagnostics). Promote a cluster out once it is large/stable enough for its own suite
+- `secret_manager/` - the gateway's `key_management_system` against a real secret manager: deployment keys resolved from it (`os.environ/<name>` where the name exists only in the manager) and virtual keys written to and deleted from it. The tests are backend-agnostic and each backend is its own lane, because the setting is global to the proxy: `E2E_SECRET_MANAGER=<system>` opts in and picks the backend from `secret_backends.BACKENDS`, the proxy is booted from `gateway/secret_manager_<system>_ci_config.yml` against the live manager, and the tests reach that manager through the backend's `SecretStore` (`secret_store_<system>.py`). A test needing something not every backend does carries `requires_capability(...)` and is deselected on lanes that lack it. `secret_manager/backend.sh up <system>` runs a backend in Docker and writes the proxy's and the tests' env. Marked `secret_manager`, deselected unless `E2E_SECRET_MANAGER` is set, and kept out of the per-PR selector. Backends today: `hashicorp_vault` and `cyberark` (CyberArk Conjur, which cannot delete, so the delete test is Vault-only)
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
 - `claude_code/` - the Claude Code compatibility matrix: drives the real `claude` CLI (and HTTP probes) against a proxy for each feature x provider cell, reporting tagged-union outcomes via the `compat_result` fixture; ships its own driver/builder/publisher plus `_*_unit_tests/` trees. The HTTP probes ride the shared transport (`ProxyClient.count_tokens` / `ProxyClient.messages`); the CLI-driving path stays bespoke
 - `ui/` - the Admin UI browser suite: Playwright in TypeScript, driving the dashboard served by a live proxy on port 4000 (seeded postgres + mock LLM upstream; see its `run_e2e.sh`). It is a self-contained npm package with its own lockfile and does not use the Python harness, pytest markers, or the shared transport; the Python rules in this file (typed models, `Result` unions, basedpyright zero-error gate) do not apply inside it. Its only Python file, `fixtures/mock_llm_server/server.py`, is excluded from the e2e basedpyright gate via the root `pyrightconfig.json`
@@ -97,7 +98,7 @@ Each suite provides its own `client` fixture (see `llm_translation/passthrough_c
 
 Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Coverage of the harness itself carries no marker and runs whether or not a proxy is up. Add `@pytest.mark.quiet_stack` to a test that measures the proxy itself (RSS, latency): the shared stack lock in `stack_lock.py` then runs it while no other test on the host is hitting the stack, marked or not, so the reading depends only on the test's own traffic. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Record and replay fixtures
 
@@ -129,6 +130,68 @@ Current limits: Bedrock cannot be mounted in record or replay (SigV4 signs the H
 ## Typing
 
 The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
+
+## Typed test metadata
+
+Separate from the coverage registry and additive to it: `@meta(Subject(...))` from `e2e_metadata.py` says what a test DRIVES, as closed enums rather than a string id. `@pytest.mark.covers("cell.id")` is untouched and keeps working exactly as before; the two markers coexist on the same test, and `@meta` always goes BELOW `@covers` so `Item.location` still anchors at the first decorator and every `source` deep link stays put
+
+```python
+@pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.ANTHROPIC,),
+        models=(CHEAP_ANTHROPIC_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
+def test_bare_key_blocks_over_its_own_budget(...) -> None: ...
+```
+
+`route` is the endpoint the test is checking: `TEAM_MANAGEMENT` for a `/team/update` test, `SPEND_REPORTING` for a `/spend/logs` test, `MESSAGES` for a test of spend on `/v1/messages`. A test whose chat call only triggers the behavior under test, like the budget block above, leaves it unset, since its steps already name the call
+
+Every field is optional today (the backfill of the rest of the suite is a later PR) and every field is a closed enum, so a typo is a basedpyright error at the call site rather than a property that silently never appears. `providers`, `models` and `capabilities` are tuples even with one member, because one test node routinely drives several: the claude_code matrix runs haiku, sonnet and opus in a single body, and a spend test calls two providers on one key. Declare every provider and every model the test drives, fallbacks included. The three are independent sets with no positional pairing between them (one provider x three models is the common case), and each is deduped and sorted at declaration so the committed run artifacts diff cleanly. `models=("gpt-5.5")` is a str and not a tuple, so anything but a tuple raises a `TypeError` where the decorator runs and shows up as a collection error naming the file. `Subject` is serialized with `dataclasses.asdict`, so a new scalar field needs no serializer edit; empty fields emit no `<property>` at all. A declared model names the constant the test drives (`CHEAP_ANTHROPIC_MODEL`, the file's own `BACKEND`), never a copy of its value, so the property cannot claim one model while an env override runs another. `e2e_metadata` and its call sites never import litellm, only the stdlib, pytest and pydantic: `Provider` mirrors litellm's `LlmProviders` values instead of importing them, because tests/e2e is shipped to the runner image on its own and a `from litellm...` at module scope would make the litellm package a hard dependency of COLLECTING the suite. `TestProviderMirrorsLitellm` in `tests/code_coverage_tests/test_e2e_metadata.py` fails on drift wherever litellm is importable and skips where it is not, so adding a provider is one line in `e2e_metadata`
+
+Declared fields ride out as JUnit `<property>` entries behind the fixed prefix, the same way steps do: each scalar under its field name, and each plural value as a repeated property under its SINGULAR name (`provider`, `model`, `capability`). The results JSON downstream regroups them under the plural key, so `providers`, `models` and `capabilities` are arrays there, `[]` when empty
+
+## Recorded test steps
+
+`@step` from `e2e_metadata.py` goes on harness helpers (client methods and poll loops), never on a test. Each call adds one plain-English sentence to the running test's list of steps, in call order, so the list reads as what the test did. The step is recorded before the helper runs, so when a test fails, its last step is where it failed. Nobody writes steps by hand. They come from the calls the test actually made, so they can't drift from what happened
+
+Steps are being added one harness at a time, and today `ProxyClient` and the rate-limit suite's `QuotaClient` have them. In a harness that has steps, every new public method that does something (an HTTP call, a poll, a login, a CLI run) gets a `@step`. Pure builders, parsers and `_private` helpers don't
+
+### Writing a label
+
+Write the label for someone who will never open the code, and fill it in from the helper's own parameters:
+
+```python
+@step("Generate a virtual key with {body}")
+def generate_key(self, body: KeyGenerateBody) -> str: ...
+
+@step('Send a /chat/completions request to {model} with the prompt "{content}"')
+def chat(self, key: str, model: str, content: str, *, max_tokens: int = 16) -> StreamingResponse: ...
+```
+
+A test that generates a key with an RPM limit and then sends one request shows:
+
+```
+Generate a virtual key with models: claude-haiku-4-5 and rpm limit: 3
+Send a /chat/completions request to claude-haiku-4-5 with the prompt "reply with one word d3940a1c4288"
+```
+
+A request model prints only the fields the test set, and a dotted placeholder like `{body.litellm_params.model}` prints just one field. A field marked `Field(repr=False)` never prints, so mark every secret field that way, and never put a key, token or credential in a label. As a backstop, the recorder replaces the value of every secret-named environment variable (`*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_CREDENTIALS`) with `***` wherever it shows up in a label. That only covers secrets the environment holds, so a key the proxy hands back during the test is still never named in a label. A placeholder that isn't one of the helper's parameters fails at import, and a literal brace is written `{{id}}`. A filled-in label is squashed onto one line and cut at 200 characters
+
+### Nesting and the step log
+
+Only the outermost step records. `ProxyClient.create_model` calls `register_model`, and domain clients call into `ProxyClient`, so each layer can carry its own label and the test still shows one step per action, worded at the level the test called
+
+On a `@contextmanager` helper, put `@step` above `@contextmanager`. The setup and cleanup around the `yield` count as that one step, and the test's own code inside the `with` records its steps as usual. A plain generator function is rejected at import because its body runs interleaved with the caller's. A decorated helper that warns about its caller uses `stacklevel=2 + STEP_FRAMES`, since the wrapper adds a frame. Nesting is tracked per thread, so a helper that hands work to worker threads still records their steps
+
+Back-to-back identical steps collapse into one, so a poll loop shows up once. The log keeps the latest 50 steps and notes how many earlier ones it dropped, since the end is where a failure happened. It is cleared when each test starts and saved after setup and again after the test body, so a test that errors in a fixture keeps what it recorded. Teardown steps are left out so cleanup never shows up after the step a test failed on
+
+### Where steps end up
+
+Each step is its own `<property name="step">` in the JUnit XML (`junit_properties.py`), because free text has no separator that is safe to join on. project-releaser gathers them into a `steps` array in the results JSON. The tests for all of this sit outside the suite, in `tests/code_coverage_tests/test_e2e_metadata.py` and `test_e2e_junit_report.py`. The second one runs real pytest with `--junitxml` under `-n 2` and checks what lands in the XML
 
 ## Coverage registry
 
@@ -191,7 +254,7 @@ reliability.<behavior>.<variant>.<assertion>
   behavior  : fallback | retry | cooldown | timeout | routing | cache | circuit_breaker | perf
   variant   : <trigger>   5xx | context_window | content_policy | 429 | timeout
               <strategy>  simple_shuffle | usage_based | latency_based | cost_based | least_busy
-              <dimension> latency | throughput | session_anomaly | memory   (perf only; SLO/threshold assertion, not binary)
+              <dimension> latency | throughput | session_anomaly | memory | idle_memory   (perf only; SLO/threshold assertion, not binary)
   assertion : routes_to_fallback | succeeds_within_retries | picks_under_tpm | returns_cached
               | trips_then_recovers | under_slo
   e.g.  reliability.fallback.context_window.routes_to_fallback     exercised_on=[chat_completions]
@@ -210,14 +273,15 @@ quota_management.<behavior>.<variant>.<assertion>
               <spend_tracking> chat_completions | stream | messages_bridge | embeddings
                                | cache_hit | key_rollup | concurrent_burst | tags | end_user
                                | per_model | failure | spend_calculate | pagination | key_attribution
+                               | websearch_interception
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
               | isolates_per_model | isolates_per_member | isolates_per_group | enforced_across_keys
               | routes_to_fallback | reseed_matches_db | reports_spend | logs_cost | zero_cost
               | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
-              | writes_failure_row | returns_cost | keeps_total | joins_key | reports_alias_and_email
+              | writes_failure_row | attributes_provider | returns_cost | keeps_total | joins_key | reports_alias_and_email
               | health_rows_keep_service_account | retrieve_batch_cost_joins_retrieving_key
-              | poller_batch_cost_joins_creating_key
+              | poller_batch_cost_joins_creating_key | bills_under_request_session
   e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
         quota_management.budget.key.blocks_over_limit              exercised_on=[chat_completions]
 ```
@@ -249,7 +313,7 @@ other.<area>.<case>.<assertion>
 ```
 
 ## Hard Rules
-- no unit tests of any kind under `tests/e2e`. a product feature is proven end to end against a live proxy, never with a unit test, and the harness itself is not unit-tested here either. no monkeypatching or mock tests. if a contributor asks you to write an end to end test, do NOT stage a unit test with it; if you find a product gap, call it out in the PR description
+- no unit tests of a product feature under `tests/e2e`, and no mock tests or monkeypatching of code anywhere in it: a product feature is proven end to end against a live proxy, never with a unit test. if a contributor asks you to write an end to end test, do NOT stage a unit test with it; if you find a product gap, call it out in the PR description. the harness's own plumbing is the one exception: the markerless tests in the root-level `test_*.py` files, `coverage_registry/test_collector.py`, `guardrails/test_guardrails_client.py`, the `claude_code/_*_unit_tests/` trees, and the `load/` aggregation tests carry no `e2e` marker, run without a proxy, and take their inputs as arguments or env vars (setting an env var through pytest's `monkeypatch` fixture is fine, patching a function, class, or module is not), and no coverage-registry or compat-matrix cell rests on them. judge a change inside one of them by that standard, not as a misplaced product test
 
 - use model management endpoints to create new models for a test. this could be in a conftest / inline for each test. ask the user what they want.
 
