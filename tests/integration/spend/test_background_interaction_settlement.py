@@ -1,5 +1,6 @@
 import math
 import socket
+import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -348,6 +349,13 @@ def _claimer_pid(row: Mapping[str, JsonValue]) -> int:
     return int(pid)
 
 
+def _booted_after(pid: int, moment: float) -> bool:
+    try:
+        return psutil.Process(pid).create_time() > moment
+    except psutil.NoSuchProcess:
+        return False
+
+
 def _worker_pids(root_pid: int) -> frozenset[int]:
     return frozenset(
         process.pid for process in group_members(root_pid) if process.pid != root_pid and _is_spawned_worker(process)
@@ -438,6 +446,7 @@ def test_a_replica_booting_later_resumes_and_bills_unclaimed_interactions(rig: R
     with rig.creator.scenario() as scenario:
         model: Final = rig.models.in_progress
         key: Final = scenario.key()
+        created_after: Final = time.time()
         created: Final = tuple(_create(rig.creator, model, key) for _ in range(3))
         for item in created:
             _state(rig, item, _completed())
@@ -449,7 +458,8 @@ def test_a_replica_booting_later_resumes_and_bills_unclaimed_interactions(rig: R
             assert len(pids) == 2, pids
             for item in created:
                 _assert_billed(_await_spend_row(item, seconds=90), rates)
-                assert _claimer_pid(_await_outcome(item, "billed")) in pids
+                claimer: Final = _claimer_pid(_await_outcome(item, "billed"))
+                assert claimer in pids or _booted_after(claimer, created_after), (claimer, pids)
         for item in created:
             assert len(_spend_rows(item)) == 1
 
@@ -669,7 +679,7 @@ def test_settlement_on_another_replica_releases_the_creators_budget_reservation(
         pinned: Final = rig.creator.request(
             "POST", "/v1beta/interactions", {"model": model, "input": "settle pinned", "background": True}, key=key
         )
-        assert pinned.status_code == 400, pinned.text
+        assert pinned.status_code == 422 and pinned.json()["error"]["type"] == "budget_exceeded", pinned.text
         _state(rig, first, _completed())
         deleted: Final = _delete(rig.settler, first, key)
         assert deleted.status_code == 200, deleted.text
