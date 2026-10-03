@@ -4,7 +4,8 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.proxy.lens.inference import Deployment, DeploymentParams, completion_charge, quote
+from litellm.proxy.lens.inference import Deployment, DeploymentParams, completion_charge, model_step, quote
+from litellm.proxy.lens.models import ModelRequest
 from litellm.types.utils import ModelResponse
 
 
@@ -120,3 +121,17 @@ def test_unknown_model_capacity_requires_explicit_operator_metadata() -> None:
     assert "model_info.max_output_tokens" in error.value.detail
     configured: Final = Deployment(litellm_params=params, model_info=ModelCapacity(max_output_tokens=32000))
     assert output_tokens(configured) == 32000
+
+
+def test_a_model_step_records_the_serving_model_and_its_tokens() -> None:
+    response: Final = ModelResponse(model="gpt-5.6", usage={"prompt_tokens": 1200, "completion_tokens": 80})
+    step: Final = model_step(response, ModelRequest(prompt="review", purpose="extract"), "analysis", 0.02)
+    assert (step.model, step.prompt_tokens, step.completion_tokens, step.cost) == ("gpt-5.6", 1200, 80, 0.02)
+
+
+def test_a_response_without_usage_still_records_a_step_instead_of_failing_settlement() -> None:
+    response: Final = ModelResponse(model="gpt-5.6")
+    unpriced: Final = response.model_copy(update={"usage": None})
+    step: Final = model_step(unpriced, ModelRequest(prompt="review", purpose="cluster"), "analysis", 0.0)
+    assert (step.prompt_tokens, step.completion_tokens) == (0, 0)
+    assert step.label == "Compared observations"
