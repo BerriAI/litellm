@@ -64,7 +64,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
-    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1215,7 +1215,7 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=None,
         user_api_key_dict=user_api_key_dict,
@@ -2754,7 +2754,7 @@ async def _process_single_key_update(
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
 
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=update_key_request,
         existing_metadata=existing_key_row.metadata,
         user_api_key_dict=user_api_key_dict,
@@ -3202,7 +3202,7 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
         user_api_key_dict=user_api_key_dict,
@@ -5595,7 +5595,7 @@ async def _execute_virtual_key_regeneration(
             user_api_key_dict=user_api_key_dict,
             entity="key",
         )
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
