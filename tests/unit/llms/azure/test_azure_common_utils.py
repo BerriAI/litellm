@@ -2235,6 +2235,11 @@ async def test_azure_client_cache_respects_retry_limit(
         assert initial.max_retries == (
             DEFAULT_MAX_RETRIES if first_retries is None else first_retries
         )
+        if first_retries is None:
+            assert llm.get_azure_openai_client(**kwargs, litellm_params={}) is initial
+            assert llm.get_azure_openai_client(
+                **kwargs, litellm_params={"max_retries": DEFAULT_MAX_RETRIES}
+            ) is initial
         with pytest.raises(RateLimitError):
             response = no_retry.chat.completions.create(
                 model="test-deployment", messages=[{"role": "user", "content": "hi"}]
