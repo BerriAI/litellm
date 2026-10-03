@@ -2,17 +2,11 @@
 import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Check, ChevronDown, Copy } from "lucide-react";
+import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "@/components/ui/dropdown-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
@@ -146,23 +140,11 @@ function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boole
   );
 }
 
-function RunHeader({
-  trace,
-  onBack,
-  embedded,
-  view,
-  onViewChange,
-}: {
-  trace: Trace;
-  onBack: () => void;
-  embedded: boolean;
-  view: TraceView;
-  onViewChange: (view: TraceView) => void;
-}) {
+function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => void; embedded: boolean }) {
   const { summary } = trace;
   const failed = summary.status === "error";
   return (
-    <header className="shrink-0 border-b bg-background px-4 py-3">
+    <header className="shrink-0 border-b bg-background px-4 pt-3">
       <div className="flex min-w-0 items-center gap-2">
         {!embedded && (
           <Button variant="ghost" size="icon-xs" onClick={onBack} aria-label="Back to runs">
@@ -173,29 +155,6 @@ function RunHeader({
         <h1 className="min-w-0 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
         <IdChip value={summary.trace_id} label="Copy trace ID" />
         <div className="ml-auto shrink-0">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="h-7 gap-1 text-xs text-muted-foreground"
-                  aria-label={`Trace view: ${view === "steps" ? "Steps" : "Conversation"}`}
-                />
-              }
-            >
-              {view === "steps" ? "Steps" : "Conversation"}
-              <ChevronDown className="size-3" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuRadioGroup value={view} onValueChange={(value) => onViewChange(value as TraceView)}>
-                <DropdownMenuRadioItem value="steps">Steps</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="conversation">Conversation</DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        <div className="shrink-0">
           <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
         </div>
       </div>
@@ -209,6 +168,14 @@ function RunHeader({
         <Stat label="Cost" value={summary.spend == null ? "Not reported" : formatCost(summary.spend)} />
         {summary.error_count > 0 && <Stat label="Step errors" value={summary.error_count.toLocaleString()} error />}
       </div>
+      <TabsList variant="line" aria-label="Trace view" className="mt-2 h-9 gap-4 p-0">
+        <TabsTrigger value="steps" className="rounded-none px-1 after:bottom-0">
+          Steps
+        </TabsTrigger>
+        <TabsTrigger value="conversation" className="rounded-none px-1 after:bottom-0">
+          Conversation
+        </TabsTrigger>
+      </TabsList>
     </header>
   );
 }
@@ -328,7 +295,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
 
   if (view === "conversation")
     return (
-      <div className="flex min-h-0 flex-1">
+      <TabsContent value="conversation" className="flex min-h-0 flex-1">
         <TraceConversation
           trace={trace}
           accessToken={accessToken}
@@ -337,11 +304,12 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
             onViewChange("steps");
           }}
         />
-      </div>
+      </TabsContent>
     );
 
   return (
-    <div
+    <TabsContent
+      value="steps"
       className={cn(
         "grid min-h-0 flex-1",
         detailOpen
@@ -385,7 +353,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
           <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
         </div>
       )}
-    </div>
+    </TabsContent>
   );
 }
 
@@ -446,14 +414,16 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
     );
   }
   return (
-    <div
+    <Tabs
+      value={view}
+      onValueChange={(value) => setView(value as TraceView)}
       className={cn(
         "@container/trace flex flex-1 flex-col gap-0 overflow-hidden bg-background",
         embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
       )}
       data-testid="run-view"
     >
-      <RunHeader trace={trace} onBack={onBack} embedded={embedded} view={view} onViewChange={setView} />
+      <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
       <RunBody
         key={trace.summary.trace_id}
         trace={trace}
@@ -463,6 +433,6 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
         view={view}
         onViewChange={setView}
       />
-    </div>
+    </Tabs>
   );
 }

@@ -42,8 +42,9 @@ describe("TraceConversation", () => {
   it("switches to a readable transcript and opens the exact tool step from it", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />);
-    await user.click(await screen.findByRole("button", { name: "Trace view: Steps" }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Conversation" }));
+    const conversationTab = await screen.findByRole("tab", { name: "Conversation", selected: false });
+    await user.click(conversationTab);
+    expect(conversationTab).toHaveAttribute("aria-selected", "true");
     const conversation = await screen.findByRole("region", { name: "Trace conversation" });
     expect(await within(conversation).findByText("Read the release notes")).toBeVisible();
     await user.click(await within(conversation).findByRole("button", { name: "Expand read_file tool call" }));
@@ -52,7 +53,7 @@ describe("TraceConversation", () => {
     expect(await within(conversation).findByText("The release is ready")).toBeVisible();
     const toolStep = within(conversation).getByRole("region", { name: "Conversation step read_file" });
     await user.click(within(toolStep).getByRole("button", { name: "Inspect step read_file" }));
-    expect(screen.getByRole("button", { name: "Trace view: Steps" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Steps", selected: true })).toBeVisible();
     expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "tool");
     expect(screen.getByRole("heading", { name: "read_file" })).toBeVisible();
   });
