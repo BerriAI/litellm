@@ -183,37 +183,17 @@ def test_every_sharded_root_named_in_the_script_exists_on_disk():
 
 def test_the_repo_as_it_stands_has_every_shard_child_assigned():
     findings = coverage._unassigned_shard_children(
-        coverage._shard_tokens(coverage._all_scalars(), coverage._unit_selection_arms())
+        coverage._invoked_test_tokens(coverage._all_scalars())
     )
     assert [f.subject for f in findings] == []
 
 
-def test_shard_tokens_credits_only_wired_unit_flags(tmp_path):
-    root = tmp_path / "tests" / "tree"
-    (root / "wired").mkdir(parents=True)
-    (root / "wired" / "test_a.py").write_text("def test_a(): assert True\n")
-    (root / "unwired").mkdir(parents=True)
-    (root / "unwired" / "test_b.py").write_text("def test_b(): assert True\n")
-    script = tmp_path / ".circleci" / "scripts" / "unit_selection.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text(
-        "legacy_paths() {\n"
-        "  case \"$1\" in\n"
-        "    wired-flag) echo tests/tree/wired ;;\n"
-        "    unwired-flag)\n"
-        "      echo tests/tree/unwired ;;\n"
-        "  esac\n"
-        "}\n"
+def test_shards_are_credited_only_from_explicit_test_paths() -> None:
+    scalars: Final = (
+        coverage.Scalar(key="test-path", value="tests/unit/wired\ntests/unit/also_wired"),
+        coverage.Scalar(key="shard", value="tests/unit/not_a_test_path"),
     )
-
-    scalars: Final = (coverage.Scalar(key="unit-flag", value="wired-flag"),)
-    findings = coverage._unassigned_shard_children(
-        coverage._shard_tokens(scalars, coverage._unit_selection_arms(tmp_path)),
-        roots=("tests/tree",),
-        repo_root=tmp_path,
-    )
-
-    assert tuple(f.subject for f in findings) == ("tests/tree/unwired",)
+    assert coverage._invoked_test_tokens(scalars) == frozenset({"tests/unit/wired", "tests/unit/also_wired"})
 
 
 def test_check_shards_passes_on_the_repo_as_it_stands(capsys):
