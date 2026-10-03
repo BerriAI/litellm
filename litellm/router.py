@@ -209,6 +209,7 @@ from litellm.router_utils.fallback_event_handlers import (
     carry_over_pre_routing_selection,
     carry_over_routed_deployment,
     clear_pre_routing_selection,
+    committed_retry_budget_for_request,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
@@ -591,6 +592,27 @@ def _anthropic_stream_fallback_error_for_raised(
         return _anthropic_stream_pre_content_error(error, model)
     retriable: Final = litellm._should_retry(status_code)  # pyright: ignore[reportPrivateUsage]  # shared retry rule
     return _anthropic_stream_pre_content_error(error, model) if retriable else None
+
+
+def _anthropic_stream_frame_error(message: str, status_code: int, model: str) -> Exception:
+    """The exception the pre-stream mapping raises for an HTTP answer with the frame's status, so a retry
+    policy's per-class budget governs an `event: error` frame the way it governs the error before the stream
+    opened; the frame's status stays the one the client sees."""
+    match status_code:
+        case 429:
+            return litellm.exceptions.RateLimitError(message=message, llm_provider="anthropic", model=model)
+        case 500 | 529:
+            return litellm.exceptions.InternalServerError(message=message, llm_provider="anthropic", model=model)
+        case 503:
+            return litellm.exceptions.ServiceUnavailableError(message=message, llm_provider="anthropic", model=model)
+        case 504:
+            return litellm.exceptions.Timeout(
+                message=message, model=model, llm_provider="anthropic", exception_status_code=status_code
+            )
+        case _:
+            return litellm.exceptions.APIError(
+                status_code=status_code, message=message, llm_provider="anthropic", model=model
+            )
 
 
 def _anthropic_stream_pre_content_error(error: Exception, model: str) -> "MidStreamFallbackError":
@@ -5656,12 +5678,7 @@ class Router:
                             message=message,
                             model=model,
                             llm_provider="anthropic",
-                            original_exception=litellm.exceptions.APIError(
-                                status_code=status_code,
-                                message=message,
-                                llm_provider="anthropic",
-                                model=model,
-                            ),
+                            original_exception=_anthropic_stream_frame_error(message, status_code, model),
                             is_pre_first_chunk=True,
                         )
                     for buffered_chunk in buffered_lifecycle_chunks:
@@ -5760,19 +5777,28 @@ class Router:
             return deployment_num_retries
         return self.num_retries if self.num_retries is not None else 0
 
-    def _anthropic_messages_retry_budget(self, trigger: Exception, kwargs: Mapping[str, object]) -> tuple[int, bool]:
-        """The retries this request still has per the retry policy when one names this error, else the plain budget."""
-        plain_budget: Final = self._anthropic_messages_plain_retry_budget(kwargs)
+    def _anthropic_messages_policy_retries(self, trigger: Exception, kwargs: Mapping[str, object]) -> int | None:
         if not self._anthropic_messages_retry_policy_in_force(kwargs):
-            return plain_budget, False
-        policy_retries: Final = _get_num_retries_from_retry_policy(
+            return None
+        return _get_num_retries_from_retry_policy(
             exception=trigger,
             model_group=_request_model_group(kwargs),
             model_group_retry_policy=self._anthropic_messages_group_retry_policy(kwargs),
             retry_policy=self.retry_policy,
         )
+
+    def _anthropic_messages_retry_budget(self, trigger: Exception, kwargs: Mapping[str, object]) -> tuple[int, bool]:
+        """
+        The budget an earlier retry of this request committed to, else the retry policy's grant when one
+        names this error, else the plain budget, with whether a policy governs the retry: a committed budget
+        is kept whichever deployment the retry lands on, as async_function_with_retries keeps its own.
+        """
+        policy_retries: Final = self._anthropic_messages_policy_retries(trigger, kwargs)
+        committed_budget: Final = committed_retry_budget_for_request(kwargs)
+        if committed_budget is not None:
+            return committed_budget, policy_retries is not None
         if policy_retries is None:
-            return plain_budget, False
+            return self._anthropic_messages_plain_retry_budget(kwargs), False
         return policy_retries, True
 
     def _anthropic_messages_stream_can_retry(self, kwargs: Mapping[str, object]) -> bool:
@@ -5783,6 +5809,9 @@ class Router:
         hold: holding frames one attempt too long is safe, forwarding them before a retry is not.
         """
         attempted: Final = attempted_retries_for_request(kwargs)
+        committed_budget: Final = committed_retry_budget_for_request(kwargs)
+        if committed_budget is not None:
+            return committed_budget > attempted
         plain_budget: Final = self._anthropic_messages_plain_retry_budget(kwargs)
         policy: Final = self._anthropic_messages_resolved_retry_policy(kwargs)
         ceiling: Final = plain_budget if policy is None else max(plain_budget, _retry_policy_ceiling(policy))

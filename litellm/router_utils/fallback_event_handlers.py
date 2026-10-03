@@ -390,6 +390,16 @@ def attempted_retries_for_request(kwargs: Mapping[str, object]) -> int:
     return attempted if type(attempted) is int and attempted > 0 else 0
 
 
+def committed_retry_budget_for_request(kwargs: Mapping[str, object]) -> int | None:
+    """The budget the first retry of this request committed to, kept by every later attempt the way the
+    pre-stream retry loop keeps its own; None until a retry has run."""
+    if attempted_retries_for_request(kwargs) == 0:
+        return None
+    bucket: Final = _request_metadata_bucket(kwargs)
+    budget: Final = bucket.get(_MID_STREAM_RETRY_BUDGET_KEY) if bucket is not None else None
+    return budget if type(budget) is int else None
+
+
 def record_retry_attempt(kwargs: Mapping[str, object], attempted_retries: int, max_retries: int) -> None:
     """Stamp the attempt about to run the way async_function_with_retries does before each of its retries."""
     bucket: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))

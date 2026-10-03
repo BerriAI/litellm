@@ -16,6 +16,7 @@ from litellm.router_utils.fallback_event_handlers import (
     MidStreamFallbackControls,
     _trigger_cooldown_for_failed_deployment,
     attempted_retries_for_request,
+    committed_retry_budget_for_request,
     carry_over_routed_deployment,
     clear_pre_routing_selection,
     fallback_attempt_key,
@@ -1467,6 +1468,21 @@ def test_record_retry_attempt_stamps_the_bucket_the_retry_wrapper_reads():
     assert kwargs["litellm_metadata"] == {"attempted_retries": 1, "max_retries": 2}
     assert kwargs["metadata"] == {}
     assert attempted_retries_for_request(kwargs) == 1
+    assert committed_retry_budget_for_request(kwargs) == 2
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        pytest.param({"litellm_metadata": {"attempted_retries": 1, "max_retries": 3}}, 3, id="committed-by-a-retry"),
+        pytest.param({"litellm_metadata": {"attempted_retries": 0, "max_retries": 3}}, None, id="stamped-before-any-retry"),
+        pytest.param({"litellm_metadata": {"attempted_retries": 1, "max_retries": "3"}}, None, id="string-is-not-a-budget"),
+        pytest.param({"litellm_metadata": {"attempted_retries": 1}}, None, id="no-budget"),
+        pytest.param({}, None, id="no-bucket"),
+    ],
+)
+def test_committed_retry_budget_for_request_is_the_budget_a_retry_stamped(kwargs, expected):
+    assert committed_retry_budget_for_request(kwargs) == expected
 
 
 def test_carry_over_routed_deployment_copies_model_info_into_the_snapshot():

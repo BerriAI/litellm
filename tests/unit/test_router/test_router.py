@@ -2,6 +2,7 @@ import asyncio
 import copy
 import functools
 import gc
+import itertools
 import json
 import logging
 import os
@@ -56,7 +57,15 @@ from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deploymen
 from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METADATA_KEY
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
+from litellm.types.router import (
+    CustomRoutingStrategyBase,
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    ModelInfo,
+    PreRoutingHookResponse,
+    RetryPolicy,
+)
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -15220,6 +15229,9 @@ def test_anthropic_messages_retry_budget_precedence_direct_call():
     assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
     assert policy_router._anthropic_messages_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
     assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
+    committed = {**routed, "litellm_metadata": {**routed["litellm_metadata"], "attempted_retries": 1, "max_retries": 5}}
+    assert router._anthropic_messages_retry_budget(drop, committed) == (5, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, committed) == (5, True)
 
 
 def test_anthropic_messages_stream_can_retry_direct_call():
@@ -15319,6 +15331,111 @@ async def test_anthropic_messages_retry_policy_sets_the_mid_stream_retry_budget_
 
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+def _anthropic_messages_error_frame(error_type: str) -> bytes:
+    return f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': error_type, 'message': error_type}})}\n\n".encode()
+
+
+_ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES: Final = (
+    pytest.param("api_error", RetryPolicy(InternalServerErrorRetries=1), id="api_error-500-internal-server"),
+    pytest.param("overloaded_error", RetryPolicy(ServiceUnavailableErrorRetries=1), id="overloaded-503-unavailable"),
+    pytest.param("rate_limit_error", RetryPolicy(RateLimitErrorRetries=1), id="rate-limit-429"),
+    pytest.param("timeout_error", RetryPolicy(TimeoutErrorRetries=1), id="timeout-504"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type,policy", _ANTHROPIC_MESSAGES_ERROR_FRAME_POLICIES)
+async def test_anthropic_messages_error_frame_is_retried_under_the_class_the_pre_stream_mapping_gives_it(
+    error_type, policy
+):
+    """An `event: error` frame before content carried a generic error, so a policy naming only error classes
+    granted it no retry while the hold still counted the policy: one attempt, then an HTTP error with no
+    bytes out. The frame now takes the class the pre-stream mapping raises for an answer with its status."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=policy)
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_error_frame(error_type)]
+        ),
+        _anthropic_messages_retried_stream,
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 0), (1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_error_frame_outside_the_policy_class_reaches_the_client_with_its_status():
+    """An overloaded frame keeps its 503, a ServiceUnavailableError, so a policy granting only
+    InternalServerError retries leaves it unretried and the client gets that error."""
+    router = _anthropic_messages_retry_router(num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1))
+    provider = _AnthropicMessagesScriptedProvider(
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+        )
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.ServiceUnavailableError) as raised:
+        [chunk async for chunk in stream]
+
+    assert raised.value.status_code == 503
+    assert len(provider.calls) == 1
+
+
+class _AnthropicMessagesAlternatingDeployments(CustomRoutingStrategyBase):
+    """Routes each attempt to the group's next deployment in turn, so which sibling a retry lands on is known."""
+
+    def __init__(self, router: Router, model_group: str) -> None:
+        self._deployments = itertools.cycle(router.get_model_list(model_name=model_group) or ())
+
+    async def async_get_available_deployment(
+        self, model, messages=None, input=None, specific_deployment=False, request_kwargs=None
+    ):
+        return next(self._deployments)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_num_retries,sibling_num_retries,expected_counters",
+    [
+        pytest.param(3, 1, [(0, 0), (1, 3), (2, 3), (3, 3)], id="sibling-grants-fewer"),
+        pytest.param(1, 3, [(0, 0), (1, 1)], id="sibling-grants-more"),
+    ],
+)
+async def test_anthropic_messages_retries_keep_the_budget_the_first_drop_committed_to_across_deployments(
+    first_num_retries, sibling_num_retries, expected_counters
+):
+    """A retry's stream recomputed its budget from the sibling deployment it landed on, so a group whose
+    deployments grant different num_retries stopped early or overshot the budget the first drop stamped
+    into the retry headers; later attempts now keep that budget, as the pre-stream retry loop does."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "glm",
+                "litellm_params": {"model": "anthropic/glm-a", "api_key": "sk-test", "num_retries": first_num_retries},
+            },
+            {
+                "model_name": "glm",
+                "litellm_params": {"model": "anthropic/glm-b", "api_key": "sk-test", "num_retries": sibling_num_retries},
+            },
+        ],
+        num_retries=0,
+        fallbacks=None,
+    )
+    router.set_custom_routing_strategy(_AnthropicMessagesAlternatingDeployments(router, "glm"))
+    provider = _AnthropicMessagesScriptedProvider(*[_anthropic_messages_dropped_before_content] * len(expected_counters))
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    with pytest.raises(litellm.APIConnectionError):
+        [chunk async for chunk in stream]
+
+    assert [model for model, _, _ in provider.calls] == (["anthropic/glm-a", "anthropic/glm-b"] * 2)[: len(expected_counters)]
+    assert [(attempted, budget) for _, attempted, budget in provider.calls] == expected_counters
 
 
 @pytest.mark.asyncio
