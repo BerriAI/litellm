@@ -5900,10 +5900,14 @@ class Router:
                 kwargs=initial_kwargs,
                 metadata_variable_name="litellm_metadata",
             )
-            # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
-            # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
+            # The content-policy and context-window dispatch branches match on the trigger's own type, so
+            # such an error's MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
             fallback_trigger: Final[Exception] = (
-                e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
+                e.original_exception
+                if isinstance(
+                    e.original_exception, (litellm.ContentPolicyViolationError, litellm.ContextWindowExceededError)
+                )
+                else e
             )
             fallback_response: Final = await self.async_function_with_fallbacks_common_utils(
                 e=fallback_trigger,

@@ -14873,6 +14873,7 @@ def _anthropic_messages_retry_router(deployment_params: dict | None = None, **ro
         model_list=[
             *group_deployments,
             {"model_name": "fb", "litellm_params": {"model": "anthropic/fb-model", "api_key": "sk-test"}},
+            {"model_name": "cw", "litellm_params": {"model": "anthropic/cw-model", "api_key": "sk-test"}},
         ],
         **router_kwargs,
     )
@@ -15068,6 +15069,66 @@ async def test_anthropic_messages_retry_raising_a_non_retriable_error_reaches_th
         [chunk async for chunk in stream]
 
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
+def _anthropic_messages_raise_context_window_error():
+    raise litellm.ContextWindowExceededError(message="prompt too long", llm_provider="anthropic", model="glm")
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_retry_raising_a_context_window_error_takes_the_context_window_fallback():
+    """The fallback chain sees the retry's own error type, so a context window overflow on the retried
+    deployment reaches context_window_fallbacks rather than the regular fallbacks."""
+    router = _anthropic_messages_retry_router(
+        num_retries=2, fallbacks=[{"glm": ["fb"]}], context_window_fallbacks=[{"glm": ["cw"]}]
+    )
+    provider = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content,
+        _anthropic_messages_raise_context_window_error,
+        lambda: _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+        ),
+    )
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from cw")]
+    assert [model for model, _, _ in provider.calls][-1] == "anthropic/cw-model"
+
+
+def test_anthropic_messages_retry_budget_precedence_direct_call():
+    """A retry policy naming the error class outranks the request's num_retries, which outranks the routed
+    deployment's, which outranks the router's; num_retries=0 on the request turns a policy off too."""
+    router = _anthropic_messages_retry_router(num_retries=3, deployment_params={"num_retries": 2})
+    deployment_id = router.get_model_list(model_name="glm")[0]["model_info"]["id"]
+    routed = {"model": "glm", "litellm_metadata": {"model_info": {"id": deployment_id}}}
+    drop = litellm.APIConnectionError(message="closed", llm_provider="databricks", model="glm")
+    reset = litellm.InternalServerError(message="reset", llm_provider="databricks", model="glm")
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=3, retry_policy=RetryPolicy(InternalServerErrorRetries=4)
+    )
+
+    assert router._anthropic_messages_retry_budget(drop, {"model": "glm"}) == (3, False)
+    assert router._anthropic_messages_retry_budget(drop, routed) == (2, False)
+    assert router._anthropic_messages_retry_budget(drop, {**routed, "num_retries": 1}) == (1, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 1}) == (4, True)
+    assert policy_router._anthropic_messages_retry_budget(drop, {"model": "glm", "num_retries": 1}) == (1, False)
+    assert policy_router._anthropic_messages_retry_budget(reset, {"model": "glm", "num_retries": 0}) == (0, False)
+
+
+def test_anthropic_messages_stream_can_retry_direct_call():
+    router = _anthropic_messages_retry_router(num_retries=1)
+    policy_router = _anthropic_messages_retry_router(
+        num_retries=0, retry_policy=RetryPolicy(InternalServerErrorRetries=1)
+    )
+
+    assert router._anthropic_messages_stream_can_retry({"model": "glm"}) is True
+    spent = {"model": "glm", "litellm_metadata": {"attempted_retries": 1}}
+    assert router._anthropic_messages_stream_can_retry(spent) is False
+    assert router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
+    assert policy_router._anthropic_messages_stream_can_retry({"model": "glm"}) is True
+    assert policy_router._anthropic_messages_stream_can_retry({"model": "glm", "num_retries": 0}) is False
 
 
 @pytest.mark.asyncio
