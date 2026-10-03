@@ -14,7 +14,7 @@ Use action=feedback to read prior findings and dismissal reasons only when feedb
 The current page is already supplied; feedback_pages=0 means no prior findings or feedback exist, so do not request feedback.
 Request only page numbers below the corresponding page count.
 Pages start at zero and no evidence is discarded.
-Return action='submit' and finding={title,description,check_id,kind:issue|pattern,priority:high|medium|low,suggestion,limitation,fix,evidence:[{execution_id,span_id,quote,role:support|counterexample}],existing_finding_id} only when evidence supports it.
+Return action='submit' and finding={title,description,check_id,kind:issue|pattern,priority:high|medium|low,suggestion,limitation,brief,evidence:[{execution_id,span_id,quote,role:support|counterexample}],existing_finding_id} only when evidence supports it.
 Mark quotes from runs that demonstrate the opposite behavior as counterexample, so they are not mistaken for affected runs.
 Include at least one supporting quote.
 Never put internal run aliases in prose; the evidence links identify the runs.
@@ -23,16 +23,14 @@ Title: a short, concrete outcome in at most 12 words.
 Description: one or two short sentences saying what happened and why it matters, at most 60 words.
 Put uncertainty or counterexamples in limitation, not in the main description; use at most 40 words.
 Suggestion: one specific action, at most 25 words, or empty if no action is needed.
-For issues, also return fix: a brief the user pastes into a coding agent that owns the observed agent.
-Scope what went wrong from the evidence before proposing changes.
-Find the most specific cause the evidence supports: compare each failed or empty tool result with the tools, permissions, working directory, and configuration visible in the recorded requests; a tool call that fails without output usually means the tool is not allowed, missing, or misconfigured.
-Prefer a fix that removes that cause, such as granting a missing tool or permission, over generic process guards like checklists or retries.
-fix.problem: the root cause in one or two sentences.
-fix.user_goal: what the end user was trying to achieve.
-fix.what_happened: what the agent actually output or did, quoting the recorded output where possible.
-fix.options: exactly two distinct, concrete changes to the agent (for example a system prompt edit, a tool description or schema change, a guard in code, or a missing tool or permission), each with a short title and the exact change to make; never suggest only verifying, monitoring, or investigating further.
-fix.test_cases: one to five user inputs drawn from the evidence with the behavior to expect after the fix.
-Omit fix for patterns or when the evidence does not show a fixable cause.
+For issues, also return brief, which describes the failure so anyone can reproduce and verify it without access to the agent's code.
+Scope what went wrong from the evidence: compare each failed or empty tool result with the tools, permissions, working directory, and configuration visible in the recorded requests, and name the most specific cause the evidence supports.
+brief.problem: the root cause in one or two sentences.
+brief.user_goal: what the end user was trying to achieve.
+brief.what_happened: what the agent actually output or did, quoting the recorded output where possible.
+brief.test_cases: one to five user inputs drawn from the evidence, each with the behavior a correct agent should show.
+Do not prescribe code or configuration changes in brief.
+Omit brief for patterns.
 Avoid jargon such as document-borne, visible noncompliance, instruction-bearing, or evaluator-directed.
 Successful recovery or resisted instructions are kind=pattern with low priority, not issues to resolve.
 For example: 'Agents ignored misleading instructions in documents'.
