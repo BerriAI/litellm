@@ -2271,6 +2271,13 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details[f"has_logged_{event_type}"] = True
         return
 
+    def has_run_logging(
+        self,
+        event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
+    ) -> None:
+        """Deprecated alias of mark_logging_complete, kept for callers of the old name"""
+        self.mark_logging_complete(event_type=event_type)
+
     def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
         if litellm.global_disable_no_log_param:
             return True

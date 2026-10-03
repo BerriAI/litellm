@@ -1608,6 +1608,20 @@ def test_mark_logging_complete_flags_by_stream_and_event(
     assert all(logging_obj.should_run_logging(event_type=other_event) for other_event in events if other_event != event)
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_has_run_logging_alias_marks_logging_complete(
+    logging_obj: LitellmLogging,
+    stream: bool,
+) -> None:
+    logging_obj.stream = stream
+
+    logging_obj.has_run_logging(event_type="async_failure")
+    assert logging_obj.should_run_logging(event_type="async_failure") is False
+
+    logging_obj.has_run_logging(event_type="async_success")
+    assert logging_obj.should_run_logging(event_type="async_success") is stream
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("concurrent", [False, True])
