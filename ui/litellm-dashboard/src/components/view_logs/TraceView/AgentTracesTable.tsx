@@ -16,6 +16,8 @@ interface AgentTracesTableProps {
   isLoading: boolean;
   error: Error | null;
   hasMore: boolean;
+  isFetching?: boolean;
+  onRetry?: () => void;
   onLoadMore: () => void;
   onOpenTrace: (trace: TraceSummary) => void;
   selectedKey?: string | null;
@@ -53,6 +55,8 @@ export function AgentTracesTable({
   isLoading,
   error,
   hasMore,
+  isFetching = false,
+  onRetry,
   onLoadMore,
   onOpenTrace,
   selectedKey = null,
@@ -105,6 +109,14 @@ export function AgentTracesTable({
                   <span className="truncate text-foreground">
                     {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
                   </span>
+                  {run.resolution_limited && (
+                    <span
+                      className="shrink-0 text-[10px] text-muted-foreground"
+                      title="This run is too large to calculate all totals in this view"
+                    >
+                      Partial totals
+                    </span>
+                  )}
                   <span className="hidden shrink-0 font-mono text-[10px] text-muted-foreground 2xl:inline">
                     {run.trace_id}
                   </span>
@@ -132,15 +144,24 @@ export function AgentTracesTable({
       </table>
       {isLoading && <div className="py-16 text-center text-[12px] text-muted-foreground">Loading runs…</div>}
       {error && (
-        <div className="py-16 text-center text-[12px] text-muted-foreground">Could not load runs: {error.message}</div>
+        <div role="alert" className="flex items-center justify-center gap-3 py-6 text-[12px] text-muted-foreground">
+          <span>
+            {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
+          </span>
+          {onRetry && (
+            <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
+              Retry
+            </Button>
+          )}
+        </div>
       )}
       {isEmpty && (
         <div className="py-16 text-center text-[12px] text-muted-foreground">No runs match these filters.</div>
       )}
       {hasMore && (
         <div className="border-t border-border/60 px-3 py-2">
-          <Button size="xs" variant="ghost" onClick={onLoadMore}>
-            Load more
+          <Button size="xs" variant="ghost" disabled={isFetching} onClick={onLoadMore}>
+            {isFetching ? "Loading…" : "Load more"}
           </Button>
         </div>
       )}

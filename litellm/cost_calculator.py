@@ -99,6 +99,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -137,8 +138,6 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     _cached_get_model_info_helper,
-    _get_model_info_from_generalization,
-    _get_potential_model_names,
     token_counter,
 )
 
@@ -926,22 +925,6 @@ def _get_response_model(completion_response: object) -> str | None:
     return None
 
 
-def _prices_only_via_capability_rule(model: str | None, custom_llm_provider: str | None) -> bool:
-    if model is None or model in litellm.model_cost or f"{custom_llm_provider}/{model}" in litellm.model_cost:
-        return False
-    try:
-        return (
-            _get_model_info_from_generalization(
-                model=model,
-                potential_model_names=_get_potential_model_names(model=model, custom_llm_provider=custom_llm_provider),
-                custom_llm_provider=custom_llm_provider,
-            )
-            is not None
-        )
-    except Exception:
-        return False
-
-
 _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
     # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
     "ON_DEMAND_PRIORITY": "priority",
@@ -1076,6 +1059,7 @@ def _is_known_usage_objects(usage_obj):
     return (
         isinstance(usage_obj, litellm.Usage)
         or isinstance(usage_obj, ResponseAPIUsage)
+        or isinstance(usage_obj, DecisionsUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1458,10 +1442,12 @@ def completion_cost(
             region_name=region_name,
         )
 
-        potential_model_names: Final = sorted(
-            (selected_model, _get_response_model(completion_response), *((model,) if model is not None else ())),
-            key=lambda candidate: _prices_only_via_capability_rule(candidate, cast(str | None, custom_llm_provider)),
-        )
+        potential_model_names: Final = [
+            selected_model,
+            _get_response_model(completion_response),
+        ]
+        if model is not None:
+            potential_model_names.append(model)
 
         for idx, model in enumerate(potential_model_names):
             try:
@@ -1476,16 +1462,21 @@ def completion_cost(
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
-                        _usage_for_dump = usage_obj
+                        _usage_for_dump = cast(BaseModel, usage_obj)
                         setattr(
                             completion_response,
                             "usage",
                             litellm.Usage(**_usage_for_dump.model_dump()),
                         )
-                    if usage_obj is None:
+                    if isinstance(usage_obj, DecisionsUsage):
+                        _usage = {
+                            "prompt_tokens": usage_obj.input_tokens,
+                            "completion_tokens": usage_obj.output_tokens,
+                        }
+                    elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
-                        _usage = usage_obj.model_dump()
+                        _usage = cast(BaseModel, usage_obj).model_dump()
                     else:
                         _usage = usage_obj
 
@@ -1973,7 +1964,8 @@ def response_cost_calculator(
     | LiteLLMRealtimeStreamLoggingObject
     | OpenAIModerationResponse
     | Response
-    | SearchResponse,
+    | SearchResponse
+    | DecisionsResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -1995,6 +1987,8 @@ def response_cost_calculator(
         "arerank",
         "search",
         "asearch",
+        "decisions",
+        "adecisions",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,
@@ -2140,10 +2134,7 @@ def pricing_entry_for_cost_calc(
         router_model_id=router_model_id,
         region_name=region_name,
     )
-    candidates: Final = sorted(
-        (selected_model, _get_response_model(completion_response), model),
-        key=lambda candidate: _prices_only_via_capability_rule(candidate, custom_llm_provider),
-    )
+    candidates: Final = (selected_model, _get_response_model(completion_response), model)
     resolved: Final = next(
         (info for info in (_cost_map_model_info(name, custom_llm_provider) for name in candidates if name) if info),
         None,

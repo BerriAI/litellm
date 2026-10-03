@@ -473,3 +473,12 @@
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
 }
+
+@keyframes lens-sweep {
+  from {
+    left: -6rem;
+  }
+  to {
+    left: 100%;
+  }
+}

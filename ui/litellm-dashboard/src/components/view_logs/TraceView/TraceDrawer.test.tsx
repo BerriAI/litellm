@@ -1,4 +1,5 @@
-import { screen, within } from "@testing-library/react";
+import { screen, within, waitFor, act } from "@testing-library/react";
+import { focusManager, onlineManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,17 +47,21 @@ const rootSpanId = (trace: Trace): string => trace.spans.find((s) => s.parent_sp
 describe("RunView", () => {
   beforeEach(() => {
     testQueryClient.clear();
+    testQueryClient.setQueryDefaults(["agentTrace"], {});
     vi.mocked(copyToClipboard).mockClear();
   });
 
-  it("shows a one-line run header: agent name, trace id, duration and steps", async () => {
+  it("shows the run name, copyable ID and run totals", async () => {
     renderRun(research);
 
     const header = await screen.findByRole("banner");
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
-    expect(header).toHaveTextContent(research.summary.trace_id);
-    expect(header).toHaveTextContent("duration 40.20s");
-    expect(header).toHaveTextContent(`steps ${research.summary.span_count}`);
+    expect(within(header).getByRole("button", { name: "Copy trace ID" })).toHaveAttribute(
+      "title",
+      research.summary.trace_id,
+    );
+    expect(header).toHaveTextContent("Duration 40.20s");
+    expect(header).toHaveTextContent(`Steps ${research.summary.span_count}`);
     expect(header).not.toHaveTextContent("failed");
   });
 
@@ -86,7 +91,7 @@ describe("RunView", () => {
 
     const tree = await screen.findByRole("tree", { name: "Spans in time order" });
     expect(tree).toHaveTextContent("researcher×12");
-    expect(screen.getByRole("banner")).toHaveTextContent(`failed ${swarm.summary.error_count}`);
+    expect(screen.getByRole("banner")).toHaveTextContent(`Step errors ${swarm.summary.error_count}`);
   });
 
   it("opens a failed run on its first failed span", async () => {
@@ -127,6 +132,8 @@ describe("RunView", () => {
     const pane = await screen.findByTestId("detail-pane");
     const root = rootSpanId(research);
     expect(pane).toHaveAttribute("data-row-id", root);
+    await user.keyboard("{Meta>}j{/Meta}{Control>}j{/Control}");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
     await user.keyboard("j");
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     await user.keyboard("k");
@@ -150,15 +157,161 @@ describe("RunView", () => {
     expect(screen.queryByRole("button", { name: "Show details" })).not.toBeInTheDocument();
   });
 
+  it("keeps loaded steps and totals after a page fails, then retries the same cursor", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 2 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "next-page" };
+    const second: Trace = {
+      ...research,
+      summary,
+      spans: [
+        { ...research.spans[1], type: "tool", name: "later-page-tool", parent_span_id: research.spans[0].span_id },
+      ],
+      next_cursor: null,
+    };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(second);
+    renderWithProviders(<RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+
+    expect(await screen.findByText("Showing 1 of 2 steps")).toBeVisible();
+    const before = screen.getByRole("banner").textContent;
+    await user.click(screen.getByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("Could not load more steps. Your loaded steps are still available.")).toBeVisible();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("later-page-tool")).toBeVisible();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    expect(screen.getAllByRole("treeitem")).toHaveLength(2);
+    expect(screen.getByRole("banner")).toHaveTextContent(before ?? "");
+    expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page", "next-page"]);
+  });
+
+  it("refreshes a failed later page from one new snapshot", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 3 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "old-second" };
+    const second: Trace = {
+      ...research,
+      summary,
+      spans: [
+        { ...research.spans[1], type: "tool", name: "old-snapshot-tool", parent_span_id: research.spans[0].span_id },
+      ],
+      next_cursor: "old-third",
+    };
+    const fresh: Trace = {
+      ...first,
+      summary: { ...summary, span_count: 2 },
+      spans: [{ ...research.spans[0], name: "fresh-root" }],
+      next_cursor: "fresh-second",
+    };
+    const freshSecond: Trace = { ...fresh, spans: [{ ...second.spans[0], name: "fresh-tool" }], next_cursor: null };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second)
+      .mockRejectedValueOnce(new Error("Trace changed while paging; refresh the trace"))
+      .mockResolvedValueOnce(fresh)
+      .mockResolvedValueOnce(freshSecond);
+    renderWithProviders(<RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("old-snapshot-tool")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Load more steps" }));
+    await user.click(await screen.findByRole("button", { name: "Refresh trace" }));
+    expect(await screen.findByText("Showing 1 of 2 steps")).toBeVisible();
+    expect(screen.queryByText("old-snapshot-tool")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("fresh-tool")).toBeVisible();
+    expect(screen.getAllByRole("treeitem")).toHaveLength(2);
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([
+      null,
+      "old-second",
+      "old-third",
+      null,
+      "fresh-second",
+    ]);
+  });
+
+  it("keeps a loaded snapshot on focus and reconnect", async () => {
+    testQueryClient.setQueryDefaults(["agentTrace"], { refetchOnWindowFocus: true, refetchOnReconnect: true });
+    vi.mocked(agentTraceCall).mockReset();
+    renderRun(research);
+    await screen.findByTestId("detail-pane");
+    await testQueryClient.invalidateQueries({ queryKey: ["agentTrace"], refetchType: "none" });
+    await act(async () => {
+      focusManager.setFocused(false);
+      onlineManager.setOnline(false);
+      focusManager.setFocused(true);
+      onlineManager.setOnline(true);
+    });
+    await waitFor(() => expect(testQueryClient.isFetching()).toBe(0));
+    expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+  });
+
   it("keeps a way back to the runs table when a run fails to load", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
-    vi.mocked(agentTraceCall).mockRejectedValue(new Error("trace exceeds the 1000 span read limit"));
+    vi.mocked(agentTraceCall).mockRejectedValue(new Error("Traces are temporarily unavailable"));
     renderWithProviders(<RunView traceId="big" accessToken="sk-test" onBack={onBack} />);
 
-    expect(await screen.findByText("trace exceeds the 1000 span read limit")).toBeInTheDocument();
+    expect(await screen.findByText("Traces are temporarily unavailable")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /back to traces/i }));
     expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds a step beyond a folded group's first page and reveals it after search clears", async () => {
+    const user = userEvent.setup();
+    const root = research.spans.find((span) => span.parent_span_id === null)!;
+    const children = Array.from(
+      { length: 45 },
+      (_, index): Span => ({
+        ...root,
+        span_id: `case-${index}`,
+        parent_span_id: root.span_id,
+        type: "tool",
+        name: "check_case",
+        input_preview: `Case ${index}`,
+        start_offset_ms: index + 1,
+        status: index === 44 ? "error" : "ok",
+      }),
+    );
+    renderRun({ ...research, spans: [root, ...children] });
+    const search = await screen.findByRole("textbox", { name: "Search steps" });
+    await user.type(search, "case 43");
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    await user.click(screen.getByRole("treeitem"));
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", "case-43");
+    await user.click(screen.getByRole("button", { name: "Clear step search" }));
+    expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "case-43");
+    await user.click(screen.getByRole("button", { name: /^Errors/ }));
+    expect(screen.getAllByRole("treeitem")).toHaveLength(1);
+    expect(screen.getByRole("treeitem")).toHaveAttribute("data-row-id", "case-44");
+    await user.type(search, "not present");
+    expect(screen.getByText("No matching steps")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
+  });
+
+  it("does not navigate steps while typing or moving the search cursor", async () => {
+    const user = userEvent.setup();
+    renderRun(research);
+    const search = await screen.findByRole("textbox", { name: "Search steps" });
+    const selected = screen.getByTestId("detail-pane").getAttribute("data-row-id");
+    await user.type(search, "jk{ArrowDown}{ArrowUp}");
+    expect(search).toHaveValue("jk");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selected);
+  });
+
+  it("distinguishes a completed run with recovered step errors from a failed run", async () => {
+    renderRun({ ...research, summary: { ...research.summary, status: "ok", error_count: 2 } });
+    const header = await screen.findByRole("banner");
+    expect(header).toHaveTextContent("Completed");
+    expect(header).toHaveTextContent("Step errors 2");
+    expect(header).not.toHaveTextContent("Failed");
   });
 
   it("copies a curl one-liner for Claude / Codex", async () => {
@@ -186,6 +339,16 @@ describe("initialRunSelection", () => {
     const toolFailure = child(toolFields);
     const trace = { ...research, spans: [base, hiddenFailure, toolFailure] };
     expect(initialRunSelection(trace).selectedId).toBe("tool");
+  });
+
+  it("folds other agent branches while revealing the failed step", () => {
+    const first = child({ span_id: "first", type: "agent" });
+    const second = child({ span_id: "second", type: "agent" });
+    const failure = child({ span_id: "failed", parent_span_id: "second", type: "tool", status: "error" });
+    const { selectedId, state } = initialRunSelection({ ...research, spans: [base, first, second, failure] });
+    expect(selectedId).toBe("failed");
+    expect(state.collapsedSpanIds.has("first")).toBe(true);
+    expect(state.collapsedSpanIds.has("second")).toBe(false);
   });
 
   it("falls back to the nearest visible ancestor when only a hidden span failed", () => {

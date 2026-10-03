@@ -8,7 +8,7 @@ import {
   type FieldValues,
   type UseFormGetValues,
 } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import { FormField } from "@/components/shared/form/FormField";

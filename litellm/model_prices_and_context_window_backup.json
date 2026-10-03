@@ -11542,9 +11542,11 @@
     },
     "azure_ai/flux.2-pro": {
         "litellm_provider": "azure_ai",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
         "mode": "image_generation",
         "output_cost_per_image": 0.04,
-        "source": "https://ai.azure.com/explore/models/flux.2-pro/version/1/registry/azureml-blackforestlabs",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supported_endpoints": [
             "/v1/images/generations"
         ]
@@ -11872,7 +11874,8 @@
             "/v1/images/generations",
             "/v1/images/edits"
         ],
-        "deprecation_date": "2026-10-01"
+        "deprecation_date": "2026-10-01",
+        "max_input_tokens": 32000
     },
     "azure_ai/MAI-Image-2.5-Flash": {
         "input_cost_per_image_token": 1.75e-06,
@@ -11886,13 +11889,15 @@
             "/v1/images/generations",
             "/v1/images/edits"
         ],
-        "deprecation_date": "2026-10-01"
+        "deprecation_date": "2026-10-01",
+        "max_input_tokens": 32000
     },
     "azure_ai/MAI-Image-2.5-Pro": {
         "deprecation_date": "2026-10-01",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
+        "max_input_tokens": 32000,
         "mode": "image_generation",
         "output_cost_per_image": 0.1085,
         "output_cost_per_image_token": 0.000106,
@@ -15608,6 +15613,38 @@
         "supports_fast_mode": true,
         "prompt_cache_min_tokens": 1024,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+    },
+    "cloudflare/clef": {
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+    },
+    "cloudflare/clef-flash": {
+        "input_cost_per_token": 9e-08,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+    },
+    "cloudflare/@cf/cloudflare/clef": {
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
+    },
+    "cloudflare/@cf/cloudflare/clef-flash": {
+        "input_cost_per_token": 9e-08,
+        "litellm_provider": "cloudflare",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
     },
     "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {
         "input_cost_per_token": 1.923e-06,
@@ -44418,6 +44455,14 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07
     },
+    "perplexity/pplx-decider-v1-27b": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.perplexity.ai/api-reference/decisions-post"
+    },
     "perplexity/sonar": {
         "input_cost_per_token": 1e-06,
         "litellm_provider": "perplexity",
@@ -64888,6 +64933,7 @@
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
+        "max_input_tokens": 32000,
         "mode": "image_generation",
         "output_cost_per_image_token": 3.8e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
@@ -64900,6 +64946,7 @@
         "input_cost_per_image_token": 2.5e-06,
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure_ai",
+        "max_input_tokens": 32000,
         "mode": "image_generation",
         "output_cost_per_image_token": 1.9e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
@@ -70741,7 +70788,7 @@
         "cache_read_input_token_cost": 4.13e-07,
         "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 6.6e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -70824,7 +70871,7 @@
         "cache_read_input_token_cost": 1.38e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.1e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -70860,7 +70907,7 @@
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -70870,7 +70917,7 @@
         "cache_read_input_token_cost": 1.375e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.1e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -70894,7 +70941,7 @@
         "cache_read_input_token_cost": 1.925e-07,
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.54e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -70902,7 +70949,7 @@
         "input_cost_per_token": 2.31e-05,
         "input_cost_per_token_batches": 1.155e-05,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -70914,7 +70961,7 @@
         "input_cost_per_token": 1.925e-06,
         "input_cost_per_token_priority": 3.85e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.54e-05,
         "output_cost_per_token_priority": 3.08e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -70953,7 +71000,7 @@
         "input_cost_per_token_above_272k_tokens_batches": 3.3e-05,
         "input_cost_per_token_batches": 1.65e-05,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 0.000198,
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_above_272k_tokens_batches": 0.0001485,
@@ -71190,7 +71237,7 @@
         "cache_read_input_token_cost": 4.13e-07,
         "input_cost_per_token": 1.65e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 6.6e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -71273,7 +71320,7 @@
         "cache_read_input_token_cost": 1.38e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.1e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -71309,7 +71356,7 @@
         "input_cost_per_token": 1.65e-05,
         "input_cost_per_token_batches": 8.25e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 0.000132,
         "output_cost_per_token_batches": 6.6e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -71319,7 +71366,7 @@
         "cache_read_input_token_cost": 1.375e-07,
         "input_cost_per_token": 1.375e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.1e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -71343,7 +71390,7 @@
         "cache_read_input_token_cost": 1.925e-07,
         "input_cost_per_token": 1.925e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.54e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
@@ -71351,7 +71398,7 @@
         "input_cost_per_token": 2.31e-05,
         "input_cost_per_token_batches": 1.155e-05,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 0.0001848,
         "output_cost_per_token_batches": 9.24e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -71363,7 +71410,7 @@
         "input_cost_per_token": 1.925e-06,
         "input_cost_per_token_priority": 3.85e-06,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.54e-05,
         "output_cost_per_token_priority": 3.08e-05,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
@@ -71402,7 +71449,7 @@
         "input_cost_per_token_above_272k_tokens_batches": 3.3e-05,
         "input_cost_per_token_batches": 1.65e-05,
         "litellm_provider": "azure",
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 0.000198,
         "output_cost_per_token_above_272k_tokens": 0.000297,
         "output_cost_per_token_above_272k_tokens_batches": 0.0001485,
@@ -72791,6 +72838,16 @@
         "supported_endpoints": [
             "/v1/systemone"
         ],
+        "metadata": {
+            "notes": "Self-hosted decision model; infrastructure costs are paid separately"
+        }
+    },
+    "strands_decider/strands-decider-2B-hobson-v19": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "strands_decider",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19",
         "metadata": {
             "notes": "Self-hosted decision model; infrastructure costs are paid separately"
         }
@@ -76876,6 +76933,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json",
         "supports_audio_input": false,
         "supports_function_calling": true,
+        "supports_prompt_cache_breakpoint": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -76897,6 +76955,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_audio_input": false,
         "supports_function_calling": true,
+        "supports_prompt_cache_breakpoint": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -76918,6 +76977,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_audio_input": false,
         "supports_function_calling": true,
+        "supports_prompt_cache_breakpoint": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -79840,5 +79900,27 @@
         "supports_tool_choice": true,
         "supports_vision": false,
         "supports_web_search": false
+    },
+    "azure_ai/kimi-k2-thinking": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/kimi/",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": false,
+        "supports_vision": false
     }
 }

@@ -61,7 +61,7 @@ jobs:
 
           - shard: core-utils
             artifact-name: core-utils
-            test-path: ""
+            test-path: tests/unit/decisions
             unit-flag: core-utils
             workers: 2
             reruns: 1
@@ -141,6 +141,7 @@ jobs:
             artifact-name: proxy-endpoints
             test-path: >-
               tests/unit/proxy/analytics_endpoints
+              tests/unit/proxy/decisions_endpoints
               tests/unit/proxy/management_endpoints
               tests/unit/proxy/list_api
               tests/unit/proxy/memory
@@ -165,6 +166,7 @@ jobs:
               tests/unit/proxy/response_api_endpoints
               tests/unit/proxy/image_endpoints
               tests/unit/proxy/ocr_endpoints
+              tests/unit/proxy/search_endpoints
               tests/unit/proxy/vector_store_endpoints
               tests/unit/proxy/agent_endpoints
               tests/unit/proxy/a2a
