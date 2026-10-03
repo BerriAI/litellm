@@ -111,6 +111,51 @@ def test_success_row_mapping():
     assert json.loads(row["metadata"])["user_api_key_alias"] == "my-key"
 
 
+@pytest.mark.parametrize("status", ("success", "failure"))
+@pytest.mark.asyncio
+async def test_custom_request_metadata_survives_clickhouse_logging(status: str) -> None:
+    custom: Final = {
+        "project": "example",
+        "labels": {"priority": 3, "enabled": False},
+        "steps": ["plan", {"duration": 0}],
+        "empty": None,
+    }
+    payload: Final = _payload(status=status)
+    kwargs: Final = {
+        "standard_logging_object": payload,
+        "litellm_params": {
+            "metadata": {**custom, "shared": "request", "user_api_key": "secret-key"},
+            "litellm_metadata": {
+                "integration": "agent",
+                "shared": "model",
+                "user_api_key_team_id": "untrusted-team",
+                "litellm_lens_internal": True,
+                "user_api_key_auth": {"api_key": "secret-key"},
+                "user_api_key_budget_reservation": {"token": "secret-key"},
+                "proxy_server_request": {"headers": {"authorization": "secret-key"}},
+                "parent_otel_span": object(),
+            },
+        },
+    }
+    logger: Final = ClickHouseSpendLogger(storage=MagicMock())
+
+    if status == "success":
+        await logger.async_log_success_event(kwargs, None, None, None)
+    else:
+        await logger.async_log_failure_event(kwargs, None, None, None)
+
+    assert len(logger.log_queue) == 1
+    assert json.loads(logger.log_queue[0]["metadata"]) == {
+        **custom,
+        "integration": "agent",
+        "shared": "request",
+        **payload["metadata"],
+        "litellm_lens_internal": False,
+    }
+    assert kwargs["litellm_params"]["metadata"] == {**custom, "shared": "request", "user_api_key": "secret-key"}
+    assert logger.log_queue[0]["team_id"] == payload["metadata"]["user_api_key_team_id"]
+
+
 def test_anthropic_cache_fields_are_used_as_fallback():
     usage = {"cache_read_input_tokens": 11, "cache_creation_input_tokens": 3}
     payload = _payload()

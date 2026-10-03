@@ -7,10 +7,12 @@ so `response_id` is always the raw provider response id (cache-hit suffix stripp
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from math import isfinite
 from types import MappingProxyType
 from typing import Any, Final
+
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,6 +30,24 @@ _TRACEPARENT: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-([0-9a-f]{16})-[0
 _INVALID_TRACE_ID: Final = "0" * 32
 _INVALID_SPAN_ID: Final = "0" * 16
 TRACE_INGEST_ROUTE: Final = "/v1/traces"
+_METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_METADATA_VALUE: Final = TypeAdapter(JsonValue)
+_INTERNAL_METADATA_KEYS: Final = frozenset(
+    ("user_api_key", "user_api_key_auth", "user_api_key_budget_reservation", "proxy_server_request")
+)
+
+
+def _request_metadata_fields(value: object) -> Iterator[tuple[str, JsonValue]]:
+    if value is None:
+        return
+    fields: Final = _METADATA_MAPPING.validate_python(value)
+    for key, field in fields.items():
+        if key in _INTERNAL_METADATA_KEYS:
+            continue
+        try:
+            yield key, _METADATA_VALUE.validate_python(field)
+        except ValidationError:
+            continue
 
 
 def strip_cache_hit_suffix(request_id: str) -> str:
@@ -114,6 +134,13 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
     redact = litellm.turn_off_message_logging is True
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
     response_cost: Final = payload.get("response_cost")
+    litellm_params: Final = _METADATA_MAPPING.validate_python(kwargs.get("litellm_params") or {})
+    request_metadata: Final = MappingProxyType(
+        {
+            **dict(_request_metadata_fields(litellm_params.get("litellm_metadata"))),
+            **dict(_request_metadata_fields(litellm_params.get("metadata"))),
+        }
+    )
     return SpendLogRecord(
         request_id=request_id,
         response_id=strip_cache_hit_suffix(request_id),
@@ -146,7 +173,9 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         trace_id=trace_id,
         span_id=span_id,
         request_tags=_request_tags(payload.get("request_tags")),
-        metadata=_json_mapping(MappingProxyType({**metadata, "litellm_lens_internal": is_lens_analysis()})),
+        metadata=_json_mapping(
+            MappingProxyType({**request_metadata, **metadata, "litellm_lens_internal": is_lens_analysis()})
+        ),
         messages="" if redact else _json(payload.get("messages")),
         response="" if redact else _json(payload.get("response")),
     )
