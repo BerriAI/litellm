@@ -24,7 +24,7 @@ _MODEL_FACTORY: Final[Callable[..., type[BaseModel]]] = create_model
 
 
 @dataclass(frozen=True, slots=True)
-class ToolLoop:
+class FunctionTool:
     name: str
     fn: Callable[..., object]
     args_model: type[BaseModel]
@@ -43,7 +43,7 @@ def _field_definition(
     return annotation, default
 
 
-def tool_loop(fn: Callable[..., object]) -> ToolLoop:
+def function_tool(fn: Callable[..., object]) -> FunctionTool:
     signature: Final = inspect.signature(fn)
     parameters: Final = tuple(signature.parameters.values())
     raw_annotations: Final[object] = inspect.get_annotations(fn, eval_str=True)
@@ -69,7 +69,7 @@ def tool_loop(fn: Callable[..., object]) -> ToolLoop:
             "parameters": args_model.model_json_schema(),
         },
     }
-    return ToolLoop(name=fn.__name__, fn=fn, args_model=args_model, spec=spec)
+    return FunctionTool(name=fn.__name__, fn=fn, args_model=args_model, spec=spec)
 
 
 def _routing_kwargs(ctx: SessionContext) -> Mapping[str, object]:

@@ -16,7 +16,7 @@ from litellm.harness.types import Harness
 from litellm.llms.tool_loop.harness.transformation import (
     ToolLoopHarnessConfig,
     completion_kwargs,
-    tool_loop,
+    function_tool,
 )
 
 
@@ -53,7 +53,7 @@ def search(
 
 
 def test_function_tool_schema_has_required_defaulted_and_literal_fields() -> None:
-    specification: Final = tool_loop(search).spec
+    specification: Final = function_tool(search).spec
     schema: Final = specification["function"]["parameters"]
 
     assert schema["required"] == ["query"]
@@ -70,7 +70,7 @@ def test_function_tool_schema_has_required_defaulted_and_literal_fields() -> Non
 
 def test_function_schema_rejects_unknown_arguments() -> None:
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
-        tool_loop(search).args_model.model_validate({"query": "owner", "unknown": "value"})
+        function_tool(search).args_model.model_validate({"query": "owner", "unknown": "value"})
 
 
 def variadic_positional(*args: int) -> int:
@@ -84,7 +84,7 @@ def variadic_keyword(**kwargs: int) -> int:
 @pytest.mark.parametrize("fn", [variadic_positional, variadic_keyword])
 def test_variadic_tools_are_rejected(fn: Callable[..., object]) -> None:
     with pytest.raises(ValueError, match="variadic parameters"):
-        tool_loop(fn)
+        function_tool(fn)
 
 
 def test_sdk_routing_overrides_completion_kwargs(tmp_path: Path) -> None:

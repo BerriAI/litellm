@@ -22,10 +22,10 @@ from litellm.harness.types import Approval, Event, Reasoning, Text, ToolCall, To
 from litellm.llms.base_llm.harness.transformation import HarnessTurnError
 from litellm.llms.tool_loop.harness.transformation import (
     TOOL_LOOP_MAX_MODEL_CALLS,
-    ToolLoop,
+    FunctionTool,
     ToolLoopHarnessConfig,
     completion_kwargs,
-    tool_loop,
+    function_tool,
 )
 from litellm.types.completion import ChatCompletionMessageParam
 from litellm.types.utils import (
@@ -152,7 +152,7 @@ async def _approval_error(approval: Approval | None) -> str | None:
 
 
 async def _tool_outcome(
-    tool: ToolLoop | None,
+    tool: FunctionTool | None,
     tool_name: str,
     arguments: dict[str, object],
     parse_error: str | None,
@@ -186,7 +186,7 @@ def _record_usage(ctx: SessionContext, response: ModelResponse) -> None:
         return
 
 
-async def _execute_tool(tool: ToolLoop, arguments: Mapping[str, object]) -> object:
+async def _execute_tool(tool: FunctionTool, arguments: Mapping[str, object]) -> object:
     validated_model: Final = tool.args_model.model_validate(arguments)
     values_object: Final[object] = validated_model.model_dump()
     validated: Final = _MAPPING_ADAPTER.validate_python(values_object)
@@ -225,13 +225,13 @@ class ToolLoopHandler(BaseHarnessHandler):
         self._config = config
         self._acompletion = acompletion if acompletion is not None else _default_acompletion
         self._messages: tuple[ChatCompletionMessageParam, ...] = ()
-        self._tools: Mapping[str, ToolLoop] = MappingProxyType({})
+        self._tools: Mapping[str, FunctionTool] = MappingProxyType({})
         self._tool_specs: tuple[ChatCompletionToolParam, ...] = ()
         self._completion_kwargs: Mapping[str, object] = MappingProxyType({})
 
     async def start(self, ctx: SessionContext) -> None:
         self._config.validate_environment(ctx)
-        tools: Final = tuple(tool_loop(fn) for fn in ctx.tools)
+        tools: Final = tuple(function_tool(fn) for fn in ctx.tools)
         if len({tool.name for tool in tools}) != len(tools):
             raise ValueError("Harness.TOOL_LOOP tool names must be unique")
         self._tools = MappingProxyType({tool.name: tool for tool in tools})
