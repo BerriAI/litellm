@@ -72,9 +72,9 @@ export function inboxRows(lenses: readonly Lens[]): InboxRow[] {
 }
 
 export function filterInbox(rows: readonly InboxRow[], { agent, priority }: InboxFilter): InboxRow[] {
-  return rows.filter(
-    (row) => (agent === ALL_AGENTS || row.agents.includes(agent)) && (priority === "all" || row.priority === priority),
-  );
+  const agentMatches = (row: InboxRow) => agent === ALL_AGENTS || row.agents.includes(agent);
+  const priorityMatches = (row: InboxRow) => priority === "all" || row.priority === priority;
+  return rows.filter((row) => agentMatches(row) && priorityMatches(row));
 }
 
 export function inboxAgents(rows: readonly InboxRow[]): string[] {
@@ -110,8 +110,14 @@ export function scheduleLabel(lens: Lens, now: number): string {
   return `${cadence} · ${nextRunLabel(next)}`;
 }
 
+const WINDOW_FORMAT: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+};
+
 export function windowLabel(job: Job): string {
-  const fmt = (iso: string) =>
-    new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, WINDOW_FORMAT);
   return `${fmt(job.start)} → ${fmt(job.end)}`;
 }
