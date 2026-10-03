@@ -118,6 +118,7 @@ proxy_env() {
   export CLICKHOUSE_DATABASE=litellm
   export LITELLM_LOCAL_MODEL_COST_MAP=True
   export PROXY_BASE_URL="$proxy_url"
+  export LITELLM_UI_PATH="$repo_root/ui/litellm-dashboard/out"
   export UI_USERNAME=admin
   export UI_PASSWORD="$master_key"
 }
@@ -182,6 +183,20 @@ cleanup() {
   for pid in "${pids[@]}"; do kill -KILL -- "-$pid" 2>/dev/null || true; done
 }
 
+build_dashboard() {
+  local dashboard_dir="$repo_root/ui/litellm-dashboard"
+  case "${LENS_DEV_BUILD_UI:-0}" in
+    0) return ;;
+    1) ;;
+    *) die "LENS_DEV_BUILD_UI must be 0 or 1" ;;
+  esac
+  echo "lens-dev: building the proxy dashboard (log: $log_dir/ui-build.log)"
+  (
+    cd "$dashboard_dir"
+    NEXT_PUBLIC_BASE_URL="" LENS_DEV_PROXY_URL="" "$repo_root/scripts/with_dashboard_node.sh" npm run build
+  ) > "$log_dir/ui-build.log" 2>&1 || die "UI build failed; see $log_dir/ui-build.log"
+}
+
 seed_data() {
   (
     proxy_env ""
@@ -225,7 +240,7 @@ main() {
   cd "$repo_root"
 
   if [ "$seed_only" = 1 ]; then
-    [ -s "$key_file" ] || [ -n "${LENS_DEV_MASTER_KEY:-}" ] || die "start make lens-dev before --seed-only"
+    [ -s "$key_file" ] || [ -n "${LENS_DEV_MASTER_KEY:-}" ] || die "start bash scripts/lens_dev.sh before --seed-only"
     load_master_key
     seed_data
     return
@@ -251,6 +266,8 @@ main() {
     (cd ui/litellm-dashboard && "$repo_root/scripts/with_dashboard_node.sh" npm ci)
   fi
 
+  build_dashboard
+
   if [ -z "${config_file:-}" ]; then
     config_file="$state_dir/config.yaml"
     write_default_config "$config_file"
@@ -263,6 +280,7 @@ main() {
 
   (
     proxy_env "$exports"
+    export PROXY_BASE_URL="http://localhost:$ui_port"
     exec "$py" litellm/proxy/proxy_cli.py --config "$config_file" --host 127.0.0.1 --port "$proxy_port"
   ) < /dev/null > "$log_dir/proxy.log" 2>&1 &
   proxy_pid=$!
@@ -270,7 +288,7 @@ main() {
 
   (
     cd ui/litellm-dashboard
-    NEXT_PUBLIC_BASE_URL="$proxy_url" exec "$repo_root/scripts/with_dashboard_node.sh" npx next dev -p "$ui_port"
+    NEXT_PUBLIC_BASE_URL="" LENS_DEV_PROXY_URL="$proxy_url" exec "$repo_root/scripts/with_dashboard_node.sh" npx next dev -p "$ui_port"
   ) < /dev/null > "$log_dir/ui.log" 2>&1 &
   pids+=("$!")
 
@@ -288,12 +306,13 @@ main() {
   cat <<EOF
 
 Lens dev is up. Ctrl-C stops everything.
-  Log in:   $proxy_url/ui/login  (admin / $key_hint)
-  Lens:     http://localhost:$ui_port/lens
+  Log in:   http://localhost:$ui_port/ui/login/  (admin / $key_hint)
+  Lens:     http://localhost:$ui_port/ui/lens/  (hot-reloads)
+  API:      $proxy_url
   Logs:     $log_dir/proxy.log
             $log_dir/worker.log
             $log_dir/ui.log
-Restart (Ctrl-C, make lens-dev) to pick up backend or worker edits; the UI hot-reloads.
+Restart for backend or worker edits; UI edits hot-reload.
 EOF
 
   while :; do

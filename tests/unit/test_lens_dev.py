@@ -186,3 +186,33 @@ def test_seed_only_with_no_cli_count_preserves_env_controls(tmp_path: Path) -> N
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.startswith("3 1 -m")
+
+
+def test_proxy_uses_this_checkouts_ui_build(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'proxy_env "export LITELLM_UI_PATH=/old/build"; echo "$LITELLM_UI_PATH"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(ROOT / "ui/litellm-dashboard/out")
+
+
+def test_dashboard_build_uses_same_origin_and_captures_failures(tmp_path: Path) -> None:
+    dashboard = tmp_path / "ui/litellm-dashboard"
+    dashboard.mkdir(parents=True)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    runner = scripts / "with_dashboard_node.sh"
+    runner.write_text('#!/bin/sh\nprintf "base=%s args=%s\\n" "$NEXT_PUBLIC_BASE_URL" "$*"\nexit "$BUILD_STATUS"\n')
+    runner.chmod(0o755)
+    snippet = f'repo_root="{tmp_path}"; mkdir -p "$log_dir"; build_dashboard'
+    success = _run(tmp_path, snippet, BUILD_STATUS="0", LENS_DEV_BUILD_UI="1", NEXT_PUBLIC_BASE_URL="http://old-proxy")
+    assert success.returncode == 0, success.stderr
+    log = tmp_path / "state/logs/ui-build.log"
+    assert log.read_text().strip() == "base= args=npm run build"
+    failure = _run(tmp_path, snippet, BUILD_STATUS="1", LENS_DEV_BUILD_UI="1")
+    assert failure.returncode == 1
+    assert "UI build failed" in failure.stderr
+
+
+def test_skipping_ui_build_needs_no_static_export(tmp_path: Path) -> None:
+    proc = _run(tmp_path, f'repo_root="{tmp_path}"; build_dashboard', LENS_DEV_BUILD_UI="0")
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "ui/litellm-dashboard/out").exists()
