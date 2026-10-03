@@ -106,16 +106,10 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
     fire_and_forget: bool | None = Field(
         default=None,
         description=(
-            "If True, the guardrail HTTP call runs as a background task and the request proceeds "
-            "without waiting for the response, in every mode (pre_call, during_call, post_call). "
-            "The guardrail becomes observe-only: action=BLOCKED and action=GUARDRAIL_INTERVENED "
-            "are ignored, and fail_on_error / unreachable_fallback cannot block the request. The "
-            "background call has a fixed 30 second timeout. A dispatched call is recorded in the "
-            "guardrail logs as guardrail_status=success with a response saying the verdict was not "
-            "read. A call whose payload cannot be built is logged as a warning, passes the request "
-            "through, and is recorded as guardrail_status=not_run. Also forces "
-            "streaming_end_of_stream_only=True so a stream sends one call instead of one per "
-            "sampled chunk. Defaults to False in GenericGuardrailAPI.__init__ when None."
+            "Observe-only mode: the guardrail call runs in the background and the request never waits for it, so "
+            "BLOCKED and GUARDRAIL_INTERVENED answers are ignored. A dispatched call is recorded as success. "
+            "Streaming sends one end-of-stream call in block_only mode. The background call uses timeout, or "
+            "30 seconds when unset. Defaults to false."
         ),
     )
 
@@ -123,12 +117,8 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         default=None,
         ge=1,
         description=(
-            "Maximum number of fire_and_forget calls in flight at once for this guardrail, per "
-            "worker process, so a slow guardrail endpoint cannot pile up background tasks without "
-            "limit. Calls beyond this limit are dropped and counted, with a rate-limited "
-            "warning, and recorded in the guardrail logs as guardrail_status=not_run. Must be >= 1, "
-            "and is validated at startup even when fire_and_forget is off. Only used when "
-            "fire_and_forget is True. Defaults to 100 in GenericGuardrailAPI.__init__ when None."
+            "Maximum number of fire_and_forget calls in flight at once for this guardrail, per worker. Calls beyond it "
+            "are dropped and recorded as not_run. Defaults to 100."
         ),
     )
 

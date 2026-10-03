@@ -11,7 +11,6 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 import httpx
-from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -25,6 +24,15 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.background_dispatch import (
+    FIRE_AND_FORGET_DISPATCHED_REASON,
+    FIRE_AND_FORGET_DROPPED_REASON,
+    FIRE_AND_FORGET_NOT_DISPATCHED_REASON,
+    FIRE_AND_FORGET_POST_TIMEOUT_SECONDS,
+    BackgroundDispatcher,
+    fire_and_forget_from_config,
+    max_inflight_from_config,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -34,15 +42,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
-
-from .background_dispatch import (
-    FIRE_AND_FORGET_DISPATCHED_REASON,
-    FIRE_AND_FORGET_DROPPED_REASON,
-    FIRE_AND_FORGET_NOT_DISPATCHED_REASON,
-    FIRE_AND_FORGET_POST_TIMEOUT_SECONDS,
-    BackgroundDispatcher,
-    resolve_max_inflight,
-)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -261,13 +260,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         self.fail_on_error: bool = True if fail_on_error is None else fail_on_error
 
-        if fire_and_forget is not None and not isinstance(fire_and_forget, bool):  # pyright: ignore[reportUnnecessaryIsInstance]  # config extras reach here unvalidated
-            raise ValueError(f"fire_and_forget must be a bool, got {fire_and_forget!r}")
-        self.fire_and_forget: bool = fire_and_forget is True
+        self.fire_and_forget: bool = fire_and_forget_from_config(fire_and_forget)
 
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
-        # via getattr(guardrail_to_apply, "streaming_*", default). Forced on under
-        # fire_and_forget so a stream dispatches one call, not one per sampled chunk.
+        # via getattr(guardrail_to_apply, "streaming_*", default).
         self.streaming_end_of_stream_only: bool = self.fire_and_forget or (
             False if streaming_end_of_stream_only is None else streaming_end_of_stream_only
         )
@@ -279,7 +275,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         # "block_only" (default) drops text rewrites on the streaming path;
         # "incremental_diff" emits them as synthetic deltas.
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
-            "block_only" if streaming_transform_mode is None else streaming_transform_mode
+            "block_only" if streaming_transform_mode is None or self.fire_and_forget else streaming_transform_mode
         )
 
         # Set supported event hooks
@@ -289,7 +285,7 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         self._dispatcher: Final = dispatcher or BackgroundDispatcher(
             guardrail_name=self.guardrail_name,
-            max_inflight=resolve_max_inflight(fire_and_forget_max_inflight),
+            max_inflight=max_inflight_from_config(fire_and_forget_max_inflight),
         )
 
         if self.fire_and_forget:
@@ -297,7 +293,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 "Generic Guardrail API (%s): fire_and_forget=True makes this guardrail observe-only. "
                 "action=BLOCKED and action=GUARDRAIL_INTERVENED are ignored, fail_on_error=%s and "
                 "unreachable_fallback=%s cannot block the request, and streaming is forced to "
-                "end-of-stream observation.",
+                "end-of-stream observation in block_only mode.",
                 self.guardrail_name,
                 self.fail_on_error,
                 self.unreachable_fallback,
@@ -386,7 +382,7 @@ class GenericGuardrailAPI(CustomGuardrail):
     def _build_guardrail_return_inputs(
         self,
         *,
-        texts: list,
+        texts: list[str],
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
@@ -442,18 +438,16 @@ class GenericGuardrailAPI(CustomGuardrail):
     def _dispatch_background_post(
         self,
         *,
-        payload: Mapping[str, JsonValue],
-        headers: Mapping[str, str],
+        guardrail_request: GenericGuardrailAPIRequest,
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
     ) -> bool:
+        payload: Final = guardrail_request.model_dump(mode="json")
+        headers: Final = self._build_request_headers()
+        timeout: Final = FIRE_AND_FORGET_POST_TIMEOUT_SECONDS if self.timeout is None else self.timeout
+
         async def _post() -> None:
-            await self.async_handler.post(
-                url=self.api_base,
-                json=dict(payload),
-                headers=dict(headers),
-                timeout=FIRE_AND_FORGET_POST_TIMEOUT_SECONDS,
-            )
+            await self.async_handler.post(url=self.api_base, json=payload, headers=headers, timeout=timeout)
 
         return self._dispatcher.dispatch(_post, context=_call_context(input_type, logging_obj))
 
@@ -498,7 +492,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=FIRE_AND_FORGET_NOT_DISPATCHED_REASON,
-                request_data=request_data or {},
+                request_data=request_data,
                 guardrail_status="not_run",
             )
             return _passthrough_inputs(inputs)
@@ -561,13 +555,9 @@ class GenericGuardrailAPI(CustomGuardrail):
                 model=model,
             )
 
-            headers: Final = self._build_request_headers()
-            # Use mode="json" to ensure all iterables are converted to lists
-            payload: Final = guardrail_request.model_dump(mode="json")
-
             if self.fire_and_forget:
                 dispatched: Final = self._dispatch_background_post(
-                    payload=payload, headers=headers, input_type=input_type, logging_obj=logging_obj
+                    guardrail_request=guardrail_request, input_type=input_type, logging_obj=logging_obj
                 )
                 self.add_standard_logging_guardrail_information_to_request_data(
                     guardrail_json_response=(
@@ -578,6 +568,9 @@ class GenericGuardrailAPI(CustomGuardrail):
                 )
                 return _passthrough_inputs(inputs)
 
+            headers: Final = self._build_request_headers()
+            # Use mode="json" to ensure all iterables are converted to lists
+            payload: Final = guardrail_request.model_dump(mode="json")
             response: Final = await self.async_handler.post(
                 url=self.api_base, json=payload, headers=headers, timeout=self.timeout
             )

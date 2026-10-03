@@ -1,7 +1,9 @@
 import asyncio
 import contextvars
 from collections.abc import Awaitable, Callable
-from typing import Final
+from typing import Annotated, Final
+
+from pydantic import Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 
@@ -16,19 +18,46 @@ FIRE_AND_FORGET_DROPPED_REASON: Final = "fire_and_forget_max_inflight reached, c
 FIRE_AND_FORGET_NOT_DISPATCHED_REASON: Final = "fire_and_forget payload could not be built, call not dispatched"
 
 _DROP_LOG_INTERVAL: Final = 100
+_FIRE_AND_FORGET_ADAPTER: Final[TypeAdapter[bool]] = TypeAdapter(bool)
+_MAX_INFLIGHT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(ge=1)])
 
 
-def resolve_max_inflight(value: object) -> int:
+def fire_and_forget_from_config(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        return _FIRE_AND_FORGET_ADAPTER.validate_python(value)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Ignoring fire_and_forget=%r, expected true or false. Awaiting every guardrail call", value
+        )
+        return False
+
+
+def _parsed_max_inflight(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return _MAX_INFLIGHT_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def max_inflight_from_config(value: object) -> int:
     if value is None:
         return DEFAULT_FIRE_AND_FORGET_MAX_INFLIGHT
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"fire_and_forget_max_inflight must be an int, got {value!r}")
-    return value
+    parsed: Final = _parsed_max_inflight(value)
+    if parsed is None:
+        verbose_proxy_logger.warning(
+            "Ignoring fire_and_forget_max_inflight=%r, expected an integer of at least 1. Using %d",
+            value,
+            DEFAULT_FIRE_AND_FORGET_MAX_INFLIGHT,
+        )
+        return DEFAULT_FIRE_AND_FORGET_MAX_INFLIGHT
+    return parsed
 
 
 class BackgroundDispatcher:
-    """Runs calls as detached tasks, dropping (and counting) calls once ``max_inflight`` are outstanding."""
-
     def __init__(self, *, guardrail_name: str | None, max_inflight: int) -> None:
         if max_inflight < 1:
             raise ValueError(f"fire_and_forget_max_inflight must be >= 1 (got {max_inflight})")
