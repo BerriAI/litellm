@@ -1,83 +1,88 @@
 """
 Provider attribution headers (`BaseConfig.get_attribution_headers`) must reach
-the wire on every OpenAI-compatible chat path, and a caller header with the
-same name must win.
+the outbound request on every OpenAI-compatible chat path, and a caller header
+with the same name must win.
 
-These send real requests to a local server and assert on what it received,
-because the default path (OpenAI SDK) never calls `validate_environment`.
+Requests go through a real `litellm.completion` into an in-process httpx
+transport that records what would have been sent, because the default path
+(OpenAI SDK) never calls `validate_environment`.
 """
 
 import json
-import threading
-from collections.abc import AsyncIterable, Iterable, Iterator, Mapping
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from collections.abc import AsyncIterable, Iterable
 from typing import Final, cast
 
+import httpx
+import openai
 import pytest
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-_COMPLETION_BODY: Final = {
-    "id": "chatcmpl-1",
-    "object": "chat.completion",
-    "created": 1,
-    "model": "m",
-    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-}
-_STREAM_CHUNK: Final = {
-    "id": "chatcmpl-1",
-    "object": "chat.completion.chunk",
-    "created": 1,
-    "model": "m",
-    "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-}
+_API_BASE: Final = "https://provider.invalid/v1"
+_COMPLETION_BODY: Final = json.dumps(
+    {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "m",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+).encode()
+_STREAM_BODY: Final = (
+    "data: "
+    + json.dumps(
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "m",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        }
+    )
+    + "\n\ndata: [DONE]\n\n"
+).encode()
 
 
-class _CaptureServer:
+class _HeaderCapturingTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
+    """Records each outbound request's headers and answers like a chat completions server."""
+
     def __init__(self) -> None:
-        self.received: list[Mapping[str, list[str]]] = []
-        captured: Final = self.received
+        self.sent: tuple[httpx.Headers, ...] = ()
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:
-                body: Final = json.loads(self.rfile.read(int(self.headers["content-length"])))
-                lowered: dict[str, list[str]] = {}
-                for name, value in self.headers.items():
-                    lowered.setdefault(name.lower(), []).append(value)
-                captured.append(lowered)
-                if body.get("stream"):
-                    payload = f"data: {json.dumps(_STREAM_CHUNK)}\n\ndata: [DONE]\n\n".encode()
-                    content_type = "text/event-stream"
-                else:
-                    payload = json.dumps(_COMPLETION_BODY).encode()
-                    content_type = "application/json"
-                self.send_response(200)
-                self.send_header("content-type", content_type)
-                self.send_header("content-length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        return self._respond(request, request.read())
 
-            def log_message(self, *args: object) -> None:
-                pass
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return self._respond(request, await request.aread())
 
-        self._server = HTTPServer(("127.0.0.1", 0), Handler)
-        self.api_base = f"http://127.0.0.1:{self._server.server_port}"
-        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+    def _respond(self, request: httpx.Request, body: bytes) -> httpx.Response:
+        self.sent = (*self.sent, request.headers)
+        if json.loads(body).get("stream"):
+            return httpx.Response(200, content=_STREAM_BODY, headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, content=_COMPLETION_BODY, headers={"content-type": "application/json"})
 
     def last(self, header: str) -> list[str]:
-        return self.received[-1].get(header.lower(), [])
+        return self.sent[-1].get_list(header)
 
-    def close(self) -> None:
-        self._server.shutdown()
+
+def _client(transport: _HeaderCapturingTransport, path: str, is_async: bool) -> object:
+    if path == "sdk":
+        if is_async:
+            return openai.AsyncOpenAI(
+                api_key="k", base_url=_API_BASE, http_client=httpx.AsyncClient(transport=transport)
+            )
+        return openai.OpenAI(api_key="k", base_url=_API_BASE, http_client=httpx.Client(transport=transport))
+    if is_async:
+        return AsyncHTTPHandler(transport=transport)
+    return HTTPHandler(client=httpx.Client(transport=transport))
 
 
 @pytest.fixture
-def server() -> Iterator[_CaptureServer]:
-    capture: Final = _CaptureServer()
-    yield capture
-    capture.close()
+def transport() -> _HeaderCapturingTransport:
+    return _HeaderCapturingTransport()
 
 
 @pytest.fixture(params=["sdk", "http_handler"])
@@ -111,73 +116,77 @@ async def _adrain(response: object) -> None:
 @pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
 @pytest.mark.parametrize("stream", [False, True])
 def test_attribution_header_sent_sync(
-    server: _CaptureServer, handler_path: str, model: str, header: str, stream: bool
+    transport: _HeaderCapturingTransport, handler_path: str, model: str, header: str, stream: bool
 ) -> None:
     response: Final = litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
-        api_base=server.api_base,
+        api_base=_API_BASE,
         api_key="k",
         stream=stream,
+        client=_client(transport, handler_path, is_async=False),
     )
     if stream:
         _drain(response)
 
-    assert server.last(header) == ["litellm"]
+    assert transport.last(header) == ["litellm"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
 @pytest.mark.parametrize("stream", [False, True])
 async def test_attribution_header_sent_async(
-    server: _CaptureServer, handler_path: str, model: str, header: str, stream: bool
+    transport: _HeaderCapturingTransport, handler_path: str, model: str, header: str, stream: bool
 ) -> None:
     response: Final = await litellm.acompletion(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
-        api_base=server.api_base,
+        api_base=_API_BASE,
         api_key="k",
         stream=stream,
+        client=_client(transport, handler_path, is_async=True),
     )
     if stream:
         await _adrain(response)
 
-    assert server.last(header) == ["litellm"]
+    assert transport.last(header) == ["litellm"]
 
 
 @pytest.mark.parametrize(("model", "header"), _ATTRIBUTED)
 @pytest.mark.parametrize("header_kwarg", ["headers", "extra_headers"])
 def test_caller_header_overrides_attribution_any_casing(
-    server: _CaptureServer, handler_path: str, model: str, header: str, header_kwarg: str
+    transport: _HeaderCapturingTransport, handler_path: str, model: str, header: str, header_kwarg: str
 ) -> None:
     caller_headers: Final = {header.upper(): "my-app"}
 
     litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
-        api_base=server.api_base,
+        api_base=_API_BASE,
         api_key="k",
+        client=_client(transport, handler_path, is_async=False),
         **{header_kwarg: caller_headers},
     )
 
-    assert server.last(header) == ["my-app"]
+    assert transport.last(header) == ["my-app"]
     assert caller_headers == {header.upper(): "my-app"}
 
 
-def test_provider_without_attribution_sends_none(server: _CaptureServer, handler_path: str) -> None:
+def test_provider_without_attribution_sends_none(transport: _HeaderCapturingTransport, handler_path: str) -> None:
     litellm.completion(
-        model="together_ai/meta-llama/Llama-3-8b-chat-hf",
+        model="deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
         messages=[{"role": "user", "content": "hi"}],
-        api_base=server.api_base,
+        api_base=_API_BASE,
         api_key="k",
+        client=_client(transport, handler_path, is_async=False),
     )
 
-    assert server.last("x-novita-source") == []
-    assert server.last("x-pplx-integration") == []
+    assert transport.last("x-novita-source") == []
+    assert transport.last("x-pplx-integration") == []
 
 
 def test_global_litellm_headers_still_apply_and_are_not_mutated(
-    server: _CaptureServer, handler_path: str, monkeypatch: pytest.MonkeyPatch
+    transport: _HeaderCapturingTransport, handler_path: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     global_headers: Final = {"X-Global": "1"}
     monkeypatch.setattr(litellm, "headers", global_headers)
@@ -185,12 +194,13 @@ def test_global_litellm_headers_still_apply_and_are_not_mutated(
     litellm.completion(
         model=_NOVITA_MODEL,
         messages=[{"role": "user", "content": "hi"}],
-        api_base=server.api_base,
+        api_base=_API_BASE,
         api_key="k",
+        client=_client(transport, handler_path, is_async=False),
     )
 
-    assert server.last("x-global") == ["1"]
-    assert server.last("x-novita-source") == ["litellm"]
+    assert transport.last("x-global") == ["1"]
+    assert transport.last("x-novita-source") == ["litellm"]
     assert global_headers == {"X-Global": "1"}
 
 

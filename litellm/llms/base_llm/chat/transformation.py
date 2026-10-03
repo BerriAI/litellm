@@ -70,8 +70,8 @@ _NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 
 def with_attribution_headers(
     attribution_headers: Mapping[str, str],
-    headers: dict | None,  # mutable-ok: returned as-is when there is nothing to add
-) -> dict | None:  # mutable-ok: becomes the request's outbound headers
+    headers: dict[str, str] | None,  # mutable-ok: returned as-is when there is nothing to add
+) -> dict[str, str] | None:  # mutable-ok: becomes the request's outbound headers
     """
     `headers` plus any attribution header the caller didn't already set (names
     compared case-insensitively). Builds a new dict; `headers` is never mutated.
