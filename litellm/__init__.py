@@ -520,6 +520,8 @@ priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]
 # priority_reservation_settings is lazy-loaded via __getattr__
 # Only declare for type checking - at runtime __getattr__ handles it
 if TYPE_CHECKING:
+    from .proxy.proxy_cli import run_server as run_server
+
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
@@ -1416,7 +1418,6 @@ from .exceptions import (
     ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *

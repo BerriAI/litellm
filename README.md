@@ -90,6 +90,8 @@ Managing LLM calls across providers gets complicated fast — different SDKs, au
 uv add litellm
 ```
 
+Install `litellm[cli]` for the `lite` and `litellm-proxy` client commands, or `litellm[proxy]` for the gateway, its `litellm` command, and dashboard. The proxy extra includes client CLI dependencies
+
 ```python
 from litellm import completion
 import os

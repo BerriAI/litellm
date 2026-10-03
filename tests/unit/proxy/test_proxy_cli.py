@@ -1,4 +1,6 @@
 import inspect
+from collections.abc import Callable
+from typing import Final
 import os
 from contextlib import nullcontext
 from pathlib import Path
@@ -3539,3 +3541,16 @@ class TestValidateConfigFlag:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "config OK" in result.output
         mock_popen.assert_not_called()
+
+
+@pytest.mark.parametrize("missing", ("click", "unrelated_dependency"))
+def test_server_cli_missing_dependency_guidance(missing: str, fail_optional_import: Callable[[str, ModuleNotFoundError], None]) -> None:
+    failure: Final = ModuleNotFoundError("dependency unavailable", name=missing)
+    fail_optional_import("click", failure)
+    with pytest.raises(ImportError) as error:
+        runpy.run_path(proxy_cli.__file__)
+    if missing == "click":
+        assert "litellm[proxy]" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure

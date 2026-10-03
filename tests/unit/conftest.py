@@ -1,10 +1,12 @@
 import asyncio
+import builtins
 import base64
 import importlib
 import os
-from collections.abc import Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 from typing import Final
 
 import boto3
@@ -332,3 +334,24 @@ def pytest_sessionfinish() -> None:
         _close_handler_if_needed(getattr(litellm, name, None))
     _run_coroutine_if_needed(close_litellm_async_clients())
     enable_socket()
+
+
+@pytest.fixture
+def fail_optional_import(monkeypatch: pytest.MonkeyPatch) -> Callable[[str, ModuleNotFoundError], None]:
+    original: Final = builtins.__import__
+
+    def fail(module: str, error: ModuleNotFoundError) -> None:
+        def import_module(
+            name: str,
+            globals: Mapping[str, object] | None = None,
+            locals: Mapping[str, object] | None = None,
+            fromlist: Sequence[str] = (),
+            level: int = 0,
+        ) -> ModuleType:
+            if name == module:
+                raise error
+            return original(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", import_module)
+
+    return fail
