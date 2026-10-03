@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   analysisModel,
   conclusions,
+  liveJob,
   liveStats,
   outcome,
   playbackPhase,
@@ -192,6 +193,24 @@ describe("playback queue", () => {
     const start = startPlayback(reviews, true);
     expect(shownCount(5, start)).toBe(2);
     expect(shownCount(120, start)).toBe(117);
+  });
+});
+
+describe("which job the live run shows", () => {
+  const job = (id: string, status: Job["status"], reviews: Review[]) => ({ id, status, reviews }) as unknown as Job;
+
+  it("shows the active job once it has reviews", () => {
+    expect(liveJob([job("new", "running", [review("a")]), job("old", "completed", [review("b")])])?.id).toBe("new");
+  });
+
+  it("shows nothing for an active job with no reviews yet, even if an older job has some", () => {
+    expect(liveJob([job("new", "queued", []), job("old", "completed", [review("b")])])).toBeUndefined();
+  });
+
+  it("keeps the latest finished job viewable only when it has reviews", () => {
+    expect(liveJob([job("done", "completed", [review("a")])])?.id).toBe("done");
+    expect(liveJob([job("done", "completed", []), job("older", "completed", [review("b")])])).toBeUndefined();
+    expect(liveJob([])).toBeUndefined();
   });
 });
 

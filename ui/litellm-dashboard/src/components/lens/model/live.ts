@@ -30,6 +30,13 @@ const READ_SHARE = 0.35;
 const TYPE_SHARE = 0.45;
 const REPLAY_ON_OPEN = 3;
 
+export function liveJob(jobs: readonly Job[]): Job | undefined {
+  const active = jobs.find((job) => job.status === "queued" || job.status === "running");
+  if (active) return active.reviews.length ? active : undefined;
+  const latest = jobs[0];
+  return latest?.reviews.length ? latest : undefined;
+}
+
 export function reviewKey(review: Pick<Review, "execution_id" | "at">): string {
   return `${review.execution_id}@${review.at}`;
 }
