@@ -45,7 +45,8 @@ export const effortNote = (basis: string | null | undefined): string =>
 
 export const coverageLabel = (summary: {
   metrics: Pick<ROISummary["metrics"], "matched_prs" | "merged_prs">;
-}): string => `${summary.metrics.matched_prs} of ${summary.metrics.merged_prs} PRs have email matches`;
+  source_provider?: string;
+}): string => `${summary.metrics.matched_prs} of ${summary.metrics.merged_prs} matched`;
 
 export const estimateLabel = (estimate: ROIEstimate): string => {
   if (estimate.status === "estimated") return `${formatNumber(estimate.hours)} hrs`;
@@ -57,7 +58,9 @@ export const filterPulls = (pulls: ROIPull[], query: string): ROIPull[] => {
   const normalized = query.trim().toLocaleLowerCase();
   if (!normalized) return pulls;
   return pulls.filter((pull) =>
-    `${pull.title} ${pull.repo} ${pull.number} ${pull.login}`.toLocaleLowerCase().includes(normalized),
+    `${pull.title} ${pull.repo} ${pull.number} ${pull.login} ${pull.source_branch ?? ""}`
+      .toLocaleLowerCase()
+      .includes(normalized),
   );
 };
 
@@ -83,7 +86,7 @@ export const peopleCsv = (summary: Pick<ROISummary, "people" | "start" | "end" |
   return [
     [
       "email",
-      "github_logins",
+      "source_logins",
       "gateway_spend_usd",
       "estimated_hours",
       "merged_prs",
@@ -98,4 +101,11 @@ export const peopleCsv = (summary: Pick<ROISummary, "people" | "start" | "end" |
   ]
     .map((row) => row.map(escape).join(","))
     .join("\r\n");
+};
+
+export const branchCostLabel = (pull: ROIPull): string => {
+  if (!pull.branch_cost || pull.branch_cost.status === "unavailable") return "Sync to calculate";
+  if (pull.branch_cost.status === "ambiguous") return "Ambiguous branch";
+  if (pull.branch_cost.status === "unattributed") return "No tagged requests";
+  return formatMoney(pull.branch_cost.spend);
 };

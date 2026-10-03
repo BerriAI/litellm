@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { effortNote, estimateLabel } from "./roiCalculatorData";
+import { effortNote, estimateLabel, branchCostLabel } from "./roiCalculatorData";
 import type { ROIIdentityMapUpdate, ROIPull, ROISummary } from "./roiCalculatorData";
 import type { ROIPerson } from "./roiCalculatorData";
 
@@ -48,7 +48,7 @@ export function PullReasoningDialog({
               </p>
               {pull.estimate.evidence_source === "pr_metadata" && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Based on PR descriptions, file change counts, and commit metadata.
+                  Based on descriptions, file change counts, and commit metadata.
                 </p>
               )}
             </div>
@@ -66,6 +66,34 @@ export function PullReasoningDialog({
               <dt className="text-muted-foreground">Email match</dt>
               <dd>{pull.email || "Not matched"}</dd>
             </dl>
+            <section className="space-y-2 border-t pt-4 text-sm">
+              <h3 className="font-medium">Branch spend · {branchCostLabel(pull)}</h3>
+              {pull.branch_cost?.status === "matched" && (
+                <p className="text-muted-foreground">
+                  {pull.branch_cost.spend?.toFixed(8)} USD across {pull.branch_cost.requests} requests
+                </p>
+              )}
+              {pull.source_repo && pull.source_branch ? (
+                <>
+                  <p className="text-muted-foreground">Send both tags with each gateway request from this branch:</p>
+                  <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
+                    {JSON.stringify(
+                      { metadata: { tags: [`repo:${pull.source_repo}`, `branch:${pull.source_branch}`] } },
+                      null,
+                      2,
+                    )}
+                  </pre>
+                  <p className="text-xs text-muted-foreground">
+                    Retained requests in the report’s UTC period. Branch names are case-sensitive. Reused branches
+                    cannot be split between changes.
+                  </p>
+                </>
+              ) : (
+                <p className="text-muted-foreground">
+                  The source repository or branch is unavailable. Sync again to refresh its metadata.
+                </p>
+              )}
+            </section>
             {summary?.estimator_prompt && (
               <details className="rounded-md border p-3">
                 <summary className="cursor-pointer font-medium">Estimator prompt</summary>
@@ -80,7 +108,7 @@ export function PullReasoningDialog({
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  View on GitHub
+                  View on {summary?.source_provider === "gitlab" ? "GitLab" : "GitHub"}
                 </a>
               )}
             </DialogFooter>

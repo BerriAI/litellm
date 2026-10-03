@@ -60,7 +60,7 @@ class _ConfigRepository:
 
     async def get_param(self, param_name: str) -> _Parameter | None:
         value: Final = self.values.get(param_name)
-        return _Parameter(value) if value is not None else None
+        return _Parameter(value) if param_name in self.values else None
 
     async def set_param(self, param_name: str, param_value: object) -> object:
         _assert_json_round_trip(param_value)
@@ -264,3 +264,51 @@ def test_manual_match_recalculates_saved_report_and_removal_restores_cohort() ->
     assert removed.status_code == 200
     assert not removed.json()["identity_map"]
     assert removed.json()["report"]["metrics"] == before.json()["report"]["metrics"]
+
+
+def test_switching_sources_clears_report_and_identities_and_keeps_tokens_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "roi-calculator-test-salt-key-0123456789")
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    saved: Final = client.put(
+        "/roi-calculator/settings",
+        json={"source_provider": "gitlab", "gitlab_token": "private-gitlab-test", "repos": ["group/subgroup/project"]},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["has_gitlab_token"] is True
+    assert "private-gitlab-test" not in saved.text
+    assert "private-gitlab-test" not in str(repository.values)
+    assert client.get("/roi-calculator/report").json()["report"] is None
+    matched: Final = client.put(
+        "/roi-calculator/identity-map", json={"github_login": "dev.name", "email": "dev@example.test"}
+    )
+    assert matched.status_code == 200
+    assert matched.json()["identity_map"] == {"dev.name": "dev@example.test"}
+    switched: Final = client.put("/roi-calculator/settings", json={"source_provider": "github"})
+    assert switched.status_code == 200
+    assert switched.json()["identity_map"] == {}
+    assert switched.json()["repos"] == []
+    assert client.get("/roi-calculator/report").json()["report"] is None
+    changed_host: Final = client.put(
+        "/roi-calculator/settings",
+        json={"source_provider": "gitlab", "gitlab_api_url": "https://git.example.test/api/v4"},
+    )
+    assert changed_host.json()["has_gitlab_token"] is False
+
+
+def test_old_source_report_is_not_returned_when_matching_new_source_identity() -> None:
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    assert client.put("/roi-calculator/settings", json={"source_provider": "gitlab"}).status_code == 200
+    old_report: Final = sample_report(datetime.now(timezone.utc))
+    serialized: Final = TypeAdapter(dict[str, object]).validate_json(TypeAdapter(ROIReport).dump_json(old_report))
+    asyncio.run(repository.set_param("roi_calculator_report", serialized))
+    assert client.get("/roi-calculator/report").json()["report"] is None
+    matched: Final = client.put(
+        "/roi-calculator/identity-map", json={"github_login": "dev.name", "email": "dev@example.test"}
+    )
+    assert matched.status_code == 200
+    assert matched.json()["report"] is None
+    assert matched.json()["identity_map"] == {"dev.name": "dev@example.test"}

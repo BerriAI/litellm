@@ -15,7 +15,15 @@ import {
 import type { ChartConfig } from "@/components/ui/chart";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { coverageLabel, peopleCsv, effortNote, estimateLabel, formatMoney, formatNumber } from "./roiCalculatorData";
+import {
+  coverageLabel,
+  peopleCsv,
+  effortNote,
+  estimateLabel,
+  formatMoney,
+  formatNumber,
+  branchCostLabel,
+} from "./roiCalculatorData";
 import type { ROIPerson, ROIPull, ROISummary } from "./roiCalculatorData";
 
 const CHART_CONFIG = {
@@ -38,101 +46,54 @@ export function ROIOverview({
   onSelectPull: (pull: ROIPull) => void;
   onViewPeople: () => void;
 }) {
+  const [basis, setBasis] = React.useState("people");
+  const branchMode = basis === "branches";
+  const changeName = summary.source_provider === "gitlab" ? "merge request" : "pull request";
   const [pagination, setPagination] = React.useState({ query, visibleCount: 10 });
   const visibleCount = pagination.query === query ? pagination.visibleCount : 10;
   const metrics = summary.metrics;
-  const unavailableRate =
-    metrics.output_hours > 0
-      ? "Spend per estimated hour is unavailable until all selected repositories can be read."
-      : "A rate requires matched estimated hours greater than zero and access to all selected repositories.";
   return (
     <div className="space-y-6">
-      <section aria-label="Spend and estimated engineering effort" className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Spend per estimated engineering hour" value={formatMoney(metrics.cost_per_hour)} />
-        <MetricCard title="Matched gateway spend" value={formatMoney(metrics.matched_spend)} />
-        <MetricCard title="Estimated engineering hours" value={`${formatNumber(metrics.output_hours)} hrs`} />
-        <MetricCard title="PR email coverage" value={coverageLabel(summary)} />
-      </section>
-      <p className="text-sm text-muted-foreground">
-        {formatMoney(metrics.excluded_spend)} of {formatMoney(metrics.total_spend)} total gateway spend is excluded from
-        the matched cohort.
-      </p>
-      <details className="rounded-lg border p-4 text-sm">
-        <summary className="cursor-pointer font-medium">Calculation details</summary>
-        <div className="space-y-3 pt-3 text-muted-foreground">
-          <p>
-            {metrics.cost_per_hour != null
-              ? `${formatMoney(metrics.matched_spend)} gateway spend ÷ ${formatNumber(metrics.output_hours)} estimated engineering hours = ${formatMoney(metrics.cost_per_hour)} per estimated hour.`
-              : unavailableRate}
-          </p>
-          <p>
-            The comparison includes {metrics.cohort_people} matched {metrics.cohort_people === 1 ? "person" : "people"}{" "}
-            with complete PR estimates, for the same period in UTC. {metrics.matched_prs} of {metrics.merged_prs} PRs
-            have email matches. {formatMoney(metrics.excluded_spend)} of {formatMoney(metrics.total_spend)} total
-            gateway spend is excluded.
-          </p>
-          <p>
-            Gateway spend includes all of each person’s usage, across repositories. This does not measure hours saved by
-            AI or financial returns.
-          </p>
-          <Button variant="link" className="h-auto p-0" onClick={onViewPeople}>
-            Review email matches
-          </Button>
-        </div>
-      </details>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Spend and estimated engineering effort</CardTitle>
-          <CardDescription>
-            Daily matched gateway spend and estimated engineering hours for the same UTC period
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ChartContainer config={CHART_CONFIG} className="h-[320px] w-full">
-            <ComposedChart data={summary.trend} margin={{ left: 8, right: 8 }}>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={36} />
-              <YAxis yAxisId="spend" tickFormatter={(value) => formatMoney(Number(value))} />
-              <YAxis yAxisId="hours" orientation="right" domain={[0, "auto"]} />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <ChartLegend content={<ChartLegendContent />} />
-              <Bar yAxisId="spend" dataKey="spend" fill="var(--color-spend)" isAnimationActive={false} />
-              <Line
-                yAxisId="hours"
-                dataKey="hours"
-                stroke="var(--color-hours)"
-                strokeWidth={2}
-                dot={false}
-                isAnimationActive={false}
-              />
-            </ComposedChart>
-          </ChartContainer>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">{effortNote(summary.effort_basis)}</p>
+        <label className="flex items-center gap-2 text-sm">
+          Spend basis
+          <select
+            aria-label="Spend basis"
+            className="h-9 rounded-md border bg-background px-3"
+            value={basis}
+            onChange={(event) => setBasis(event.target.value)}
+          >
+            <option value="people">People</option>
+            <option value="branches">Branches</option>
+          </select>
+        </label>
+      </div>
+      <ROIMetrics summary={summary} branchMode={branchMode} />
+      <ROIComparison summary={summary} branchMode={branchMode} onViewPeople={onViewPeople} />
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <CardTitle>Pull requests</CardTitle>
+            <CardTitle>{changeName === "merge request" ? "Merge requests" : "Pull requests"}</CardTitle>
             <CardDescription>
               {metrics.merged_prs} merged · {metrics.estimated_prs} estimated · {metrics.pending_prs} need attention
             </CardDescription>
           </div>
           <Input
-            aria-label="Search pull requests"
+            aria-label={`Search ${changeName}s`}
             className="w-full sm:max-w-xs"
-            placeholder="Search pull requests"
+            placeholder={`Search ${changeName}s`}
             type="search"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
           />
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </div>
+        <div className="space-y-4">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Pull request</TableHead>
+                <TableHead>{changeName === "merge request" ? "Merge request" : "Pull request"}</TableHead>
+                {branchMode && <TableHead className="text-right">Tagged spend</TableHead>}
                 <TableHead className="text-right">Estimated hours</TableHead>
               </TableRow>
             </TableHeader>
@@ -141,7 +102,7 @@ export function ROIOverview({
                 <TableRow key={`${pull.repo}#${pull.number}`}>
                   <TableCell>
                     <Button
-                      aria-label={`Open estimate for ${pull.repo} pull request ${pull.number}`}
+                      aria-label={`Open estimate for ${pull.repo} ${changeName} ${pull.number}`}
                       className="h-auto whitespace-normal p-0 text-left"
                       variant="link"
                       onClick={() => onSelectPull(pull)}
@@ -154,13 +115,14 @@ export function ROIOverview({
                       </span>
                     </Button>
                   </TableCell>
+                  {branchMode && <TableCell className="text-right tabular-nums">{branchCostLabel(pull)}</TableCell>}
                   <TableCell className="text-right tabular-nums">{estimateLabel(pull.estimate)}</TableCell>
                 </TableRow>
               ))}
               {pulls.length === 0 && (
                 <TableRow>
-                  <TableCell className="text-center text-muted-foreground" colSpan={2}>
-                    {query ? "No matching pull requests." : "No merged pull requests in this period."}
+                  <TableCell className="text-center text-muted-foreground" colSpan={branchMode ? 3 : 2}>
+                    {query ? `No matching ${changeName}s.` : `No merged ${changeName}s in this period.`}
                   </TableCell>
                 </TableRow>
               )}
@@ -177,26 +139,169 @@ export function ROIOverview({
                 }))
               }
             >
-              Load more pull requests
+              Load more {changeName}s
             </Button>
           )}
-          <Button variant="outline" onClick={onViewPeople}>
-            Review email matches
-          </Button>
-        </CardContent>
-      </Card>
+          {!branchMode && (
+            <Button variant="outline" onClick={onViewPeople}>
+              Review email matches
+            </Button>
+          )}
+        </div>
+      </section>
     </div>
+  );
+}
+
+function ROIMetrics({ summary, branchMode }: { summary: ROISummary; branchMode: boolean }) {
+  const branches = summary.branch_metrics;
+  const metrics = summary.metrics;
+  return (
+    <section
+      aria-label="Spend and estimated engineering effort"
+      className="grid divide-y border-y md:grid-cols-2 md:divide-y-0 xl:grid-cols-4"
+    >
+      <MetricCard
+        title="Spend / estimated hour"
+        value={formatMoney(branchMode ? branches?.cost_per_hour : metrics.cost_per_hour)}
+      />
+      <MetricCard
+        title={branchMode ? "Matched branch spend" : "Matched gateway spend"}
+        value={formatMoney(branchMode ? branches?.spend : metrics.matched_spend)}
+      />
+      <MetricCard
+        title="Estimated engineering hours"
+        value={`${formatNumber(branchMode ? branches?.hours : metrics.output_hours)} hrs`}
+      />
+      <MetricCard
+        title={branchMode ? "Branch coverage" : "Email coverage"}
+        value={branchMode ? `${branches?.matched_pulls ?? 0} of ${metrics.merged_prs} matched` : coverageLabel(summary)}
+      />
+    </section>
+  );
+}
+
+function ROIComparison({
+  summary,
+  branchMode,
+  onViewPeople,
+}: {
+  summary: ROISummary;
+  branchMode: boolean;
+  onViewPeople: () => void;
+}) {
+  const branches = summary.branch_metrics;
+  const metrics = summary.metrics;
+  const unavailableRate =
+    metrics.output_hours > 0
+      ? "Spend per estimated hour is unavailable until all selected repositories can be read."
+      : "A rate requires matched estimated hours greater than zero and access to all selected repositories.";
+  return (
+    <>
+      {branchMode ? (
+        <details className="text-sm">
+          <summary className="cursor-pointer font-medium">
+            How branch costs work · {formatMoney(branches?.unlinked_spend)} unallocated
+          </summary>
+          <div className="space-y-3 pt-3 text-muted-foreground">
+            <p>
+              Costs come from requests with both a repository tag and a branch tag. They cover retained request logs in
+              this report’s UTC period, not the branch’s lifetime. Email matching is not required.
+            </p>
+            <p>
+              Open a change below for its exact tags. Send them in metadata.tags or the x-litellm-tags header. Missing
+              tags stay unmatched. Multiple merged changes on the same branch in this report stay ambiguous.
+            </p>
+            <p>
+              Only matched branches with complete effort estimates contribute to the rate.{" "}
+              {formatMoney(branches?.total_tagged_spend)} total tagged spend was found for these repositories.
+            </p>
+            {(summary.unlinked_branches?.length ?? 0) > 0 && (
+              <ul className="space-y-2">
+                {summary.unlinked_branches?.map((row) => (
+                  <li key={`${row.repo}:${row.branch}`} className="flex flex-wrap justify-between gap-2">
+                    <span className="break-all">
+                      {row.repo} · {row.branch}
+                    </span>
+                    <span>{formatMoney(row.spend)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </details>
+      ) : (
+        <>
+          <p className="text-sm text-muted-foreground">
+            {formatMoney(metrics.excluded_spend)} of {formatMoney(metrics.total_spend)} total gateway spend is excluded
+            from the matched cohort.
+          </p>
+          <details className="rounded-lg border p-4 text-sm">
+            <summary className="cursor-pointer font-medium">Calculation details</summary>
+            <div className="space-y-3 pt-3 text-muted-foreground">
+              <p>
+                {metrics.cost_per_hour != null
+                  ? `${formatMoney(metrics.matched_spend)} gateway spend ÷ ${formatNumber(metrics.output_hours)} estimated engineering hours = ${formatMoney(metrics.cost_per_hour)} per estimated hour.`
+                  : unavailableRate}
+              </p>
+              <p>
+                The comparison includes {metrics.cohort_people} matched{" "}
+                {metrics.cohort_people === 1 ? "person" : "people"} with complete effort estimates, for the same period
+                in UTC. {metrics.matched_prs} of {metrics.merged_prs} merged changes have email matches.{" "}
+                {formatMoney(metrics.excluded_spend)} of {formatMoney(metrics.total_spend)} total gateway spend is
+                excluded.
+              </p>
+              <p>
+                Gateway spend includes all of each person’s usage, across repositories. This does not measure hours
+                saved by AI or financial returns.
+              </p>
+              <Button variant="link" className="h-auto p-0" onClick={onViewPeople}>
+                Review email matches
+              </Button>
+            </div>
+          </details>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Spend and estimated engineering effort</CardTitle>
+              <CardDescription>
+                Daily matched gateway spend and estimated engineering hours for the same UTC period
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ChartContainer config={CHART_CONFIG} className="h-[320px] w-full">
+                <ComposedChart data={summary.trend} margin={{ left: 8, right: 8 }}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={36} />
+                  <YAxis yAxisId="spend" tickFormatter={(value) => formatMoney(Number(value))} />
+                  <YAxis yAxisId="hours" orientation="right" domain={[0, "auto"]} />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <ChartLegend content={<ChartLegendContent />} />
+                  <Bar yAxisId="spend" dataKey="spend" fill="var(--color-spend)" isAnimationActive={false} />
+                  <Line
+                    yAxisId="hours"
+                    dataKey="hours"
+                    stroke="var(--color-hours)"
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </ChartContainer>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </>
   );
 }
 
 function MetricCard({ title, value }: { title: string; value: string }) {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className="break-words text-2xl tabular-nums">{value}</CardTitle>
-      </CardHeader>
-    </Card>
+    <div className="py-6 pr-6">
+      <p className="text-sm text-muted-foreground">{title}</p>
+      <p className="mt-2 break-words text-2xl font-semibold tabular-nums">{value}</p>
+    </div>
   );
 }
 
@@ -283,7 +388,7 @@ export function ROIPeopleView({
                   <TableCell className="text-right tabular-nums">
                     {person.estimated_prs > 0 ? `${formatNumber(person.hours)} hrs` : "—"}
                     <p className="text-xs text-muted-foreground">
-                      {person.prs} {person.prs === 1 ? "PR" : "PRs"}
+                      {person.prs} {person.prs === 1 ? "change" : "changes"}
                       {person.pending_prs > 0 ? ` · ${person.pending_prs} pending` : ""}
                     </p>
                   </TableCell>
@@ -304,7 +409,8 @@ export function ROIPeopleView({
       <details className="rounded-lg border p-4 text-sm">
         <summary className="cursor-pointer font-medium">How email matching works</summary>
         <p className="mt-3 text-muted-foreground">
-          Matches use the author’s public GitHub email or commit emails associated with their GitHub account. Email
+          Matches use the author’s public profile email
+          {summary.source_provider === "gitlab" ? "." : " or commit emails associated with their GitHub account."} Email
           matching ignores case. Private, noreply, and ambiguous emails stay unmatched. Manual matches take priority.
           People with no spend record or incomplete PR estimates are excluded from the ratio.
         </p>

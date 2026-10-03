@@ -28,7 +28,7 @@ _PULL_LIST_JSON: Final = """[
     "body": "Preserve UTC behavior.",
     "merged_at": "2026-09-12T12:00:00Z",
     "updated_at": "2026-09-12T12:00:00Z",
-    "head": {"sha": "abcdef"},
+    "head": {"sha": "abcdef", "ref": "feature", "repo": {"full_name": "org/repo"}},
     "user": {"login": "alice"}
   }
 ]"""
@@ -39,7 +39,7 @@ _PULL_DETAIL_JSON: Final = """{
   "html_url": "https://github.com/org/repo/pull/42",
   "user": {"login": "alice"},
   "merged_at": "2026-09-12T12:00:00Z",
-  "head": {"sha": "abcdef"},
+  "head": {"sha": "abcdef", "ref": "feature", "repo": {"full_name": "org/repo"}},
   "additions": 1,
   "deletions": 1,
   "changed_files": 1,
@@ -242,6 +242,8 @@ async def test_unchanged_estimated_pull_refreshes_identity_without_model_call() 
     assert manager.status.reused == 1
     report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
     assert report["pulls"][0]["estimate"].get("cached") is True
+    assert report["pulls"][0]["source_branch"] == "feature"
+    assert report["pulls"][0]["source_repo"] == "github.com/org/repo"
     assert report["pulls"][0]["profile_email"] == "new@example.com"
     assert report["pulls"][0]["emails"] == ("alice@example.com", "new@example.com")
 

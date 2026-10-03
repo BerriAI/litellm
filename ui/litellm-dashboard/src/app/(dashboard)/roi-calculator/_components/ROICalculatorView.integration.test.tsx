@@ -145,7 +145,7 @@ describe("ROICalculatorView", () => {
   it("shows the spend summary and opens an accessible pull reasoning dialog", async () => {
     render(<ROICalculatorView accessToken="token" />);
 
-    expect(await screen.findByText("Spend per estimated engineering hour")).toBeInTheDocument();
+    expect(await screen.findByText("Spend / estimated hour")).toBeInTheDocument();
     expect(screen.getByText("$3.00")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" }));
 
@@ -201,7 +201,7 @@ describe("ROICalculatorView", () => {
 
     render(<ROICalculatorView accessToken="token" userRole="Admin" isViewOnly />);
 
-    expect(await screen.findByText("Spend per estimated engineering hour")).toBeInTheDocument();
+    expect(await screen.findByText("Spend / estimated hour")).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("Read-only access");
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel sync" })).not.toBeInTheDocument();
@@ -210,8 +210,8 @@ describe("ROICalculatorView", () => {
     expect(screen.getByText("alice-work")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "alice-work" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
-    expect(screen.getByLabelText("GitHub token")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.getByLabelText("GitHub token (optional for public repositories)")).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Save settings" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
   });
@@ -244,9 +244,12 @@ describe("ROICalculatorView", () => {
 
     render(<ROICalculatorView accessToken="token" />);
 
-    expect(await screen.findByRole("heading", { name: "Connect GitHub to get started" })).toBeInTheDocument();
-    expect(screen.getByLabelText("GitHub token")).toHaveAttribute("type", "password");
-    expect(screen.getAllByText("Connect GitHub to get started")).toHaveLength(1);
+    expect(await screen.findByRole("heading", { name: "Connect your repositories" })).toBeInTheDocument();
+    expect(screen.getByLabelText("GitHub token (optional for public repositories)")).toHaveAttribute(
+      "type",
+      "password",
+    );
+    expect(screen.getAllByText("Connect your repositories")).toHaveLength(1);
   });
 
   it("clearly identifies the sample report and returns to setup when exiting", async () => {
@@ -263,13 +266,13 @@ describe("ROICalculatorView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
-    expect(screen.getByText("Spend per estimated engineering hour")).toBeVisible();
+    expect(screen.getByText("Spend / estimated hour")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Exit demo" }));
 
-    expect(screen.getByRole("heading", { name: "Connect GitHub to get started" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Connect your repositories" })).toBeVisible();
     expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.put).not.toHaveBeenCalled();
@@ -299,8 +302,8 @@ describe("ROICalculatorView", () => {
     render(<ROICalculatorView accessToken="token" />);
 
     expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
-    expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 5000 })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Connect GitHub to get started" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Spend / estimated hour", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Last synced Sep 30, 2026, 12:00 PM UTC");
     expect(screen.getByRole("status")).toHaveTextContent("57 of 57 estimates reused");
   });
@@ -380,14 +383,14 @@ describe("ROICalculatorView", () => {
     expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(
       "The sync status could not be loaded.",
     );
-    expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 7000 })).toBeInTheDocument();
+    expect(await screen.findByText("Spend / estimated hour", {}, { timeout: 7000 })).toBeInTheDocument();
     expect(screen.queryByText("The sync status could not be loaded.")).not.toBeInTheDocument();
   });
   it("saves the edited schedule before running from Settings", async () => {
     vi.mocked(apiClient.put).mockResolvedValue(settings);
     vi.mocked(apiClient.post).mockResolvedValue({ ...idleStatus, running: true });
     render(<ROICalculatorView accessToken="token" />);
-    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Settings" }));
     fireEvent.change(screen.getByLabelText("Update interval (hours)"), { target: { value: "6" } });
     fireEvent.click(screen.getByRole("button", { name: "Save and run analysis" }));
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith("/roi-calculator/sync", { accessToken: "token" }));

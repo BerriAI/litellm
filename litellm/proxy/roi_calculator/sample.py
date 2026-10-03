@@ -1,7 +1,14 @@
 from datetime import datetime, timedelta
 from typing import Final
 
-from litellm.types.roi_calculator import DEFAULT_PROMPT, ROIEstimate, ROIPullRecord, ROIReport, ROISpendRecord
+from litellm.types.roi_calculator import (
+    DEFAULT_PROMPT,
+    ROIBranchSpend,
+    ROIEstimate,
+    ROIPullRecord,
+    ROIReport,
+    ROISpendRecord,
+)
 
 
 def sample_report(now: datetime) -> ROIReport:
@@ -23,6 +30,8 @@ def sample_report(now: datetime) -> ROIReport:
             "cached": False,
         }
         return ROIPullRecord(
+            source_repo="github.com/example/gateway",
+            source_branch=f"sample/{login}",
             repo="example/gateway",
             number=142 + index,
             title=title,
@@ -50,6 +59,11 @@ def sample_report(now: datetime) -> ROIReport:
         if email
     )
     return ROIReport(
+        branch_spend=tuple(
+            ROIBranchSpend(repo="github.com/example/gateway", branch=f"sample/{login}", spend=cost / 2, requests=75)
+            for login, email, _, _, cost in examples
+            if email
+        ),
         mode="demo",
         start=start.isoformat(),
         end=now.date().isoformat(),

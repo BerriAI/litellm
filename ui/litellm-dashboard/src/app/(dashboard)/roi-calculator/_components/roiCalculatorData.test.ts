@@ -13,6 +13,8 @@ import {
 import type { ROIPull } from "./roiCalculatorData";
 
 const pull = (overrides: Partial<ROIPull>): ROIPull => ({
+  source_repo: "github.com/org/repo",
+  source_branch: "feature",
   repo: "org/repo",
   number: 42,
   title: "Improve request routing",
@@ -56,13 +58,14 @@ describe("ROI calculator display helpers", () => {
   it("keeps caveat copy tied to the estimate basis and reports match coverage", () => {
     expect(effortNote("without_ai")).toContain("not actual hours worked or hours saved");
     expect(effortNote(null)).toContain("Earlier estimates");
-    expect(coverageLabel(summary)).toBe("1 of 2 PRs have email matches");
+    expect(coverageLabel(summary)).toBe("1 of 2 matched");
   });
 
   it("labels estimates and filters PRs by title, repository, number, or login", () => {
     const matchingPull = pull({});
     expect(estimateLabel(matchingPull.estimate)).toBe("4.5 hrs");
-    expect(estimateLabel({ status: "needs_review", hours: null, reasoning: "", cached: false })).toBe("Needs review");
+    const incompleteEstimate = { status: "needs_review", hours: null, reasoning: "", cached: false };
+    expect(estimateLabel(incompleteEstimate)).toBe("Needs review");
     expect(filterPulls([matchingPull], "ROUTING")).toEqual([matchingPull]);
     expect(filterPulls([matchingPull], "nobody")).toEqual([]);
   });
@@ -75,6 +78,9 @@ it("exports precise spend, cohort eligibility and safely quoted CSV values", () 
     effort_basis: "without_ai",
     people: [
       {
+        id: "export-person",
+        estimated_prs: 1,
+        match_methods: ["manual"],
         email: '=HYPERLINK("bad")',
         logins: ["alice", "bob"],
         spend: 0.0001,

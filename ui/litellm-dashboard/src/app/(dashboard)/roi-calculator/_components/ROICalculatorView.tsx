@@ -1,8 +1,8 @@
 "use client";
 
-import { Page } from "@/components/shared/Page";
+import { Page, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import React from "react";
-import { Calculator, RefreshCw } from "lucide-react";
+import { Calculator, RefreshCw, Settings2 } from "lucide-react";
 
 import { apiClient } from "@/components/networking";
 import { DemoNotice } from "@/components/shared/DemoNotice";
@@ -11,7 +11,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isProxyAdminTierRole } from "@/utils/roles";
 import ROISettingsPanel from "./ROISettingsPanel";
@@ -28,7 +29,7 @@ import type {
   ROISyncStatus,
 } from "./roiCalculatorData";
 
-type View = "overview" | "people" | "settings";
+type View = "overview" | "people";
 
 const IDLE_STATUS: ROISyncStatus = {
   running: false,
@@ -55,6 +56,7 @@ export default function ROICalculatorView({
   const [sampleSummary, setSampleSummary] = React.useState<ROISummary | null>(null);
   const adminReadOnly = isViewOnly && isProxyAdminTierRole(userRole ?? "");
   const readOnly = adminReadOnly || sampleSummary !== null;
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [view, setView] = React.useState<View>("overview");
   const [settings, setSettings] = React.useState<ROISettings | null>(null);
   const [liveSummary, setSummary] = React.useState<ROISummary | null>(null);
@@ -120,7 +122,6 @@ export default function ROICalculatorView({
             if (cancelled) return;
             setSummary(report);
             reportNeedsRefresh = false;
-            setView((current) => (current === "settings" ? "overview" : current));
           }
           if (!cancelled) setError(null);
         })
@@ -144,6 +145,7 @@ export default function ROICalculatorView({
       const nextStatus = await apiClient.post<ROISyncStatus>("/roi-calculator/sync", { accessToken });
       statusRef.current = nextStatus;
       setStatus(nextStatus);
+      setSettingsOpen(false);
     } catch (reason) {
       setError(extractErrorMessage(reason));
     }
@@ -208,6 +210,7 @@ export default function ROICalculatorView({
   const resetView = (updated: ROISettings) => {
     setSettings(updated);
     setSummary(null);
+    setSettingsOpen(false);
     setView("overview");
     setStatus(IDLE_STATUS);
     statusRef.current = IDLE_STATUS;
@@ -220,13 +223,27 @@ export default function ROICalculatorView({
   const syncedAt = syncIsUpToDate ? summary?.synced_at : null;
 
   return (
-    <Page>
+    <Page className="p-6 md:p-8">
       <PageHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <PageHeaderTitle>
             <Calculator />
             ROI Calculator
           </PageHeaderTitle>
+          {summary && !sampleSummary && (
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+                <Settings2 />
+                Settings
+              </Button>
+              {!readOnly && (
+                <Button onClick={() => void startSync()} disabled={status.running || !settings.ready}>
+                  <RefreshCw className={status.running ? "animate-spin" : ""} />
+                  {status.running ? "Syncing…" : "Run analysis"}
+                </Button>
+              )}
+            </div>
+          )}
           {!liveSummary && showLiveStatus && (
             <Button variant="outline" onClick={() => void previewSample()}>
               Preview sample report
@@ -236,7 +253,7 @@ export default function ROICalculatorView({
         <PageHeaderDescription>
           {summary
             ? `${summary.start} through ${summary.end} · UTC`
-            : "Compare gateway spend with estimated engineering effort for merged pull requests"}
+            : "Compare gateway spend with estimated engineering effort for merged pull and merge requests"}
           {syncedAt && (
             <span className="mt-1 block text-xs text-muted-foreground" role="status">
               Last synced {formatSyncedAt(syncedAt)}
@@ -260,21 +277,12 @@ export default function ROICalculatorView({
       )}
 
       {summary && (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Tabs value={view} onValueChange={(value) => setView(value as View)}>
-            <TabsList aria-label="ROI Calculator views">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="people">People</TabsTrigger>
-              {!sampleSummary && <TabsTrigger value="settings">Settings</TabsTrigger>}
-            </TabsList>
-          </Tabs>
-          {view !== "settings" && !readOnly && (
-            <Button onClick={() => void startSync()} disabled={status.running || !settings.ready}>
-              <RefreshCw className={status.running ? "animate-spin" : ""} />
-              {status.running ? "Syncing…" : "Run analysis"}
-            </Button>
-          )}
-        </div>
+        <Tabs value={view} onValueChange={(value) => setView(value as View)}>
+          <PageTabsList aria-label="ROI Calculator views">
+            <PageTabsTrigger value="overview">Overview</PageTabsTrigger>
+            <PageTabsTrigger value="people">People</PageTabsTrigger>
+          </PageTabsList>
+        </Tabs>
       )}
 
       {error && (
@@ -311,7 +319,7 @@ export default function ROICalculatorView({
                 <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
               </div>
               <p className="text-sm text-muted-foreground">
-                {status.done} of {status.total} pull requests processed · {status.reused} reused
+                {status.done} of {status.total} changes processed · {status.reused} reused
                 {` · ${status.elapsed_seconds ?? 0}s elapsed`}
                 {status.remaining_seconds != null ? ` · about ${status.remaining_seconds}s remaining` : ""}
               </p>
@@ -325,7 +333,7 @@ export default function ROICalculatorView({
         </Card>
       )}
 
-      {view === "settings" || (!summary && !status.running) ? (
+      {!summary && !status.running ? (
         <ROISettingsPanel
           accessToken={accessToken}
           initialSettings={settings}
@@ -355,6 +363,32 @@ export default function ROICalculatorView({
           readOnly={readOnly}
         />
       )}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Calculator settings</DialogTitle>
+            <DialogDescription>Connect repositories and choose how to estimate effort.</DialogDescription>
+          </DialogHeader>
+          <ROISettingsPanel
+            accessToken={accessToken}
+            initialSettings={settings}
+            onboarding={false}
+            onSaved={(updated) => {
+              setSettings(updated);
+              if (
+                updated.source_provider !== settings.source_provider ||
+                updated.github_api_url !== settings.github_api_url ||
+                updated.gitlab_api_url !== settings.gitlab_api_url
+              )
+                setSummary(null);
+            }}
+            onReset={resetView}
+            onStartSync={startSync}
+            readOnly={readOnly}
+            syncDisabled={status.running}
+          />
+        </DialogContent>
+      </Dialog>
       <PullReasoningDialog pull={selectedPull} summary={summary} onClose={() => setSelectedPull(null)} />
       {!readOnly && (
         <IdentityMatchDialog
