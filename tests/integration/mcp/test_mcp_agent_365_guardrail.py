@@ -16,6 +16,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
+    INITIALIZE,
     EntryPoint,
     McpCaller,
     McpPeer,
@@ -145,18 +146,21 @@ def test_a_missing_or_malformed_caller_bearer_blocks_on_every_entry_point_whatev
             for label, bearer in (("without a bearer", None), ("opaque bearer", "not-a-jws")):
                 caller: Final = rig.caller(entry, bearer)
                 if entry == "server_mcp":
-                    challenged: Final = caller.rpc(
-                        "tools/call", {"name": f"{rig.alias}-add", "arguments": {"entry": entry}}
-                    )
+                    challenged: Final = caller.rpc("initialize", INITIALIZE)
                     assert challenged.status_code == 401, f"{entry} {label}: {challenged.text}"
                     authenticate: Final = challenged.headers.get("www-authenticate", "")
                     assert f'resource_metadata="{metadata_url}"' in authenticate, f"{entry} {label}: {authenticate!r}"
                     assert 'error="invalid_token"' in authenticate, f"{entry} {label}: {authenticate!r}"
-                    continue
+                    if bearer is None:
+                        unsigned: Final = caller.rpc(
+                            "tools/call", {"name": f"{rig.alias}-add", "arguments": {"entry": entry}}
+                        )
+                        assert unsigned.status_code == 401, f"{entry} {label}: {unsigned.text}"
+                        continue
                 outcome: Final = caller.call(f"{rig.alias}-add", {"entry": entry}, server_id=rig.server_id)
                 assert outcome.error is not None and REJECTED in outcome.raw, f"{entry} {label}: {outcome.raw}"
         assert rig.upstream_tool_names() == ()
-        expected: Final = 2 * (len(ENTRY_POINTS) - 1)
+        expected: Final = 2 * len(ENTRY_POINTS) - 1
         assert rig.guardrail_statuses("call_mcp_tool", expected) == ["guardrail_intervened"] * expected
 
 
