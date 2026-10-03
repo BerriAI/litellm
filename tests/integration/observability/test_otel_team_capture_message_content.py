@@ -14,7 +14,15 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
-from integration._support.otlp_sink import Span, SpanSinks, configure_sink, recorded_requests, recorded_spans
+from integration._support.otlp_sink import (
+    ConnectSink,
+    Span,
+    SpanSinks,
+    configure_sink,
+    owned_connect_sink,
+    recorded_requests,
+    recorded_spans,
+)
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -164,6 +172,7 @@ class Cursors:
     operator: int
     tenant: int
     arize: int
+    newrelic: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +183,7 @@ class Rig:
     model: str
     upstream: Wire
     sinks: SpanSinks
+    newrelic: ConnectSink
 
     def cursors(self) -> Cursors:
         self.upstream.drain()
@@ -181,6 +191,7 @@ class Rig:
             recorded_spans(self.sinks.operator)[0],
             recorded_spans(self.sinks.tenant)[0],
             recorded_spans(self.sinks.arize)[0],
+            recorded_spans(self.newrelic.control_url)[0],
         )
 
     def upstream_hits(self, marker: str) -> int:
@@ -254,7 +265,8 @@ def _sent_with(url: str, credential: Credential) -> frozenset[str]:
     return frozenset(
         span_id
         for request in recorded_requests(url)
-        if {name.lower(): seen for name, seen in object_value(request.get("headers")).items()}.get(header) == value
+        if {name.lower(): seen for name, seen in object_value(request.get("headers") or {}).items()}.get(header)
+        == value
         for span_id in request.get("span_ids") or ()
         if isinstance(span_id, str)
     )
@@ -456,6 +468,41 @@ def test_arize_destination_drops_openinference_content(rig: Rig) -> None:
     assert model.get("llm.model_name"), sorted(model)
 
 
+def test_weave_destination_drops_its_content(rig: Rig) -> None:
+    _, key = rig.team_key(
+        "no_content",
+        "weave",
+        callback="weave_otel",
+        variables={"wandb_api_key": "wandb-a", "weave_project_id": "team/a"},
+    )
+    cursors: Final = rig.cursors()
+    sent: Final = _served(rig.send(key))
+    operator: Final = eventually(
+        lambda: _of_request(rig.sinks.arize, cursors.arize, sent, ("project_id", "operator/weave")),
+        lambda spans: any(sent.marker in str(span["attributes"].get("weave.output", "")) for span in spans),
+        seconds=40,
+    )
+    assert operator, "operator weave copy has no weave.output to strip"
+    tenant: Final = _assert_redacted_twin(rig, sent, cursors, rig.sinks.arize, cursors.arize, ("project_id", "team/a"))
+    assert not any("weave.output" in span["attributes"] for span in tenant), _names(tenant)
+
+
+def test_newrelic_destination_drops_genai_content(rig: Rig) -> None:
+    _, key = rig.team_key("no_content", "newrelic", callback="newrelic", variables={"newrelic_api_key": "nr-team-a"})
+    cursors: Final = rig.cursors()
+    sent: Final = _served(rig.send(key))
+    tenant: Final = _assert_redacted_twin(
+        rig, sent, cursors, rig.newrelic.control_url, cursors.newrelic, ("api-key", "nr-team-a")
+    )
+    hosts: Final = {
+        object_value(request.get("headers") or {}).get("Host")
+        for request in recorded_requests(rig.newrelic.control_url)
+        if object_value(request.get("headers") or {}).get("api-key") == "nr-team-a"
+    }
+    assert hosts == {"otlp.nr-data.net"}, hosts
+    assert tenant
+
+
 def test_global_no_content_is_not_lifted_by_a_span_only_team(dark_rig: Rig) -> None:
     _, key = dark_rig.team_key("span_only", "b")
     cursors: Final = dark_rig.cursors()
@@ -568,7 +615,9 @@ def _write_config(directory: Path, sinks: SpanSinks, name: str) -> Path:
 
 
 @contextmanager
-def _started(provider: Wire, sinks: SpanSinks, directory: Path, capture: str | None) -> Generator[Rig]:
+def _started(
+    provider: Wire, sinks: SpanSinks, newrelic: ConnectSink, directory: Path, capture: str | None
+) -> Generator[Rig]:
     environment: Final = {
         "LITELLM_OTEL_V2": "1",
         "OTEL_BSP_SCHEDULE_DELAY": "300",
@@ -579,6 +628,12 @@ def _started(provider: Wire, sinks: SpanSinks, directory: Path, capture: str | N
         "ARIZE_SPACE_KEY": "space-operator",
         "ARIZE_API_KEY": "arize-operator",
         "ARIZE_HTTP_ENDPOINT": sinks.arize + "/v1/traces",
+        "WANDB_API_KEY": "wandb-operator",
+        "WANDB_PROJECT_ID": "operator/weave",
+        "WANDB_HOST": sinks.arize,
+        "HTTPS_PROXY": newrelic.proxy_url,
+        "NO_PROXY": "127.0.0.1,localhost",
+        "REQUESTS_CA_BUNDLE": newrelic.ca_pem,
         **({} if capture is None else {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": capture}),
     }
     with (
@@ -596,7 +651,9 @@ def _started(provider: Wire, sinks: SpanSinks, directory: Path, capture: str | N
         ) as owned,
         owned.gateway.scenario() as scenario,
     ):
-        yield Rig(owned.gateway, owned, scenario, scenario.model(api_base=provider.url + "/v1"), provider, sinks)
+        yield Rig(
+            owned.gateway, owned, scenario, scenario.model(api_base=provider.url + "/v1"), provider, sinks, newrelic
+        )
 
 
 @pytest.fixture(scope="module")
@@ -606,12 +663,23 @@ def provider() -> Iterator[Wire]:
 
 
 @pytest.fixture(scope="module")
-def rig(provider: Wire, audit_sinks: SpanSinks, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    with _started(provider, audit_sinks, tmp_path_factory.mktemp("capture-span-only"), "span_only") as started:
+def newrelic_sink(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ConnectSink]:
+    with owned_connect_sink(tmp_path_factory.mktemp("newrelic-sink")) as sink:
+        yield sink
+
+
+@pytest.fixture(scope="module")
+def rig(
+    provider: Wire, audit_sinks: SpanSinks, newrelic_sink: ConnectSink, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Rig]:
+    directory: Final = tmp_path_factory.mktemp("capture-span-only")
+    with _started(provider, audit_sinks, newrelic_sink, directory, "span_only") as started:
         yield started
 
 
 @pytest.fixture(scope="module")
-def dark_rig(provider: Wire, audit_sinks: SpanSinks, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    with _started(provider, audit_sinks, tmp_path_factory.mktemp("capture-no-content"), None) as started:
+def dark_rig(
+    provider: Wire, audit_sinks: SpanSinks, newrelic_sink: ConnectSink, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Rig]:
+    with _started(provider, audit_sinks, newrelic_sink, tmp_path_factory.mktemp("capture-no-content"), None) as started:
         yield started
