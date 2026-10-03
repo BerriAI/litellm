@@ -14,7 +14,7 @@ import hashlib
 import json
 import random
 import traceback
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
@@ -819,10 +819,10 @@ _JOBS_CACHE_KEY: Final = "shadow_eval:active_jobs"
 def shadow_eval_snapshot_needed(jobs_cache: InMemoryCache = _jobs_cache) -> bool:
     """Whether pre-call must capture a guardrail snapshot: only a jobs cache proving that no
     shadow-eval job is active lets the copy be skipped; an unfilled cache fails open."""
-    cached: Final = jobs_cache.get_cache(_JOBS_CACHE_KEY)
-    if cached is None:
+    cached: Final[object] = jobs_cache.get_cache(_JOBS_CACHE_KEY)
+    if cached is None or not isinstance(cached, Sized):
         return True
-    return not isinstance(cached, Mapping) or len(cached) > 0
+    return len(cached) > 0
 
 
 class ShadowEvalLogger(CustomLogger):

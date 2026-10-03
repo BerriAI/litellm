@@ -4540,9 +4540,6 @@ async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_asy
 
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_keeps_the_preset_cache_key_set_by_the_client_wrapper():
-    """The caching wrapper stores the request's cache key on logging_obj.litellm_params before the
-    handler runs. The handler used to overwrite it with None, so spend logging recomputed the key
-    from the full body on every request."""
     from datetime import datetime
 
     from litellm.litellm_core_utils.litellm_logging import Logging
