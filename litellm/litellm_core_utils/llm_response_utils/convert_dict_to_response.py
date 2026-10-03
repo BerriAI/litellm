@@ -231,15 +231,7 @@ async def convert_to_streaming_response_async(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(
-            model_response_object,
-            "usage",
-            Usage(
-                completion_tokens=response_object["usage"].get("completion_tokens", 0),
-                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-                total_tokens=response_object["usage"].get("total_tokens", 0),
-            ),
-        )
+        setattr(model_response_object, "usage", Usage(**response_object["usage"]))
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
@@ -325,10 +317,7 @@ def convert_to_streaming_response(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+        setattr(model_response_object, "usage", Usage(**response_object["usage"]))
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
