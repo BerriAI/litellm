@@ -922,7 +922,10 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     ``cachePoint`` blocks. Bedrock rejects requests carrying cachePoint blocks for
     models without prompt caching support ("You invoked an unsupported model or your
     request did not allow prompt caching"), so a model whose cost-map entry does not declare
-    ``supports_prompt_caching`` must not receive them. A model absent from the map
+    ``supports_prompt_caching`` must not receive them. An explicit
+    ``supports_prompt_cache_breakpoint`` on the entry wins over that flag: a model can price
+    cached tokens through implicit caching yet reject the marker on Converse ("This model
+    doesn't support the cachePoint field", Kimi K3). A model absent from the map
     (an application inference profile ARN, a model newer than the map) keeps emitting
     so existing caching setups never silently degrade. ``litellm.utils.supports_prompt_caching``
     is not reusable here: it returns False for unmapped models, the opposite polarity.
@@ -938,6 +941,16 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     )
     if not entries:
         return True
+    explicit_marker_support: Final = next(
+        (
+            entry.get("supports_prompt_cache_breakpoint") is True
+            for entry in entries
+            if entry.get("supports_prompt_cache_breakpoint") is not None
+        ),
+        None,
+    )
+    if explicit_marker_support is not None:
+        return explicit_marker_support
     return any(entry.get("supports_prompt_caching") is True for entry in entries)
 
 
