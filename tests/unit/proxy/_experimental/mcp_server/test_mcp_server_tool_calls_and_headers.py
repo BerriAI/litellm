@@ -12554,7 +12554,9 @@ class TestConnectSignInPreflight:
     """A subject token the provider rejects must fail at connect with the RFC 9728 challenge, not as a
     JSON-RPC error on every tools/call where ``WWW-Authenticate`` is lost."""
 
-    async def _connect(self, route_names, guardrail, allowed, raw_headers=None, connecting=_connecting):
+    async def _connect(
+        self, route_names, guardrail, allowed, raw_headers=None, connecting=_connecting, user_api_key_auth=None
+    ):
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         server = _catalog_server()
@@ -12575,12 +12577,62 @@ class TestConnectSignInPreflight:
                 mcp_servers=list(route_names),
                 oauth2_headers=None,
                 mcp_server_auth_headers=None,
-                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                user_api_key_auth=user_api_key_auth or UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                 client_ip=None,
                 raw_headers=raw_headers
                 or {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
                 connecting=connecting,
             )
+
+    @pytest.mark.asyncio
+    async def test_custom_auth_admitted_bearer_is_pre_flighted_not_challenged(self):
+        """Custom auth admits the caller on its own IdP token in ``Authorization`` with no
+        ``x-litellm-api-key``; that token is the sign-in subject, so connect pre-flights it as a tool
+        call forwarded it before the subject split, instead of challenging for a missing subject."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        admitted = UserAPIKeyAuth(api_key="entra.jwt.token", user_id="u-1")
+        admitted.authenticated_by_custom_auth = True
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(
+                ["catalog"],
+                guardrail,
+                [server],
+                raw_headers={"authorization": "Bearer entra.jwt.token"},
+                user_api_key_auth=admitted,
+            )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == ["entra.jwt.token"]
+
+    @pytest.mark.asyncio
+    async def test_custom_auth_admitted_virtual_key_bearer_is_still_challenged(self):
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        admitted = UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1")
+        admitted.authenticated_by_custom_auth = True
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(
+                    ["catalog"],
+                    guardrail,
+                    [server],
+                    raw_headers={"authorization": "Bearer sk-litellm-virtual-key"},
+                    user_api_key_auth=admitted,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert 'error="invalid_token"' in ((exc.value.headers or {}).get("WWW-Authenticate") or "")
+        assert guardrail.preflight_calls == []
 
     @pytest.mark.asyncio
     async def test_rejected_subject_challenges_at_connect(self):

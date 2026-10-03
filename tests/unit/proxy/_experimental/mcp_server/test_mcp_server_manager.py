@@ -6986,6 +6986,50 @@ class TestMCPServerManager:
         assert kwargs["incoming_subject_token"] == expected_subject
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raw_headers", "api_key", "expected_subject"),
+        [
+            pytest.param({"authorization": "Bearer eyJ.x.y"}, "eyJ.x.y", "eyJ.x.y", id="idp-bearer-is-the-subject"),
+            pytest.param({"authorization": "Bearer sk-1234"}, "sk-1234", None, id="virtual-key-is-not-a-subject"),
+            pytest.param(
+                {"x-litellm-api-key": "ca-key", "authorization": "Bearer ca-key"},
+                "ca-key",
+                None,
+                id="explicit-key-admission-repeated-in-authorization-is-not-a-subject",
+            ),
+        ],
+    )
+    async def test_pre_call_tool_check_hands_sign_in_the_bearer_custom_auth_admitted(
+        self, raw_headers, api_key, expected_subject
+    ):
+        """Custom auth admits the caller on its own IdP token in ``Authorization`` with no
+        ``x-litellm-api-key``, so that token is the sign-in subject as it was before the subject split."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", allowed_tools=None
+        )
+        admitted = UserAPIKeyAuth(api_key=api_key, user_id="u")
+        admitted.authenticated_by_custom_auth = True
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        await manager.pre_call_tool_check(
+            server_name="srv",
+            name="turn",
+            arguments={},
+            user_api_key_auth=admitted,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+            raw_headers=raw_headers,
+        )
+
+        kwargs: Final = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert kwargs["incoming_bearer_token"] == api_key
+        assert kwargs["incoming_subject_token"] == expected_subject
+
+    @pytest.mark.asyncio
     async def test_check_tool_permission_for_key_team_allows_permitted_tool(self):
         """
         Test check_tool_permission_for_key_team directly - should allow permitted tool.
