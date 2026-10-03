@@ -115,6 +115,9 @@ locals {
   backend_extra_env_kv = [
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
+  gateway_timeout_env_kv = contains(keys(var.gateway_extra_env), "KEEPALIVE_TIMEOUT") ? [] : [
+    { name = "KEEPALIVE_TIMEOUT", value = tostring(var.lb_timeout_seconds + 30) },
+  ]
 
   backend_default_env_kv = [
     { name = "STORE_MODEL_IN_DB", value = "true" },
@@ -186,7 +189,7 @@ locals {
     { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
   ] : []
 
-  gateway_env_kv      = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv, local.gateway_pool_env, local.collector_env_kv)
+  gateway_env_kv      = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_timeout_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv, local.gateway_pool_env, local.collector_env_kv)
   gateway_env_secrets = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
 
   collector_env_kv_all = concat(
@@ -241,6 +244,7 @@ resource "google_cloud_run_v2_service" "gateway" {
   template {
     service_account                  = google_service_account.runtime.email
     max_instance_request_concurrency = var.gateway_max_instance_request_concurrency
+    timeout                          = "${var.lb_timeout_seconds}s"
 
     vpc_access {
       connector = google_vpc_access_connector.this[0].id

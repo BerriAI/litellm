@@ -726,3 +726,14 @@ variable "collector_drain_timeout_seconds" {
     error_message = "collector_drain_timeout_seconds must be > 0."
   }
 }
+
+variable "lb_timeout_seconds" {
+  description = "Request timeout in seconds for the external load balancer backend service and the gateway Cloud Run service. Streams that stay silent longer than this (slow first token) are cut with a 504, so keep it at or above the proxy's request_timeout."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.lb_timeout_seconds >= 1
+    error_message = "lb_timeout_seconds must be >= 1."
+  }
+}

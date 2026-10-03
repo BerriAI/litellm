@@ -16,6 +16,41 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].image
           value: ghcr.io/berriai/litellm:test
+  - it: should set KEEPALIVE_TIMEOUT by default
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEEPALIVE_TIMEOUT
+            value: "630"
+  - it: should omit KEEPALIVE_TIMEOUT when configured to zero
+    template: deployment.yaml
+    set:
+      keepaliveTimeoutSeconds: 0
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEEPALIVE_TIMEOUT
+          any: true
+  - it: should preserve an envVars KEEPALIVE_TIMEOUT override without duplication
+    template: deployment.yaml
+    set:
+      envVars:
+        KEEPALIVE_TIMEOUT: "120"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEEPALIVE_TIMEOUT
+            value: "120"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KEEPALIVE_TIMEOUT
+            value: "630"
+          any: true
   - it: should work with tolerations
     template: deployment.yaml
     set:

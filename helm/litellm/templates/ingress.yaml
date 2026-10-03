@@ -6,6 +6,17 @@
 {{- $backendPort := .Values.backend.service.port -}}
 {{- $uiPort := .Values.ui.service.port -}}
 {{- $controller := .Values.ingress.controller | default "alb" -}}
+{{- $annotations := deepCopy (.Values.ingress.annotations | default (dict)) -}}
+{{- if and (eq $controller "alb") .Values.ingress.idleTimeoutSeconds (not (hasKey $annotations "alb.ingress.kubernetes.io/load-balancer-attributes")) -}}
+{{- $_ := set $annotations "alb.ingress.kubernetes.io/load-balancer-attributes" (printf "idle_timeout.timeout_seconds=%v" .Values.ingress.idleTimeoutSeconds) -}}
+{{- else if and (eq $controller "nginx") .Values.ingress.idleTimeoutSeconds -}}
+{{- if not (hasKey $annotations "nginx.ingress.kubernetes.io/proxy-read-timeout") -}}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/proxy-read-timeout" (printf "%v" .Values.ingress.idleTimeoutSeconds) -}}
+{{- end }}
+{{- if not (hasKey $annotations "nginx.ingress.kubernetes.io/proxy-send-timeout") -}}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/proxy-send-timeout" (printf "%v" .Values.ingress.idleTimeoutSeconds) -}}
+{{- end }}
+{{- end }}
 {{- if not (has $controller (list "alb" "nginx")) }}
 {{- fail (printf "ingress.controller: unknown controller %q, expected one of alb, nginx" $controller) }}
 {{- end }}
@@ -96,9 +107,9 @@ metadata:
   name: {{ include "litellm.fullname" . }}
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- if $annotations }}
   annotations:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml $annotations | nindent 4 }}
   {{- end }}
 spec:
   {{- with .Values.ingress.className }}

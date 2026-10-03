@@ -105,6 +105,18 @@ container under `template.template.containers` (Cloud Run v2 supports
 multiple containers) and replace the password-based URL with the proxy's
 Unix socket.
 
+### Load balancer and gateway timeouts
+
+The external load balancer and gateway Cloud Run service default to 600 seconds
+through `lb_timeout_seconds`. The gateway receives `KEEPALIVE_TIMEOUT` set to
+30 seconds above that value, so uvicorn keeps connections open longer than the
+load balancer. Override `gateway_extra_env.KEEPALIVE_TIMEOUT` when a different
+gateway timeout is needed.
+
+```hcl
+lb_timeout_seconds = 600
+```
+
 ## Configuring the proxy
 
 ### `proxy_config`
