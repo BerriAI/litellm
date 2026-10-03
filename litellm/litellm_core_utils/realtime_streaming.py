@@ -806,6 +806,20 @@ class RealTimeStreaming:
 
         return self._has_realtime_guardrails_for_event_hooks([GuardrailEventHooks.realtime_input_transcription])
 
+    def _proxy_drives_turns(self) -> bool:
+        """True when the proxy, not the backend's server-VAD, starts the assistant's response.
+
+        With a ``realtime_input_transcription`` guardrail the proxy sets
+        ``turn_detection.create_response: false`` on the backend and sends ``response.create``
+        itself after the transcript passed the guardrail. Without such a guardrail the backend
+        auto-responds as soon as the caller stops speaking, so a ``response.create`` from the
+        proxy would start a second response for the same turn; the backend rejects it with
+        ``conversation_already_has_active_response`` (#31726).
+
+        Transcription-only sessions have no assistant response at all.
+        """
+        return not self._is_transcription_session and self._has_audio_transcription_guardrails()
+
     async def run_realtime_guardrails(
         self,
         transcript: str,
@@ -1017,7 +1031,9 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked and not self._is_transcription_session:
+                # Send response.create only if the proxy disabled the backend's auto-response
+                # (transcript guardrail configured). Otherwise the backend created it already.
+                if not blocked and self._proxy_drives_turns():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
@@ -1068,7 +1084,9 @@ class RealTimeStreaming:
                 transcript,
                 item_id=event_obj.get("item_id"),
             )
-            if not blocked:
+            # Send response.create only if the proxy disabled the backend's auto-response
+            # (transcript guardrail configured). Otherwise the backend created it already.
+            if not blocked and self._proxy_drives_turns():
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
             return True
         return False
