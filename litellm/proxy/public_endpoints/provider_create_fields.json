@@ -749,6 +749,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "BITDEER_AI",
+    "provider_display_name": "Bitdeer AI",
+    "litellm_provider": "bitdeer-ai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api-inference.bitdeer.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "bitdeer-ai/moonshotai/Kimi-K3"
+  },
+  {
     "provider": "BYTEZ",
     "provider_display_name": "Bytez",
     "litellm_provider": "bytez",
