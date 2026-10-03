@@ -10,12 +10,6 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     _pubsub_capable_client,
     coordination_redis_cache,
 )
-from litellm.proxy.common_utils.registry_cache_version import bump_registry_version
-from litellm.proxy.common_utils.user_api_key_cache import (
-    REGISTRY_CACHE_KEYS,
-    is_registry_cache_key,
-    registry_version_cache_key,
-)
 
 if TYPE_CHECKING:
     from litellm.caching.in_memory_cache import InMemoryCache
@@ -139,8 +133,6 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
     committed, so a cache backend error must not fail the endpoint.
     """
     for cache_key in cache_keys:
-        if cache_key in REGISTRY_CACHE_KEYS:
-            await bump_registry_version(cache_key, user_api_key_cache)
         try:
             await user_api_key_cache.async_delete_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
@@ -150,8 +142,6 @@ async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "Us
                 e,
             )
         await publish_auth_cache_invalidation(cache_key=cache_key)
-        if cache_key in REGISTRY_CACHE_KEYS:
-            await publish_auth_cache_invalidation(cache_key=registry_version_cache_key(cache_key))
 
 
 class AuthCacheInvalidationSubscriber:
@@ -223,8 +213,6 @@ class AuthCacheInvalidationSubscriber:
             for additional_cache in self._additional_in_memory_caches:
                 additional_cache.set_cache(parsed.cache_key, parsed.new_value, ttl=parsed.ttl)
             return
-        if is_registry_cache_key(parsed.cache_key):
-            self._user_api_key_cache.note_registry_invalidation()
         self._user_api_key_cache.in_memory_cache_for(parsed.cache_key).delete_cache(parsed.cache_key)
         for additional_cache in self._additional_in_memory_caches:
             additional_cache.delete_cache(parsed.cache_key)

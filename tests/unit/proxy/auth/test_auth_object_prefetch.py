@@ -1,15 +1,11 @@
 """Counts the Redis round trips and DB queries auth object reads cost per cache regime, and checks that the
 per-object getters still enforce on their own when the prefetch cannot help."""
 
-import asyncio
 import json
 from collections.abc import Sequence
-from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fakeredis import FakeServer
-from fakeredis.aioredis import FakeRedis
 from fastapi import HTTPException
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -33,9 +29,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
-    model_access_group_registry_cache_key,
-    registry_loaded_version_cache_key,
-    registry_version_cache_key,
 )
 
 USER_ID = "prefetch-user"
@@ -112,33 +105,6 @@ class CountingRedis(RedisCache):
         self._trip(f"SET {key}")
         self.store[key] = json.dumps(value)
 
-    async def async_seed_and_increment(self, key: str, seed: int) -> int:
-        self._trip(f"SETNX {key}", f"INCR {key}")
-        raw: Final = self.store.get(key)
-        current: Final = seed if raw is None else int(json.loads(raw))
-        updated: Final = current + 1
-        self.store[key] = json.dumps(updated)
-        return updated
-
-    async def async_get_or_seed(self, key: str, seed: int) -> int:
-        self._trip(f"SETNX {key}", f"GET {key}")
-        raw: Final = self.store.get(key)
-        if raw is None:
-            self.store[key] = json.dumps(seed)
-            return seed
-        return int(json.loads(raw))
-
-    async def async_set_cache_atomically(
-        self,
-        cache_list: Sequence[tuple[str, object]],
-        ttl: float | None,
-    ) -> None:
-        if not cache_list:
-            return
-        self._trip(*(f"SET {key}" for key, _ in cache_list))
-        for key, value in cache_list:
-            self.store[key] = json.dumps(value)
-
     async def async_set_cache_pipeline(self, cache_list: Sequence[tuple[str, object]], **kwargs: object) -> None:
         self._trip(*(f"SET {key}" for key, _ in cache_list))
         for key, value in cache_list:
@@ -152,42 +118,6 @@ class CountingRedis(RedisCache):
     async def async_delete_cache(self, key: str) -> None:
         self._trip(f"DEL {key}")
         self.store.pop(key, None)
-
-
-class _GatedFakeRedis(RedisCache):
-    def __init__(self, client: FakeRedis, read_done: asyncio.Event, gate: asyncio.Event) -> None:
-        self._client: Final = client
-        self._read_done: Final = read_done
-        self._gate: Final = gate
-        self.mget_calls = 0
-
-    async def async_batch_get_cache(self, key_list: Sequence[str], **kwargs: object) -> dict[str, object]:
-        keys: Final = tuple(key_list)
-        values: Final = await self._client.mget(keys)
-        result: Final = {
-            key: json.loads(value) if value is not None else None
-            for key, value in zip(keys, values, strict=True)
-        }
-        self.mget_calls += 1
-        self._read_done.set()
-        await self._gate.wait()
-        return result
-
-    async def async_seed_and_increment(self, key: str, seed: int) -> int:
-        await self._client.set(key, json.dumps(seed), nx=True)
-        return await self._client.incr(key)
-
-    async def async_set_cache_atomically(
-        self,
-        cache_list: Sequence[tuple[str, object]],
-        ttl: float | None,
-    ) -> None:
-        values: Final = {key: json.dumps(value) for key, value in cache_list}
-        if values:
-            await self._client.mset(values)
-
-    async def async_delete_cache(self, key: str, **kwargs: object) -> None:
-        await self._client.delete(key)
 
 
 def _prisma(rows: dict[str, object] | None = ALL_ROWS) -> MagicMock:
@@ -424,103 +354,7 @@ async def test_identity_prefetch_warms_the_end_user_so_its_getter_needs_neither_
     end_user = await get_end_user_object(end_user_id="eu-1", prisma_client=prisma, user_api_key_cache=cache)
 
     assert end_user is not None and end_user.user_id == "eu-1"
-    assert redis.commands == [
-        f"MGET {end_user_key} {end_user_restricted_registry_cache_key()} "
-        f"{registry_loaded_version_cache_key(end_user_restricted_registry_cache_key())}"
-    ]
-    assert prisma.db.mock_calls == []
-
-
-@pytest.mark.asyncio
-async def test_identity_prefetch_fetches_registry_list_and_tag_as_a_pair():
-    registry_key = end_user_restricted_registry_cache_key()
-    loaded_key = registry_loaded_version_cache_key(registry_key)
-    redis = CountingRedis({registry_key: json.dumps(["eu-1"]), loaded_key: json.dumps(17)})
-    cache = _cache(redis)
-    cache.in_memory_cache.set_cache(key=loaded_key, value=17, ttl=60)
-
-    await prefetch_identity_keys([registry_key, loaded_key], cache)
-
-    assert redis.commands == [f"MGET {registry_key} {loaded_key}"]
-    assert cache.in_memory_cache.get_cache(key=registry_key) == ["eu-1"]
-    assert cache.in_memory_cache.get_cache(key=loaded_key) == 17
-
-
-@pytest.mark.asyncio
-async def test_identity_prefetch_discards_registry_keys_invalidated_during_redis_read():
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-
-    gate: Final = asyncio.Event()
-    read_done: Final = asyncio.Event()
-    redis: Final = _GatedFakeRedis(
-        FakeRedis(server=FakeServer(), decode_responses=True),
-        read_done=read_done,
-        gate=gate,
-    )
-    cache: Final = _cache(redis)
-    end_user_key: Final = end_user_cache_key("prefetch-race-end-user")
-    registry_key: Final = end_user_restricted_registry_cache_key()
-    loaded_key: Final = registry_loaded_version_cache_key(registry_key)
-    version_key: Final = registry_version_cache_key(registry_key)
-    row: Final = {"user_id": "prefetch-race-end-user", "spend": 0.0}
-    await redis.async_set_cache_atomically(
-        cache_list=(
-            (end_user_key, row),
-            (registry_key, ("old-entry",)),
-            (loaded_key, 41),
-            (version_key, 41),
-        ),
-        ttl=60,
-    )
-
-    prefetch: Final = asyncio.create_task(
-        prefetch_identity_keys((end_user_key, registry_key, loaded_key, version_key), cache)
-    )
-    await read_done.wait()
-    await evict_and_broadcast(cache_keys=(registry_key,), user_api_key_cache=cache)
-    gate.set()
-    await prefetch
-
-    assert redis.mget_calls == 1
-    assert cache.in_memory_cache.get_cache(key=end_user_key) == row
-    assert cache.in_memory_cache.get_cache(key=registry_key) is None
-    assert cache.in_memory_cache.get_cache(key=loaded_key) is None
-    assert cache.in_memory_cache.get_cache(key=version_key) is None
-
-
-@pytest.mark.asyncio
-async def test_identity_prefetch_batches_versioned_registries_and_keeps_them_warm():
-    from litellm.proxy.auth.auth_checks import (
-        _load_end_user_restricted_registry,
-        _load_model_access_group_registry,
-    )
-    from litellm.proxy.auth.user_api_key_auth import _identity_cache_keys
-
-    end_user_registry_key = end_user_restricted_registry_cache_key()
-    model_access_group_key = model_access_group_registry_cache_key()
-    redis = CountingRedis(
-        {
-            end_user_cache_key("eu-1"): json.dumps({"user_id": "eu-1", "blocked": False, "spend": 0.0}),
-            end_user_registry_key: json.dumps(["eu-1"]),
-            registry_loaded_version_cache_key(end_user_registry_key): json.dumps(17),
-            registry_version_cache_key(end_user_registry_key): json.dumps(17),
-            model_access_group_key: json.dumps([]),
-            registry_loaded_version_cache_key(model_access_group_key): json.dumps(23),
-            registry_version_cache_key(model_access_group_key): json.dumps(23),
-        }
-    )
-    cache = _cache(redis)
-    prisma = _prisma()
-    identity_keys = _identity_cache_keys("unused", end_user_id="eu-1", key_is_resolved=True)
-
-    await prefetch_identity_keys(identity_keys, cache)
-
-    assert len(redis.commands) == 1
-    assert redis.commands[0].startswith("MGET ")
-    assert set(redis.commands[0].split()[1:]) == set(identity_keys)
-    assert await _load_end_user_restricted_registry(prisma, cache) == frozenset({"eu-1"})
-    assert await _load_model_access_group_registry(prisma, cache) == frozenset()
-    assert redis.round_trips == 1
+    assert redis.commands == [f"MGET {end_user_key} {end_user_restricted_registry_cache_key()}"]
     assert prisma.db.mock_calls == []
 
 

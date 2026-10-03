@@ -4,7 +4,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from fakeredis.aioredis import FakeRedis
 from fastapi import Request, status
 
 import litellm
@@ -91,40 +90,11 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
-    registry_loaded_version_cache_key,
-    registry_version_cache_key,
     tag_cache_key,
     tag_registry_cache_key,
 )
 from litellm.utils import get_utc_datetime
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
-
-
-def _fakeredis_cache_pair(monkeypatch: pytest.MonkeyPatch) -> tuple[RedisCache, RedisCache]:
-    from fakeredis import FakeServer
-    from fakeredis.aioredis import FakeRedis
-
-    import litellm._redis as redis_module
-
-    server: Final = FakeServer()
-
-    def fake_sync_client(**kwargs: object) -> MagicMock:
-        return MagicMock()
-
-    def fake_pool(**kwargs: object) -> None:
-        return None
-
-    def fake_async_client(**kwargs: object) -> FakeRedis:
-        return FakeRedis(server=server, decode_responses=True)
-
-    monkeypatch.setattr(redis_module, "get_redis_client", fake_sync_client)
-    monkeypatch.setattr(redis_module, "get_redis_connection_pool", fake_pool)
-    monkeypatch.setattr(redis_module, "get_redis_async_client", fake_async_client)
-    server_id: Final = id(server)
-    return (
-        RedisCache(host=f"registry-worker-a-{server_id}"),
-        RedisCache(host=f"registry-worker-b-{server_id}"),
-    )
 
 
 def _rendered_log_message(call):
@@ -2758,7 +2728,7 @@ async def test_get_tag_objects_batch():
     from litellm.proxy.auth.auth_checks import get_tag_objects_batch
 
     mock_prisma = MagicMock()
-    mock_cache = _TtlRecordingCache()
+    mock_cache = MagicMock()
     mock_proxy_logging = MagicMock()
 
     # Simulate 5 tags: 2 cached, 3 uncached
@@ -2823,9 +2793,17 @@ async def test_get_tag_objects_batch():
         }
     )
 
-    await mock_cache.async_set_cache(key="tag:cached-1", value=cached_tag_1, model_type=LiteLLM_TagTable)
-    await mock_cache.async_set_cache(key="tag:cached-2", value=cached_tag_2, model_type=LiteLLM_TagTable)
-    mock_cache.writes.clear()
+    # Mock cache behavior - return cached tags, None for uncached
+    async def mock_get_cache(*args, **kwargs):
+        key = kwargs.get("key")
+        if key == "tag:cached-1":
+            return cached_tag_1
+        if key == "tag:cached-2":
+            return cached_tag_2
+        return None
+
+    mock_cache.async_get_cache = AsyncMock(side_effect=mock_get_cache)
+    mock_cache.async_set_cache = AsyncMock()
 
     # Mock DB to return all uncached tags in ONE query
     mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[uncached_tag_1, uncached_tag_2, uncached_tag_3])
@@ -2866,25 +2844,16 @@ async def test_get_tag_objects_batch():
     ]
 
     # Verify uncached tags were cached after fetching, alongside the tag-name registry
-    cached_keys = [key for key, _ in mock_cache.writes]
+    cache_calls = mock_cache.async_set_cache.call_args_list
+    cached_keys = [call.kwargs["key"] for call in cache_calls]
     assert sorted(cached_keys) == [
         "tag:uncached-1",
         "tag:uncached-2",
         "tag:uncached-3",
+        "tag_registry",
     ]
-    assert all(ttl is not None for _, ttl in mock_cache.writes)
-    registry_key: Final = tag_registry_cache_key()
-    loaded_version_key: Final = registry_loaded_version_cache_key(registry_key)
-    version_key: Final = registry_version_cache_key(registry_key)
-    assert mock_cache.in_memory_cache.get_cache(key=registry_key) == (
-        "uncached-1",
-        "uncached-2",
-        "uncached-3",
-    )
-    assert mock_cache.in_memory_cache.get_cache(key=loaded_version_key) == mock_cache.in_memory_cache.get_cache(
-        key=version_key
-    )
-    assert {registry_key, loaded_version_key}.issubset(mock_cache.in_memory_cache.ttl_dict)
+    # Every write is TTL-bounded; an unbounded tag entry would outlive budget updates.
+    assert all("ttl" in call.kwargs for call in cache_calls)
 
 
 class _TtlRecordingCache(UserApiKeyCache):
@@ -2994,60 +2963,6 @@ async def test_get_tag_objects_batch_fetches_only_registered_uncached_tags():
     batch_calls = _batch_calls(mock_prisma.db.litellm_tagtable.find_many)
     assert len(batch_calls) == 1
     assert batch_calls[0].kwargs["where"]["tag_name"]["in"] == ["registered-tag"]
-
-
-@pytest.mark.asyncio
-async def test_tag_registry_reload_observes_a_tag_added_during_a_stale_load():
-    from litellm.proxy.auth.auth_checks import _load_tag_registry, get_tag_objects_batch
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-
-    new_tag: Final = "registry-race-tag"
-    gate: Final = asyncio.Event()
-    snapshot_taken: Final = asyncio.Event()
-    fetched_names: Final[list[str]] = []
-
-    class FakeTagTable:
-        def __init__(self) -> None:
-            self.rows: list[SimpleNamespace] = [_tag_registry_row("existing-tag")]
-
-        async def find_many(
-            self,
-            where: Mapping[str, object] | None = None,
-            take: int | None = None,
-            include: Mapping[str, object] | None = None,
-        ) -> list[object]:
-            if where is not None:
-                tag_filter: Final = where.get("tag_name")
-                if not isinstance(tag_filter, Mapping):
-                    return []
-                requested_values: Final = tag_filter.get("in")
-                if not isinstance(requested_values, Sequence):
-                    return []
-                requested: Final = tuple(name for name in requested_values if isinstance(name, str))
-                fetched_names.extend(requested)
-                return [_tag_db_row(name) for name in requested]
-            snapshot: Final = list(self.rows)
-            snapshot_taken.set()
-            await gate.wait()
-            return snapshot
-
-    table = FakeTagTable()
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_tagtable=table))
-    cache = UserApiKeyCache()
-    loader = asyncio.create_task(_load_tag_registry(prisma, cache))
-    await snapshot_taken.wait()
-    table.rows.append(_tag_registry_row(new_tag))
-    await evict_and_broadcast(
-        cache_keys=(tag_cache_key(new_tag), tag_registry_cache_key()),
-        user_api_key_cache=cache,
-    )
-    gate.set()
-    await loader
-
-    result = await get_tag_objects_batch([new_tag], prisma, cache)
-
-    assert list(result) == [new_tag]
-    assert fetched_names == [new_tag]
 
 
 @pytest.mark.asyncio
@@ -7549,411 +7464,6 @@ async def test_get_end_user_object_oversized_registry_falls_back_and_stops_refet
     assert second is not None and second.blocked is True
     mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
     assert mock_prisma.db.litellm_endusertable.find_unique.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_end_user_registry_load_does_not_hide_rows_added_during_a_stale_load(end_user_registry_skip_enabled):
-    from litellm.proxy.auth.auth_checks import (
-        _end_user_is_known_unrestricted,
-        _load_end_user_restricted_registry,
-        get_end_user_object,
-    )
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-
-    new_id = "integration-new-end-user"
-
-    class FakeEndUserTable:
-        def __init__(self, gate: asyncio.Event, snapshot_taken: asyncio.Event) -> None:
-            self.rows: list[SimpleNamespace] = [SimpleNamespace(user_id="someone-else")]
-            self.gate: Final = gate
-            self.snapshot_taken: Final = snapshot_taken
-            self.find_unique_calls: int = 0
-
-        async def find_many(self, where: Mapping[str, object] | None = None, take: int | None = None) -> list[SimpleNamespace]:
-            snapshot: Final = list(self.rows)
-            self.snapshot_taken.set()
-            await self.gate.wait()
-            return snapshot
-
-        async def find_unique(
-            self,
-            where: Mapping[str, object] | None = None,
-            include: Mapping[str, object] | None = None,
-        ) -> None:
-            self.find_unique_calls += 1
-            return None
-
-    async def scenario(race: bool) -> tuple[bool, int]:
-        gate: Final = asyncio.Event()
-        snapshot_taken: Final = asyncio.Event()
-        table: Final = FakeEndUserTable(gate, snapshot_taken)
-        prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_endusertable=table))
-        cache: Final = UserApiKeyCache()
-        loader: asyncio.Task[frozenset[str] | None] | None = None
-        if race:
-            loader = asyncio.create_task(_load_end_user_restricted_registry(prisma, cache))
-            await snapshot_taken.wait()
-        table.rows.append(SimpleNamespace(user_id=new_id))
-        await evict_and_broadcast(
-            cache_keys=(end_user_cache_key(new_id), end_user_restricted_registry_cache_key()),
-            user_api_key_cache=cache,
-        )
-        gate.set()
-        if loader is not None:
-            await loader
-        skipped = await _end_user_is_known_unrestricted(
-            end_user_id=new_id,
-            prisma_client=prisma,
-            user_api_key_cache=cache,
-            token_end_user_max_budget=None,
-        )
-        if not skipped:
-            await get_end_user_object(
-                end_user_id=new_id,
-                prisma_client=prisma,
-                user_api_key_cache=cache,
-            )
-        return skipped, table.find_unique_calls
-
-    assert await scenario(race=True) == (False, 1)
-    assert await scenario(race=False) == (False, 1)
-
-
-@pytest.mark.asyncio
-async def test_end_user_registry_load_version_is_shared_between_workers(end_user_registry_skip_enabled, monkeypatch):
-    from litellm.proxy.auth.auth_checks import _load_end_user_restricted_registry, get_end_user_object
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-
-    redis_a, redis_b = _fakeredis_cache_pair(monkeypatch)
-    cache_a = UserApiKeyCache(redis_cache=redis_a)
-    cache_b = UserApiKeyCache(redis_cache=redis_b)
-
-    class FakeEndUserTable:
-        def __init__(self) -> None:
-            self.rows: list[SimpleNamespace] = [SimpleNamespace(user_id="someone-else")]
-            self.snapshot_taken: Final = asyncio.Event()
-            self.gate: Final = asyncio.Event()
-            self.find_unique_calls: Final[list[str]] = []
-
-        async def find_many(self, where: Mapping[str, object] | None = None, take: int | None = None) -> list[SimpleNamespace]:
-            snapshot: Final = list(self.rows)
-            self.snapshot_taken.set()
-            await self.gate.wait()
-            return snapshot
-
-        async def find_unique(
-            self,
-            where: Mapping[str, object] | None = None,
-            include: Mapping[str, object] | None = None,
-        ) -> None:
-            user_id: Final = where["user_id"] if where is not None else None
-            if isinstance(user_id, str):
-                self.find_unique_calls.append(user_id)
-            return None
-
-    table = FakeEndUserTable()
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_endusertable=table))
-    loader = asyncio.create_task(_load_end_user_restricted_registry(prisma, cache_a))
-    await table.snapshot_taken.wait()
-    new_id = "shared-registry-race-end-user"
-    table.rows.append(SimpleNamespace(user_id=new_id))
-    await evict_and_broadcast(
-        cache_keys=(end_user_cache_key(new_id), end_user_restricted_registry_cache_key()),
-        user_api_key_cache=cache_b,
-    )
-    table.gate.set()
-    await loader
-
-    await get_end_user_object(new_id, prisma, cache_a)
-    await get_end_user_object(new_id, prisma, cache_b)
-
-    assert table.find_unique_calls == [new_id, new_id]
-
-
-class _GatedRegistryRedis(RedisCache):
-    def __init__(
-        self,
-        client: FakeRedis,
-        read_done: asyncio.Event,
-        gate: asyncio.Event,
-    ) -> None:
-        self._client: Final = client
-        self._read_done: Final = read_done
-        self._gate: Final = gate
-
-    async def async_batch_get_cache(
-        self,
-        key_list: list[str] | list[str | None],
-        **kwargs: object,
-    ) -> dict[str, object]:
-        keys: Final = tuple(key for key in key_list if key is not None)
-        values: Final = await self._client.mget(keys)
-        result: Final = {
-            key: json.loads(value) if value is not None else None
-            for key, value in zip(keys, values, strict=True)
-        }
-        self._read_done.set()
-        await self._gate.wait()
-        return result
-
-    async def async_get_or_seed(self, key: str, seed: int) -> int:
-        await self._client.set(key, json.dumps(seed), nx=True)
-        value: Final = await self._client.get(key)
-        if value is None:
-            raise ValueError("Redis returned no registry version")
-        decoded: Final = json.loads(value)
-        if isinstance(decoded, bool) or not isinstance(decoded, int):
-            raise ValueError("Redis returned an invalid registry version")
-        return decoded
-
-    async def async_seed_and_increment(self, key: str, seed: int) -> int:
-        await self._client.set(key, json.dumps(seed), nx=True)
-        return await self._client.incr(key)
-
-    async def async_set_cache_atomically(
-        self,
-        cache_list: Sequence[tuple[str, object]],
-        ttl: float | None,
-    ) -> None:
-        values: Final = {key: json.dumps(value) for key, value in cache_list}
-        if values:
-            await self._client.mset(values)
-
-    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        await self._client.set(key, json.dumps(value))
-
-    async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
-        value: Final = await self._client.get(key)
-        return json.loads(value) if value is not None else None
-
-    async def async_delete_cache(self, key: str, **kwargs: object) -> None:
-        await self._client.delete(key)
-
-
-class _RaceEndUserTable:
-    def __init__(self) -> None:
-        self.rows: list[SimpleNamespace] = [SimpleNamespace(user_id="someone-else")]
-        self.find_unique_calls: int = 0
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = None,
-        take: int | None = None,
-    ) -> list[SimpleNamespace]:
-        return list(self.rows)
-
-    async def find_unique(
-        self,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, object] | None = None,
-    ) -> None:
-        self.find_unique_calls += 1
-        return None
-
-
-@pytest.mark.asyncio
-async def test_end_user_registry_same_worker_discards_a_redis_read_invalidated_in_flight(
-    end_user_registry_skip_enabled,
-) -> None:
-    from fakeredis import FakeServer
-
-    from litellm.proxy.auth.auth_checks import _end_user_is_known_unrestricted, get_end_user_object
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-
-    server: Final = FakeServer()
-    gate: Final = asyncio.Event()
-    read_done: Final = asyncio.Event()
-    redis_cache: Final = _GatedRegistryRedis(
-        FakeRedis(server=server, decode_responses=True),
-        read_done=read_done,
-        gate=gate,
-    )
-    cache: Final = UserApiKeyCache(redis_cache=redis_cache)
-    registry_key: Final = end_user_restricted_registry_cache_key()
-    loaded_key: Final = registry_loaded_version_cache_key(registry_key)
-    version_key: Final = registry_version_cache_key(registry_key)
-    await redis_cache.async_set_cache_atomically(
-        cache_list=((registry_key, ("someone-else",)), (loaded_key, 30), (version_key, 30)),
-        ttl=60,
-    )
-    table: Final = _RaceEndUserTable()
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_endusertable=table))
-    new_id: Final = "same-worker-registry-race-end-user"
-    check: Final = asyncio.create_task(
-        _end_user_is_known_unrestricted(
-            end_user_id=new_id,
-            prisma_client=prisma,
-            user_api_key_cache=cache,
-            token_end_user_max_budget=None,
-        )
-    )
-    await read_done.wait()
-    table.rows.append(SimpleNamespace(user_id=new_id))
-    await evict_and_broadcast(
-        cache_keys=(end_user_cache_key(new_id), registry_key),
-        user_api_key_cache=cache,
-    )
-    gate.set()
-
-    assert await check is False
-    await get_end_user_object(end_user_id=new_id, prisma_client=prisma, user_api_key_cache=cache)
-    memory_ids: Final = cache.in_memory_cache.get_cache(key=registry_key)
-    assert isinstance(memory_ids, tuple) and new_id in memory_ids
-    memory_loaded_version: Final = cache.in_memory_cache.get_cache(key=loaded_key)
-    memory_current_version: Final = cache.in_memory_cache.get_cache(key=version_key)
-    assert isinstance(memory_loaded_version, int) and memory_loaded_version == memory_current_version
-    assert table.find_unique_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_end_user_registry_subscriber_invalidates_a_cross_worker_redis_read(
-    end_user_registry_skip_enabled,
-) -> None:
-    from fakeredis import FakeServer
-
-    from litellm.proxy.auth.auth_checks import _end_user_is_known_unrestricted, get_end_user_object
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-        AuthCacheInvalidationSubscriber,
-        evict_and_broadcast,
-    )
-
-    server: Final = FakeServer()
-    gate_a: Final = asyncio.Event()
-    gate_a.set()
-    gate_b: Final = asyncio.Event()
-    read_done_b: Final = asyncio.Event()
-    redis_a: Final = _GatedRegistryRedis(
-        FakeRedis(server=server, decode_responses=True),
-        read_done=asyncio.Event(),
-        gate=gate_a,
-    )
-    redis_b: Final = _GatedRegistryRedis(
-        FakeRedis(server=server, decode_responses=True),
-        read_done=read_done_b,
-        gate=gate_b,
-    )
-    cache_a: Final = UserApiKeyCache(redis_cache=redis_a)
-    cache_b: Final = UserApiKeyCache(redis_cache=redis_b)
-    registry_key: Final = end_user_restricted_registry_cache_key()
-    loaded_key: Final = registry_loaded_version_cache_key(registry_key)
-    version_key: Final = registry_version_cache_key(registry_key)
-    await redis_a.async_set_cache_atomically(
-        cache_list=((registry_key, ("someone-else",)), (loaded_key, 31), (version_key, 31)),
-        ttl=60,
-    )
-    table: Final = _RaceEndUserTable()
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_endusertable=table))
-    new_id: Final = "cross-worker-registry-race-end-user"
-    check: Final = asyncio.create_task(
-        _end_user_is_known_unrestricted(
-            end_user_id=new_id,
-            prisma_client=prisma,
-            user_api_key_cache=cache_b,
-            token_end_user_max_budget=None,
-        )
-    )
-    await read_done_b.wait()
-    table.rows.append(SimpleNamespace(user_id=new_id))
-    await evict_and_broadcast(
-        cache_keys=(end_user_cache_key(new_id), registry_key),
-        user_api_key_cache=cache_a,
-    )
-    subscriber: Final = AuthCacheInvalidationSubscriber(redis_cache=redis_b, user_api_key_cache=cache_b)
-    subscriber._apply_message({"type": "message", "data": json.dumps({"cache_key": version_key}).encode()})
-    gate_b.set()
-
-    assert await check is False
-    await get_end_user_object(end_user_id=new_id, prisma_client=prisma, user_api_key_cache=cache_b)
-    memory_ids: Final = cache_b.in_memory_cache.get_cache(key=registry_key)
-    assert isinstance(memory_ids, tuple) and new_id in memory_ids
-    memory_loaded_version: Final = cache_b.in_memory_cache.get_cache(key=loaded_key)
-    memory_current_version: Final = cache_b.in_memory_cache.get_cache(key=version_key)
-    assert isinstance(memory_loaded_version, int) and memory_loaded_version == memory_current_version
-    assert table.find_unique_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_end_user_registry_does_not_mix_memory_version_with_stale_redis_list(
-    end_user_registry_skip_enabled,
-    monkeypatch,
-):
-    from litellm.proxy.auth.auth_checks import (
-        _end_user_is_known_unrestricted,
-        _load_end_user_restricted_registry,
-        get_end_user_object,
-    )
-
-    redis, _ = _fakeredis_cache_pair(monkeypatch)
-    cache = UserApiKeyCache(redis_cache=redis)
-    registry_key = end_user_restricted_registry_cache_key()
-    loaded_key = registry_loaded_version_cache_key(registry_key)
-    version_key = registry_version_cache_key(registry_key)
-    cache.in_memory_cache.set_cache(key=loaded_key, value=12, ttl=60)
-    cache.in_memory_cache.set_cache(key=version_key, value=12, ttl=60)
-    await redis.async_set_cache_atomically(
-        cache_list=((registry_key, ("old-entry",)), (loaded_key, 11), (version_key, 12)),
-        ttl=60,
-    )
-
-    new_id = "tier-mix-end-user"
-    prisma = MagicMock()
-    prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row(new_id)])
-    prisma.db.litellm_endusertable.find_unique = AsyncMock(return_value=None)
-
-    assert await _load_end_user_restricted_registry(prisma, cache) == frozenset({new_id})
-    skipped = await _end_user_is_known_unrestricted(
-        end_user_id=new_id,
-        prisma_client=prisma,
-        user_api_key_cache=cache,
-        token_end_user_max_budget=None,
-    )
-    assert skipped is False
-    await get_end_user_object(end_user_id=new_id, prisma_client=prisma, user_api_key_cache=cache)
-    prisma.db.litellm_endusertable.find_many.assert_awaited_once()
-    prisma.db.litellm_endusertable.find_unique.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_end_user_registry_memory_version_is_a_zero_io_hot_read(end_user_registry_skip_enabled, monkeypatch):
-    from litellm.proxy.auth.auth_checks import _load_end_user_restricted_registry
-
-    redis, _ = _fakeredis_cache_pair(monkeypatch)
-    redis_read = AsyncMock(wraps=redis.async_batch_get_cache)
-    monkeypatch.setattr(redis, "async_batch_get_cache", redis_read)
-    cache = UserApiKeyCache(redis_cache=redis)
-    registry_key = end_user_restricted_registry_cache_key()
-    cache.in_memory_cache.set_cache(key=registry_key, value=("known-id",), ttl=60)
-    cache.in_memory_cache.set_cache(key=registry_loaded_version_cache_key(registry_key), value=21, ttl=60)
-    cache.in_memory_cache.set_cache(key=registry_version_cache_key(registry_key), value=21, ttl=60)
-    prisma = MagicMock()
-    prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
-
-    assert await _load_end_user_restricted_registry(prisma, cache) == frozenset({"known-id"})
-    redis_read.assert_not_awaited()
-    prisma.db.litellm_endusertable.find_many.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_end_user_registry_is_reloaded_when_redis_has_no_current_version(end_user_registry_skip_enabled, monkeypatch):
-    from litellm.proxy.auth.auth_checks import _load_end_user_restricted_registry
-    from litellm.proxy.common_utils.user_api_key_cache import registry_loaded_version_cache_key
-    from litellm.proxy.common_utils.user_api_key_cache import registry_version_cache_key
-
-    redis_a, _ = _fakeredis_cache_pair(monkeypatch)
-    cache = UserApiKeyCache(redis_cache=redis_a)
-    registry_key = end_user_restricted_registry_cache_key()
-    loaded_key = registry_loaded_version_cache_key(registry_key)
-    version_key = registry_version_cache_key(registry_key)
-    cache.in_memory_cache.set_cache(key=registry_key, value=("old-entry",), ttl=60)
-    cache.in_memory_cache.set_cache(key=loaded_key, value=101, ttl=60)
-    assert await redis_a.async_get_cache(key=version_key) is None
-
-    mock_prisma = MagicMock()
-    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[_end_user_registry_row("new-entry")])
-    result = await _load_end_user_restricted_registry(mock_prisma, cache)
-
-    assert result == frozenset({"new-entry"})
-    mock_prisma.db.litellm_endusertable.find_many.assert_awaited_once()
 
 
 @pytest.mark.asyncio

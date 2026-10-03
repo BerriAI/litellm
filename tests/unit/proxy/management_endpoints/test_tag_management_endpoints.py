@@ -11,11 +11,9 @@ from prisma.actions import LiteLLM_VerificationTokenActions
 
 
 from contextlib import contextmanager
-from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import litellm
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
@@ -456,23 +454,21 @@ async def test_delete_tag():
         app.dependency_overrides.clear()
 
 
-class _RecordingAuthCache(UserApiKeyCache):
+class _RecordingAuthCache:
     """Captures the keys an endpoint evicts, so tests assert on cache keys not mock plumbing."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.deleted: Final[list[str]] = []
+    def __init__(self):
+        self.deleted: list[str] = []
 
     async def async_delete_cache(self, key: str) -> None:
         self.deleted.append(key)
-        await super().async_delete_cache(key=key)
 
 
 @contextmanager
 def _tag_cache_doubles():
     """Swaps in the auth cache and the cross-worker publisher a tag mutation is expected to hit."""
-    recording_cache: Final = _RecordingAuthCache()
-    mock_publish: Final = AsyncMock()
+    recording_cache = _RecordingAuthCache()
+    mock_publish = AsyncMock()
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
         patch(
@@ -543,15 +539,8 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
             )
             assert response.status_code == 200
 
-            assert recording_cache.deleted == [
-                "tag:cache-tag",
-                "tag_registry",
-            ]
-            assert _published_keys(mock_publish) == [
-                "tag:cache-tag",
-                "tag_registry",
-                "tag_registry:version",
-            ]
+            assert recording_cache.deleted == ["tag:cache-tag", "tag_registry"]
+            assert _published_keys(mock_publish) == ["tag:cache-tag", "tag_registry"]
     finally:
         app.dependency_overrides.clear()
 
@@ -643,15 +632,8 @@ async def test_delete_tag_invalidates_tag_and_registry_caches():
             )
             assert response.status_code == 200
 
-            assert recording_cache.deleted == [
-                "tag:cache-tag",
-                "tag_registry",
-            ]
-            assert _published_keys(mock_publish) == [
-                "tag:cache-tag",
-                "tag_registry",
-                "tag_registry:version",
-            ]
+            assert recording_cache.deleted == ["tag:cache-tag", "tag_registry"]
+            assert _published_keys(mock_publish) == ["tag:cache-tag", "tag_registry"]
     finally:
         app.dependency_overrides.clear()
 

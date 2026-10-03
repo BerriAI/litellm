@@ -9818,8 +9818,6 @@ def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
         end_user_cache_key,
         end_user_restricted_registry_cache_key,
         model_access_group_registry_cache_key,
-        registry_loaded_version_cache_key,
-        registry_version_cache_key,
     )
     from litellm.proxy.utils import hash_token
 
@@ -9827,30 +9825,17 @@ def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
         hash_token("sk-1234"),
         end_user_cache_key("eu-1"),
         end_user_restricted_registry_cache_key(),
-        registry_loaded_version_cache_key(end_user_restricted_registry_cache_key()),
-        registry_version_cache_key(end_user_restricted_registry_cache_key()),
         model_access_group_registry_cache_key(),
-        registry_loaded_version_cache_key(model_access_group_registry_cache_key()),
-        registry_version_cache_key(model_access_group_registry_cache_key()),
     )
     assert _identity_cache_keys("a" * 64, end_user_id=None, key_is_resolved=False) == (
         hash_token("a" * 64),
         model_access_group_registry_cache_key(),
-        registry_loaded_version_cache_key(model_access_group_registry_cache_key()),
-        registry_version_cache_key(model_access_group_registry_cache_key()),
     )
     master_key_keys = _identity_cache_keys("my-master-key", end_user_id=None, key_is_resolved=False)
-    assert master_key_keys == (
-        hash_token("my-master-key"),
-        model_access_group_registry_cache_key(),
-        registry_loaded_version_cache_key(model_access_group_registry_cache_key()),
-        registry_version_cache_key(model_access_group_registry_cache_key()),
-    )
+    assert master_key_keys == (hash_token("my-master-key"), model_access_group_registry_cache_key())
     assert "my-master-key" not in master_key_keys, "a bearer that is not an sk- key must not be sent to Redis as is"
     assert _identity_cache_keys("sk-1234", end_user_id=None, key_is_resolved=True) == (
         model_access_group_registry_cache_key(),
-        registry_loaded_version_cache_key(model_access_group_registry_cache_key()),
-        registry_version_cache_key(model_access_group_registry_cache_key()),
     )
 
 
