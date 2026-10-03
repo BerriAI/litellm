@@ -11,6 +11,7 @@ from litellm import Router
 from litellm.proxy.lens.endpoints import (
     list_agents,
     run_settings,
+    run_window,
     user_scope,
     watchable,
     watching,
@@ -234,3 +235,17 @@ async def test_watch_all_skips_an_investigation_whose_model_is_gone_instead_of_f
     assert skipped is not None
     assert skipped.id == stale.id
     assert skipped.reason
+
+
+def test_run_now_since_last_run_keeps_scanning_only_new_traces_even_with_an_agent_override() -> None:
+    now: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    resumed: Final = saved_lens().model_copy(update={"last_scan_at": now - timedelta(hours=1)})
+    window: Final = run_window(resumed, RunRequest(agent_name="billing"), now)
+    assert window is not None
+    assert window[0] == now - timedelta(hours=1)
+
+
+def test_run_now_with_a_lookback_scans_that_lookback_instead_of_since_last_run() -> None:
+    now: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    resumed: Final = saved_lens().model_copy(update={"last_scan_at": now - timedelta(hours=1)})
+    assert run_window(resumed, RunRequest(lookback_hours=24), now) is None
