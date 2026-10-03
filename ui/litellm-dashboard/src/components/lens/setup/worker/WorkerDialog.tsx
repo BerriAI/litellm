@@ -54,7 +54,7 @@ export function WorkerDialog({
     defaultValues: defaultWorkerFormValues(),
     mode: "onChange",
   });
-  const { formState, reset, setValue, clearErrors, setError: setFormError } = form;
+  const { formState, reset, setValue } = form;
   const [editingWorker, setEditingWorker] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [created, setCreated] = useState<WorkerCreated | null>(null);
@@ -96,7 +96,7 @@ export function WorkerDialog({
   };
   const prepareWorker = usePrepareWorker(accessToken, { onChanged, onPrepared });
   const createWorker = form.handleSubmit(async (values) => {
-    clearErrors("root");
+    setError("");
     try {
       const registration = {
         address: values.address,
@@ -107,10 +107,7 @@ export function WorkerDialog({
       };
       await prepareWorker.mutateAsync(registration);
     } catch (e) {
-      setFormError("root", {
-        type: "server",
-        message: e instanceof Error ? e.message : "Could not create credential",
-      });
+      setError(e instanceof Error ? e.message : "Could not create credential");
     }
   });
   const revoke = async (id: string) => {
@@ -134,8 +131,6 @@ export function WorkerDialog({
     created && !connected && "sm:max-w-lg",
     !created && "sm:max-w-xl",
   );
-  const onlyRootError = !!formState.errors.root && Object.keys(formState.errors).length === 1;
-  const formCanSubmit = (formState.isValid || onlyRootError) && !formState.isSubmitting;
   const description = describeSetup ? setupDescription : "Worker status and model access";
   return (
     <FormProvider {...form}>
@@ -175,7 +170,7 @@ export function WorkerDialog({
               <Button variant="outline" disabled={formState.isSubmitting} onClick={cancelForm}>
                 Cancel
               </Button>
-              <Button disabled={!formCanSubmit} onClick={() => void createWorker()}>
+              <Button disabled={!formState.isValid || formState.isSubmitting} onClick={() => void createWorker()}>
                 {formState.isSubmitting ? "Preparing…" : actionLabel}
               </Button>
             </DialogFooter>
@@ -189,9 +184,9 @@ export function WorkerDialog({
               revoke={revoke}
             />
           )}
-          {(formState.errors.root?.message || error) && (
+          {error && (
             <p role="alert" className="text-sm text-destructive">
-              {formState.errors.root?.message || error}
+              {error}
             </p>
           )}
         </DialogContent>

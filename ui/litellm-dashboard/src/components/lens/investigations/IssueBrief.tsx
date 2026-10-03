@@ -2,12 +2,14 @@ import { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { Check } from "lucide-react";
 import { copyToClipboard } from "@/utils/dataUtils";
+import anthropicLogo from "@/../public/assets/logos/anthropic.svg";
+import openaiLogo from "@/../public/assets/logos/openai_small.svg";
 import { briefMarkdown } from "../model/findings";
 import { type IssueBrief } from "../model/types";
 
 const AGENTS = [
-  { name: "Claude Code", logo: "/assets/logos/anthropic.svg" },
-  { name: "Codex", logo: "/assets/logos/openai_small.svg" },
+  { name: "Claude Code", logo: anthropicLogo.src },
+  { name: "Codex", logo: openaiLogo.src },
 ] as const;
 
 const COPIED_RESET_MS = 1500;

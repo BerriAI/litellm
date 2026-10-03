@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { z } from "zod";
 import { Controller } from "react-hook-form";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -28,20 +29,19 @@ export function MonitoringDialog({
   onSave: (settings: Settings) => Promise<void>;
   onClose: () => void;
 }) {
+  const [error, setError] = useState("");
   const form = useZodForm(monitoringSchema, {
     defaultValues: { interval_minutes: settings.interval_minutes ?? 30 },
     mode: "onChange",
   });
-  const { formState, control, setError } = form;
+  const { formState, control } = form;
   const save = form.handleSubmit(async ({ interval_minutes }) => {
+    setError("");
     try {
       await onSave({ ...settings, enabled: true, interval_minutes });
       onClose();
     } catch (cause) {
-      setError("root", {
-        type: "server",
-        message: cause instanceof Error ? cause.message : "Could not enable monitoring",
-      });
+      setError(cause instanceof Error ? cause.message : "Could not enable monitoring");
     }
   });
   return (
@@ -84,9 +84,9 @@ export function MonitoringDialog({
             Reconnect the worker before enabling monitoring.
           </p>
         )}
-        {formState.errors.root?.message && (
+        {error && (
           <p role="alert" className="text-sm text-destructive">
-            {formState.errors.root.message}
+            {error}
           </p>
         )}
         <DialogFooter>

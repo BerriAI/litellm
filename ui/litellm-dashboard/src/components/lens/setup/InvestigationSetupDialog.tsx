@@ -55,11 +55,12 @@ export function InvestigationSetupDialog({
 }) {
   const [step, setStep] = useState(0);
   const [previewReady, setPreviewReady] = useState(false);
+  const [error, setError] = useState("");
   const form = useZodForm(investigationSchema, {
     defaultValues: investigationDefaults(initial, mode, defaultSource),
     mode: "onChange",
   });
-  const { control, setError, setValue, subscribe, trigger, formState } = form;
+  const { control, setValue, subscribe, trigger, formState } = form;
   const [selectedModel, repeat] = useWatch({
     control,
     name: ["selectedModel", "repeat"],
@@ -87,13 +88,11 @@ export function InvestigationSetupDialog({
     if (await trigger(investigationStepFields[step])) setStep(step + 1);
   };
   const save = form.handleSubmit(async (values) => {
+    setError("");
     try {
       await onSave(investigationSettings(values, initial, model));
     } catch (cause) {
-      setError("root", {
-        type: "server",
-        message: cause instanceof Error ? cause.message : "Could not save investigation",
-      });
+      setError(cause instanceof Error ? cause.message : "Could not save investigation");
     }
   });
   const unsupported = modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
@@ -176,9 +175,9 @@ export function InvestigationSetupDialog({
                 The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
               </p>
             )}
-            {formState.errors.root?.message && (
+            {error && (
               <p role="alert" className="text-sm text-destructive">
-                {formState.errors.root.message}
+                {error}
               </p>
             )}
           </div>

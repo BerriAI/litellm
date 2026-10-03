@@ -98,13 +98,7 @@ export function MatchingActivity({
     return `${preview.data.eligible} matching ${noun}${preview.data.eligible === 1 ? "" : "s"}`;
   };
   return (
-    <div
-      data-state={mode === "activity" ? "active" : "inactive"}
-      className={cn(
-        "data-[state=active]:grid data-[state=active]:gap-6 data-[state=active]:sm:grid-cols-2",
-        "data-[state=inactive]:space-y-5",
-      )}
-    >
+    <div className={cn(mode === "activity" ? "grid gap-6 sm:grid-cols-2" : "space-y-5")}>
       <div className="space-y-5">
         {mode === "scope" ? (
           <ScopeFields

@@ -200,6 +200,45 @@ it("configures monitoring separately and rejects a zero interval", async () => {
   await waitFor(() => expect(screen.getByRole("button", { name: "Enable monitoring" })).toBeDisabled());
 });
 
+it("allows retrying an investigation save after a server error", async () => {
+  const user = userEvent.setup();
+  const save = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue(undefined);
+  renderWithProviders(
+    <InvestigationSetupDialog
+      initial={settings}
+      models={["analysis"]}
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={save}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  const saveButton = screen.getByRole("button", { name: "Save changes" });
+  await waitFor(() => expect(saveButton).toBeEnabled());
+
+  await user.click(saveButton);
+  expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+  await waitFor(() => expect(saveButton).toBeEnabled());
+
+  await user.click(saveButton);
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+});
+
+it("allows retrying monitoring after a server error", async () => {
+  const user = userEvent.setup();
+  const save = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue(undefined);
+  renderWithProviders(<MonitoringDialog settings={settings} ready onSave={save} onClose={vi.fn()} />);
+  const saveButton = screen.getByRole("button", { name: "Enable monitoring" });
+
+  await user.click(saveButton);
+  expect(await screen.findByRole("alert")).toHaveTextContent("boom");
+  await waitFor(() => expect(saveButton).toBeEnabled());
+
+  await user.click(saveButton);
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+});
+
 it("keeps the draft when readiness changes and blocks a run until the worker recovers", async () => {
   const user = userEvent.setup();
   const save = vi.fn();
