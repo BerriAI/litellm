@@ -3585,6 +3585,72 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
         assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
 
 
+@pytest.fixture
+def openai_wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from litellm.llms.openai.workload_identity import _workload_identity_auth
+
+    token_file: Final = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token-from-file")
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    _workload_identity_auth.cache_clear()
+
+
+@pytest.mark.parametrize("static_key", [None, "", "   "])
+def test_openai_passthrough_uses_workload_identity_token_without_static_key(
+    openai_passthrough_client: TestClient,
+    openai_wif_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    static_key: str | None,
+) -> None:
+    if static_key is None:
+        monkeypatch.delenv("OPENAI_API_KEY")
+    else:
+        monkeypatch.setenv("OPENAI_API_KEY", static_key)
+    with respx.mock(assert_all_called=True) as upstream:
+        token_exchange = upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+        route = upstream.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json={"id": "upstream_123"})
+        )
+        response = openai_passthrough_client.post(
+            "/openai_passthrough/v1/responses", json={"model": "gpt-5.1", "input": "hi"}
+        )
+
+        assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+        assert route.calls.last.request.headers["authorization"] == "Bearer wif-bearer"
+        assert json.loads(token_exchange.calls.last.request.content)["subject_token"] == "subject-token-from-file"
+
+
+@pytest.mark.asyncio
+async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign_api_base(
+    openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_BASE", "https://my-vllm.internal/")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ),
+        respx.mock(assert_all_mocked=True) as upstream,
+        pytest.raises(Exception, match="Required 'OPENAI_API_KEY'"),
+    ):
+        await openai_proxy_route(
+            endpoint="v1/responses",
+            request=MagicMock(spec=Request),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=MagicMock(),
+        )
+    assert upstream.calls.call_count == 0
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
@@ -7298,6 +7364,8 @@ class TestTypeSafePassthroughRoute:
         "provider, endpoint, is_decision_request",
         (
             ("typesafe", "systemone", True),
+            ("laya", "systemone", True),
+            ("bespoke", "systemone", True),
             ("typesafe", "systemone/", True),
             ("typesafe", "systemone?trace=1", True),
             ("typesafe", "systemone/?trace=1", True),
@@ -7316,7 +7384,7 @@ class TestTypeSafePassthroughRoute:
         self,
         client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
-        provider: Literal["typesafe", "openrouter"],
+        provider: Literal["typesafe", "openrouter", "laya", "bespoke"],
         endpoint: str,
         is_decision_request: bool,
         quota_scope: Literal["key", "project_output"],
@@ -7337,12 +7405,15 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
         monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
-        model: Final = "jev-latest" if provider == "typesafe" else "test-generative-model"
+        monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
+        monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
+        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
+        permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
             tpm_limit=token_limit if quota_scope == "key" else None,
             project_id="test-project" if quota_scope == "project_output" else None,
-            project_metadata={"model_otpm_limit": {model: token_limit}} if quota_scope == "project_output" else {},
+            project_metadata={"model_otpm_limit": {permission_model: token_limit}} if quota_scope == "project_output" else {},
         )
         monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: auth)
         body: Final = (
@@ -7409,36 +7480,44 @@ class TestTypeSafePassthroughRoute:
         )
 
 
-class TestLayaPassthroughRoute:
+@pytest.mark.parametrize("provider", ["laya", "bespoke"])
+class TestOssDecisionPassthroughRoute:
     @pytest.fixture
-    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    def checkpoint(self, provider: str) -> str:
+        return "english" if provider == "laya" else "nimble-latest"
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch, provider: str) -> Iterator[TestClient]:
         from litellm.proxy.proxy_server import app
 
-        monkeypatch.setenv("LAYA_API_BASE", "http://laya.test/base")
+        monkeypatch.setenv(f"{provider.upper()}_API_BASE", f"http://{provider}.test/base")
         monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
-        monkeypatch.delenv("LAYA_API_KEY", raising=False)
+        monkeypatch.delenv(f"{provider.upper()}_API_KEY", raising=False)
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
         yield TestClient(app)
 
-    @pytest.mark.parametrize("api_key", [None, "laya-provider-key"])
-    def test_laya_forwards_native_decisions_without_gateway_or_typesafe_credentials(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, api_key: str | None
+    @pytest.mark.parametrize("api_key", [None, "oss-provider-key"])
+    def test_oss_forwards_native_decisions_without_gateway_or_typesafe_credentials(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, api_key: str | None, provider: str, checkpoint: str
     ) -> None:
         if api_key is not None:
-            monkeypatch.setenv("LAYA_API_KEY", api_key)
+            monkeypatch.setenv(f"{provider.upper()}_API_KEY", api_key)
         body: Final = {
-            "model": "english",
+            "model": checkpoint,
             "state": "refund",
             "questions": {"department": {"type": "choice", "criteria": {"billing": "refunds"}}},
         }
-        answer: Final = {"model": "laya-rl-agent", "routing": {"model": "english"}, "answers": {}}
+        answer: Final = {
+            "model": "laya-rl-agent" if provider == "laya" else checkpoint, "answers": {},
+            **({"routing": {"model": checkpoint}} if provider == "laya" else {}),
+        }
         with respx.mock(assert_all_called=True) as upstream:
-            route: Final = upstream.post("http://laya.test/base/v1/systemone?trace=yes").respond(200, json=answer)
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone?trace=yes").respond(200, json=answer)
             response: Final = client.post(
-                "/laya/v1/systemone?trace=yes",
+                f"/{provider}/v1/systemone?trace=yes",
                 json=body,
                 headers={"Authorization": "Bearer sk-virtual", "x-pass-authorization": "Bearer attacker"},
             )
@@ -7448,26 +7527,26 @@ class TestLayaPassthroughRoute:
         assert sent.headers.get("authorization") == (f"Bearer {api_key}" if api_key else None)
         assert json.loads(sent.content) == body
 
-    def test_laya_missing_server_fails_without_contacting_another_provider(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    def test_oss_missing_server_fails_without_contacting_another_provider(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, provider: str, checkpoint: str
     ) -> None:
-        monkeypatch.delenv("LAYA_API_BASE")
+        monkeypatch.delenv(f"{provider.upper()}_API_BASE")
         with respx.mock(assert_all_called=False) as upstream:
-            response: Final = client.post("/laya/v1/systemone", json={"model": "english"})
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint})
         assert response.status_code == 503
-        assert "LAYA_API_BASE" in response.text
+        assert f"{provider.upper()}_API_BASE" in response.text
         assert len(upstream.calls) == 0
 
-    def test_laya_does_not_forward_unsupported_endpoints(self, client: TestClient) -> None:
+    def test_oss_does_not_forward_unsupported_endpoints(self, client: TestClient, provider: str, checkpoint: str) -> None:
         with respx.mock(assert_all_called=False) as upstream:
-            response: Final = client.post("/laya/v1/evaluate", json={"model": "english"})
+            response: Final = client.post(f"/{provider}/v1/evaluate", json={"model": checkpoint})
         assert response.status_code == 404
         assert len(upstream.calls) == 0
 
     @pytest.mark.parametrize("model", [None, "auto", "jev-latest"])
-    def test_laya_rejects_implicit_checkpoint_selection(self, client: TestClient, model: str | None) -> None:
+    def test_oss_rejects_implicit_checkpoint_selection(self, client: TestClient, model: str | None, provider: str) -> None:
         with respx.mock(assert_all_called=False) as upstream:
-            response: Final = client.post("/laya/v1/systemone", json={"model": model})
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": model})
         assert response.status_code == 400
         assert len(upstream.calls) == 0
 
@@ -7475,19 +7554,19 @@ class TestLayaPassthroughRoute:
         "controls",
         [{"custom_body": {"model": "multilingual", "state": "refund"}}, {"stream": True}, {"stream": "true"}],
     )
-    def test_laya_rejects_controls_that_change_authorized_body_or_usage_accounting(
-        self, client: TestClient, controls: Mapping[str, object]
+    def test_oss_rejects_controls_that_change_authorized_body_or_usage_accounting(
+        self, client: TestClient, controls: Mapping[str, object], provider: str, checkpoint: str
     ) -> None:
         with respx.mock(assert_all_called=False) as upstream:
-            route: Final = upstream.post("http://laya.test/base/v1/systemone").respond(200, json={"answers": {}})
-            response: Final = client.post("/laya/v1/systemone", json={"model": "english", **controls})
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint, **controls})
         assert response.status_code == 400
         assert not route.called
 
 
     @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
-    def test_laya_hooks_enforce_canonical_model_limits_and_keep_native_wire_body(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str
+    def test_oss_hooks_enforce_canonical_model_limits_and_keep_native_wire_body(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str, provider: str, checkpoint: str
     ) -> None:
         from litellm.integrations.custom_logger import CustomLogger
         from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
@@ -7497,7 +7576,7 @@ class TestLayaPassthroughRoute:
         cache: Final = DualCache()
         limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
         auth: Final = UserAPIKeyAuth(
-            api_key="laya-native-rpm", metadata={"model_rpm_limit": {"laya/english": 1}},
+            api_key="oss-native-rpm", metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
         )
         def authenticated_key() -> UserAPIKeyAuth:
             return auth
@@ -7509,7 +7588,7 @@ class TestLayaPassthroughRoute:
                 self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
                 data: dict[str, object], call_type: CallTypesLiteral,
             ) -> dict[str, object]:
-                assert data["model"] == "laya/english"
+                assert data["model"] == f"{provider}/{checkpoint}"
                 metadata: Final = data.get(metadata_slot)
                 assert isinstance(metadata, dict)
                 assert "standard_logging_guardrail_information" not in metadata
@@ -7519,40 +7598,42 @@ class TestLayaPassthroughRoute:
 
         monkeypatch.setattr(litellm, "callbacks", [LimitHook()])
         body: Final = {
-            "model": "english", "state": "refund",
+            "model": checkpoint, "state": "refund",
             metadata_slot: {
                 "customer_label": "retained", "model_group": "unbounded-client-choice",
                 "standard_logging_guardrail_information": [{"guardrail_cost": 25.0}],
             },
         }
         with respx.mock(assert_all_called=True) as upstream:
-            route: Final = upstream.post("http://laya.test/base/v1/systemone").respond(200, json={"answers": {}})
-            first: Final = client.post("/laya/v1/systemone", json=body)
-            second: Final = client.post("/laya/v1/systemone", json=body)
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
+            first: Final = client.post(f"/{provider}/v1/systemone", json=body)
+            second: Final = client.post(f"/{provider}/v1/systemone", json=body)
         assert first.status_code == 200, first.text
         assert second.status_code == 429, second.text
         assert route.call_count == 1
-        assert json.loads(route.calls.last.request.content) == {"model": "english", "state": "refund"}
+        assert json.loads(route.calls.last.request.content) == {"model": checkpoint, "state": "refund"}
 
-    def test_laya_preserves_trusted_hook_checkpoint_changes(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    def test_oss_preserves_trusted_hook_checkpoint_changes(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, provider: str, checkpoint: str
     ) -> None:
         from litellm.integrations.custom_logger import CustomLogger
+
+        changed_checkpoint: Final = "multilingual" if provider == "laya" else "bespokelabs/Bespoke-Nimble-9B"
 
         class CheckpointHook(CustomLogger):
             async def async_pre_call_hook(
                 self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
                 data: dict[str, object], call_type: CallTypesLiteral,
             ) -> dict[str, object]:
-                assert data["model"] == "laya/english"
-                return {**data, "model": "laya/multilingual"}
+                assert data["model"] == f"{provider}/{checkpoint}"
+                return {**data, "model": f"{provider}/{changed_checkpoint}"}
 
         monkeypatch.setattr(litellm, "callbacks", [CheckpointHook()])
         with respx.mock(assert_all_called=True) as upstream:
-            route: Final = upstream.post("http://laya.test/base/v1/systemone").respond(200, json={"answers": {}})
-            response: Final = client.post("/laya/v1/systemone", json={"model": "english", "state": "refund"})
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
+            response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint, "state": "refund"})
         assert response.status_code == 200, response.text
-        assert json.loads(route.calls.last.request.content) == {"model": "multilingual", "state": "refund"}
+        assert json.loads(route.calls.last.request.content) == {"model": changed_checkpoint, "state": "refund"}
 
 
 class TestFalAIPassthroughRoute:

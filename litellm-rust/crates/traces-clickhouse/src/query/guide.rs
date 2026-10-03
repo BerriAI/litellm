@@ -1,11 +1,15 @@
 use askama::Template;
-use serde::Serialize;
+use litellm_traces::query::guide::Example;
 
-use super::{AttributeCatalog, MetadataCatalog, TableSchema};
-use crate::{Error, NormalizedFieldDefinition};
+use super::{AttributeCatalog, Discovery, MetadataCatalog, TableSchema};
+use crate::{Error, NormalizedFieldDefinition, query_access::ReaderLimits};
 
 #[derive(Template)]
 #[template(path = "query_help.jinja", escape = "none", blocks = [
+    "live_schema",
+    "normalized_fields",
+    "metadata",
+    "attributes",
     "recent_spans_name",
     "recent_spans_sql",
     "custom_metadata_name",
@@ -16,6 +20,16 @@ use crate::{Error, NormalizedFieldDefinition};
     "correlated_calls_sql",
     "discover_keys_name",
     "discover_keys_sql",
+    "recent_spend_name",
+    "recent_spend_sql",
+    "model_spend_name",
+    "model_spend_sql",
+    "trace_spend_name",
+    "trace_spend_sql",
+    "unmatched_spans_name",
+    "unmatched_spans_sql",
+    "missing_spend",
+    "partial_spend",
     "time_window",
     "reader_limits",
     "reader_profile",
@@ -33,16 +47,20 @@ pub(super) struct QueryGuide<'a> {
     pub normalized_fields: &'a [NormalizedFieldDefinition],
     pub metadata: &'a MetadataCatalog,
     pub attributes: &'a [AttributeCatalog],
-}
-
-#[derive(Serialize)]
-pub(super) struct Example {
-    name: String,
-    sql: String,
+    pub limits: &'a ReaderLimits,
 }
 
 impl QueryGuide<'_> {
-    pub fn examples(&self) -> Result<[Example; 5], Error> {
+    pub fn sections(&self) -> Result<[String; 4], Error> {
+        Ok([
+            render(&self.as_live_schema())?,
+            render(&self.as_normalized_fields())?,
+            render(&self.as_metadata())?,
+            render(&self.as_attributes())?,
+        ])
+    }
+
+    pub fn examples(&self) -> Result<[Example; 9], Error> {
         Ok([
             Example {
                 name: render(&self.as_recent_spans_name())?,
@@ -64,10 +82,26 @@ impl QueryGuide<'_> {
                 name: render(&self.as_discover_keys_name())?,
                 sql: render(&self.as_discover_keys_sql())?,
             },
+            Example {
+                name: render(&self.as_recent_spend_name())?,
+                sql: render(&self.as_recent_spend_sql())?,
+            },
+            Example {
+                name: render(&self.as_model_spend_name())?,
+                sql: render(&self.as_model_spend_sql())?,
+            },
+            Example {
+                name: render(&self.as_trace_spend_name())?,
+                sql: render(&self.as_trace_spend_sql())?,
+            },
+            Example {
+                name: render(&self.as_unmatched_spans_name())?,
+                sql: render(&self.as_unmatched_spans_sql())?,
+            },
         ])
     }
 
-    pub fn gotchas(&self) -> Result<[String; 11], Error> {
+    pub fn gotchas(&self) -> Result<[String; 13], Error> {
         Ok([
             render(&self.as_time_window())?,
             render(&self.as_reader_limits())?,
@@ -78,6 +112,8 @@ impl QueryGuide<'_> {
             render(&self.as_literal_keys())?,
             render(&self.as_time_units())?,
             render(&self.as_spend_totals())?,
+            render(&self.as_missing_spend())?,
+            render(&self.as_partial_spend())?,
             render(&self.as_trace_rollups())?,
             render(&self.as_sampling())?,
         ])

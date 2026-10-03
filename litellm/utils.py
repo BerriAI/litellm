@@ -55,6 +55,7 @@ import litellm.litellm_core_utils.json_validation_rule
 from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_default_encoding,
+    _get_messages_reach_token_count,
     _get_modified_max_tokens,
     _get_token_counter_new,
 )
@@ -410,7 +411,7 @@ if TYPE_CHECKING:
         BaseVectorStoreFilesConfig,
     )
     from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo, BedrockRoute
     from litellm.llms.bedrock.embed.amazon_nova_transformation import (
         AmazonNovaEmbeddingConfig,
     )
@@ -1207,7 +1208,7 @@ def function_setup(
         elif call_type == CallTypes.moderation.value or call_type == CallTypes.amoderation.value:
             messages = args[1] if len(args) > 1 else kwargs["input"]
         elif call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value:
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            messages = args[0] if len(args) > 0 else kwargs.get("prompt")
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
             messages = kwargs.get("query")
         elif call_type in (CallTypes.search.value, CallTypes.asearch.value):
@@ -3473,6 +3474,14 @@ def _should_drop_param(k, additional_drop_params) -> bool:
     return False
 
 
+def _bedrock_route_for_request(
+    model: str, passed_params: Mapping[str, object], additional_drop_params: Sequence[str] | None
+) -> BedrockRoute:
+    from litellm.llms.bedrock.common_utils import bedrock_route_for_request
+
+    return bedrock_route_for_request(model, passed_params, additional_drop_params)
+
+
 def _get_non_default_params(passed_params: dict, default_params: dict, additional_drop_params: list | None) -> dict:
     non_default_params: Final = {}
     for k, v in passed_params.items():
@@ -3603,7 +3612,7 @@ def get_optional_params_image_gen(
     user: str | None = None,
     imageConfig: dict | None = None,
     custom_llm_provider: str | None = None,
-    additional_drop_params: list | None = None,
+    additional_drop_params: Sequence[str] | None = None,
     provider_config: BaseImageGenerationConfig | None = None,
     drop_params: bool | None = None,
     **kwargs: object,
@@ -4446,7 +4455,7 @@ def get_optional_params(
     allowed_openai_params: list[str] | None = None,
     reasoning_effort=None,
     verbosity=None,
-    additional_drop_params=None,
+    additional_drop_params: list[str] | None = None,
     messages: list[AllMessageValues] | None = None,
     thinking: AnthropicThinkingParam | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
@@ -4514,9 +4523,17 @@ def get_optional_params(
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
+    bedrock_route: Final = (
+        _bedrock_route_for_request(model, passed_params, additional_drop_params)
+        if custom_llm_provider == "bedrock"
+        else None
+    )
     get_supported_openai_params: Final[_SupportedOpenAIParamsGetter] = litellm_utils.get_supported_openai_params
-    supported_params = get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
+    supported_params = (
+        litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+        if bedrock_route == "converse"
+        and isinstance(provider_config, litellm.AmazonBedrockRuntimeChatCompletionsConfig)
+        else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
     )
     if supported_params is None:
         supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
@@ -4686,7 +4703,6 @@ def get_optional_params(
         )
     elif custom_llm_provider == "bedrock":
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
-        bedrock_route: Final = bedrock_model_info.get_bedrock_route(model)
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
@@ -6321,6 +6337,7 @@ def _get_model_info_helper(
                 default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
+                supports_regex_lookaround=_model_info.get("supports_regex_lookaround", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
@@ -8845,8 +8862,12 @@ class ProviderConfigManager:
             return litellm.AzureAIRerankConfig()
         elif litellm.LlmProviders.INFINITY == provider:
             return litellm.InfinityRerankConfig()
-        elif litellm.LlmProviders.JINA_AI == provider:
-            return litellm.JinaAIRerankConfig()
+        elif provider in (litellm.LlmProviders.JINA_AI, litellm.LlmProviders.SCALEWAY):
+            return (
+                litellm.ScalewayRerankConfig()
+                if provider == litellm.LlmProviders.SCALEWAY
+                else litellm.JinaAIRerankConfig()
+            )
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMRerankConfig()
         elif litellm.LlmProviders.HUGGINGFACE == provider:
@@ -10099,19 +10120,19 @@ def is_prompt_caching_valid_prompt(
     OpenAI's minimum is a flat 1024 across models, which the default already covers.
     """
     try:
-        if messages is None and tools is None:
+        if messages is None:
             return False
         if custom_llm_provider is not None and not model.startswith(custom_llm_provider):
             model = custom_llm_provider + "/" + model
-        token_count: Final = token_counter(
-            messages=messages,
-            tools=tools,
-            model=model,
-            use_default_image_token_count=True,
-        )
         if min_token_count is None:
             min_token_count = get_prompt_cache_min_tokens(model=model)
-        return token_count >= min_token_count
+        return _get_messages_reach_token_count()(
+            model=model,
+            messages=messages,
+            threshold=min_token_count,
+            tools=tools,
+            use_default_image_token_count=True,
+        )
     except Exception as e:
         verbose_logger.error("Error in is_prompt_caching_valid_prompt: %s", e)
         return False

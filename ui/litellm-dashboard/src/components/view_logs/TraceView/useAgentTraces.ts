@@ -1,10 +1,10 @@
+import { useTracesApi } from "@/components/lens/services";
 import { useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 import { useMemo } from "react";
 
 import { ApiError } from "@/lib/http/client";
 
-import { agentTraceListCall, apiClient } from "../../networking";
 import { LIVE_TAIL_INTERVAL_MS } from "../log_filter_logic";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
@@ -65,15 +65,14 @@ export function useAgentTraces({
   isLiveTail,
   enabled,
 }: UseAgentTracesOptions): AgentTracesResult {
+  const traces = useTracesApi(accessToken);
   const fetchPage = (pageParam: unknown): Promise<TracePage> => {
     const nowMs = Date.now();
-    const listOptions: Parameters<typeof agentTraceListCall>[0] = {
-      accessToken,
+    return traces.list({
       startMs: traceWindowStartMs(startTime, endTime, isCustomDate, nowMs),
       endMs: isCustomDate ? moment(endTime).valueOf() : nowMs,
       cursor: pageParam as string | null,
-    };
-    return agentTraceListCall(listOptions);
+    });
   };
   const queryOptions: Parameters<typeof useInfiniteQuery<TracePage, Error>>[0] = {
     queryKey: ["agentTraces", accessToken, startTime, endTime, isCustomDate],
@@ -90,11 +89,11 @@ export function useAgentTraces({
   };
   const query = useInfiniteQuery<TracePage, Error>(queryOptions);
 
-  const traces = useMemo(() => query.data?.pages.flatMap((page) => page.data) ?? [], [query.data]);
+  const loaded = useMemo(() => query.data?.pages.flatMap((page) => page.data) ?? [], [query.data]);
   const notEnabled = isTracingNotEnabled(query.error);
 
   return {
-    traces,
+    traces: loaded,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
     notEnabledDetail: notEnabled ? query.error?.message || "Agent tracing is not enabled" : null,
@@ -106,14 +105,14 @@ export function useAgentTraces({
 }
 
 export function useTraceAvailability(accessToken: string, enabled: boolean) {
-  const options: UseQueryOptions<TracePage, Error, boolean> = {
+  const traces = useTracesApi(accessToken);
+  const options: UseQueryOptions<boolean, Error> = {
     queryKey: ["trace-availability", accessToken],
-    queryFn: () => apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } }),
-    select: (page: TracePage) => page.data.length > 0,
+    queryFn: () => traces.anyRecorded(),
     enabled,
     retry: false,
     refetchInterval: (query) =>
-      query.state.data?.data.length || requiresUserAction(query.state.error) ? false : LIVE_TAIL_INTERVAL_MS,
+      query.state.data || requiresUserAction(query.state.error) ? false : LIVE_TAIL_INTERVAL_MS,
     refetchOnWindowFocus: (query) => !requiresUserAction(query.state.error),
     refetchOnReconnect: (query) => !requiresUserAction(query.state.error),
     refetchIntervalInBackground: false,

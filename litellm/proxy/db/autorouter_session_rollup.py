@@ -22,12 +22,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.create_views import SupportsExecuteRaw
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -266,7 +268,8 @@ def build_autorouter_turn_transaction(
     the payload's own usage record through the savings owner, never handed in beside it.
     The baseline the turn's saved_spend was priced against travels with the turn, so the
     row can name the counterfactual for the money it holds even after the router is
-    reconfigured or removed.
+    reconfigured or removed. A request with no session id still owns its router-day money,
+    so it becomes a turn with an empty session id that writes the day row and no session row.
     """
     if payload.get("status") != "success":
         return None
@@ -278,9 +281,9 @@ def build_autorouter_turn_transaction(
     router_name: Final = routing_decision.get("router_model_name") or payload.get("model_group")
     api_key: Final = payload.get("api_key") or ""
     user_id: Final = payload.get("user") or ""
-    session_id: Final = payload.get("session_id")
+    session_id: Final = payload.get("session_id") or ""
     model: Final = payload.get("model")
-    if not (isinstance(router_name, str) and router_name and (api_key or user_id) and session_id and model):
+    if not (isinstance(router_name, str) and router_name and (api_key or user_id) and model):
         return None
     turn_at: Final = _turn_time_utc(str(payload.get("startTime") or ""))
     if turn_at is None:
@@ -379,7 +382,7 @@ SELECT
     {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}, {_BASELINE_DELTA},
     {_p("savings_estimated_turns")}::int, {_p("savings_estimated_actual_spend")}::float8,
     {_p("savings_estimated_saved_spend")}::float8, {_ESTIMATED_BASELINE_DELTA}
-WHERE {required_identity}::text <> ''
+WHERE {required_identity}::text <> '' AND {_p("session_id")}::text <> ''
 ON CONFLICT ({user_column}api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
     total_tokens = t.total_tokens + EXCLUDED.total_tokens,
@@ -467,6 +470,13 @@ WITH {_DAY_UPSERT_SQL}
 {_session_upsert_sql(user_scoped=True)}
 """
 
+_SESSION_TABLE_BY_STATEMENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        UPSERT_AUTOROUTER_SESSION_SQL: "LiteLLM_AutoRouterSession",
+        UPSERT_AUTOROUTER_USER_SESSION_SQL: "LiteLLM_AutoRouterUserSession",
+    }
+)
+
 
 def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | None:
     if isinstance(value, bool):
@@ -485,7 +495,8 @@ async def write_autorouter_turn(
     transaction: AutoRouterTurnTransaction,
     statement: str = UPSERT_AUTOROUTER_SESSION_SQL,
 ) -> None:
-    await db.execute_raw(statement, *_upsert_params(transaction))
+    async with db_span("write_autorouter_turn", _SESSION_TABLE_BY_STATEMENT.get(statement)):
+        await db.execute_raw(statement, *_upsert_params(transaction))
 
 
 async def _upsert_turn_with_retry(
