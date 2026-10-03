@@ -12,6 +12,7 @@ export type LogsSortField = keyof typeof LOGS_SORT_FIELD_MAP;
 
 export type LogEntry = {
   request_id: string;
+  litellm_call_id?: string | null;
   api_key: string;
   team_id: string;
   model: string;
@@ -42,6 +43,7 @@ export type LogEntry = {
   request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
+  session_total_duration_ms?: number;
   session_total_tokens?: number;
   session_total_prompt_tokens?: number;
   session_total_completion_tokens?: number;

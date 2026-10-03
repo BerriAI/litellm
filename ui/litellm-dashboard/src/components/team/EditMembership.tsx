@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
 import { z } from "zod/v4";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
@@ -9,16 +11,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { UtcDateTimeInput } from "@/components/shared/form/UtcDateTimeInput";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import {
   buildMemberFormData,
   buildMemberFormValues,
   emptyMemberFormValues,
+  TEMP_BUDGET_PAIR_MESSAGE,
+  tempBudgetPairError,
   type MemberAdditionalField,
   type MemberFieldsConfig,
   type MemberFormValues,
 } from "./memberFormValues";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+dayjs.extend(utc);
 
 interface BaseMember {
   user_email?: string;
@@ -53,7 +60,10 @@ const buildMemberSchema = (config: ModalConfig): z.ZodType<MemberFormValues, Mem
     ...Object.fromEntries((config.additionalFields ?? []).map((field) => [field.name, memberFieldSchema])),
   };
 
-  return z.object(shape);
+  return z.object(shape).superRefine((values, ctx) => {
+    const path = tempBudgetPairError(values);
+    if (path !== null) ctx.addIssue({ code: "custom", path: [path], message: TEMP_BUDGET_PAIR_MESSAGE });
+  });
 };
 
 const MemberModal = <T extends BaseMember>({
@@ -157,7 +167,17 @@ const MemberModal = <T extends BaseMember>({
               <BudgetDurationDropdown
                 id={id}
                 value={typeof value === "string" ? value : null}
-                onChange={(next) => onChange(next)}
+                onChange={(next) => onChange(mode === "add" ? next ?? undefined : next)}
+              />
+            );
+          case "utc-datetime":
+            return (
+              <UtcDateTimeInput
+                {...rest}
+                id={id}
+                ref={ref}
+                value={typeof value === "string" && value !== "" ? dayjs.utc(value) : null}
+                onChange={(next) => onChange(next === null ? null : next.toISOString())}
               />
             );
           default:

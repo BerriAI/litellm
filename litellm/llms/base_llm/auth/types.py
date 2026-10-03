@@ -8,8 +8,8 @@ import httpx
 from pydantic import SecretStr
 
 BodyEncoding: TypeAlias = Literal["json", "form"]
-AssertionReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list
-AssertionSource: TypeAlias = Callable[[], str | None]  # mutable-ok: Callable param-list syntax, not a list
+AssertionReader: TypeAlias = Callable[[str], str | None]
+AssertionSource: TypeAlias = Callable[[], str | None]
 
 
 @dataclass(frozen=True, slots=True)

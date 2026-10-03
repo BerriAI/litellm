@@ -1,4 +1,10 @@
-import type { ColumnDef, PaginationState, RowSelectionState, SortingState } from "@tanstack/react-table";
+import type {
+  ColumnDef,
+  PaginationState,
+  RowSelectionState,
+  SortingState,
+  VisibilityState,
+} from "@tanstack/react-table";
 
 import { DataTable } from "./DataTable";
 
@@ -12,6 +18,7 @@ const columns: ColumnDef<Row, unknown>[] = [];
 const sorting: SortingState = [{ id: "name", desc: false }];
 const pagination: PaginationState = { pageIndex: 0, pageSize: 10 };
 const rowSelection: RowSelectionState = { r1: true };
+const columnVisibility: VisibilityState = { name: false };
 const noop = () => {};
 
 export const uncontrolled = <DataTable data={data} columns={columns} defaultSorting={sorting} />;
@@ -32,6 +39,8 @@ export const controlled = (
     onColumnFiltersChange={noop}
     rowSelection={rowSelection}
     onRowSelectionChange={noop}
+    columnVisibility={columnVisibility}
+    onColumnVisibilityChange={noop}
   />
 );
 
@@ -64,4 +73,20 @@ export const bothSortingSources = (
 export const selectionWithoutHandler = (
   // @ts-expect-error a controlled `rowSelection` needs `onRowSelectionChange` or selection changes are dropped
   <DataTable data={data} columns={columns} rowSelection={rowSelection} />
+);
+
+export const visibilityWithoutHandler = (
+  // @ts-expect-error a controlled `columnVisibility` needs `onColumnVisibilityChange` or Columns-menu toggles are dropped
+  <DataTable data={data} columns={columns} columnVisibility={columnVisibility} />
+);
+
+export const bothVisibilitySources = (
+  // @ts-expect-error `defaultColumnVisibility` seeds uncontrolled visibility, so it cannot pair with a controlled `columnVisibility`
+  <DataTable
+    data={data}
+    columns={columns}
+    defaultColumnVisibility={columnVisibility}
+    columnVisibility={columnVisibility}
+    onColumnVisibilityChange={noop}
+  />
 );

@@ -58,7 +58,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         )
         # The deployment's own credential is applied here, so a caller-supplied one must not ride
         # along upstream beside a minted federation Bearer.
-        return {  # mutable-ok: validate_environment's contract returns a real dict, which httpx then consumes
+        return {
             **without_caller_credential_headers(headers),
             **auth_header,
             "anthropic-version": "2023-06-01",

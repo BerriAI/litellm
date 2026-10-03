@@ -54,7 +54,7 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         return api_key or get_secret_str("LITELLM_PROXY_API_KEY")
 
     @staticmethod
-    def _should_use_litellm_proxy_by_default(
+    def should_use_litellm_proxy_by_default(
         litellm_params: LiteLLM_Params | None = None,
     ):
         """

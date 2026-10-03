@@ -34,7 +34,7 @@ from litellm.llms.base_llm.auth.types import InsecureTokenUrl, SyncTokenPoster
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-SecretReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list
+SecretReader: TypeAlias = Callable[[str], str | None]
 
 _GRANT_TYPE: Final = "client_credentials"
 _TIMEOUT_SECONDS: Final = 30.0
@@ -79,7 +79,7 @@ class _HttpxSyncKeycloakPoster:
             response: Final[httpx.Response | None] = self._handler_instance().post(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.post is legacy-untyped; the result is validated below
                 url,
                 content=content,
-                headers=dict(headers),  # mutable-ok: HTTPHandler.post requires a concrete dict
+                headers=dict(headers),
                 timeout=timeout,
             )
         except httpx.HTTPStatusError as e:

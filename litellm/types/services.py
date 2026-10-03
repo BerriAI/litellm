@@ -69,13 +69,9 @@ DEFAULT_SERVICE_CONFIGS: Final = {
     ServiceTypes.ROUTER.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.AUTH.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     ServiceTypes.PROXY_PRE_CALL.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
-    ServiceTypes.ANTHROPIC_WIF.value: {  # mutable-ok: ServiceConfig mandates the dict-of-list shape
-        "metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]  # mutable-ok: ServiceConfig mandates a list
-    },
+    ServiceTypes.ANTHROPIC_WIF.value: {"metrics": [ServiceMetrics.COUNTER, ServiceMetrics.HISTOGRAM]},
     # cache hits are counter-only: no HTTP call happens, so observing a latency would be a lie
-    ServiceTypes.ANTHROPIC_WIF_CACHE.value: {  # mutable-ok: ServiceConfig mandates the dict-of-list shape
-        "metrics": [ServiceMetrics.COUNTER]  # mutable-ok: ServiceConfig mandates a list
-    },
+    ServiceTypes.ANTHROPIC_WIF_CACHE.value: {"metrics": [ServiceMetrics.COUNTER]},
     # Operational metrics for DB Transaction Queues
     ServiceTypes.POD_LOCK_MANAGER.value: {"metrics": [ServiceMetrics.GAUGE]},
     ServiceTypes.IN_MEMORY_DAILY_SPEND_UPDATE_QUEUE.value: {"metrics": [ServiceMetrics.GAUGE]},
@@ -109,6 +105,7 @@ class ServiceLoggerPayload(BaseModel):
     service: ServiceTypes = Field(description="who is this for? - postgres/redis")
     duration: float = Field(description="How long did the request take?")
     call_type: str = Field(description="The call of the service, being made")
+    caller: str | None = Field(None, description="The litellm call chain that made the service call, innermost first")
     event_metadata: dict | None = Field(description="The metadata logged during service success/failure")
 
     def to_json(self, **kwargs):
