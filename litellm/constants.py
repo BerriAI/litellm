@@ -123,6 +123,9 @@ MAX_BASE64_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG"
 # When true, adds detailed per-phase timing breakdown headers to responses.
 # Headers: x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms
 LITELLM_DETAILED_TIMING: Final = os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
+LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST: Final = (
+    os.getenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "false").lower() == "true"
+)
 
 # Model cost map validation constants
 MODEL_COST_MAP_MIN_MODEL_COUNT: Final = int(

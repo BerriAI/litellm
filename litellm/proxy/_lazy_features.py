@@ -16,6 +16,7 @@ from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -23,7 +24,8 @@ from starlette.routing import BaseRoute, Match
 from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.route_priority import hot_routes_first
+from litellm.constants import LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST
+from litellm.proxy.route_priority import configured_pass_through_routes_first, hot_routes_first
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, FastAPI
@@ -432,6 +434,20 @@ def _in_registry_order(
     )
 
 
+def _route_table(
+    app: "FastAPI",
+    routes: Sequence[BaseRoute],
+    lazy_routes: Mapping[str, tuple[BaseRoute, ...]],
+    features: tuple[LazyFeature, ...],
+) -> list[BaseRoute]:  # mutable-ok: assigned to Router.routes, a list
+    ordered: Final = _in_registry_order(routes, lazy_routes, features, _lazy_slots(app))
+    if LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST:
+        return hot_routes_first(ordered)
+    return hot_routes_first(
+        configured_pass_through_routes_first(ordered, tuple(chain.from_iterable(lazy_routes.values())))
+    )
+
+
 async def _force_load(app: "FastAPI", feat: LazyFeature, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> bool:
     """Import + register a lazy feature exactly once per (app, module).
     Shared by the middleware and the /lazy/warm endpoint."""
@@ -481,8 +497,8 @@ def _register_feature(app: "FastAPI", feat: LazyFeature, module: object, feature
         {**previous, feat.module_path: tuple(app.router.routes[before:])}
     )
     app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
-    app.router.routes[:] = hot_routes_first(  # rebind-ok: the app owns its route table
-        _in_registry_order(app.router.routes, lazy_routes, features, _lazy_slots(app))
+    app.router.routes[:] = _route_table(  # rebind-ok: the app owns its route table
+        app, app.router.routes, lazy_routes, features
     )
     _lazy_loaded(app).add(feat.module_path)
     app.openapi_schema = None
@@ -549,8 +565,8 @@ def _restore_registry_order(app: "FastAPI", features: tuple[LazyFeature, ...]) -
     still_routed: Final = MappingProxyType(
         {module_path: tuple(r for r in routes if id(r) in present) for module_path, routes in registered.items()}
     )
-    app.router.routes[:] = hot_routes_first(  # rebind-ok: the app owns its route table
-        _in_registry_order(app.router.routes, still_routed, features, _lazy_slots(app))
+    app.router.routes[:] = _route_table(  # rebind-ok: the app owns its route table
+        app, app.router.routes, still_routed, features
     )
     app.openapi_schema = None
 

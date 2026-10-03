@@ -1,13 +1,20 @@
 import sys
+from collections.abc import Callable, Sequence
 from types import ModuleType
 
 import httpx
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
-from starlette.routing import Match
+from starlette.routing import BaseRoute, Match, Route
 
-from litellm.proxy.route_priority import HOT_ROUTE_PATHS, hot_routes_first
+from litellm.proxy.route_priority import (
+    HOT_ROUTE_PATHS,
+    configured_pass_through_routes_first,
+    hot_routes_first,
+    shadowed_by_builtin_claim,
+)
+from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
 FILLER_COUNT = 300
 
@@ -20,6 +27,34 @@ def _routes_scanned_before_dispatch(app: FastAPI, method: str, path: str) -> int
         if match == Match.FULL:
             return i + 1
     raise AssertionError(f"{method} {path} has no route")
+
+
+def _dispatch(routes: Sequence[BaseRoute], method: str, path: str) -> Callable[..., object]:
+    """Endpoint of the first route a real request to method+path would hit."""
+    scope = {"type": "http", "method": method, "path": path, "root_path": "", "headers": [], "query_string": b""}
+    for route in routes:
+        match, _ = route.matches(dict(scope))
+        if match == Match.FULL:
+            return route.endpoint
+    raise AssertionError(f"{method} {path} has no route")
+
+
+def _endpoint(name: str) -> Callable[..., object]:
+    async def handler() -> dict[str, str]:
+        return {"handler": name}
+
+    handler.__name__ = name
+    return handler
+
+
+def _configured(path: str, name: str) -> Route:
+    endpoint = _endpoint(name)
+    setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+    return Route(path, endpoint, methods=["GET"])
+
+
+def _builtin(path: str, name: str) -> Route:
+    return Route(path, _endpoint(name), methods=["GET"])
 
 
 def _hot_router() -> APIRouter:
@@ -169,3 +204,57 @@ def test_proxy_app_dispatches_liveness_and_chat_completions_before_the_rest():
     assert _routes_scanned_before_dispatch(app, "GET", "/health/liveness") <= hot_count
     assert _routes_scanned_before_dispatch(app, "POST", "/v1/chat/completions") <= hot_count
     assert _routes_scanned_before_dispatch(app, "POST", "/chat/completions") <= hot_count
+
+
+def test_deeper_builtin_prefix_claim_still_beats_a_configured_catch_all():
+    builtin = _builtin("/zeta/inner/{endpoint:path}", "builtin")
+    configured = _configured("/zeta/{subpath:path}", "configured")
+
+    reordered = configured_pass_through_routes_first([builtin, configured], [builtin])
+
+    assert _dispatch(reordered, "GET", "/zeta/inner/x") is builtin.endpoint
+
+
+def test_an_exact_builtin_still_beats_an_identical_configured_path():
+    builtin = _builtin("/zeta/same", "builtin")
+    configured = _configured("/zeta/same", "configured")
+
+    reordered = configured_pass_through_routes_first([builtin, configured], [builtin])
+
+    assert _dispatch(reordered, "GET", "/zeta/same") is builtin.endpoint
+
+
+def test_an_exact_configured_route_beats_a_builtin_prefix_claim():
+    builtin = _builtin("/zeta/{endpoint:path}", "builtin")
+    configured = _configured("/zeta/v1/thing", "configured")
+
+    reordered = configured_pass_through_routes_first([builtin, configured], [builtin])
+
+    assert _dispatch(reordered, "GET", "/zeta/v1/thing") is configured.endpoint
+
+
+def test_a_builtin_with_a_trailing_literal_is_not_a_prefix_claim():
+    builtin = _builtin("/zeta/{id:path}/search", "builtin")
+    configured = _configured("/zeta/{subpath:path}", "configured")
+
+    reordered = configured_pass_through_routes_first([builtin, configured], [builtin])
+
+    assert _dispatch(reordered, "GET", "/zeta/a/search") is builtin.endpoint
+
+
+def test_shadowed_by_builtin_claim_is_true_under_a_builtin_prefix_claim():
+    builtin = _builtin("/typesafe/{endpoint:path}", "builtin")
+
+    assert shadowed_by_builtin_claim("/typesafe/{subpath:path}", (builtin,)) is True
+
+
+def test_shadowed_by_builtin_claim_is_false_under_a_non_claim_builtin():
+    builtin = _builtin("/zeta/{id:path}/search", "builtin")
+
+    assert shadowed_by_builtin_claim("/zeta/{subpath:path}", (builtin,)) is False
+
+
+def test_shadowed_by_builtin_claim_is_false_for_an_unrelated_prefix():
+    builtin = _builtin("/typesafe/{endpoint:path}", "builtin")
+
+    assert shadowed_by_builtin_claim("/other/{subpath:path}", (builtin,)) is False
