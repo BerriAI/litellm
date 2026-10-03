@@ -348,6 +348,7 @@ def raise_token_exchange_challenge(
     *,
     root_path: str,
     claims: str | None = None,
+    resource_metadata: str | None = None,
 ) -> NoReturn:
     """Raise the RFC 9728 / RFC 6750 challenge an OBO (``token_exchange``) server returns when the
     caller's subject token is missing or the IdP rejected it.
@@ -365,8 +366,12 @@ def raise_token_exchange_challenge(
     ``error="invalid_token"`` and is byte-identical to the static one. Both the error value (one of
     two literals) and the base64 claims draw from a fixed alphabet, so nothing from the IdP body
     reaches the header unescaped.
+
+    ``resource_metadata`` is the absolute metadata URL of the route the client connected on (RFC 9728
+    5.1 names the parameter a URL, and the MCP SDK fetches it verbatim), supplied by the connect gate
+    that still holds the request; without it the challenge falls back to the alias's relative path.
     """
-    resource_metadata: Final = oauth_protected_resource_path(root_path, server)
+    metadata_url: Final = resource_metadata or oauth_protected_resource_path(root_path, server)
     encoded_claims: Final = base64.b64encode(claims.encode()).decode() if claims else None
     error: Final = "insufficient_claims" if encoded_claims else "invalid_token"
     error_description: Final = (
@@ -376,7 +381,7 @@ def raise_token_exchange_challenge(
     )
     www_authenticate: Final = ", ".join(
         (
-            f'Bearer resource_metadata="{resource_metadata}"',
+            f'Bearer resource_metadata="{metadata_url}"',
             f'error="{error}"',
             f'error_description="{error_description}"',
             *((f'claims="{encoded_claims}"',) if encoded_claims else ()),

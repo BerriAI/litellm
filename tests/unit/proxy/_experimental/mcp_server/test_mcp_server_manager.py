@@ -1638,6 +1638,19 @@ class TestMCPServerManager:
         assert server.advertises_gateway_authorization_server is False
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_advertise_gateway_as_for_token_exchange(self):
+        # keeps_caller_authorization includes oauth2_token_exchange so a sign-in provider may gate it,
+        # but named discovery must still fall to the server's own PRM rather than the aggregate AS.
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(self._client_forwarded_config(MCPAuth.oauth2_token_exchange))
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.keeps_caller_authorization is True
+        assert server.advertises_gateway_authorization_server is False
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "config",
         [
@@ -3089,6 +3102,34 @@ class TestMCPServerManager:
         headers = exc_info.value.headers or {}
         www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
         assert "resource_metadata" in www_authenticate
+
+    @pytest.mark.asyncio
+    async def test_preflight_rejected_subject_challenge_names_the_connected_segment(self):
+        """A subject rejected on ``/mcp/<server_id>`` must point resource_metadata at that same
+        segment, the way the sign-in preflight does, so the client's discovery fetch resolves."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_unauthorized("subject token rejected by the IdP"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-segment")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer rejected-subject"},
+                user_api_key_auth=None,
+                resource_metadata=f"http://gw.test/.well-known/oauth-protected-resource/mcp/{server.server_id}",
+            )
+        headers = exc_info.value.headers or {}
+        www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+        assert (
+            f'resource_metadata="http://gw.test/.well-known/oauth-protected-resource/mcp/{server.server_id}"'
+            in www_authenticate
+        ), www_authenticate
 
     @pytest.mark.asyncio
     async def test_preflight_token_exchange_maps_gateway_fault_to_public_status(self):
@@ -6346,6 +6387,94 @@ class TestMCPServerManager:
         assert manager._resolve_mcp_server_for_tool_call("zapier", "create_zap") is zapier
         assert manager._resolve_mcp_server_for_tool_call("other", "create_zap") is other
 
+    @pytest.mark.parametrize("gh_first", [True, False], ids=["gh-listed-first", "gh-public-listed-first"])
+    def test_answering_to_prefers_alias_over_earlier_prefix_match(self, gh_first):
+        manager = MCPServerManager()
+        gh = MCPServer(
+            server_id="gh-id", name="gh", server_name="gh", transport=MCPTransport.http, auth_type=MCPAuth.oauth2
+        )
+        gh_public = MCPServer(
+            server_id="gh-public-id", name="gh_public", server_name="gh_public", alias="gh", transport=MCPTransport.http
+        )
+        manager.registry = (
+            {"gh-id": gh, "gh-public-id": gh_public} if gh_first else {"gh-public-id": gh_public, "gh-id": gh}
+        )
+
+        assert manager.get_mcp_server_answering_to("gh") is gh_public
+        assert manager.get_mcp_server_answering_to("GH") is gh_public
+        assert manager.get_mcp_server_answering_to("Gh_Public") is gh_public
+        assert manager.get_mcp_server_answering_to("gh-public-id") is gh_public
+        assert manager.get_mcp_server_answering_to("GH_PUBLIC") is gh_public
+        assert manager.get_mcp_server_answering_to("gh-id") is gh
+
+    @pytest.mark.parametrize("gh_first", [True, False], ids=["alias-listed-first", "server-name-listed-first"])
+    def test_answering_to_agrees_with_exact_name_before_case_folding(self, gh_first):
+        manager = MCPServerManager()
+        by_alias = MCPServer(
+            server_id="a-id",
+            name="a",
+            server_name="a",
+            alias="gh",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        by_server_name = MCPServer(server_id="b-id", name="b", server_name="Gh", transport=MCPTransport.http)
+        manager.registry = (
+            {"a-id": by_alias, "b-id": by_server_name} if gh_first else {"b-id": by_server_name, "a-id": by_alias}
+        )
+
+        for name in ("Gh", "gh"):
+            assert manager.get_mcp_server_answering_to(name) is manager.get_mcp_server_by_name(name), name
+        assert manager.get_mcp_server_answering_to("Gh") is by_server_name
+        assert manager.get_mcp_server_answering_to("gh") is by_alias
+        assert manager.get_mcp_server_answering_to("GH") is by_alias
+
+    @pytest.mark.parametrize("hidden_first", [True, False], ids=["hidden-listed-first", "public-listed-first"])
+    def test_answering_to_never_reroutes_a_name_hidden_from_an_ip_to_a_case_variant(self, hidden_first):
+        manager = MCPServerManager()
+        hidden = MCPServer(
+            server_id="p-id",
+            name="gh",
+            server_name="gh",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        public = MCPServer(server_id="u-id", name="u", server_name="u", alias="Gh", transport=MCPTransport.http)
+        manager.registry = {"p-id": hidden, "u-id": public} if hidden_first else {"u-id": public, "p-id": hidden}
+
+        assert manager.get_mcp_server_answering_to("gh", client_ip="203.0.113.7") is None
+        assert manager.get_mcp_server_answering_to("p-id", client_ip="203.0.113.7") is None
+        assert manager.get_mcp_server_answering_to("gh", client_ip="10.0.0.7") is hidden
+        assert manager.get_mcp_server_answering_to("Gh", client_ip="203.0.113.7") is public
+
+    @pytest.mark.parametrize("pinned_first", [True, False], ids=["pinned-id-listed-first", "alias-listed-first"])
+    def test_answering_to_and_discovery_agree_on_a_pinned_id_that_another_alias_case_folds_to(self, pinned_first):
+        from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        pinned = MCPServer(server_id="foo", name="pinned", server_name="pinned", transport=MCPTransport.http)
+        by_alias = MCPServer(
+            server_id="b-id",
+            name="b",
+            server_name="b",
+            alias="Foo",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        registry = {"foo": pinned, "b-id": by_alias} if pinned_first else {"b-id": by_alias, "foo": pinned}
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.registry.update(registry)
+        try:
+            for name in ("foo", "Foo", "FOO"):
+                connected = global_mcp_server_manager.get_mcp_server_answering_to(name)
+                discovered = discoverable_endpoints._resolve_mcp_server_by_name_or_id(name, client_ip=None)
+                assert discovered is connected, name
+            assert global_mcp_server_manager.get_mcp_server_answering_to("foo") is pinned
+            assert global_mcp_server_manager.get_mcp_server_answering_to("Foo") is by_alias
+            assert global_mcp_server_manager.get_mcp_server_answering_to("FOO") is by_alias
+        finally:
+            global_mcp_server_manager.registry.clear()
+
     def test_remove_server_drops_only_its_own_tool_mapping_rows(self):
         manager = self._manager_with_deepwiki_and_huggingface()
 
@@ -6972,6 +7101,185 @@ class TestMCPServerManager:
             )
 
         assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raw_headers", "api_key", "expected_bearer", "expected_subject"),
+        [
+            pytest.param(
+                {"authorization": "Bearer sk-1234"},
+                "sk-1234",
+                "sk-1234",
+                None,
+                id="litellm-key-as-bearer-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Bearer eyJ.x.y"},
+                "sk-1234",
+                "eyJ.x.y",
+                "eyJ.x.y",
+                id="key-admission-plus-idp-bearer-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "bearer eyJ.x.y"},
+                "sk-1234",
+                "eyJ.x.y",
+                "eyJ.x.y",
+                id="lowercase-bearer-scheme-is-the-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Basic a.b.c"},
+                "sk-1234",
+                None,
+                None,
+                id="non-bearer-scheme-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Digest x.y.z"},
+                "sk-1234",
+                None,
+                None,
+                id="digest-scheme-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "eyJ.x.y"},
+                "sk-1234",
+                None,
+                None,
+                id="scheme-less-value-is-not-a-subject",
+            ),
+        ],
+    )
+    async def test_pre_call_tool_check_separates_raw_bearer_from_subject(
+        self, raw_headers, api_key, expected_bearer, expected_subject
+    ):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", allowed_tools=None
+        )
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        await manager.pre_call_tool_check(
+            server_name="srv",
+            name="turn",
+            arguments={},
+            user_api_key_auth=UserAPIKeyAuth(api_key=api_key, user_id="u"),
+            proxy_logging_obj=proxy_logging,
+            server=server,
+            raw_headers=raw_headers,
+        )
+
+        kwargs: Final = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert kwargs["incoming_bearer_token"] == expected_bearer
+        assert kwargs["incoming_subject_token"] == expected_subject
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raw_headers", "expected_subject"),
+        [
+            pytest.param({"authorization": "Bearer gw.master.key"}, None, id="master-key-alone-is-not-a-subject"),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Bearer gw.master.key"},
+                None,
+                id="master-key-next-to-a-virtual-key-is-not-a-subject",
+            ),
+            pytest.param(
+                {"x-litellm-api-key": "sk-1234", "authorization": "Bearer gw.other.jws"},
+                "gw.other.jws",
+                id="a-dotted-bearer-that-is-not-the-master-key-is-the-subject",
+            ),
+        ],
+    )
+    async def test_pre_call_tool_check_withholds_a_dotted_master_key_from_the_subject(
+        self, raw_headers, expected_subject
+    ):
+        """A master key is a LiteLLM credential whatever its shape, so even one with the two dots of a
+        compact JWS never becomes the sign-in subject a provider would send to its IdP."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", allowed_tools=None
+        )
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        with patch("litellm.proxy.proxy_server.master_key", "gw.master.key"):
+            await manager.pre_call_tool_check(
+                server_name="srv",
+                name="turn",
+                arguments={},
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-1234", user_id="u"),
+                proxy_logging_obj=proxy_logging,
+                server=server,
+                raw_headers=raw_headers,
+            )
+
+        kwargs: Final = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert kwargs["incoming_bearer_token"] == raw_headers["authorization"].removeprefix("Bearer ")
+        assert kwargs["incoming_subject_token"] == expected_subject
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raw_headers", "api_key", "custom_auth", "expected_subject"),
+        [
+            pytest.param(
+                {"authorization": "Bearer eyJ.x.y"},
+                "eyJ.x.y",
+                True,
+                "eyJ.x.y",
+                id="custom-auth-idp-bearer-is-the-subject",
+            ),
+            pytest.param(
+                {"authorization": "Bearer eyJ.x.y"},
+                "eyJ.x.y",
+                False,
+                "eyJ.x.y",
+                id="built-in-oauth2-admission-bearer-is-the-subject",
+            ),
+            pytest.param({"authorization": "Bearer sk-1234"}, "sk-1234", True, None, id="virtual-key-is-not-a-subject"),
+            pytest.param(
+                {"x-litellm-api-key": "ca-key", "authorization": "Bearer ca-key"},
+                "ca-key",
+                True,
+                None,
+                id="explicit-key-admission-repeated-in-authorization-is-not-a-subject",
+            ),
+        ],
+    )
+    async def test_pre_call_tool_check_hands_sign_in_the_bearer_that_admitted_the_caller(
+        self, raw_headers, api_key, custom_auth, expected_subject
+    ):
+        """Custom auth and the built-in OAuth2 admission both admit the caller on its own IdP token in
+        ``Authorization`` with no ``x-litellm-api-key`` and record it as ``api_key``; that token is the
+        sign-in subject as the raw bearer was before the subject split."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", allowed_tools=None
+        )
+        admitted = UserAPIKeyAuth(api_key=api_key, user_id="u")
+        admitted.authenticated_by_custom_auth = custom_auth
+        proxy_logging = MagicMock()
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+
+        await manager.pre_call_tool_check(
+            server_name="srv",
+            name="turn",
+            arguments={},
+            user_api_key_auth=admitted,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+            raw_headers=raw_headers,
+        )
+
+        kwargs: Final = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert kwargs["incoming_bearer_token"] == api_key
+        assert kwargs["incoming_subject_token"] == expected_subject
 
     @pytest.mark.asyncio
     async def test_check_tool_permission_for_key_team_allows_permitted_tool(self):

@@ -16,6 +16,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
+    INITIALIZE,
     EntryPoint,
     McpCaller,
     McpPeer,
@@ -36,6 +37,10 @@ GUARDRAIL_ROWS: Final = (
     'FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s ORDER BY "startTime"'
 )
 FALLBACKS: Final = (None, "fail_open", "fail_closed")
+
+
+def _origin(gateway: Gateway) -> str:
+    return str(gateway.client.base_url).rstrip("/")
 
 
 def _generic_guardrail_outage(request: Request) -> Reply:
@@ -136,15 +141,26 @@ def test_a_missing_or_malformed_caller_bearer_blocks_on_every_entry_point_whatev
 ) -> None:
     with _rig(gateway, tmp_path, fallback) as rig:
         assert f"{rig.alias}-add" in rig.caller().list_tools().tools, "the catalog needs only the virtual key"
+        metadata_url: Final = f"{_origin(rig.candidate)}/.well-known/oauth-protected-resource/{rig.alias}/mcp"
         for entry in ENTRY_POINTS:
-            missing: Final = rig.caller(entry).call(f"{rig.alias}-add", {"entry": entry}, server_id=rig.server_id)
-            assert missing.error is not None and REJECTED in missing.raw, f"{entry} without a bearer: {missing.raw}"
-            malformed: Final = rig.caller(entry, "not-a-jws").call(
-                f"{rig.alias}-add", {"entry": entry}, server_id=rig.server_id
-            )
-            assert malformed.error is not None and REJECTED in malformed.raw, f"{entry} opaque bearer: {malformed.raw}"
+            for label, bearer in (("without a bearer", None), ("opaque bearer", "not-a-jws")):
+                caller: Final = rig.caller(entry, bearer)
+                if entry == "server_mcp":
+                    challenged: Final = caller.rpc("initialize", INITIALIZE)
+                    assert challenged.status_code == 401, f"{entry} {label}: {challenged.text}"
+                    authenticate: Final = challenged.headers.get("www-authenticate", "")
+                    assert f'resource_metadata="{metadata_url}"' in authenticate, f"{entry} {label}: {authenticate!r}"
+                    assert 'error="invalid_token"' in authenticate, f"{entry} {label}: {authenticate!r}"
+                    if bearer is None:
+                        unsigned: Final = caller.rpc(
+                            "tools/call", {"name": f"{rig.alias}-add", "arguments": {"entry": entry}}
+                        )
+                        assert unsigned.status_code == 401, f"{entry} {label}: {unsigned.text}"
+                        continue
+                outcome: Final = caller.call(f"{rig.alias}-add", {"entry": entry}, server_id=rig.server_id)
+                assert outcome.error is not None and REJECTED in outcome.raw, f"{entry} {label}: {outcome.raw}"
         assert rig.upstream_tool_names() == ()
-        expected: Final = 2 * len(ENTRY_POINTS)
+        expected: Final = 2 * len(ENTRY_POINTS) - 1
         assert rig.guardrail_statuses("call_mcp_tool", expected) == ["guardrail_intervened"] * expected
 
 

@@ -1,3 +1,4 @@
+import json
 import uuid
 from typing import Final
 
@@ -90,6 +91,36 @@ def test_subject_grant_lists_only_reachable_tools_and_denies_the_rest(
             assert denied_listed.tools == ()
         else:
             assert not any(name.startswith(denied_alias) for name in denied_listed.tools), denied_listed.tools
+
+
+@pytest.mark.parametrize("entry", ("mcp", "server_mcp"))
+def test_access_group_named_like_an_ungranted_server_still_routes_the_groups_servers(
+    gateway: Gateway, entry: EntryPoint
+) -> None:
+    with peer_of("http") as shadow, peer_of("http") as member, gateway.scenario() as scenario:
+        group: Final = "docs" + uuid.uuid4().hex[:8]
+        member_alias: Final = "mem" + uuid.uuid4().hex[:8]
+        register_mcp(scenario, shadow, group)
+        register_mcp(scenario, member, member_alias, mcp_access_groups=[group])
+        key: Final = scenario.key(object_permission={"mcp_access_groups": [group]})
+        unmatched: Final = "none" + uuid.uuid4().hex[:8]
+        denied: Final = McpCaller(
+            gateway, key, entry, unmatched, {"x-mcp-servers": unmatched} if entry == "mcp" else {}
+        ).list_tools()
+        assert (denied.status, json.loads(denied.error or "null"), denied.tools) == (
+            (
+                200,
+                {"code": -32600, "message": f"The key is not allowed to access the requested MCP servers: {unmatched}"},
+                (),
+            )
+            if entry == "mcp"
+            else (404, {"detail": f"MCP server, toolset, or access group '{unmatched}' not found"}, ())
+        ), denied.raw
+        selection: Final = {"x-mcp-servers": group} if entry == "mcp" else {}
+        listed: Final = McpCaller(gateway, key, entry, group, selection).list_tools()
+        assert listed.ok, listed.raw
+        assert set(listed.tools) == {f"{member_alias}-{tool}" for tool in ("add", "multiply", "fail")}, listed.tools
+        assert tool_calls(shadow.drain()) == ()
 
 
 @pytest.mark.parametrize("entry", ("mcp", "server_mcp", "rest"))

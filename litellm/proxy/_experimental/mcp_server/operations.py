@@ -120,6 +120,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     logging_safe_mcp_headers,
     match_known_tool_name,
     normalize_server_name,
+    server_answers_to_name,
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
@@ -435,6 +436,7 @@ async def _dispatch_virtual_mcp_tool(
 async def _get_allowed_mcp_servers_from_mcp_server_names(
     mcp_servers: Sequence[str] | None,
     allowed_mcp_servers: list[MCPServer],
+    client_ip: str | None = None,
 ) -> list[MCPServer]:
     """
     Get the filtered MCP servers from the MCP server names.
@@ -451,15 +453,10 @@ async def _get_allowed_mcp_servers_from_mcp_server_names(
     # Filter servers based on mcp_servers parameter if provided
     if mcp_servers is not None:
         for server_or_group in mcp_servers:
-            server_name_matched = False
-
-            for server in allowed_mcp_servers:
-                if server and _server_answers_to(server, server_or_group):
-                    filtered_server[server.server_id] = server
-                    server_name_matched = True
-                    break
-
-            if not server_name_matched:
+            scoped = _scoped_server(server_or_group, allowed_mcp_servers, client_ip)
+            if scoped is not None:
+                filtered_server[scoped.server_id] = scoped
+            else:
                 try:
                     access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                         [server_or_group]
@@ -493,8 +490,20 @@ def _http_detail_message(detail: object) -> str:
 
 
 def _server_answers_to(server: MCPServer, name: str) -> bool:
-    requested: Final = name.lower()
-    return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+    return server_answers_to_name(server, name)
+
+
+def _scoped_server(name: str, allowed_mcp_servers: Sequence[MCPServer], client_ip: str | None) -> MCPServer | None:
+    """The granted server a scoped ``name`` selects for the caller: the registry's own pass order run over
+    ``allowed_mcp_servers`` alone, so a granted server wins over an ungranted alias or case variant the registry
+    would pick. ``None`` when no granted server answers, or when the registry's own pick for ``name`` is a server
+    hidden from ``client_ip``; the caller then retries the name as an access group it holds."""
+    if (
+        global_mcp_server_manager.get_mcp_server_answering_to(name, client_ip=client_ip) is None
+        and global_mcp_server_manager.get_mcp_server_answering_to(name) is not None
+    ):
+        return None
+    return global_mcp_server_manager.get_mcp_server_answering_to(name, client_ip=client_ip, among=allowed_mcp_servers)
 
 
 async def raise_denied_scoped_mcp_access(
@@ -675,6 +684,7 @@ async def _get_allowed_mcp_servers(
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
+            client_ip=client_ip,
         )
 
     return allowed_mcp_servers
@@ -1776,7 +1786,9 @@ def _challenge_missing_token_exchange_subject(
     The listing that fills a cold catalog absorbs the upstream 401 by design, so without this
     check a missing subject surfaces as an unknown-tool error instead of the challenge the
     warm path already raises. Gated to servers the key may reach so an unauthorized caller
-    learns nothing about the catalog.
+    learns nothing about the catalog. Guardrail-only sign-in is challenged at connect instead: a
+    tool call's JSON-RPC error drops ``WWW-Authenticate``, so the guardrail's own rejection is
+    the more useful answer there.
     """
     if server is None or server.auth_type != MCPAuth.oauth2_token_exchange:
         return
@@ -2439,6 +2451,7 @@ async def call_mcp_tool(
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
+            client_ip=client_ip,
         )
         if mcp_servers and not allowed_mcp_servers:
             await raise_denied_scoped_mcp_access(

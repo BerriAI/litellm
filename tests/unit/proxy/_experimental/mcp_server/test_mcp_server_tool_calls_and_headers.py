@@ -1,4 +1,3 @@
-from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import asyncio
 import contextlib
 import contextvars
@@ -7,7 +6,7 @@ import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
@@ -29,8 +28,11 @@ from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERS
 from pydantic import TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
+import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPTransport,
@@ -49,6 +51,10 @@ def test_mcp_available_on_sdk2():
 
     assert Version("2.2.0") <= Version(version("mcp")) < Version("3")
     assert MCP_AVAILABLE is True
+
+
+async def _connecting() -> bool:
+    return True
 
 
 def _rendered_log_message(call):
@@ -1159,6 +1165,7 @@ async def test_mcp_read_resource_success():
 )
 async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, metadata):
     from mcp.types import ReadResourceRequestParams
+
     from litellm.proxy._experimental.mcp_server import operations, server
 
     uri: Final = "https://example.com/resource"
@@ -1276,6 +1283,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else failing_server
     )
+    mock_manager.get_mcp_server_answering_to = MCPServerManager().get_mcp_server_answering_to
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
         server_ids,
@@ -3748,6 +3756,521 @@ async def test_stateful_mcp_session_owner_mismatch_returns_403():
 
     mcp_server._stateful_session_auth_contexts.pop(session_id, None)
     mcp_server._stateful_session_owners.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_stateful_mcp_session_owner_mismatch_is_rejected_before_the_body_is_read():
+    """A POST carrying another caller's mcp-session-id is refused before any body chunk is awaited, so a
+    slow sender cannot hold the request open past the owner check."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "owned-session-slow-body"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    intruder_auth = UserAPIKeyAuth(api_key="intruder-key", user_id="intruder")
+    mcp_server._stateful_session_auth_contexts[session_id] = MagicMock()
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer intruder-key"),
+            (b"mcp-session-id", session_id.encode()),
+        ],
+    }
+    body_never_arrives = asyncio.Event()
+
+    async def stalled_receive():
+        await body_never_arrives.wait()
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent_messages: list = []
+
+    async def capture_send(message):
+        sent_messages.append(message)
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(intruder_auth, None, None, None, None, None),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
+            patch.object(session_manager_stateful, "handle_request", new_callable=AsyncMock),
+            patch.object(session_manager_stateful, "_server_instances", {session_id: MagicMock()}),
+        ):
+            await asyncio.wait_for(handle_streamable_http_mcp(scope, stalled_receive, capture_send), timeout=2)
+    finally:
+        body_never_arrives.set()
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+
+    statuses = [m["status"] for m in sent_messages if m.get("type") == "http.response.start"]
+    assert statuses == [403], sent_messages
+
+
+@pytest.mark.asyncio
+async def test_stateful_mcp_session_owner_mismatch_is_refused_before_the_body_arrives():
+    """A POST naming another caller's session is refused with 403 while the sender is still withholding the body,
+    so a stalled body cannot delay the refusal or reach the stateful manager."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "owned-session-stalled-body"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    intruder_auth = UserAPIKeyAuth(api_key="intruder-key", user_id="intruder")
+    mcp_server._stateful_session_auth_contexts[session_id] = MagicMock()
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer intruder-key"),
+            (b"mcp-session-id", session_id.encode()),
+        ],
+    }
+    body_never_sent = asyncio.Event()
+
+    async def withheld_body() -> Message:
+        await body_never_sent.wait()
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent_messages: list[Message] = []
+
+    async def capture_send(message: Message) -> None:
+        sent_messages.append(message)
+
+    handle_request_mock = AsyncMock()
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(intruder_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful,
+                "handle_request",
+                side_effect=handle_request_mock,
+            ),
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                {session_id: MagicMock()},
+            ),
+        ):
+            await asyncio.wait_for(handle_streamable_http_mcp(scope, withheld_body, capture_send), timeout=2)
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+
+    handle_request_mock.assert_not_awaited()
+    statuses = [m["status"] for m in sent_messages if m.get("type") == "http.response.start"]
+    assert statuses == [403]
+
+
+@pytest.mark.asyncio
+async def test_owner_mismatch_on_a_torn_down_session_is_refused_before_the_body_under_a_fail_closed_outage():
+    """While a session's transport is already gone but its owner binding is still recorded, a POST from another
+    caller is refused with 403 before its withheld body arrives even when the fail-closed sign-in gate would
+    otherwise peek at the body to tell an ``initialize`` apart."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = _catalog_server()
+    guardrail = _CallerSignInGuardrail(
+        guardrail_name="sign-in-stub",
+        preflight_result=Unavailable("the Entra token endpoint could not be reached", fail_open=False),
+    )
+    session_id = "owned-session-being-torn-down"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    intruder_auth = UserAPIKeyAuth(api_key="intruder-key", user_id="intruder")
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/catalog",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"intruder-key"),
+            (b"authorization", b"Bearer entra.jwt.token"),
+            (b"mcp-session-id", session_id.encode()),
+        ],
+    }
+    body_never_sent = asyncio.Event()
+
+    async def withheld_body() -> Message:
+        await body_never_sent.wait()
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent_messages: list[Message] = []
+
+    async def capture_send(message: Message) -> None:
+        sent_messages.append(message)
+
+    handle_request_mock = AsyncMock()
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(
+                    intruder_auth,
+                    None,
+                    ["catalog"],
+                    None,
+                    None,
+                    {"x-litellm-api-key": "intruder-key", "authorization": "Bearer entra.jwt.token"},
+                ),
+            ),
+            patch.object(
+                mcp_operations.global_mcp_server_manager,
+                "get_filtered_registry",
+                return_value={server.server_id: server},
+            ),
+            patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+            patch.object(mcp_server, "_check_passthrough_upstream_auth", AsyncMock()),
+            patch.object(mcp_operations, "_raise_if_initialize_grants_no_mcp_servers", AsyncMock()),
+            patch.object(mcp_server, "_SESSION_MANAGERS_INITIALIZED", True),
+            patch.object(session_manager_stateful, "handle_request", side_effect=handle_request_mock),
+            patch.object(session_manager_stateful, "_server_instances", {}),
+        ):
+            await asyncio.wait_for(handle_streamable_http_mcp(scope, withheld_body, capture_send), timeout=2)
+    finally:
+        mcp_server._stateful_session_owners.pop(session_id, None)
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, guardrail, require_self=False
+        )
+
+    assert guardrail.preflight_calls == []
+    handle_request_mock.assert_not_awaited()
+    statuses = [m["status"] for m in sent_messages if m.get("type") == "http.response.start"]
+    assert statuses == [403]
+
+
+@pytest.mark.asyncio
+async def test_initialize_naming_a_stale_session_still_meets_the_fail_closed_connect_gate():
+    """A client that retries ``initialize`` with a session id this worker no longer knows is connecting, so a
+    fail-closed sign-in outage answers it 503 at the gate instead of letting the stripped-header retry open a
+    session."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = _catalog_server()
+    guardrail = _CallerSignInGuardrail(
+        guardrail_name="sign-in-stub",
+        preflight_result=Unavailable("the Entra token endpoint could not be reached", fail_open=False),
+    )
+    initialize = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode()
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/catalog",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer entra.jwt.token"),
+            (b"mcp-session-id", b"stale-session-from-a-restarted-worker"),
+        ],
+    }
+    incoming: asyncio.Queue[Message] = asyncio.Queue()
+    await incoming.put({"type": "http.request", "body": initialize, "more_body": False})
+    sent_messages: list[Message] = []
+
+    async def capture_send(message: Message) -> None:
+        sent_messages.append(message)
+
+    handle_request_mock = AsyncMock()
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(
+                    UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    None,
+                    ["catalog"],
+                    None,
+                    None,
+                    {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
+                ),
+            ),
+            patch.object(
+                mcp_operations.global_mcp_server_manager,
+                "get_filtered_registry",
+                return_value={server.server_id: server},
+            ),
+            patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+            patch.object(mcp_server, "_check_passthrough_upstream_auth", AsyncMock()),
+            patch.object(mcp_operations, "_raise_if_initialize_grants_no_mcp_servers", AsyncMock()),
+            patch.object(mcp_server, "_SESSION_MANAGERS_INITIALIZED", True),
+            patch.object(session_manager_stateful, "handle_request", side_effect=handle_request_mock),
+            patch.object(session_manager_stateful, "_server_instances", {}),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await asyncio.wait_for(handle_streamable_http_mcp(scope, incoming.get, capture_send), timeout=2)
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, guardrail, require_self=False
+        )
+
+    assert exc.value.status_code == 503
+    assert guardrail.preflight_calls == ["entra.jwt.token"]
+    handle_request_mock.assert_not_awaited()
+    assert sent_messages == []
+
+
+@pytest.mark.asyncio
+async def test_connect_challenge_answers_before_the_body_is_read(monkeypatch):
+    """A session-less ``POST`` to a gated server without a subject token gets its RFC 9728 challenge straight
+    away: the gate must not wait for the body it never needs, so a client that withholds it still sees 401."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    server = _make_obo_server("obo_server")
+    mcp_operations.global_mcp_server_manager.registry.update({server.server_id: server})
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/mcp/obo_server",
+        "root_path": "",
+        "query_string": b"",
+        "server": ("gw.example", 4000),
+        "client": ("10.0.0.7", 51000),
+        "headers": [
+            (b"host", b"gw.example:4000"),
+            (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"sk-litellm-virtual-key"),
+        ],
+    }
+    withheld_body: asyncio.Queue[Message] = asyncio.Queue()
+    sent_messages: list[Message] = []
+
+    async def capture_send(message: Message) -> None:
+        sent_messages.append(message)
+
+    handle_request_mock = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(
+                UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                None,
+                ["obo_server"],
+                None,
+                None,
+                {"x-litellm-api-key": "sk-litellm-virtual-key"},
+            ),
+        ),
+        patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+            mcp_operations.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            AsyncMock(return_value=[server.server_id]),
+        ),
+        patch.object(mcp_server, "_SESSION_MANAGERS_INITIALIZED", True),
+        patch.object(session_manager_stateful, "handle_request", side_effect=handle_request_mock),
+        patch.object(session_manager_stateful, "_server_instances", {}),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await asyncio.wait_for(handle_streamable_http_mcp(scope, withheld_body.get, capture_send), timeout=2)
+
+    assert exc.value.status_code == 401
+    assert (exc.value.headers or {})["WWW-Authenticate"].startswith(
+        'Bearer resource_metadata="http://gw.example:4000/.well-known/oauth-protected-resource/mcp/obo_server"'
+    ), exc.value.headers
+    handle_request_mock.assert_not_awaited()
+    assert sent_messages == []
+
+
+@pytest.mark.asyncio
+async def test_initialize_naming_a_session_whose_transport_is_already_gone_still_meets_the_fail_closed_connect_gate():
+    """While idle purge or cap eviction is still terminating a transport, its owner entry outlives the transport;
+    an ``initialize`` retried with that id is still a new connection and meets the fail-closed gate."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    server = _catalog_server()
+    guardrail = _CallerSignInGuardrail(
+        guardrail_name="sign-in-stub",
+        preflight_result=Unavailable("the Entra token endpoint could not be reached", fail_open=False),
+    )
+    initialize = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode()
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/catalog",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer entra.jwt.token"),
+            (b"mcp-session-id", b"session-mid-termination"),
+        ],
+    }
+    incoming: asyncio.Queue[Message] = asyncio.Queue()
+    await incoming.put({"type": "http.request", "body": initialize, "more_body": False})
+    sent_messages: list[Message] = []
+
+    async def capture_send(message: Message) -> None:
+        sent_messages.append(message)
+
+    handle_request_mock = AsyncMock()
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(
+                    UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    None,
+                    ["catalog"],
+                    None,
+                    None,
+                    {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
+                ),
+            ),
+            patch.object(
+                mcp_operations.global_mcp_server_manager,
+                "get_filtered_registry",
+                return_value={server.server_id: server},
+            ),
+            patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+            patch.object(mcp_server, "_check_passthrough_upstream_auth", AsyncMock()),
+            patch.object(mcp_operations, "_raise_if_initialize_grants_no_mcp_servers", AsyncMock()),
+            patch.object(mcp_server, "_SESSION_MANAGERS_INITIALIZED", True),
+            patch.object(session_manager_stateful, "handle_request", side_effect=handle_request_mock),
+            patch.object(session_manager_stateful, "_server_instances", {}),
+            patch.object(mcp_server, "_owner_fingerprint_for", return_value="owner-fingerprint"),
+            patch.dict(
+                mcp_server._stateful_session_owners, {"session-mid-termination": "owner-fingerprint"}, clear=True
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await asyncio.wait_for(handle_streamable_http_mcp(scope, incoming.get, capture_send), timeout=2)
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, guardrail, require_self=False
+        )
+
+    assert exc.value.status_code == 503
+    assert guardrail.preflight_calls == ["entra.jwt.token"]
+    handle_request_mock.assert_not_awaited()
+    assert sent_messages == []
+
+
+@pytest.mark.asyncio
+async def test_stateful_mcp_session_post_hands_the_whole_body_to_the_session_manager():
+    """The owner's follow-up POST on a live session reaches the stateful manager with every body byte intact
+    after the routing peek."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "owned-session-replay"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    mcp_server._stateful_session_auth_contexts[session_id] = MagicMock()
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer owner-key"),
+            (b"mcp-session-id", session_id.encode()),
+        ],
+    }
+    chunks = [
+        {"type": "http.request", "body": b'{"jsonrpc":"2.0","id":7,"method":"tools/list",', "more_body": True},
+        {"type": "http.request", "body": b'"params":{}}', "more_body": False},
+    ]
+    receive = AsyncMock(side_effect=list(chunks))
+    delivered: list[bytes] = []
+
+    async def drain_body(scope_, receive_, send_):
+        while True:
+            message = await receive_()
+            delivered.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                return
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(owner_auth, None, None, None, None, None),
+            ),
+            patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
+            patch.object(session_manager_stateful, "handle_request", side_effect=drain_body),
+            patch.object(session_manager_stateful, "_server_instances", {session_id: MagicMock()}),
+        ):
+            await handle_streamable_http_mcp(scope, receive, AsyncMock())
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+
+    assert b"".join(delivered) == b'{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}'
 
 
 @pytest.mark.asyncio
@@ -6761,6 +7284,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
+        mock_manager.get_mcp_server_answering_to = MCPServerManager().get_mcp_server_answering_to
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["legacy-m2m-id"], 0))
         mock_manager._get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
 
@@ -8683,6 +9207,458 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_known_alias_returns
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("alias_server_first", [True, False], ids=["alias-granted-first", "server-name-granted-first"])
+async def test_scoped_router_selects_the_server_the_connect_preflight_resolves(alias_server_first):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    by_alias = MCPServer(server_id="a-id", name="a", server_name="a", alias="gh", transport=MCPTransport.http)
+    by_server_name = MCPServer(server_id="b-id", name="b", server_name="Gh", transport=MCPTransport.http)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({"a-id": by_alias, "b-id": by_server_name})
+    granted_both = [by_alias, by_server_name] if alias_server_first else [by_server_name, by_alias]
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            for name in ("Gh", "gh", "GH"):
+                expected = global_mcp_server_manager.get_mcp_server_answering_to(name)
+                selected = await _get_allowed_mcp_servers_from_mcp_server_names(
+                    mcp_servers=[name], allowed_mcp_servers=granted_both
+                )
+                assert [s.server_id for s in selected] == [expected.server_id], name
+            only_b = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["gh"], allowed_mcp_servers=[by_server_name]
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert [s.server_id for s in only_b] == ["b-id"], (
+        "the granted server answering to the name wins over the registry's ungranted alias holder"
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoped_name_of_an_ungranted_server_is_retried_as_an_access_group_the_key_holds():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    shadow = MCPServer(server_id="s-id", name="docs", server_name="docs", transport=MCPTransport.http)
+    member = MCPServer(server_id="m-id", name="m", server_name="m", transport=MCPTransport.http)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({"s-id": shadow, "m-id": member})
+    group_members = {"docs": ["m-id"]}
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            side_effect=lambda names: [sid for name in names for sid in group_members.get(name, [])],
+        ) as groups:
+            collided = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["docs"], allowed_mcp_servers=[member]
+            )
+            unmatched = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["team"], allowed_mcp_servers=[member]
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert [s.server_id for s in collided] == ["m-id"], (
+        "a name owned by an ungranted server must still resolve to the access group of that name the key holds"
+    )
+    assert unmatched == [], "a name matching neither a granted server nor a granted access group stays denied"
+    assert groups.await_args_list == [call(["docs"]), call(["team"])]
+
+
+@pytest.mark.asyncio
+async def test_scoped_router_hides_a_private_server_from_an_external_ip_like_the_connect_preflight():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    private = MCPServer(
+        server_id="p-id",
+        name="p",
+        server_name="p",
+        alias="gh",
+        transport=MCPTransport.http,
+        available_on_public_internet=False,
+    )
+    public = MCPServer(server_id="u-id", name="u", server_name="u", alias="Gh", transport=MCPTransport.http)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({"p-id": private, "u-id": public})
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            external = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["gh"], allowed_mcp_servers=[public], client_ip="203.0.113.7"
+            )
+            internal = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["gh"], allowed_mcp_servers=[public], client_ip=None
+            )
+            by_own_name = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["Gh"], allowed_mcp_servers=[public], client_ip="203.0.113.7"
+            )
+        assert global_mcp_server_manager.get_mcp_server_answering_to("gh", client_ip="203.0.113.7") is None
+        assert global_mcp_server_manager.get_mcp_server_answering_to("gh", client_ip=None) is private
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert external == [], "a name the preflight hides from this IP must not reroute to a case variant"
+    assert [s.server_id for s in internal] == ["u-id"], "with no IP hiding in play the granted case variant wins"
+    assert [s.server_id for s in by_own_name] == ["u-id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registry", "scope", "granted", "expected"),
+    [
+        pytest.param(("a-id", "d-id"), "docs", ("d-id",), ["d-id"], id="alias-collision-alias-holder-listed-first"),
+        pytest.param(("d-id", "a-id"), "docs", ("d-id",), ["d-id"], id="alias-collision-exact-name-listed-first"),
+        pytest.param(("g1", "g2"), "GITHUB", ("g2",), ["g2"], id="case-variant-collision"),
+    ],
+)
+async def test_scoped_router_prefers_the_granted_server_answering_to_the_name(registry, scope, granted, expected):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    servers: Final = {
+        "a-id": MCPServer(
+            server_id="a-id", name="a_docs", server_name="a_docs", alias="docs", transport=MCPTransport.http
+        ),
+        "d-id": MCPServer(server_id="d-id", name="docs", server_name="docs", transport=MCPTransport.http),
+        "g1": MCPServer(server_id="g1", name="GitHub", server_name="GitHub", transport=MCPTransport.http),
+        "g2": MCPServer(server_id="g2", name="github", server_name="github", transport=MCPTransport.http),
+    }
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({server_id: servers[server_id] for server_id in registry})
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as groups:
+            selected: Final = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=[scope], allowed_mcp_servers=[servers[server_id] for server_id in granted]
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert [s.server_id for s in selected] == expected
+    groups.assert_not_awaited()
+
+
+def test_get_mcp_server_answering_to_among_applies_the_registry_pass_order_and_ip_hiding():
+    manager: Final = MCPServerManager()
+    by_alias: Final = MCPServer(server_id="a-id", name="a", server_name="a", alias="svc", transport=MCPTransport.http)
+    by_server_name: Final = MCPServer(server_id="b-id", name="b", server_name="svc", transport=MCPTransport.http)
+    by_name: Final = MCPServer(server_id="c-id", name="svc", server_name="c", transport=MCPTransport.http)
+    by_id: Final = MCPServer(server_id="svc", name="d", server_name="d", transport=MCPTransport.http)
+    folded: Final = MCPServer(server_id="e-id", name="e", server_name="SVC", transport=MCPTransport.http)
+    hidden: Final = MCPServer(
+        server_id="h-id",
+        name="h",
+        server_name="h",
+        alias="svc",
+        transport=MCPTransport.http,
+        available_on_public_internet=False,
+    )
+
+    assert manager.get_mcp_server_answering_to("svc", among=[by_name, by_server_name, by_alias]) is by_alias
+    assert manager.get_mcp_server_answering_to("svc", among=[by_name, by_server_name]) is by_server_name
+    assert manager.get_mcp_server_answering_to("svc", among=[by_id, by_name]) is by_name
+    assert manager.get_mcp_server_answering_to("svc", among=[folded, by_id]) is by_id
+    assert manager.get_mcp_server_answering_to("svc", among=[folded]) is folded
+    assert manager.get_mcp_server_answering_to("E-ID", among=[folded]) is folded
+    assert manager.get_mcp_server_answering_to("svc", among=()) is None
+    assert manager.get_mcp_server_answering_to("svc", client_ip="203.0.113.7", among=[hidden, folded]) is None
+    assert manager.get_mcp_server_answering_to("svc", client_ip="10.0.0.7", among=[hidden, folded]) is hidden
+    assert manager.get_mcp_server_answering_to("svc", client_ip="203.0.113.7", among=[folded]) is folded
+    assert manager.get_mcp_server_answering_to("svc") is None
+
+    manager.registry = {"e-id": folded, "b-id": by_server_name, "a-id": by_alias}
+
+    assert manager.get_mcp_server_answering_to("svc") is by_alias
+    assert manager.get_mcp_server_answering_to("svc") is manager.get_mcp_server_answering_to(
+        "svc", among=tuple(manager.registry.values())
+    )
+
+
+class _GrantedServerSignInGuardrail(CustomGuardrail):
+    """Requires caller sign-in on one server only and records every server it is asked about."""
+
+    def __init__(self, *args, gated_server_id: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._gated_server_id = gated_server_id
+        self.asked_about = []  # mutable-ok: call recorder
+
+    def caller_sign_in(self, server, user_api_key_auth):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
+
+        self.asked_about.append(server.server_id)
+        if server.server_id != self._gated_server_id:
+            return None
+        return CallerSignIn(issuers=("https://idp.test",), scopes=("scope-a",))
+
+    async def preflight_caller_sign_in(self, server, user_api_key_auth, subject_token):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import SignedIn
+
+        return SignedIn()
+
+
+class TestConnectPreflightRoutesLikeTheScopedRouter:
+    """A granted key connecting to ``/mcp/{name}`` is pre-flighted for the server the scoped router routes
+    it to, so an ungranted server holding the name as an alias neither hides the granted server's sign-in
+    challenge nor skips its connect-time exchange."""
+
+    @staticmethod
+    def _register_alias_collision() -> None:
+        alias_holder: Final = MCPServer(
+            server_id="a-id",
+            name="a_docs",
+            server_name="a_docs",
+            alias="docs",
+            url="https://a.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        granted: Final = MCPServer(
+            server_id="d-id",
+            name="docs",
+            server_name="docs",
+            url="https://d.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        mcp_operations.global_mcp_server_manager.registry.update({"a-id": alias_holder, "d-id": granted})
+
+    @staticmethod
+    async def _connect_to_docs() -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": "/mcp/docs", "headers": []},
+            mcp_servers=["docs"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-granted-docs", user_id="u-1"),
+            client_ip=None,
+            raw_headers={"x-litellm-api-key": "sk-granted-docs"},
+            connecting=_connecting,
+        )
+
+    @pytest.mark.asyncio
+    async def test_exchange_runs_for_the_granted_server_not_the_alias_holder(self):
+        self._register_alias_collision()
+
+        async def refuse_exchange(server, **kwargs):
+            raise HTTPException(
+                status_code=401, detail=f"exchange refused for {server.server_id} at {kwargs['resource_metadata']}"
+            )
+
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=["d-id"])
+            ),
+            patch.object(  # test-quality-ok: a real exchanger would call an IdP; this one reports which server it ran for
+                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", refuse_exchange
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._connect_to_docs()
+
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "exchange refused for d-id at /.well-known/oauth-protected-resource/mcp/docs"
+
+    @pytest.mark.asyncio
+    async def test_sign_in_challenge_names_the_granted_server_not_the_alias_holder(self, monkeypatch):
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        self._register_alias_collision()
+        guardrail: Final = _GrantedServerSignInGuardrail(guardrail_name="sign-in-stub", gated_server_id="d-id")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                    mcp_operations.global_mcp_server_manager,
+                    "get_allowed_mcp_servers",
+                    AsyncMock(return_value=["d-id"]),
+                ),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await self._connect_to_docs()
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert ((exc.value.headers or {}).get("WWW-Authenticate") or "").startswith(
+            'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/docs"'
+        )
+        assert guardrail.asked_about == ["d-id"]
+
+    @staticmethod
+    def _register_obo_alias_collision() -> None:
+        obo: Final = MCPServer(
+            server_id="o-id",
+            name="obo_server",
+            server_name="obo_server",
+            alias="obo",
+            url="https://obo.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.test/token",
+            client_id="cid",
+            client_secret="csecret",
+        )
+        plain: Final = MCPServer(
+            server_id="p-id",
+            name="obo",
+            server_name="obo",
+            url="https://plain.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        mcp_operations.global_mcp_server_manager.registry.update({"o-id": obo, "p-id": plain})
+
+    @staticmethod
+    async def _connect_to(route_name: str) -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": f"/mcp/{route_name}", "headers": []},
+            mcp_servers=[route_name],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-collision", user_id="u-1"),
+            client_ip=None,
+            raw_headers={"x-litellm-api-key": "sk-collision"},
+            connecting=_connecting,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_name", ["obo", "OBO"], ids=["exact_alias", "case_variant"])
+    async def test_granted_plain_server_connects_past_an_ungranted_obo_alias_holder(self, route_name):
+        self._register_obo_alias_collision()
+
+        async def report_exchange(server, **kwargs):
+            raise HTTPException(
+                status_code=401, detail=f"exchange ran for {server.server_id} at {kwargs['resource_metadata']}"
+            )
+
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=["p-id"])
+            ),
+            patch.object(  # test-quality-ok: a real exchanger would call an IdP; this one reports which server it ran for
+                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", report_exchange
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._connect_to(route_name)
+
+        assert exc.value.status_code == 401
+        assert exc.value.detail == f"exchange ran for p-id at /.well-known/oauth-protected-resource/mcp/{route_name}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_name", ["obo", "obo_server"], ids=["alias", "server_name"])
+    async def test_granted_obo_server_still_challenges_without_a_subject(self, route_name, monkeypatch):
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        self._register_obo_alias_collision()
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=["o-id"])
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._connect_to(route_name)
+
+        assert exc.value.status_code == 401
+        assert ((exc.value.headers or {}).get("WWW-Authenticate") or "").startswith(
+            f'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/{route_name}"'
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route_name", ["obo", "OBO"], ids=["exact_alias", "case_variant"])
+    async def test_key_granting_neither_server_is_not_preflighted_for_the_plain_one(self, route_name):
+        self._register_obo_alias_collision()
+        preflight: Final = AsyncMock()
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=[])
+            ),
+            patch.object(  # test-quality-ok: a real exchanger would call an IdP; this one records which server ran
+                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", preflight
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await self._connect_to(route_name)
+
+        assert exc.value.status_code == 401
+        assert preflight.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_access_group_named_like_an_ungranted_server_connects_like_the_merge_base(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        member: Final = MCPServer(
+            server_id="w-id",
+            name="wiki_obo",
+            server_name="wiki_obo",
+            url="https://wiki-obo.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.test/token",
+            client_id="cid",
+            client_secret="csecret",
+        )
+        shadow: Final = MCPServer(
+            server_id="s-id",
+            name="wiki",
+            server_name="wiki",
+            url="https://wiki.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        mcp_operations.global_mcp_server_manager.registry.update({"w-id": member, "s-id": shadow})
+        group_members: Final = {"wiki": ["w-id"]}
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                mcp_operations.global_mcp_server_manager, "get_allowed_mcp_servers", AsyncMock(return_value=["w-id"])
+            ),
+            patch(  # test-quality-ok: access group membership lives in the DB; the real scoped router runs on it
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+                "MCPRequestHandler._get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                side_effect=lambda names: [sid for name in names for sid in group_members.get(name, [])],
+            ),
+        ):
+            outcome = await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/wiki", "headers": [(b"host", b"testserver")]},
+                mcp_servers=["wiki"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-group", user_id="u-1"),
+                client_ip=None,
+                raw_headers={"x-litellm-api-key": "sk-group"},
+                connecting=_connecting,
+            )
+
+        assert outcome is None, (
+            "a key granted only the access group named like an ungranted plain server must connect without a "
+            "sign-in challenge, as at the merge base; the challenge would advertise the plain server's metadata"
+        )
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_from_mcp_server_names_mixed_known_and_unknown():
     """
     Mixed scope (one valid + one unknown) returns only the resolved server,
@@ -9529,7 +10505,7 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers_from_mcp_server_names",
-            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers: allowed_mcp_servers),
+            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers, client_ip=None: allowed_mcp_servers),
         ),
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
@@ -9823,6 +10799,7 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else broken_server
     )
+    mock_manager.get_mcp_server_answering_to = MCPServerManager().get_mcp_server_answering_to
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(server, **kwargs):
@@ -9978,7 +10955,7 @@ class TestPreemptive401ModeAware:
         with (
             patch.object(
                 mcp_operations.global_mcp_server_manager,
-                "get_mcp_server_by_name",
+                "get_mcp_server_answering_to",
                 return_value=server,
             ),
             patch.object(
@@ -9995,7 +10972,115 @@ class TestPreemptive401ModeAware:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
                 client_ip=None,
+                connecting=_connecting,
             )
+
+    async def _connect_with_a_grant(self, server, requested: str, path: str) -> HTTPException:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        manager = mcp_operations.global_mcp_server_manager
+        manager.registry.clear()
+        manager.registry[server.server_id] = server
+        with (
+            patch.object(  # test-quality-ok: the key's grant list lives in the DB; the real router runs on it
+                manager, "get_allowed_mcp_servers", AsyncMock(return_value=[server.server_id])
+            ),
+            patch.object(manager, "has_user_oauth_token", new_callable=AsyncMock, return_value=False),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": path, "headers": [(b"host", b"testserver")]},
+                mcp_servers=[requested],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+                client_ip=None,
+                connecting=_connecting,
+            )
+        return exc.value
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("delegate", [True, False], ids=["oauth_delegate", "gateway_interactive"])
+    @pytest.mark.parametrize("shape", ["alias_case", "server_id", "x_mcp_servers"])
+    async def test_moved_connect_shapes_get_the_exact_name_routes_challenge(self, delegate, shape, monkeypatch):
+        """Alias-case, server-id and x-mcp-servers connects resolve the same server the router serves, so
+        they answer the exact-name route's 401 with the requested spelling in the route segment."""
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        server = _make_oauth2_server("gwx", oauth2_flow="authorization_code", delegate_auth_to_upstream=delegate)
+        requested, path, exact_path = {
+            "alias_case": ("GWX", "/mcp/GWX", "/mcp/gwx"),
+            "server_id": (server.server_id, f"/mcp/{server.server_id}", "/mcp/gwx"),
+            "x_mcp_servers": ("GWX", "/mcp", "/mcp"),
+        }[shape]
+
+        exact = await self._connect_with_a_grant(server, "gwx", exact_path)
+        moved = await self._connect_with_a_grant(server, requested, path)
+
+        assert exact.status_code == 401
+        assert (moved.status_code, moved.detail) == (exact.status_code, exact.detail)
+        exact_header = {k.lower(): v for k, v in (exact.headers or {}).items()}["www-authenticate"]
+        moved_header = {k.lower(): v for k, v in (moved.headers or {}).items()}["www-authenticate"]
+        assert "/gwx" in exact_header
+        assert moved_header == exact_header.replace("/gwx", f"/{requested}")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kind", ["plain_obo", "oauth_passthrough"])
+    @pytest.mark.parametrize("shape", ["alias_case", "server_id", "x_mcp_servers"])
+    async def test_moved_obo_and_passthrough_shapes_get_the_exact_name_routes_challenge(self, kind, shape, monkeypatch):
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        server = (
+            _make_obo_server("obx")
+            if kind == "plain_obo"
+            else MCPServer(
+                server_id="id-obx",
+                name="obx",
+                alias="obx",
+                server_name="obx",
+                url="https://obx.test/mcp",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.none,
+                extra_headers=["Authorization"],
+                oauth_passthrough=True,
+                mcp_info={"server_name": "obx"},
+            )
+        )
+        requested, path, exact_path = {
+            "alias_case": ("OBX", "/mcp/OBX", "/mcp/obx"),
+            "server_id": (server.server_id, f"/mcp/{server.server_id}", "/mcp/obx"),
+            "x_mcp_servers": ("OBX", "/mcp", "/mcp"),
+        }[shape]
+
+        exact = await self._connect_with_a_grant(server, "obx", exact_path)
+        moved = await self._connect_with_a_grant(server, requested, path)
+
+        assert exact.status_code == 401
+        assert (moved.status_code, moved.detail) == (exact.status_code, exact.detail)
+        exact_header = {k.lower(): v for k, v in (exact.headers or {}).items()}["www-authenticate"]
+        moved_header = {k.lower(): v for k, v in (moved.headers or {}).items()}["www-authenticate"]
+        assert "/obx" in exact_header
+        assert moved_header == exact_header.replace("/obx", f"/{requested}")
+
+    @pytest.mark.asyncio
+    async def test_aggregate_connect_without_a_server_selection_is_not_challenged(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        manager = mcp_operations.global_mcp_server_manager
+        manager.registry.clear()
+        for alias, delegate in (("gwx", False), ("relay", True)):
+            server = _make_oauth2_server(alias, oauth2_flow="authorization_code", delegate_auth_to_upstream=delegate)
+            manager.registry[server.server_id] = server
+
+        outcome = await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "method": "POST", "path": "/mcp", "headers": [(b"host", b"testserver")]},
+            mcp_servers=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+            client_ip=None,
+            connecting=_connecting,
+        )
+
+        assert outcome is None, "an unselected aggregate connect must pass without a sign-in challenge"
 
     @pytest.mark.asyncio
     async def test_deferred_discovery_runs_before_delegate_challenge(self):
@@ -10077,7 +11162,7 @@ class TestPreemptive401ModeAware:
             patch.dict(os.environ, {"SERVER_ROOT_PATH": "/litellm"}),
             patch.object(
                 mcp_operations.global_mcp_server_manager,
-                "get_mcp_server_by_name",
+                "get_mcp_server_answering_to",
                 return_value=server,
             ),
             patch.object(
@@ -10095,6 +11180,7 @@ class TestPreemptive401ModeAware:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
                 client_ip=None,
+                connecting=_connecting,
             )
 
         assert exc.value.status_code == 401
@@ -10184,7 +11270,7 @@ class TestSingleServerPreflightReachesIdJag:
         with (
             patch.object(  # test-quality-ok: route wiring must use the manager's configured server
                 mcp_operations.global_mcp_server_manager,
-                "get_mcp_server_by_name",
+                "get_mcp_server_answering_to",
                 return_value=server,
             ),
             patch.object(  # test-quality-ok: route wiring must invoke the manager preflight
@@ -10203,6 +11289,7 @@ class TestSingleServerPreflightReachesIdJag:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                 client_ip=None,
+                connecting=_connecting,
             )
 
     @pytest.mark.asyncio
@@ -10244,7 +11331,7 @@ class TestSingleServerPreflightReachesIdJag:
         with (
             patch.object(  # test-quality-ok: route wiring must use the manager's configured server
                 mcp_operations.global_mcp_server_manager,
-                "get_mcp_server_by_name",
+                "get_mcp_server_answering_to",
                 return_value=token_exchange,
             ),
             patch.object(  # test-quality-ok: route wiring must invoke the manager preflight
@@ -10261,6 +11348,7 @@ class TestSingleServerPreflightReachesIdJag:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
                 client_ip=None,
+                connecting=_connecting,
             )
 
         assert exc.value.status_code == 401
@@ -10309,7 +11397,7 @@ class TestOboPreflightScopedToAllowedServers:
         preflight = AsyncMock()
         with (
             patch.object(  # test-quality-ok: route handler reads the module-level manager, no injection seam
-                mcp_operations.global_mcp_server_manager, "get_mcp_server_by_name", return_value=requested
+                mcp_operations.global_mcp_server_manager, "get_mcp_server_answering_to", return_value=requested
             ),
             patch.object(  # test-quality-ok: the exchanger is the observable; a real one would call an IdP
                 mcp_operations.global_mcp_server_manager, "preflight_token_exchange", preflight
@@ -10325,6 +11413,11 @@ class TestOboPreflightScopedToAllowedServers:
                 mcp_server_auth_headers=None,
                 user_api_key_auth=user_api_key_auth,
                 client_ip="10.0.0.7",
+                raw_headers={
+                    "x-litellm-api-key": user_api_key_auth.api_key if user_api_key_auth else "",
+                    "authorization": self.SUBJECT_HEADERS["Authorization"],
+                },
+                connecting=_connecting,
             )
         return allowed_lookup, preflight
 
@@ -10333,9 +11426,7 @@ class TestOboPreflightScopedToAllowedServers:
         requested = _make_obo_server("obo_tools")
         key = UserAPIKeyAuth(api_key="sk-plain-only")
 
-        allowed_lookup, preflight = await self._run(
-            requested, allowed=[_make_obo_server("plain_tools")], user_api_key_auth=key
-        )
+        allowed_lookup, preflight = await self._run(requested, allowed=[], user_api_key_auth=key)
 
         preflight.assert_not_awaited()
         allowed_lookup.assert_awaited_once_with(
@@ -10350,8 +11441,60 @@ class TestOboPreflightScopedToAllowedServers:
         _, preflight = await self._run(requested, allowed=[requested], user_api_key_auth=key)
 
         preflight.assert_awaited_once_with(
-            server=requested, oauth2_headers=self.SUBJECT_HEADERS, user_api_key_auth=key, raw_headers=None
+            server=requested,
+            oauth2_headers=self.SUBJECT_HEADERS,
+            user_api_key_auth=key,
+            raw_headers={
+                "x-litellm-api-key": key.api_key,
+                "authorization": self.SUBJECT_HEADERS["Authorization"],
+            },
+            resource_metadata=f"/.well-known/oauth-protected-resource/mcp/{requested.alias}",
         )
+
+
+class TestOboChallengeGateKeepsBaseConnectRules:
+    """An OBO connect carrying a bearer in oauth2_headers is challenged by the exchange path, not the
+    preemptive gate, so a multi-server connect or a single-server connect with any bearer at all must
+    not be refused before the session opens."""
+
+    LITELLM_KEY_BEARER = {"Authorization": "Bearer sk-1234"}
+
+    async def _run(self, servers: list[MCPServer], mcp_servers: list[str]) -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        with (
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
+                mcp_operations.global_mcp_server_manager,
+                "get_mcp_server_answering_to",
+                return_value=servers[0],
+            ),
+            patch.object(  # test-quality-ok: allowed-set resolution needs the DB; the test controls its answer
+                mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=servers)
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/obo", "headers": []},
+                mcp_servers=mcp_servers,
+                oauth2_headers=self.LITELLM_KEY_BEARER,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1"),
+                client_ip=None,
+                raw_headers={"x-litellm-api-key": "sk-1234", "authorization": "Bearer sk-1234"},
+                connecting=_connecting,
+            )
+
+    @pytest.mark.asyncio
+    async def test_multi_server_connect_with_any_bearer_is_not_preemptively_challenged(self):
+        obo = _make_obo_server("obo")
+        catalog = MCPServer(server_id="id-catalog", name="catalog", alias="catalog", transport=MCPTransport.http)
+
+        await self._run([obo, catalog], ["obo", "catalog"])
+
+    @pytest.mark.asyncio
+    async def test_single_obo_connect_with_litellm_key_bearer_still_challenges(self):
+        with pytest.raises(HTTPException) as exc:
+            await self._run([_make_obo_server("obo")], ["obo"])
+        assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -10871,8 +12014,8 @@ async def test_native_listing_preserves_empty_result_on_auth_failure(_mcp_reques
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_hook_raises", [False, True])
 async def test_tool_listing_preserves_permission_denial_when_failure_logging_fails(failure_hook_raises):
-    from litellm.proxy._experimental.mcp_server import operations
     from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
 
     auth = UserAPIKeyAuth(user_id="denied-caller")
     denial = HTTPException(status_code=403, detail="scope denied")
@@ -10908,8 +12051,9 @@ async def test_legacy_sse_mount_emits_message_endpoint(
 ) -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+
     from litellm.proxy._experimental.mcp_server import server as mcp_server
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 
     app: Final = Starlette(routes=[Mount("/mcp", app=mcp_server.app)])
     incoming: Final[asyncio.Queue[Message]] = asyncio.Queue()
@@ -11067,6 +12211,7 @@ def test_protocol_header_respects_configured_advertisement(revision, rejected):
 @pytest.mark.asyncio
 async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ctx):
     from mcp.types import DiscoverResult, RequestParams, ServerCapabilities
+
     from litellm.proxy._experimental.mcp_server import server
 
     expected = DiscoverResult(supported_versions=["2025-11-25"], capabilities=ServerCapabilities())
@@ -11085,3 +12230,663 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
     context = dispatched.await_args.args[1]
     assert context.user_api_key_auth.user_id == "discover-caller"
     assert context.mcp_servers == ("allowed",)
+
+
+def _connect_scope(
+    path: str, *, headers: list[tuple[bytes, bytes]] | None = None, client_ip: str = "10.0.0.7"
+) -> dict[str, object]:
+    return {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "root_path": "",
+        "query_string": b"",
+        "server": ("gw.example", 4000),
+        "client": (client_ip, 51000),
+        "headers": [(b"host", b"gw.example:4000"), *(headers or [])],
+    }
+
+
+def _catalog_server() -> MCPServer:
+    return MCPServer(
+        server_id="catalog-server-id-001",
+        name="catalog",
+        alias="catalog",
+        server_name="catalog",
+        url="https://catalog.test/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        mcp_info={"server_name": "catalog"},
+    )
+
+
+class _CallerSignInGuardrail(CustomGuardrail):
+    def __init__(self, *args, preflight_result=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._preflight_result = preflight_result
+        self.preflight_calls = []  # mutable-ok: call recorder
+
+    def caller_sign_in(self, server, user_api_key_auth):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
+
+        return CallerSignIn(issuers=("https://idp.test",), scopes=("scope-a",))
+
+    async def preflight_caller_sign_in(self, server, user_api_key_auth, subject_token):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import SignedIn
+
+        self.preflight_calls.append(subject_token)
+        return self._preflight_result if self._preflight_result is not None else SignedIn()
+
+
+class TestConnectChallengeResolver:
+    """The connect-time sign-in challenge must resolve the server the same way the router resolves
+    ``/mcp/{name}``: server_id, case-insensitive name, and the short prefix all reach it."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route_name",
+        [
+            "catalog-server-id-001",
+            "CATALOG",
+        ],
+        ids=["server_id", "uppercase_name"],
+    )
+    async def test_provider_gated_server_challenged_on_every_route_spelling(self, route_name):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        preflight = AsyncMock()
+        try:
+            with (
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "preflight_token_exchange",
+                    preflight,
+                ),
+                patch.object(
+                    mcp_operations,
+                    "_get_allowed_mcp_servers",
+                    AsyncMock(return_value=[server]),
+                ),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope={"type": "http", "method": "POST", "path": f"/mcp/{route_name}", "headers": []},
+                    mcp_servers=[route_name],
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=None,
+                    connecting=_connecting,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        headers = exc.value.headers or {}
+        assert "resource_metadata" in (headers.get("WWW-Authenticate") or "")
+        preflight.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_provider_gated_server_challenged_on_short_prefix_route(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+        from litellm.proxy._experimental.mcp_server.utils import compute_short_server_prefix
+
+        server = _catalog_server()
+        route_name = compute_short_server_prefix(server.server_id)
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(
+                    mcp_operations,
+                    "_get_allowed_mcp_servers",
+                    AsyncMock(return_value=[server]),
+                ),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope={"type": "http", "method": "POST", "path": f"/mcp/{route_name}", "headers": []},
+                    mcp_servers=[route_name],
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=None,
+                    connecting=_connecting,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "route_name", "metadata_url"),
+        [
+            ("/mcp/obo", "obo", "http://gw.example:4000/.well-known/oauth-protected-resource/mcp/obo"),
+            (
+                "/mcp/obo_server",
+                "obo_server",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/mcp/obo_server",
+            ),
+            (
+                "/obo_server/mcp",
+                "obo_server",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/obo_server/mcp",
+            ),
+        ],
+        ids=["alias_route", "server_name_route", "server_first_route"],
+    )
+    async def test_obo_challenge_names_the_absolute_metadata_url_of_the_connected_route(
+        self, monkeypatch, path, route_name, metadata_url
+    ):
+        """RFC 9728 5.1 makes resource_metadata a URL and the MCP SDK fetches it verbatim, then refuses a
+        document whose ``resource`` does not prefix-match the URL it connected to. The OBO challenge must
+        therefore advertise the absolute metadata URL of the route the client used, not the alias's path."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        obo = _make_obo_server("obo").model_copy(update={"name": "obo_server", "server_name": "obo_server"})
+        with (
+            patch.object(
+                mcp_operations.global_mcp_server_manager,
+                "get_mcp_server_answering_to",
+                return_value=obo,
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=_connect_scope(path),
+                mcp_servers=[route_name],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                client_ip=None,
+                connecting=_connecting,
+            )
+
+        assert exc.value.status_code == 401
+        assert (exc.value.headers or {}).get("WWW-Authenticate") == (
+            f'Bearer resource_metadata="{metadata_url}", '
+            'error="invalid_token", '
+            'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("path", "general_settings", "client_ip", "metadata_url"),
+        [
+            ("/mcp/catalog", {}, "10.0.0.7", "http://gw.example:4000/.well-known/oauth-protected-resource/mcp/catalog"),
+            (
+                "/catalog/mcp",
+                {},
+                "10.0.0.7",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/catalog/mcp",
+            ),
+            (
+                "/catalog/mcp",
+                {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+                "10.0.0.7",
+                "https://public.example/.well-known/oauth-protected-resource/catalog/mcp",
+            ),
+            (
+                "/catalog/mcp",
+                {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+                "203.0.113.9",
+                "http://gw.example:4000/.well-known/oauth-protected-resource/catalog/mcp",
+            ),
+        ],
+        ids=["mcp_first", "server_first", "forwarded_from_trusted_proxy", "forwarded_from_untrusted_client"],
+    )
+    async def test_provider_challenge_names_the_absolute_metadata_url_of_the_connected_route(
+        self, monkeypatch, path, general_settings, client_ip, metadata_url
+    ):
+        """The sign-in challenge must point at the metadata document of the route the client used
+        (``/catalog/mcp`` and ``/mcp/catalog`` are distinct documents with distinct ``resource`` values),
+        built on the public origin only when the forwarded headers come from a configured trusted proxy."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        forwarded = [(b"x-forwarded-proto", b"https"), (b"x-forwarded-host", b"public.example")]
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.general_settings", general_settings, create=True),
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope=_connect_scope(path, headers=forwarded, client_ip=client_ip),
+                    mcp_servers=["catalog"],
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=client_ip,
+                    connecting=_connecting,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert (
+            (exc.value.headers or {})
+            .get("WWW-Authenticate", "")
+            .startswith(f'Bearer resource_metadata="{metadata_url}"')
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route_name",
+        ["catalog-server-id-001", "CATALOG"],
+        ids=["server_id", "uppercase_name"],
+    )
+    async def test_challenge_resource_metadata_names_the_connected_segment(self, route_name):
+        """The PRM path in the challenge must name the segment the client connected with, or the
+        client's follow-up metadata fetch 404s against the route it was pointed at."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(
+                    mcp_operations,
+                    "_get_allowed_mcp_servers",
+                    AsyncMock(return_value=[server]),
+                ),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope={"type": "http", "method": "POST", "path": f"/mcp/{route_name}", "headers": []},
+                    mcp_servers=[route_name],
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=None,
+                    connecting=_connecting,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        authenticate: Final = (exc.value.headers or {}).get("WWW-Authenticate") or ""
+        assert authenticate.startswith(
+            f'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/{route_name}"'
+        )
+
+
+class TestConnectSignInPreflight:
+    """A subject token the provider rejects must fail at connect with the RFC 9728 challenge, not as a
+    JSON-RPC error on every tools/call where ``WWW-Authenticate`` is lost."""
+
+    async def _connect(
+        self, route_names, guardrail, allowed, raw_headers=None, connecting=_connecting, user_api_key_auth=None
+    ):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _catalog_server()
+        with (
+            patch.object(
+                mcp_operations.global_mcp_server_manager,
+                "get_filtered_registry",
+                return_value={server.server_id: server},
+            ),
+            patch.object(
+                mcp_operations,
+                "_get_allowed_mcp_servers",
+                AsyncMock(return_value=allowed),
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": f"/mcp/{route_names[0]}", "headers": []},
+                mcp_servers=list(route_names),
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=user_api_key_auth or UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                client_ip=None,
+                raw_headers=raw_headers
+                or {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
+                connecting=connecting,
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authorization",
+        ["Basic a.b.c", "Digest x.y.z", "eyJ.pay.sig"],
+        ids=["basic_scheme", "digest_scheme", "scheme_less"],
+    )
+    async def test_authorization_without_a_bearer_scheme_is_challenged_not_pre_flighted(self, authorization):
+        """Only a ``Bearer`` credential is a sign-in subject; a Basic or Digest value, or a bare string that
+        merely has two dots, is challenged locally and never handed to a provider's IdP."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(
+                    ["catalog"],
+                    guardrail,
+                    [server],
+                    raw_headers={"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": authorization},
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert 'error="invalid_token"' in ((exc.value.headers or {}).get("WWW-Authenticate") or "")
+        assert guardrail.preflight_calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_headers",
+        [
+            {"authorization": "Bearer gw.master.key"},
+            {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer gw.master.key"},
+        ],
+        ids=["master_key_alone", "master_key_next_to_a_virtual_key"],
+    )
+    async def test_dotted_master_key_bearer_is_challenged_never_pre_flighted(self, raw_headers):
+        """The master key is a LiteLLM credential even when it has the two dots of a compact JWS, so the
+        connect answers the local challenge instead of sending the key to a provider's IdP."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.master_key", "gw.master.key"),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await self._connect(["catalog"], guardrail, [server], raw_headers=raw_headers)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert 'error="invalid_token"' in ((exc.value.headers or {}).get("WWW-Authenticate") or "")
+        assert guardrail.preflight_calls == []
+
+    @pytest.mark.asyncio
+    async def test_custom_auth_admitted_bearer_is_pre_flighted_not_challenged(self):
+        """Custom auth admits the caller on its own IdP token in ``Authorization`` with no
+        ``x-litellm-api-key``; that token is the sign-in subject, so connect pre-flights it as a tool
+        call forwarded it before the subject split, instead of challenging for a missing subject."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        admitted = UserAPIKeyAuth(api_key="entra.jwt.token", user_id="u-1")
+        admitted.authenticated_by_custom_auth = True
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(
+                ["catalog"],
+                guardrail,
+                [server],
+                raw_headers={"authorization": "Bearer entra.jwt.token"},
+                user_api_key_auth=admitted,
+            )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == ["entra.jwt.token"]
+
+    @pytest.mark.asyncio
+    async def test_custom_auth_admitted_virtual_key_bearer_is_still_challenged(self):
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        admitted = UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1")
+        admitted.authenticated_by_custom_auth = True
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(
+                    ["catalog"],
+                    guardrail,
+                    [server],
+                    raw_headers={"authorization": "Bearer sk-litellm-virtual-key"},
+                    user_api_key_auth=admitted,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        assert 'error="invalid_token"' in ((exc.value.headers or {}).get("WWW-Authenticate") or "")
+        assert guardrail.preflight_calls == []
+
+    @pytest.mark.asyncio
+    async def test_built_in_oauth2_admitted_bearer_is_pre_flighted_not_challenged(self):
+        """The built-in OAuth2 admission records the caller's token as ``api_key`` without the custom-auth
+        marker; that token is still the sign-in subject, so connect pre-flights it instead of challenging."""
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(
+                ["catalog"],
+                guardrail,
+                [server],
+                raw_headers={"authorization": "Bearer entra.jwt.token"},
+                user_api_key_auth=UserAPIKeyAuth(api_key="entra.jwt.token", user_id="u-1"),
+            )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == ["entra.jwt.token"]
+
+    @pytest.mark.asyncio
+    async def test_rejected_subject_on_an_open_session_is_left_to_the_tool_call_hook(self):
+        """Only the connect pre-flights the subject. On an open session the gate must not exchange at all, so
+        the tool-call hook runs the one exchange and answers a rejection inside the JSON-RPC envelope with its
+        guardrail Logs row, as base did."""
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Rejected
+
+        async def _open_session() -> bool:
+            return False
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub",
+            preflight_result=Rejected("the Entra OBO exchange was rejected (AADSTS5002723)"),
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(["catalog"], guardrail, [server], connecting=_open_session)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == []
+
+    @pytest.mark.asyncio
+    async def test_rejected_subject_challenges_at_connect(self):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Rejected
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub",
+            preflight_result=Rejected("the Entra OBO exchange was rejected (AADSTS70002)"),
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(["catalog"], guardrail, [server])
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        authenticate: Final = (exc.value.headers or {}).get("WWW-Authenticate") or ""
+        assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/catalog"' in authenticate
+        assert 'error="invalid_token"' in authenticate
+        assert guardrail.preflight_calls == ["entra.jwt.token"]
+
+    @pytest.mark.asyncio
+    async def test_unavailable_fail_closed_answers_503(self):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub",
+            preflight_result=Unavailable("the Entra token endpoint could not be reached", fail_open=False),
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(["catalog"], guardrail, [server])
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 503
+        assert exc.value.detail == "the Entra token endpoint could not be reached"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rpc_method", "session_id", "reaches"),
+        [
+            ("initialize", None, None),
+            ("tools/call", "open-session-1", "stateful"),
+            ("tools/call", None, "stateless"),
+        ],
+        ids=["connect_503", "open_session_tools_call", "stateless_tools_call"],
+    )
+    async def test_fail_closed_outage_is_the_connects_503_only_on_initialize(self, rpc_method, session_id, reaches):
+        """Only the ``initialize`` POST turns a fail-closed provider outage into the connect's 503. Every other
+        JSON-RPC POST on the gated route must reach the session manager with its body intact and without a gate
+        exchange, so the tools/call hook runs the one exchange, answers the outage inside the result envelope and
+        writes the guardrail Logs row, as base did."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub",
+            preflight_result=Unavailable("Entra rejected the gateway's own Agent 365 credentials", fail_open=False),
+        )
+        body = json.dumps({"jsonrpc": "2.0", "id": 7, "method": rpc_method, "params": {}}).encode()
+        session_headers = [(b"mcp-session-id", session_id.encode())] if session_id else []
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/catalog",
+            "headers": [(b"content-type", b"application/json"), (b"authorization", b"Bearer entra.jwt.token")]
+            + session_headers,
+        }
+        receive = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+        send = AsyncMock()
+        delivered: dict[str, bytes] = {}  # mutable-ok: records which manager saw the replayed body
+
+        def _recorder(manager: str):
+            async def handle(_scope, replayed_receive, _send):
+                delivered[manager] = (await replayed_receive())["body"]
+
+            return handle
+
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch.object(
+                    server_module,
+                    "extract_mcp_auth_context",
+                    AsyncMock(
+                        return_value=(
+                            UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                            None,
+                            ["catalog"],
+                            None,
+                            None,
+                            {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
+                        )
+                    ),
+                ),
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+                patch.object(server_module, "_SESSION_MANAGERS_INITIALIZED", True),
+                patch.object(server_module.session_manager_stateful, "handle_request", _recorder("stateful")),
+                patch.object(server_module.session_manager_stateless, "handle_request", _recorder("stateless")),
+                patch.object(
+                    server_module.session_manager_stateful,
+                    "_server_instances",
+                    {session_id: MagicMock()} if session_id else {},
+                ),
+            ):
+                if reaches is None:
+                    with pytest.raises(HTTPException) as exc:
+                        await server_module.handle_streamable_http_mcp(scope, receive, send)
+                    assert exc.value.status_code == 503
+                    assert exc.value.detail == "Entra rejected the gateway's own Agent 365 credentials"
+                else:
+                    await server_module.handle_streamable_http_mcp(scope, receive, send)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+            if session_id:
+                server_module._remove_stateful_session_tracking(session_id)
+
+        assert guardrail.preflight_calls == (["entra.jwt.token"] if reaches is None else [])
+        assert delivered == ({} if reaches is None else {reaches: body})
+        send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_multi_server_connect_never_awaits_the_preflight(self):
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(["catalog", "other"], guardrail, [server])
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == []

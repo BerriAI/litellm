@@ -7,7 +7,9 @@ the I/O edge that maps any transport/HTTP failure to None and parses a JSON body
 from unittest.mock import patch
 
 import pytest
+from pydantic import SecretStr
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials import Error, Ok, ServerSpec
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
     _post_exchange_endpoint,
     build_token_exchanger,
@@ -17,24 +19,26 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
     SubjectTokenRejected,
     TokenExchangeClientError,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import TokenExchangeConfig
 
 _HTTP_CLIENT = "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
 
 
-def _client_raising_4xx(body: object):
-    """An httpx client whose POST returns a 4xx whose ``raise_for_status`` raises an HTTPStatusError
-    carrying ``body`` as its JSON, so the RFC 6749 error-code classification can be driven."""
+def _client_raising_status(status: int, body: object):
+    """An httpx client whose POST returns ``status`` whose ``raise_for_status`` raises an
+    HTTPStatusError carrying ``body`` as its JSON, so the RFC 6749 error-code classification can be
+    driven."""
     import httpx
 
     request = httpx.Request("POST", "https://idp/token")
-    response = httpx.Response(400, json=body, request=request)
+    response = httpx.Response(status, json=body, request=request)
 
     class _Resp:
         def raise_for_status(self) -> None:
             raise httpx.HTTPStatusError("bad request", request=request, response=response)
 
     class _Client:
-        async def post(self, url, headers, data):
+        async def post(self, url, headers, data, timeout=None):
             return _Resp()
 
     return _Client()
@@ -47,6 +51,25 @@ def test_build_token_exchanger_returns_an_exchanger():
 def test_build_gives_each_caller_an_independent_cache():
     # Separate builds must not share a cache, so one egress instance cannot serve another's tokens.
     assert build_token_exchanger() is not build_token_exchanger()
+
+
+@pytest.mark.asyncio
+async def test_build_token_exchanger_drives_the_injected_http_edge():
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    async def post(url: str, form: dict[str, str], client_auth_headers: dict[str, str]) -> dict[str, object] | None:
+        seen.append((url, form))
+        return {"access_token": "x", "expires_in": 60}
+
+    config = TokenExchangeConfig(
+        token_exchange_endpoint="https://idp/token", client_id="cid", client_secret=SecretStr("csec")
+    )
+    server = ServerSpec(server_id="srv", resource="https://up.example.com", config=config)
+    result = await build_token_exchanger(post=post).exchange("jwt", server, config)
+    assert isinstance(result, Ok)
+    assert result.ok.access_token == "x"
+    assert [url for url, _ in seen] == ["https://idp/token"]
+    assert seen[0][1]["subject_token"] == "jwt"
 
 
 @pytest.mark.asyncio
@@ -66,7 +89,7 @@ async def test_post_parses_json_body_on_success():
             return {"access_token": "x", "expires_in": 60}
 
     class _Client:
-        async def post(self, url, headers, data):
+        async def post(self, url, headers, data, timeout=None):
             return _Resp()
 
     with patch(_HTTP_CLIENT, return_value=_Client()):
@@ -80,7 +103,35 @@ async def test_post_parses_json_body_on_success():
 )
 async def test_post_maps_gateway_fault_4xx_to_client_error(code):
     # RFC 6749 5.2 gateway-fault codes must raise TokenExchangeClientError (-> 500), not the caller 401.
-    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx({"error": code})):
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(400, {"error": code})):
+        with pytest.raises(TokenExchangeClientError):
+            await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("aadsts_code", [5002723, "5002710"], ids=["invalid_jwt", "no_kid_as_string"])
+async def test_post_maps_invalid_client_with_an_aadsts_50027xx_code_to_subject_rejected(aadsts_code):
+    # Entra reports a malformed or unverifiable caller assertion as invalid_client with an AADSTS50027xx
+    # sub-code (the same top-level error it uses for a bad gateway secret); that one is the caller's 401.
+    body = {
+        "error": "invalid_client",
+        "error_description": f"AADSTS{aadsts_code}: Invalid JWT token.",
+        "error_codes": [aadsts_code],
+    }
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(401, body)):
+        with pytest.raises(SubjectTokenRejected):
+            await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_codes",
+    [[7000215], [5002723.0], "5002723", None],
+    ids=["bad_secret_code", "float_code", "codes_not_a_list", "no_codes"],
+)
+async def test_post_keeps_invalid_client_without_an_assertion_code_as_client_error(error_codes):
+    body = {"error": "invalid_client", **({} if error_codes is None else {"error_codes": error_codes})}
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(401, body)):
         with pytest.raises(TokenExchangeClientError):
             await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
 
@@ -93,7 +144,7 @@ async def test_post_maps_gateway_fault_4xx_to_client_error(code):
 )
 async def test_post_maps_subject_fault_4xx_to_subject_rejected(body):
     # A subject-fault code (or an unparseable/absent error) is the caller's problem -> SubjectTokenRejected (401).
-    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx(body)):
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(400, body)):
         with pytest.raises(SubjectTokenRejected):
             await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
 
@@ -110,7 +161,7 @@ async def test_post_returns_none_on_non_object_json(payload):
             return payload
 
     class _Client:
-        async def post(self, url, headers, data):
+        async def post(self, url, headers, data, timeout=None):
             return _Resp()
 
     with patch(_HTTP_CLIENT, return_value=_Client()):
@@ -128,7 +179,7 @@ async def test_post_threads_step_up_error_and_claims_into_subject_rejected():
         "error_description": "AADSTS50079: the user must enroll MFA",
         "claims": claims,
     }
-    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx(body)):
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(400, body)):
         with pytest.raises(SubjectTokenRejected) as exc_info:
             await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
     assert exc_info.value.claims == claims
@@ -137,7 +188,7 @@ async def test_post_threads_step_up_error_and_claims_into_subject_rejected():
 
 @pytest.mark.asyncio
 async def test_post_subject_rejection_without_claims_carries_none_claims():
-    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx({"error": "invalid_grant"})):
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(400, {"error": "invalid_grant"})):
         with pytest.raises(SubjectTokenRejected) as exc_info:
             await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
     assert exc_info.value.claims is None
@@ -148,6 +199,26 @@ async def test_post_gateway_fault_still_wins_when_claims_are_present():
     # A gateway-fault code stays a 500-class TokenExchangeClientError even if the body carries
     # claims; the caller cannot fix invalid_client by stepping up.
     body = {"error": "invalid_client", "claims": '{"access_token":{}}'}
-    with patch(_HTTP_CLIENT, return_value=_client_raising_4xx(body)):
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(400, body)):
         with pytest.raises(TokenExchangeClientError):
             await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
+
+
+_CONFIG = TokenExchangeConfig(
+    token_exchange_endpoint="https://idp.example.com/token",
+    client_id="cid",
+    client_secret=SecretStr("csec"),
+    scopes=("s1",),
+)
+_SERVER = ServerSpec(server_id="srv", resource="https://up.example.com", config=_CONFIG)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [408, 429])
+async def test_exchange_maps_throttled_or_timed_out_4xx_to_upstream_unavailable(status):
+    # 408/429 are the IdP shedding load, not the caller presenting a bad subject: the exchange must
+    # surface upstream_unavailable (503-class, retryable) and never tell the caller to sign in again.
+    with patch(_HTTP_CLIENT, return_value=_client_raising_status(status, {"error": "temporarily_unavailable"})):
+        result = await OboTokenExchanger(_post_exchange_endpoint).exchange("caller-jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"

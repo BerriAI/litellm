@@ -1,6 +1,8 @@
 import base64
 import hashlib
+import json
 import secrets
+import socket
 import time
 import uuid
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
+from integration._support.wire import Reply, Request, wire_server
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -201,6 +204,105 @@ def test_token_exchange_without_a_subject_token_is_rejected_before_any_upstream_
         assert tool_calls(peer.drain()) == ()
         assert auth.token_requests() == ()
         _assert_subject_token_challenge(as_subject, alias)
+
+
+@pytest.mark.parametrize("status", (429, 408), ids=("throttled", "timed-out"))
+def test_a_throttled_token_exchange_is_an_outage_not_a_sign_in_challenge(gateway: Gateway, status: int) -> None:
+    def shedding_idp(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/token", request
+        return Reply(status=status, body=json.dumps({"error": "temporarily_unavailable"}).encode())
+
+    with mcp_peer() as peer, wire_server(shedding_idp) as idp, gateway.scenario() as scenario:
+        alias: Final = "te" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2_token_exchange",
+            token_exchange_endpoint=idp.url + "/token",
+            credentials={"client_id": "te-client", "client_secret": "te-secret"},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(
+            gateway, key, "server_mcp", alias, headers={"Authorization": "Bearer subject-" + uuid.uuid4().hex}
+        )
+        peer.drain()
+        response: Final = caller.rpc("tools/call", {"name": f"{alias}-add", "arguments": ADD})
+        assert response.status_code == 503, (response.status_code, response.text, dict(response.headers))
+        assert "www-authenticate" not in response.headers, dict(response.headers)
+        assert len(idp.drain()) == 1
+        assert tool_calls(peer.drain()) == ()
+
+
+def test_a_malformed_caller_assertion_is_a_sign_in_challenge_not_an_outage(gateway: Gateway) -> None:
+    def entra_like_idp(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/token", request
+        body: Final = {"error": "invalid_client", "error_codes": [5002723], "error_description": "Invalid JWT token"}
+        return Reply(status=401, body=json.dumps(body).encode())
+
+    with mcp_peer() as peer, wire_server(entra_like_idp) as idp, gateway.scenario() as scenario:
+        alias: Final = "te" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2_token_exchange",
+            token_exchange_endpoint=idp.url + "/token",
+            credentials={"client_id": "te-client", "client_secret": "te-secret"},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(
+            gateway,
+            key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJ3cm9uZyJ9.c2ln"},
+        )
+        peer.drain()
+        response: Final = caller.rpc("tools/call", {"name": f"{alias}-add", "arguments": ADD})
+        assert response.status_code == 401, (response.status_code, response.text, dict(response.headers))
+        challenge: Final = response.headers["www-authenticate"]
+        origin: Final = str(gateway.client.base_url).rstrip("/")
+        assert f'resource_metadata="{origin}/.well-known/oauth-protected-resource/{alias}/mcp"' in challenge, challenge
+        assert 'error="invalid_token"' in challenge, challenge
+        assert len(idp.drain()) == 1
+        assert tool_calls(peer.drain()) == ()
+
+
+def test_a_refused_token_exchange_answers_before_the_request_body_arrives(gateway: Gateway) -> None:
+    """The exchange preflight runs on the headers alone, so a client whose body is still in flight gets the
+    challenge at once instead of the gateway waiting for bytes it will never use."""
+
+    def entra_like_idp(request: Request) -> Reply:
+        body: Final = {"error": "invalid_client", "error_codes": [5002723], "error_description": "Invalid JWT token"}
+        return Reply(status=401, body=json.dumps(body).encode())
+
+    with mcp_peer() as peer, wire_server(entra_like_idp) as idp, gateway.scenario() as scenario:
+        alias: Final = "te" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2_token_exchange",
+            token_exchange_endpoint=idp.url + "/token",
+            credentials={"client_id": "te-client", "client_secret": "te-secret"},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        origin: Final = urlsplit(str(gateway.client.base_url))
+        head: Final = (
+            f"POST /mcp/{alias} HTTP/1.1\r\nHost: {origin.netloc}\r\nx-litellm-api-key: {key}\r\n"
+            "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJ3cm9uZyJ9.c2ln\r\n"
+            "Accept: application/json, text/event-stream\r\nContent-Type: application/json\r\n"
+            "Content-Length: 4096\r\n\r\n"
+        )
+        started: Final = time.monotonic()
+        with socket.create_connection((origin.hostname or "127.0.0.1", origin.port or 80), timeout=10) as raw:
+            raw.sendall(head.encode())
+            status_line: Final = raw.recv(4096).split(b"\r\n", 1)[0]
+        assert status_line == b"HTTP/1.1 401 Unauthorized", status_line
+        assert time.monotonic() - started < 5
+        assert len(idp.drain()) == 1
+        assert tool_calls(peer.drain()) == ()
 
 
 def _assert_subject_token_challenge(response: httpx.Response, alias: str) -> None:

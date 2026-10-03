@@ -13,6 +13,7 @@ import json
 import math
 import os
 import re
+import secrets
 import time
 from collections.abc import (
     AsyncIterator,
@@ -169,6 +170,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     openapi_tool_name,
     parse_admin_env_vars,
+    server_answers_to_name,
     strip_known_server_prefix,
     validate_mcp_server_name,
 )
@@ -1161,6 +1163,10 @@ LITELLM_VIRTUAL_KEY_PREFIX: Final = "sk-"
 
 def _raw_header_value(raw_headers: Mapping[str, str] | None, name: str) -> str | None:
     return next((v for k, v in (raw_headers or {}).items() if isinstance(k, str) and k.lower() == name), None)
+
+
+def _is_master_key(bearer: str, master_key: str | None) -> bool:
+    return bool(master_key) and secrets.compare_digest(bearer.encode(), (master_key or "").encode())
 
 
 def _has_explicit_litellm_admission_header(raw_headers: Mapping[str, str] | None) -> bool:
@@ -3897,6 +3903,31 @@ class MCPServerManager:
             return None
         return bearer
 
+    @staticmethod
+    def _caller_sign_in_subject_token(
+        oauth2_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
+    ) -> str | None:
+        """The ``Bearer`` credential a caller sign-in provider validates. An admission that consumed
+        ``Authorization`` (custom auth, built-in OAuth2, JWT) did so on the caller's own IdP token, so that token
+        is the subject; any other scheme, a LiteLLM key (virtual or master) and a bearer repeating
+        ``x-litellm-api-key`` are withheld."""
+        from litellm.proxy.proxy_server import master_key  # noqa: PLC0415  # circular import
+
+        authorization: Final = (oauth2_headers or {}).get("Authorization") or _raw_header_value(
+            raw_headers, "authorization"
+        )
+        scheme_and_credential: Final = (authorization or "").split(None, 1)
+        if len(scheme_and_credential) != 2 or scheme_and_credential[0].lower() != "bearer":
+            return None
+        bearer: Final = scheme_and_credential[1]
+        if bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX) or _is_master_key(bearer, master_key):
+            return None
+        admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
+        if admission_header and strip_auth_scheme(admission_header, "Bearer") == bearer:
+            return None
+        return bearer
+
     def _obo_subject_token(
         self,
         server: MCPServer,
@@ -4109,6 +4140,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None = None,
+        resource_metadata: str | None = None,
     ) -> None:
         """Mint an exchange-backed server's upstream credential at the transport edge.
 
@@ -4140,13 +4172,24 @@ class MCPServerManager:
                 if subject_token is not None:
                     return
             case _:
+                from litellm.proxy._experimental.mcp_server.caller_sign_in import (  # noqa: PLC0415  # lazy: provider discovery pulls the guardrail registry
+                    caller_sign_in_for,
+                )
+
+                sign_in_subject: Final = self._caller_sign_in_subject_token(oauth2_headers, raw_headers)
+                if sign_in_subject is None and caller_sign_in_for(server, user_api_key_auth) is not None:
+                    raise_token_exchange_challenge(
+                        server, root_path=get_request_root_path(), resource_metadata=resource_metadata
+                    )
                 return
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
         spec: Final = to_server_spec_fail_closed(resolved_server)
         if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
         if subject_token is None and isinstance(spec.config, TokenExchangeConfig):
-            raise_token_exchange_challenge(resolved_server, root_path=get_request_root_path())
+            raise_token_exchange_challenge(
+                resolved_server, root_path=get_request_root_path(), resource_metadata=resource_metadata
+            )
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
@@ -4156,6 +4199,7 @@ class MCPServerManager:
                         resolved_server,
                         root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
+                        resource_metadata=resource_metadata,
                     )
                 raise_public(err)
 
@@ -5747,13 +5791,11 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
-        # Extract incoming Bearer token from raw request headers so
-        # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
-        normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
-        incoming_bearer_token: str | None = None
-        auth_hdr: Final = normalized_raw.get("authorization", "")
-        if auth_hdr.lower().startswith("bearer "):
-            incoming_bearer_token = auth_hdr[len("bearer ") :]
+        inbound_authorization: Final = _raw_header_value(raw_headers, "authorization") or ""
+        incoming_bearer_token: Final = (
+            inbound_authorization[len("bearer ") :] if inbound_authorization.lower().startswith("bearer ") else None
+        )
+        incoming_subject_token: Final = self._caller_sign_in_subject_token(None, raw_headers)
 
         pre_hook_kwargs: Final = {
             "guardrail_context": guardrail_context,
@@ -5769,6 +5811,7 @@ class MCPServerManager:
             ),
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
             "incoming_bearer_token": incoming_bearer_token,
+            "incoming_subject_token": incoming_subject_token,
             "headers": logging_safe_mcp_headers(raw_headers),
             "tool_description": tool.description if tool is not None else None,
             "tool_input_schema": tool.input_schema if tool is not None else None,
@@ -6980,6 +7023,70 @@ class MCPServerManager:
                     return None
                 return server
         return None
+
+    def get_mcp_server_answering_to(
+        self, name: str, client_ip: str | None = None, *, among: Sequence[MCPServer] | None = None
+    ) -> MCPServer | None:
+        """The one server a ``/mcp/{name}`` segment denotes, shared by the connect preflight, the scoped
+        router, and RFC 9728 discovery so all three name the same server: the exact ``get_mcp_server_by_name``
+        priority first, then the exact ``server_id``, then the name priority case-insensitively, then any prefix
+        form routing accepts. A name that denotes a server hidden from ``client_ip`` resolves to ``None`` at the
+        pass that found it: it never falls through to a looser pass that could name another server. ``among``
+        runs the same passes over those servers alone instead of the registry, which is how the scoped router
+        picks the caller's granted server answering to ``name``."""
+        if among is not None:
+            return self._server_among_answering_to(name, tuple(among), client_ip)
+        exact: Final = self.get_mcp_server_by_name(name)
+        if exact is not None:
+            return exact if self._is_server_accessible_from_ip(exact, client_ip) else None
+        by_id: Final = self.get_mcp_server_by_id(name)
+        if by_id is not None:
+            return by_id if self._is_server_accessible_from_ip(by_id, client_ip) else None
+        requested: Final = name.lower()
+        servers: Final = tuple(self.get_registry().values())
+        identifiers: Final[tuple[Callable[[MCPServer], str | None], ...]] = (
+            lambda server: server.alias,
+            lambda server: server.server_name,
+            lambda server: server.name,
+        )
+        for identifier in identifiers:
+            if (found := next((s for s in servers if (identifier(s) or "").lower() == requested), None)) is not None:
+                return found if self._is_server_accessible_from_ip(found, client_ip) else None
+        return next(
+            (
+                server
+                for server in self.get_filtered_registry(client_ip).values()
+                if server_answers_to_name(server, name)
+            ),
+            None,
+        )
+
+    def _server_among_answering_to(
+        self, name: str, servers: Sequence[MCPServer], client_ip: str | None
+    ) -> MCPServer | None:
+        """``get_mcp_server_answering_to`` over ``servers`` instead of the registry: the same passes in the
+        same order, with a server hidden from ``client_ip`` resolving to ``None`` at the pass that found it."""
+        requested: Final = name.lower()
+        passes: Final[tuple[Callable[[MCPServer], bool], ...]] = (
+            lambda server: server.alias == name,
+            lambda server: server.server_name == name,
+            lambda server: server.name == name,
+            lambda server: server.server_id == name,
+            lambda server: (server.alias or "").lower() == requested,
+            lambda server: (server.server_name or "").lower() == requested,
+            lambda server: (server.name or "").lower() == requested,
+        )
+        for matches in passes:
+            if (found := next((server for server in servers if matches(server)), None)) is not None:
+                return found if self._is_server_accessible_from_ip(found, client_ip) else None
+        return next(
+            (
+                server
+                for server in servers
+                if self._is_server_accessible_from_ip(server, client_ip) and server_answers_to_name(server, name)
+            ),
+            None,
+        )
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """

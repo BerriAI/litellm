@@ -7,6 +7,7 @@ from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import HTTPException
@@ -390,6 +391,84 @@ def trust_xff():
         return_value=True,
     ):
         yield
+
+
+def _registered_gateway_oauth2_server():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server: Final = MCPServer(
+        server_id="oid-7f3a",
+        name="gwx",
+        server_name="gwx",
+        alias="gwx",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="gw-client",
+        client_secret="gw-secret",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+        scopes=["read"],
+    )
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+    return server
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["GWX", "oid-7f3a"], ids=["alias_case", "server_id"])
+async def test_authorization_server_doc_for_a_moved_lookup_matches_the_exact_name_doc(lookup):
+    """A case variant or server id now resolves like the exact name, so its AS metadata is the
+    exact-name doc with the requested spelling in the issuer and endpoint paths."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        oauth_authorization_server_mcp_standard,
+    )
+
+    _registered_gateway_oauth2_server()
+    request: Final = _mock_callback_request("http://litellm.example.com/")
+
+    exact: Final = await oauth_authorization_server_mcp_standard(request=request, mcp_server_name="gwx")
+    moved: Final = await oauth_authorization_server_mcp_standard(request=request, mcp_server_name=lookup)
+
+    assert exact["issuer"] == "http://litellm.example.com/mcp/gwx"
+    assert moved == {
+        key: value.replace("/gwx", f"/{lookup}") if isinstance(value, str) else value for key, value in exact.items()
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["GWX", "oid-7f3a"], ids=["alias_case", "server_id"])
+async def test_authorize_relay_for_a_moved_lookup_redirects_like_the_exact_name(lookup):
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize
+
+    _registered_gateway_oauth2_server()
+    request: Final = _mock_callback_request("http://litellm.example.com/")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper", return_value="sealed"
+    ):
+        exact: Final = await authorize(
+            request=request, mcp_server_name="gwx", redirect_uri="http://127.0.0.1:60108/callback", state="s1"
+        )
+        moved: Final = await authorize(
+            request=request, mcp_server_name=lookup, redirect_uri="http://127.0.0.1:60108/callback", state="s1"
+        )
+
+    exact_target: Final = urlparse(exact.headers["location"])
+    moved_target: Final = urlparse(moved.headers["location"])
+    exact_query: Final = parse_qs(exact_target.query)
+    moved_query: Final = parse_qs(moved_target.query)
+    assert exact.status_code == 307
+    assert exact_target._replace(query="") == urlparse("https://provider.com/oauth/authorize")
+    assert exact_query["client_id"] == ["gw-client"]
+    assert len(exact_query.pop("state")) == 1 and len(moved_query.pop("state")) == 1
+    assert (moved.status_code, moved_target._replace(query=""), moved_query) == (
+        exact.status_code,
+        exact_target._replace(query=""),
+        exact_query,
+    )
 
 
 @pytest.mark.asyncio
@@ -3642,8 +3721,8 @@ async def test_authorize_resolves_server_by_id_when_name_lookup_fails():
 
     assert response.status_code == 307
     assert "https://provider.com/oauth/authorize" in response.headers["location"]
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -3679,8 +3758,8 @@ async def test_token_endpoint_resolves_server_by_id_when_name_lookup_fails():
         )
 
     assert json.loads(result.body)["access_token"] == "token"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -3711,8 +3790,8 @@ async def test_register_client_resolves_server_by_id_when_name_lookup_fails():
         result = await discoverable_endpoints.register_client(request=request, mcp_server_name=server.server_id)
 
     assert json.loads(result.body)["client_id"] == "registered-client"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -3739,8 +3818,58 @@ async def test_protected_resource_metadata_resolves_server_by_id_when_name_looku
 
     assert result["authorization_servers"] == ["https://llm.example.com/mcp"]
     assert result["resource"] == f"https://llm.example.com/mcp/{server.server_id}"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
+
+
+@pytest.mark.asyncio
+async def test_protected_resource_metadata_resolves_the_connected_case_variant():
+    """The challenge points clients at the segment they connected with (``/mcp/CATALOG``), so the PRM
+    route must resolve that same segment through the answering-to fallback."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="catalog-server-id-001",
+        name="catalog",
+        alias="catalog",
+        server_name="catalog",
+        url="https://catalog.test/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        mcp_info={"server_name": "catalog"},
+    )
+    sign_in: Final = CallerSignIn(
+        issuers=("https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",),
+        scopes=("api://22222222-2222-2222-2222-222222222222/access_as_user",),
+    )
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None),  # test-quality-ok: resolver seam
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=None),  # test-quality-ok: resolver seam
+        patch.object(
+            global_mcp_server_manager, "get_filtered_registry", return_value={server.server_id: server}
+        ),  # test-quality-ok: resolver seam
+        patch.object(discoverable_endpoints, "caller_sign_in_for", return_value=sign_in),  # test-quality-ok: provider seam
+    ):
+        result = await discoverable_endpoints._build_oauth_protected_resource_response(
+            request=request,
+            mcp_server_name="CATALOG",
+            use_standard_pattern=True,
+        )
+
+    assert result["authorization_servers"] == (
+        "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",
+    )
+    assert result["resource"] == "https://llm.example.com/mcp/CATALOG"
 
 
 def test_authorization_server_metadata_resolves_server_by_id_when_name_lookup_fails():
@@ -3765,8 +3894,8 @@ def test_authorization_server_metadata_resolves_server_by_id_when_name_lookup_fa
 
     assert result["scopes_supported"] == server.scopes
     assert result["issuer"] == f"https://llm.example.com/{server.server_id}"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -7288,7 +7417,7 @@ async def test_token_exchange_persists_for_oauth2():
 # -------------------------------------------------------------------
 
 _OBO_RESOURCE = "https://litellm.example.com/mcp/obo_mcp"
-_PATCH_ISSUERS = "litellm.proxy._experimental.mcp_server.discoverable_endpoints._jwt_auth_issuers"
+_PATCH_ISSUERS = "litellm.proxy._experimental.mcp_server.caller_sign_in.jwt_auth_issuers"
 
 
 def _obo_server(scopes=None):
@@ -7307,48 +7436,48 @@ def _obo_server(scopes=None):
     )
 
 
-def test_obo_protected_resource_response_names_jwt_issuers():
+def test_caller_sign_in_protected_resource_response_names_jwt_issuers():
     """An OBO server's PRM points authorization_servers at the configured JWT issuers (the IdP that
     mints and validates the subject token), with the gateway resource echoed back."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
 
     with patch(_PATCH_ISSUERS, return_value=["https://idp.example.com"]):
-        response = _obo_protected_resource_response(_obo_server(scopes=["read"]), _OBO_RESOURCE)
+        response = _caller_sign_in_protected_resource_response(_obo_server(scopes=["read"]), _OBO_RESOURCE)
     assert response == {
-        "authorization_servers": ["https://idp.example.com"],
+        "authorization_servers": ("https://idp.example.com",),
         "resource": _OBO_RESOURCE,
-        "scopes_supported": ["read"],
+        "scopes_supported": ("read",),
     }
 
 
-def test_obo_protected_resource_response_scopes_default_empty():
-    """A scopeless OBO server reports scopes_supported as [] rather than None."""
+def test_caller_sign_in_protected_resource_response_scopes_default_empty():
+    """A scopeless OBO server reports scopes_supported as an empty array rather than None."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
 
     with patch(_PATCH_ISSUERS, return_value=["https://idp.example.com"]):
-        response = _obo_protected_resource_response(_obo_server(scopes=None), _OBO_RESOURCE)
-    assert response["scopes_supported"] == []
+        response = _caller_sign_in_protected_resource_response(_obo_server(scopes=None), _OBO_RESOURCE)
+    assert response["scopes_supported"] == ()
 
 
-def test_obo_protected_resource_response_falls_back_when_no_issuer():
+def test_caller_sign_in_protected_resource_response_falls_back_when_no_issuer():
     """With no JWT issuer configured, the OBO branch returns None so the caller falls back to the
     gateway-default PRM (discovery still works, it just can't name the IdP)."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
 
     with patch(_PATCH_ISSUERS, return_value=[]):
-        assert _obo_protected_resource_response(_obo_server(), _OBO_RESOURCE) is None
+        assert _caller_sign_in_protected_resource_response(_obo_server(), _OBO_RESOURCE) is None
 
 
-def test_obo_protected_resource_response_ignores_non_obo_server():
+def test_caller_sign_in_protected_resource_response_ignores_non_obo_server():
     """Non-OBO servers are not handled by this branch (returns None -> gateway default)."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
     from litellm.proxy._types import MCPTransport
     from litellm.types.mcp import MCPAuth
@@ -7360,7 +7489,7 @@ def test_obo_protected_resource_response_ignores_non_obo_server():
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
     )
-    assert _obo_protected_resource_response(oauth2_server, _OBO_RESOURCE) is None
+    assert _caller_sign_in_protected_resource_response(oauth2_server, _OBO_RESOURCE) is None
 
 
 @pytest.mark.asyncio
@@ -7390,7 +7519,7 @@ async def test_build_oauth_protected_resource_response_obo_end_to_end():
                 mcp_server_name="obo_mcp",
                 use_standard_pattern=True,
             )
-        assert response["authorization_servers"] == ["https://idp.example.com"]
+        assert response["authorization_servers"] == ("https://idp.example.com",)
         assert response["resource"] == "https://litellm.example.com/mcp/obo_mcp"
     finally:
         global_mcp_server_manager.registry.clear()
