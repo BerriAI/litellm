@@ -4607,6 +4607,7 @@ def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
         )
 
 
+
 _WEATHER_TOOL: Final = {
     "type": "function",
     "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
@@ -4614,39 +4615,92 @@ _WEATHER_TOOL: Final = {
 
 
 @pytest.mark.parametrize(
-    "extra_body",
+    "extra_body,expected_effort",
     [
-        pytest.param({"reasoning_effort": "low"}, id="reasoning_effort"),
-        pytest.param({"reasoning": {"effort": "high"}}, id="reasoning-object"),
+        pytest.param({"reasoning_effort": "low"}, "low", id="reasoning_effort"),
+        pytest.param({"reasoning": {"effort": "high"}}, "high", id="reasoning-object"),
     ],
 )
 @pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5"])
-@patch("litellm.completion_extras.responses_api_bridge.completion")
-def test_gpt_5_4_and_5_5_tools_with_extra_body_effort_route_to_responses(
-    mock_responses_completion: MagicMock, model: str, extra_body: dict[str, object]
+def test_completion_bridges_function_tools_with_extra_body_effort_to_responses(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    extra_body: dict[str, object],
+    expected_effort: str,
 ) -> None:
-    mock_responses_completion.return_value = MagicMock()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
 
-    litellm.completion(
-        model=model,
-        messages=[{"role": "user", "content": "ok"}],
+    response: Final = litellm.completion(
+        model=f"openai/{model}",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
         tools=[_WEATHER_TOOL],
         extra_body=extra_body,
         api_key="fake-key",
     )
 
-    assert mock_responses_completion.called is True
+    assert responses_route.call_count == 1
+    assert json.loads(responses_route.calls[0].request.content)["reasoning"]["effort"] == expected_effort
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
-@patch("litellm.completion_extras.responses_api_bridge.completion")
-def test_gpt_5_5_tools_with_extra_body_effort_none_stays_chat(mock_responses_completion: MagicMock) -> None:
+def test_completion_routes_on_extra_body_effort_over_top_level_effort(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
+    )
+
     litellm.completion(
-        model="gpt-5.5",
-        messages=[{"role": "user", "content": "ok"}],
+        model="openai/gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[_WEATHER_TOOL],
+        reasoning_effort="none",
+        extra_body={"reasoning_effort": "low"},
+        api_key="fake-key",
+    )
+
+    assert responses_route.call_count == 1
+    assert json.loads(responses_route.calls[0].request.content)["reasoning"]["effort"] == "low"
+
+
+def test_completion_keeps_function_tools_with_extra_body_effort_none_on_chat(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, openai_api_response: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chat_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json=openai_api_response
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
         tools=[_WEATHER_TOOL],
         extra_body={"reasoning_effort": "none"},
         api_key="fake-key",
-        mock_response="hi",
     )
 
-    assert mock_responses_completion.called is False
+    assert chat_route.call_count == 1
+    assert json.loads(chat_route.calls[0].request.content)["reasoning_effort"] == "none"
+
+
+def test_completion_keeps_extra_body_effort_with_summary_on_chat_without_function_tools(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, openai_api_response: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chat_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").respond(
+        json=openai_api_response
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.1",
+        messages=[{"role": "user", "content": "hi"}],
+        extra_body={"reasoning_effort": "low", "reasoningSummary": "auto"},
+        api_key="fake-key",
+    )
+
+    assert chat_route.call_count == 1

@@ -1089,6 +1089,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
+    extra_body_reasoning_effort: str | Mapping[str, object] | None = None,
 ) -> tuple[dict, str]:
     model_info: dict[str, object] = {}
 
@@ -1150,10 +1151,15 @@ def responses_api_bridge_check(
         )
         for tool in (tools or ())
     )
-    if isinstance(reasoning_effort, dict):
-        reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
+    wire_reasoning_effort: Final = (
+        extra_body_reasoning_effort if extra_body_reasoning_effort is not None else reasoning_effort
+    )
+    if isinstance(wire_reasoning_effort, dict):
+        reasoning_active = (
+            wire_reasoning_effort.get("effort") != "none" or wire_reasoning_effort.get("summary") is not None
+        )
     else:
-        reasoning_active = reasoning_effort != "none"
+        reasoning_active = wire_reasoning_effort != "none"
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
     # by Azure OpenAI through the azure provider. Resolve the effective OpenAI base arg>global>env>default
@@ -1171,12 +1177,12 @@ def responses_api_bridge_check(
         has_function_tool
         and reasoning_active
         and (
-            foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
+            foundry_chat_rejects_function_tools_while_reasoning(model, wire_reasoning_effort)
             if on_foundry_openai_endpoint
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
                 and (
-                    reasoning_effort is not None
+                    wire_reasoning_effort is not None
                     or (on_constraint_enforcing_endpoint and OpenAIGPT5Config.is_model_gpt_5_6_plus_model(model))
                 )
             )
@@ -5779,15 +5785,12 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=(
-                    reasoning_effort
-                    if reasoning_effort is not None
-                    else peek_extra_body_reasoning_effort(
-                        cast(Mapping[str, object], optional_params)  # cast-ok: optional_params is untyped
-                    )
-                ),
+                reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                extra_body_reasoning_effort=peek_extra_body_reasoning_effort(
+                    cast(Mapping[str, object], optional_params)  # cast-ok: optional_params is untyped
+                ),
             )
 
         # Use base_model (the true underlying model) for Azure model-type
