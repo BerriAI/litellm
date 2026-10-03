@@ -24,6 +24,23 @@ _billing_time: Final[ContextVar[datetime | None]] = ContextVar("billing_time", d
 _post_response: Final[ContextVar[bool]] = ContextVar("post_response", default=False)
 
 
+_emulated_file_search: Final[ContextVar[bool]] = ContextVar("emulated_file_search", default=False)
+
+
+@contextmanager
+def emulated_file_search_phase() -> Generator[None]:
+    """Nested calls of emulated file_search, whose answer keeps only its own tool calls."""
+    token: Final = _emulated_file_search.set(True)
+    try:
+        yield
+    finally:
+        _emulated_file_search.reset(token)
+
+
+def in_emulated_file_search() -> bool:
+    return _emulated_file_search.get()
+
+
 @contextmanager
 def post_response_phase() -> Generator[None]:
     """Work the caller no longer waits for (success callbacks, response-cache writes), including tasks it spawns."""
