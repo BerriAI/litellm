@@ -23,6 +23,7 @@ from litellm.proxy.lens.state import (
     claim_job,
     current_job,
     merge_finding,
+    next_scan_start,
     queue_job,
     renew_budget,
 )
@@ -199,7 +200,7 @@ def test_a_scan_after_a_long_outage_never_reaches_past_the_lookback_window() -> 
 
 def test_run_now_with_an_exact_window_scans_that_window_and_is_marked_manual() -> None:
     window: Final = (NOW - timedelta(hours=5), NOW - timedelta(hours=3))
-    job: Final = queue_job(lens(), NOW, "manual", window=window).jobs[0]
+    job: Final = queue_job(lens(), NOW, "manual", window=window, trigger="manual").jobs[0]
     assert (job.start, job.end) == window
     assert job.trigger == "manual"
 
@@ -324,3 +325,14 @@ def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check
     separate: Final = merge_finding(reviewed, other, 2, NOW)
     assert separate.id != legacy_id
     assert separate.status == "open" and separate.reason == ""
+
+
+def test_only_successful_scheduled_scans_move_the_next_scan_forward() -> None:
+    previous: Final = lens().model_copy(update={"last_scan_at": NOW - timedelta(hours=3)})
+    scheduled: Final = queue_job(previous, NOW, "scheduled").jobs[0]
+    manual: Final = queue_job(
+        previous, NOW, "manual", window=(NOW - timedelta(hours=2), NOW - timedelta(hours=1)), trigger="manual"
+    ).jobs[0]
+    assert next_scan_start(previous, scheduled, failed=False) == scheduled.end
+    assert next_scan_start(previous, scheduled, failed=True) == previous.last_scan_at
+    assert next_scan_start(previous, manual, failed=False) == previous.last_scan_at
