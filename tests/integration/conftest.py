@@ -133,6 +133,8 @@ def shared_provider_server() -> Iterator[SharedProvider]:
         pytest.fail("the shared fake provider needs tests to run one at a time; this group runs under pytest-xdist")
     with shared_provider() as server:
         yield server
+        late: Final = server.received()
+        assert late == (), f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
 
 
 @pytest.fixture
