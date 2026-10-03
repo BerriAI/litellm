@@ -42,6 +42,7 @@ from litellm.caching.redis_batch import (
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -4986,10 +4987,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
+        if is_batch_line_item_event(kwargs):
+            return
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )
@@ -5102,7 +5105,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             completion_tokens,
         )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """
         On failure: decrement max_parallel_requests and refund the upfront
         TPM reservation only against the scopes the reservation actually
@@ -5111,6 +5114,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         whose partial usage was recovered settles the reservation at that
         usage instead of refunding it.
         """
+        if is_batch_line_item_event(kwargs):
+            return
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )

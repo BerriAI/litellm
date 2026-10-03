@@ -1185,19 +1185,24 @@ class TestRetrieveBatchCostPassesModelIdentity:
 
         captured: dict[str, object] = {}
 
-        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
 
-        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
+        async def fake_handle_completed_batch(
+            **kwargs: object,
+        ) -> tuple[BatchCostUsageResult, BatchResultFiles]:
             captured.update(kwargs)
-            return BatchCostUsageResult(
-                cost=1.25,
-                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
-                models=["m"],
-                successful_requests=1,
-                failed_requests=0,
+            return (
+                BatchCostUsageResult(
+                    cost=1.25,
+                    usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                    models=["m"],
+                    successful_requests=1,
+                    failed_requests=0,
+                ),
+                BatchResultFiles(output=None, error=None),
             )
 
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", fake_handle_completed_batch)
+        monkeypatch.setattr(logging_module, "_handle_completed_batch_with_files", fake_handle_completed_batch)
 
         obj = LitellmLogging(
             model="bedrock/global.anthropic.claude-sonnet-4-6",
@@ -1280,7 +1285,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
         handle_completed_batch = AsyncMock()
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "_handle_completed_batch_with_files", handle_completed_batch)
         batch = self._batch(status, output_file_id)
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
@@ -1290,20 +1295,23 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
 
     @pytest.mark.asyncio
     async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
-        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
         from litellm.litellm_core_utils import litellm_logging as logging_module
         from litellm.types.utils import Usage
 
         handle_completed_batch = AsyncMock(
-            return_value=BatchCostUsageResult(
-                cost=8e-06,
-                usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
-                models=["gpt-5.6-luna"],
-                successful_requests=2,
-                failed_requests=0,
+            return_value=(
+                BatchCostUsageResult(
+                    cost=8e-06,
+                    usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
+                    models=["gpt-5.6-luna"],
+                    successful_requests=2,
+                    failed_requests=0,
+                ),
+                BatchResultFiles(output=None, error=None),
             )
         )
-        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "_handle_completed_batch_with_files", handle_completed_batch)
         batch = self._batch("completed", "file-out")
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
@@ -9153,3 +9161,163 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+class TestRetrieveBatchReusesFetchedResultFiles:
+    """The aggregate path and log_batch_line_items must share one fetch of each
+    result file: output and error are fetched once total (not once each per
+    consumer), and forwarded bytes keep line-item logging off the wire."""
+
+    @staticmethod
+    def _batch_file_bytes() -> dict[str, bytes]:
+        input_jsonl = json.dumps(
+            {
+                "custom_id": "a",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            }
+        ).encode()
+        output_jsonl = json.dumps(
+            {
+                "custom_id": "a",
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "id": "chatcmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "hi back"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    },
+                },
+            }
+        ).encode()
+        error_jsonl = json.dumps({"custom_id": "b", "error": {"message": "rejected"}}).encode()
+        return {"file-in": input_jsonl, "file-out": output_jsonl, "file-err": error_jsonl}
+
+    @staticmethod
+    def _logging_obj() -> LitellmLogging:
+        obj = LitellmLogging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-reuse",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "openai"
+        obj.update_environment_variables(
+            litellm_params={"metadata": {}},
+            optional_params={},
+            custom_llm_provider="openai",
+        )
+        return obj
+
+    @staticmethod
+    def _batch():
+        from litellm.types.utils import LiteLLMBatch
+
+        return LiteLLMBatch(
+            id="batch_reuse_fetched_files",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="completed",
+            output_file_id="file-out",
+            error_file_id="file-err",
+        )
+
+    @pytest.mark.asyncio
+    async def test_compute_path_fetches_each_result_file_once(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
+        file_bytes = self._batch_file_bytes()
+
+        async def fake_afile_content(**kwargs):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(content=file_bytes[kwargs["file_id"]])
+
+        file_mock = AsyncMock(side_effect=fake_afile_content)
+        monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+        monkeypatch.setattr("litellm.files.main.afile_content", file_mock)
+        monkeypatch.setattr("litellm.cost_calculator.batch_cost_calculator", lambda **kw: (0.01, 0.02))
+
+        await self._logging_obj()._async_success_handler_body(
+            result=self._batch(), start_time=None, end_time=None
+        )
+
+        fetched = sorted(call.kwargs["file_id"] for call in file_mock.await_args_list)
+        assert fetched == ["file-err", "file-in", "file-out"], (
+            "each result file must be fetched exactly once across aggregate costing and line-item logging"
+        )
+
+    @pytest.mark.asyncio
+    async def test_explicit_kwargs_path_forwards_result_files(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
+        from litellm.types.utils import Usage
+
+        file_bytes = self._batch_file_bytes()
+
+        async def fake_afile_content(**kwargs):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(content=file_bytes[kwargs["file_id"]])
+
+        file_mock = AsyncMock(side_effect=fake_afile_content)
+        monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+        monkeypatch.setattr("litellm.files.main.afile_content", file_mock)
+
+        await self._logging_obj().async_success_handler(
+            result=self._batch(),
+            batch_cost=1.5,
+            batch_usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            batch_models=["gpt-4o"],
+            batch_successful_requests=1,
+            batch_failed_requests=1,
+            batch_output_file_content=file_bytes["file-out"],
+            batch_error_file_content=file_bytes["file-err"],
+        )
+
+        assert file_mock.await_count == 1
+        assert file_mock.await_args.kwargs["file_id"] == "file-in", (
+            "forwarded output/error bytes must leave only the input file to fetch"
+        )
+
+    @pytest.mark.asyncio
+    async def test_line_item_logging_failure_leaves_aggregate_result_intact(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
+        from litellm.types.utils import Usage
+
+        monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+        monkeypatch.setattr(
+            "litellm.batches.batch_line_item_logging.log_batch_line_items",
+            AsyncMock(side_effect=RuntimeError("claim backend exploded")),
+        )
+
+        batch = self._batch()
+        await self._logging_obj().async_success_handler(
+            result=batch,
+            batch_cost=1.5,
+            batch_usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            batch_models=["gpt-4o"],
+            batch_successful_requests=1,
+            batch_failed_requests=1,
+        )
+
+        assert batch._hidden_params["response_cost"] == 1.5
+        assert batch.usage.total_tokens == 15

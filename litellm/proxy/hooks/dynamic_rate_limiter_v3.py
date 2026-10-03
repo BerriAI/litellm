@@ -5,7 +5,7 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 import os
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from fastapi import HTTPException
 
@@ -14,6 +14,7 @@ from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
@@ -685,7 +686,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """
         Update token usage for priority-based rate limiting after successful API calls.
 
@@ -693,6 +694,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         - model_saturation_check: Model-wide token tracking
         - priority_model: Priority-specific token tracking
         """
+        if is_batch_line_item_event(kwargs):
+            return
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )
