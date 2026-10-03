@@ -297,7 +297,7 @@ pub struct QueryHelp {
     attributes: Vec<AttributeCatalog>,
     relationships: &'static [Relationship],
     #[cfg_attr(feature = "schema", schemars(with = "Vec<Example>"))]
-    examples: [Example; 9],
+    examples: [Example; 12],
     #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     gotchas: [String; 13],
     guide: String,

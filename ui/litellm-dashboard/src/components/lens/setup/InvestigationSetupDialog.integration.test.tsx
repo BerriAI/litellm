@@ -133,18 +133,18 @@ describe("Lens setup", () => {
     await user.click(screen.getByRole("button", { name: /Add your own/ }));
     await user.click(screen.getByRole("button", { name: "Remove check 3" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
     expect(screen.getByText("1 matching run")).toBeInTheDocument();
     expect(screen.getByText("Research report")).toBeInTheDocument();
     expect(screen.getByText(/2026-09-30/)).toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" })).not.toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Run investigation" }));
+    await user.click(screen.getByRole("button", { name: "Run and monitor" }));
     const expected = {
       name: "Research follow-up",
       service: "",
       agent_name: "",
       filters: [{ key: "swarm", value: "research" }],
-      enabled: false,
+      enabled: true,
       sample_size: null,
       model: "analysis",
       monthly_budget: 100,
@@ -323,11 +323,11 @@ it.each(["new", "duplicate"] as const)("blocks a %s investigation until its mode
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(await screen.findByText("1 matching run")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: mode === "new" ? "Run and monitor" : "Run investigation" })).toBeDisabled();
   expect(save).not.toHaveBeenCalled();
 });
 
-it("shows optional budget and repeat controls only under advanced options and saves their values", async () => {
+it("keeps a duplicated investigation's schedule off and saves the interval once switched on", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
   renderWithProviders(
@@ -343,15 +343,37 @@ it("shows optional budget and repeat controls only under advanced options and sa
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
+  expect(screen.getByRole("checkbox", { name: "Keep watching for new traces" })).not.toBeChecked();
   await user.click(screen.getByText("Advanced options"));
-  expect(screen.getByRole("checkbox", { name: "Repeat this investigation" })).not.toBeChecked();
   fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" }), { target: { value: "8" } });
-  await user.click(screen.getByRole("checkbox", { name: "Repeat this investigation" }));
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Repeat every" }), { target: { value: "120" } });
+  await user.click(screen.getByRole("checkbox", { name: "Keep watching for new traces" }));
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "120" } });
   await user.click(screen.getByRole("button", { name: "Run and monitor" }));
   expect(save).toHaveBeenCalledWith(
     expect.objectContaining({ enabled: true, interval_minutes: 120, monthly_budget: 8 }),
   );
+});
+
+it("watches new investigations every 15 minutes by default, outside advanced options", async () => {
+  const user = userEvent.setup();
+  const save = vi.fn().mockResolvedValue(undefined);
+  renderWithProviders(
+    <InvestigationSetupDialog
+      models={["analysis"]}
+      defaultModel="analysis"
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={save}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  const watching = await screen.findByRole("checkbox", { name: "Keep watching for new traces" });
+  expect(watching).toBeChecked();
+  expect(watching).toBeVisible();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "Run and monitor" }));
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, interval_minutes: 15 }));
 });
 
 it("does not silently analyze everything after individual selection is enabled", async () => {
@@ -510,8 +532,8 @@ describe("Watch for", () => {
     expect(tile("unhappy")).toHaveAttribute("aria-pressed", "false");
     expect(tile("looping")).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "Run investigation" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Run and monitor" }));
     const saved = (save.mock.calls[0][0] as Settings).checks.map((check) => check.id);
     expect(saved).toEqual(["watch_unsolved", "watch_blocked", "watch_looping"]);
   });
@@ -558,7 +580,7 @@ describe("Watch for", () => {
     );
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("button", { name: "Run investigation" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Run and monitor" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Back" }));
     for (const name of ["unsolved", "blocked", "unhappy"]) await user.click(tile(name));
     await user.click(screen.getByRole("button", { name: "Continue" }));
