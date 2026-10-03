@@ -190,7 +190,7 @@ async def _get_tag_list_scope(
     return {"api_key": {"in": scoped_api_keys}}
 
 
-async def _get_tag_daily_activity_api_key_filter(
+async def get_tag_daily_activity_api_key_filter(
     prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
     requested_api_key: str | None,
@@ -757,7 +757,7 @@ async def get_tag_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     tag_list: Final = tags.split(",") if tags else None
-    scoped_api_key_filter: Final = await _get_tag_daily_activity_api_key_filter(
+    scoped_api_key_filter: Final = await get_tag_daily_activity_api_key_filter(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
         requested_api_key=api_key,

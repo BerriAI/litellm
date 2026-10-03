@@ -15,7 +15,7 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         unsafe { std::env::set_var(name, value) };
-        let secret = EnvironmentSecrets::python_compatible()
+        let secret = EnvironmentSecrets::python_compatible(litellm_http::Client::plain_for_test())
             .resolve(&[name])
             .await
             .unwrap()
@@ -42,7 +42,7 @@ async fn dynamic_names_use_the_same_resolver_and_snapshots_never_do_fresh_lookup
             reads.fetch_add(1, Ordering::SeqCst);
             (name != "missing").then(|| name.to_owned())
         }),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     let snapshot = source.resolve(&["declared", "missing"]).await.unwrap();
     let name = format!("runtime-{}", "key");

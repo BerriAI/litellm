@@ -53,7 +53,7 @@ def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, o
     if not isinstance(stored_headers, Mapping):
         return None
     entra_owns_authorization: Final = _agent_authenticates_with_entra(agent_litellm_params)
-    return {  # mutable-ok: completion() and httpx take the request headers as a dict
+    return {
         name: value
         for name, value in stored_headers.items()
         if not (entra_owns_authorization and str(name).lower() == "authorization")

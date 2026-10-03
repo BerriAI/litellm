@@ -1,10 +1,8 @@
 use std::{collections::BTreeMap as Map, io::Read, path::Path};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_llms::base_llm::ocr::{
-    error::Error,
-    transformation::{OCR_INLINE_MAX_BYTES, OcrDocument},
-};
+use litellm_llms::base_llm::ocr::{error::Error, transformation::OCR_INLINE_MAX_BYTES};
+use litellm_llms_types::formats::ocr::OcrDocument;
 
 use crate::ocr::types::OcrDocumentInput;
 
@@ -110,6 +108,7 @@ mod tests {
     use std::collections::BTreeMap as Map;
 
     use litellm_llms::base_llm::ocr::document::InlineDocument;
+    use rstest::rstest;
 
     use super::*;
 
@@ -135,24 +134,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn file_name_mime_mapping_matches_python() {
-        for (name, expected) in [
-            ("document.pdf", "application/pdf"),
-            ("image.png", "image/png"),
-            ("photo.jpg", "image/jpeg"),
-            ("photo.jpeg", "image/jpeg"),
-            ("animation.gif", "image/gif"),
-            ("image.webp", "image/webp"),
-            ("scan.tiff", "image/tiff"),
-            ("scan.tif", "image/tiff"),
-            ("bitmap.bmp", "image/bmp"),
-            ("DOCUMENT.PDF", "application/pdf"),
-            ("IMAGE.PNG", "image/png"),
-            ("file.unknown-extension", "application/octet-stream"),
-        ] {
-            assert_eq!(mime_type_for_name(name), expected);
-        }
+    #[rstest]
+    #[case::pdf("document.pdf", "application/pdf")]
+    #[case::png("image.png", "image/png")]
+    #[case::jpg("photo.jpg", "image/jpeg")]
+    #[case::jpeg("photo.jpeg", "image/jpeg")]
+    #[case::gif("animation.gif", "image/gif")]
+    #[case::webp("image.webp", "image/webp")]
+    #[case::tiff("scan.tiff", "image/tiff")]
+    #[case::tif("scan.tif", "image/tiff")]
+    #[case::bmp("bitmap.bmp", "image/bmp")]
+    #[case::uppercase_pdf("DOCUMENT.PDF", "application/pdf")]
+    #[case::uppercase_png("IMAGE.PNG", "image/png")]
+    #[case::unknown("file.unknown-extension", "application/octet-stream")]
+    fn file_name_mime_mapping_matches_python(#[case] name: &str, #[case] expected: &str) {
+        assert_eq!(mime_type_for_name(name), expected);
     }
 
     #[test]

@@ -4,7 +4,8 @@ from typing import Final
 import pytest
 from pydantic import ValidationError
 
-from litellm.rust_bridge.responses.route_host import arguments, response
+import litellm
+from litellm.rust_bridge.responses.route_host import arguments, connection_defaults, response
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -55,3 +56,21 @@ def test_arguments_are_the_public_kwargs_view() -> None:
     )
 
     assert arguments(request) is kwargs
+
+
+@pytest.mark.parametrize(
+    ("global_key", "provider_key", "expected"),
+    (
+        ("global", "provider", "global"),
+        (None, "provider", "provider"),
+        ("", "provider", "provider"),
+        (None, None, None),
+    ),
+)
+def test_connection_defaults_preserve_openai_precedence(
+    monkeypatch: pytest.MonkeyPatch, global_key: str | None, provider_key: str | None, expected: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "api_key", global_key)
+    monkeypatch.setattr(litellm, "openai_key", provider_key)
+    monkeypatch.setattr(litellm, "api_base", "https://configured.invalid/v1")
+    assert connection_defaults("openai") == (expected, litellm.api_base)

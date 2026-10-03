@@ -3,6 +3,7 @@
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
@@ -29,7 +30,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config, excluded_db_systems_from
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -661,12 +662,7 @@ class OpenTelemetryV2(CustomLogger):
         if error_override is None and start_time is None and end_time is None and parent_otel_span is None:
             return None
         if error_override is not None and data.error is None:
-            data = ServiceSpanData(
-                service_name=data.service_name,
-                call_type=data.call_type,
-                error=SpanError(message=error_override),
-                event_metadata=data.event_metadata,
-            )
+            data = replace(data, error=SpanError(message=error_override))
         # Parent like every other span: ambient context first (so identity Baggage
         # rides along and the call nests under whatever request phase is active —
         # e.g. a DB lookup under the live ``auth`` span), falling back to the
@@ -902,10 +898,28 @@ def publish_global_otel_v2_provider(
     """
     global _published_v2_provider
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
-    attach_tenant_fan_out(logger.tracer_provider, *_v2_configs(in_memory_loggers, logger))
+    attach_tenant_fan_out(
+        logger.tracer_provider,
+        *_v2_configs(in_memory_loggers, logger),
+        excluded_db_systems=_excluded_db_systems(logger),
+    )
     set_global_provider(logger.tracer_provider)
     _published_v2_provider = logger.tracer_provider  # rebind-ok: startup records the one provider carrying the fan-out
     return logger
+
+
+def _excluded_db_systems(logger: "OpenTelemetryV2") -> frozenset[str]:
+    """The datastore services withheld from tenant destinations.
+
+    ``callback_settings.otel.excluded_services`` wins over the env var whichever
+    logger got published: with ``callbacks: [langfuse_otel, otel]`` the ``otel``
+    callback folds into the preset, whose config is env-only.
+    """
+    otel_settings: Final = (litellm.callback_settings or {}).get("otel")
+    configured: Final = otel_settings.get("excluded_services") if isinstance(otel_settings, dict) else None
+    if configured is None:
+        return logger.config.excluded_services
+    return excluded_db_systems_from(configured)
 
 
 def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:
@@ -967,7 +981,11 @@ def fan_out_provider() -> ApiTracerProvider:
         return published
     logger: Final = _registered_v2_logger()
     if logger is not None:
-        attach_tenant_fan_out(logger.tracer_provider, logger.config)
+        attach_tenant_fan_out(
+            logger.tracer_provider,
+            logger.config,
+            excluded_db_systems=_excluded_db_systems(logger),
+        )
         return logger.tracer_provider
     return get_tracer_provider()
 

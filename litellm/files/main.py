@@ -28,12 +28,15 @@ FileCreateProvider = Literal[
     "manus",
     "anthropic",
     "mistral",
+    "xai",
 ]
 FileRetrieveProvider = Literal[
-    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic", "mistral"
+    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic", "mistral", "xai"
 ]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "bedrock", "litellm_proxy", "manus", "anthropic", "mistral"]
-FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic", "mistral"]
+FileDeleteProvider = Literal[
+    "openai", "azure", "gemini", "bedrock", "litellm_proxy", "manus", "anthropic", "mistral", "xai"
+]
+FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic", "mistral", "xai"]
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
@@ -49,6 +52,8 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
+from litellm.llms.xai.batches.handler import XAIBatchesHandler
+from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileContentRequest,
@@ -103,6 +108,7 @@ openai_files_instance: Final = OpenAIFilesAPI()
 azure_files_instance: Final = AzureOpenAIFilesAPI()
 vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
+xai_batch_results_instance: Final = XAIBatchesHandler()
 #################################################
 
 
@@ -918,6 +924,15 @@ def file_content(
                 logging_obj=_file_content_logging_obj(kwargs, _is_async),
                 _is_async=_is_async,
                 client=client,
+            )
+
+        if custom_llm_provider == LlmProviders.XAI.value and is_xai_batch_results_id(file_id):
+            return xai_batch_results_instance.batch_results_content(
+                _is_async=_is_async,
+                batch_id=file_id,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
             )
 
         # Check if provider has a custom files config (e.g., Anthropic, Manus)

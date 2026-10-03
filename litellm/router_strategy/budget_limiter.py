@@ -421,7 +421,7 @@ class RouterBudgetLimiting(CustomLogger):
             increment_operations_to_flush: Final = tuple(self.redis_increment_operation_queue)
             if not increment_operations_to_flush:
                 return increment_operations_to_flush
-            self.redis_increment_operation_queue = []  # mutable-ok: emptied queue must stay appendable
+            self.redis_increment_operation_queue = []
             self._detached_increment_operations = increment_operations_to_flush
             return increment_operations_to_flush
 
@@ -478,9 +478,7 @@ class RouterBudgetLimiting(CustomLogger):
             "Pushing Redis Increment Pipeline for queue: %s",
             increment_operations_to_flush,
         )
-        increment_list: Final = list(  # mutable-ok: Redis pipeline contract requires a list
-            increment_operations_to_flush
-        )
+        increment_list: Final = list(increment_operations_to_flush)
         try:
             await redis_cache.async_increment_pipeline(increment_list=increment_list)
         except Exception as error:
@@ -502,12 +500,12 @@ class RouterBudgetLimiting(CustomLogger):
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
         model_id: Final[str] = str(standard_logging_payload.get("model_id", ""))
-        custom_llm_provider: Final[str] = kwargs.get("litellm_params", {}).get("custom_llm_provider", None)
-        if custom_llm_provider is None:
-            raise ValueError("custom_llm_provider is required")
+        custom_llm_provider: Final[str | None] = standard_logging_payload.get("custom_llm_provider")
 
-        budget_config: Final = self._get_budget_config_for_provider(custom_llm_provider)
-        if budget_config:
+        budget_config: Final = (
+            self._get_budget_config_for_provider(custom_llm_provider) if custom_llm_provider is not None else None
+        )
+        if custom_llm_provider is not None and budget_config is not None:
             # increment spend for provider
             spend_key: Final = f"provider_spend:{custom_llm_provider}:{budget_config.budget_duration}"
             start_time_key: Final = f"provider_budget_start_time:{custom_llm_provider}"

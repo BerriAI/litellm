@@ -38,6 +38,7 @@ def _run_shard(tmp_path: Path, test_path: str, workers: str) -> subprocess.Compl
             "PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}",
             "GITHUB_OUTPUT": str(tmp_path / "github_output"),
             "TEST_PATH": test_path,
+            "UNIT_FLAG": "",
             "WORKERS": workers,
         },
         capture_output=True,

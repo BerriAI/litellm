@@ -1,23 +1,55 @@
 import asyncio
+import base64
 import importlib
 import os
 from collections.abc import Coroutine, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
 import boto3
+import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
+HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
+    (
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "VIRTUAL_ENV",
+        "LITELLM_LOCAL_MODEL_COST_MAP",
+        "TIKTOKEN_CACHE_DIR",
+    )
+)
+HOST_ENVIRONMENT_ALLOWED_PREFIXES: Final = ("PYTEST_", "PYTHON", "COV_CORE_", "COVERAGE_")
+HOST_ONLY_ENVIRONMENT: Final = frozenset(
+    name
+    for name in os.environ
+    if name not in HOST_ENVIRONMENT_ALLOWLIST and not name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES)
+)
+
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
     image_handling as image_handling_module,
 )
+from litellm.llms.gemini.chat import transformation as gemini_chat_transformation_module  # noqa: E402  # same import-time dependency
 from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # same import-time dependency
     close_litellm_async_clients,
 )
@@ -89,6 +121,9 @@ RESTORED_GLOBALS: Final = (
 )
 MODULE_LEVEL_CLIENTS: Final = ("module_level_client", "module_level_aclient")
 SESSION_CLIENTS: Final = ("base_llm_aiohttp_handler", "httpx_client", "aclient", "client")
+ONE_PIXEL_PNG: Final = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
 
 
 def _allow_loopback_only() -> None:
@@ -147,6 +182,11 @@ def _flush_client_caches() -> None:
     _reset_aws_auth_caches()
 
 
+@pytest.fixture(autouse=True, scope="session")
+def bundled_tiktoken_cache() -> None:
+    importlib.import_module("litellm.litellm_core_utils.default_encoding")
+
+
 @pytest.fixture(scope="session")
 def isolated_aws_config_files(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     aws_dir: Final = tmp_path_factory.mktemp("aws-config")
@@ -161,6 +201,8 @@ def isolated_aws_config_files(tmp_path_factory: pytest.TempPathFactory) -> tuple
 def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> Iterator[None]:
     credentials, config = isolated_aws_config_files
     with pytest.MonkeyPatch.context() as environment:
+        for name in HOST_ONLY_ENVIRONMENT:
+            environment.delenv(name, raising=False)
         environment.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
         environment.setenv("AWS_CONFIG_FILE", str(config))
         environment.setenv("AWS_EC2_METADATA_DISABLED", "true")
@@ -234,6 +276,47 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    yield
+    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+    reload_beta_headers_config()
+
+
+@dataclass(slots=True)
+class AsyncOnlyImageFetch:
+    fetched: list[str] = field(default_factory=list)  # mutable-ok: tests assert on the URLs fetched, in order
+    base64_png: str = base64.b64encode(ONE_PIXEL_PNG).decode()
+    data_url: str = "data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode()
+
+
+@pytest.fixture
+def async_only_image_fetch(monkeypatch: pytest.MonkeyPatch) -> AsyncOnlyImageFetch:
+    fetch: Final = AsyncOnlyImageFetch()
+
+    def forbid_sync_fetch(client: object, url: str, **kwargs: object) -> httpx.Response:
+        raise litellm.ImageFetchError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve_png(client: object, url: str, **kwargs: object) -> httpx.Response:
+        fetch.fetched.append(url)
+        return httpx.Response(
+            200, content=ONE_PIXEL_PNG, headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
+
+    def forbid_sync_convert(url: str, *args: object, **kwargs: object) -> str:
+        if url.startswith(("http://", "https://")):
+            raise litellm.ImageFetchError(f"sync convert_url_to_base64 ran on the request path: {url}")
+        return url
+
+    monkeypatch.setattr(image_handling_module, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(image_handling_module, "async_safe_get", serve_png)
+    for module in (image_handling_module, prompt_factory_module, gemini_chat_transformation_module):
+        monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
+    return fetch
 
 
 @pytest.fixture
