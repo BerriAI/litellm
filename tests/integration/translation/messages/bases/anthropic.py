@@ -2,7 +2,7 @@ from typing import Final
 
 from integration.translation.case import TranslationTestCase
 
-CLAUDE_OPUS_5_5: Final = TranslationTestCase(
+CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
     litellm_request={
@@ -71,7 +71,7 @@ CLAUDE_OPUS_5_5: Final = TranslationTestCase(
     },
 )
 
-CLAUDE_SONNET_4_6: Final = TranslationTestCase(
+CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
     litellm_request={

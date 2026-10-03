@@ -5,7 +5,7 @@ import pytest
 from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
-from integration.translation.messages.bases.anthropic import CLAUDE_SONNET_4_6 as BASE
+from integration.translation.messages.bases.anthropic import CLAUDE_SONNET_4_6_TEST_CASE
 from integration.translation.runner import run
 
 SIGNATURE_1: Final = (
@@ -15,21 +15,21 @@ SIGNATURE_1: Final = (
     "1FW7qRmOMOKJKhbheeMpsTs7XvdvsiDQqgM4PAJt4cwgGAE="
 )
 
-THINKING_BUDGET: Final = replace(
-    BASE,
+CLAUDE_SONNET_4_6_THINKING_BUDGET_TEST_CASE: Final = replace(
+    CLAUDE_SONNET_4_6_TEST_CASE,
     scenario="thinking_budget",
     litellm_request={
-        **BASE.litellm_request,
+        **CLAUDE_SONNET_4_6_TEST_CASE.litellm_request,
         "max_tokens": 2048,
         "thinking": {"type": "enabled", "budget_tokens": 1024},
     },
     expected_provider_request={
-        **BASE.expected_provider_request,
+        **CLAUDE_SONNET_4_6_TEST_CASE.expected_provider_request,
         "max_tokens": 2048,
         "thinking": {"type": "enabled", "budget_tokens": 1024},
     },
     mock_provider_response={
-        **BASE.mock_provider_response,
+        **CLAUDE_SONNET_4_6_TEST_CASE.mock_provider_response,
         "id": "msg_011CffzUREgTzMm1dXRqP2LR",
         "content": [
             {"type": "thinking", "thinking": "Hello!", "signature": SIGNATURE_1},
@@ -47,7 +47,7 @@ THINKING_BUDGET: Final = replace(
         },
     },
     expected_litellm_response={
-        **BASE.expected_litellm_response,
+        **CLAUDE_SONNET_4_6_TEST_CASE.expected_litellm_response,
         "id": "msg_011CffzUREgTzMm1dXRqP2LR",
         "content": [
             {"type": "thinking", "thinking": "Hello!", "signature": SIGNATURE_1},
@@ -67,6 +67,6 @@ THINKING_BUDGET: Final = replace(
 )
 
 
-@pytest.mark.parametrize("case", [THINKING_BUDGET], ids=lambda case: case.id)
+@pytest.mark.parametrize("case", [CLAUDE_SONNET_4_6_THINKING_BUDGET_TEST_CASE], ids=lambda case: case.id)
 def test_messages_reasoning_anthropic(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
     run(case, gateway, provider)
