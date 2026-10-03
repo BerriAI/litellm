@@ -15,10 +15,14 @@ from fastapi import HTTPException
 from oauthlib.oauth2 import WebApplicationClient
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter
 
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.roi_calculator.settings import load_settings, load_stored_settings, save_settings
 from litellm.proxy.roi_calculator.sync_store import SyncStore
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROISettings, ROISyncStatus
 
 Provider: TypeAlias = Literal["github", "gitlab"]
@@ -214,13 +218,19 @@ class TokenGrant(BaseModel):
 
 
 async def _token(config: OAuthConfig, body: str, transport: httpx.AsyncBaseTransport | None) -> TokenGrant:
-    async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:
-        try:
-            response: Final = await client.post(
-                config.token_url, data=dict(parse_qsl(body)), headers={"Accept": "application/json"}
-            )
-        except httpx.RequestError:
-            raise HTTPException(502, "Could not reach the provider. Try connecting again.") from None
+    client: Final = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.ROICalculator,
+        params={"timeout": 30, "follow_redirects": False, "transport": transport},
+    ).client
+    try:
+        response: Final = await client.post(
+            config.token_url, data=dict(parse_qsl(body)), headers={"Accept": "application/json"}
+        )
+    except httpx.RequestError:
+        raise HTTPException(502, "Could not reach the provider. Try connecting again.") from None
+    finally:
+        if transport is not None:
+            await client.aclose()
     if response.status_code != 200:
         raise HTTPException(502, "The provider rejected the connection. Try connecting again.")
     try:
