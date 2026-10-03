@@ -7,7 +7,8 @@ const jevClassifierConfigFields = {
   instructions: z
     .string()
     .nullish()
-    .transform((value) => value ?? undefined),
+    .transform((value) => value ?? undefined)
+    .optional(),
   circuit_breaker_enabled: z.boolean().optional(),
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
 };

@@ -48,7 +48,7 @@ import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import GuardrailsSelect from "./GuardrailsSelect";
 import {
   type CallerEditAccess,

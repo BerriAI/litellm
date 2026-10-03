@@ -250,7 +250,7 @@ describe("fixed management operations", () => {
   it("provides strict JSON schemas for nullable and transformed tool arguments", async () => {
     const model = transport([completion()]);
     await runLiteAdmin(options(), model.client);
-    const tools = model.requests[0].tools!;
+    const tools = model.requests[0].tools!.filter((tool) => tool.type === "function");
     for (const tool of tools) expect(tool.function.strict).toBe(true);
     const createUser = tools.find((tool) => tool.function.name === "user_create")!;
     const expectedSchema = {
