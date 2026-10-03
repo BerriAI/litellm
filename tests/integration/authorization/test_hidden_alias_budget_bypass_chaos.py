@@ -107,6 +107,7 @@ def test_alias_flipped_to_a_free_group_during_a_burst_only_ever_serves_or_refuse
                 seen.put((marker, response.status_code))
             return frozenset(response.status_code for response in responses)
 
+        assert wave(rig.gateway) == frozenset({BUDGET_EXCEEDED})
         flip: Final = threading.Thread(target=install_aliases, args=(rig.gateway, {alias: hidden(rig.free)}))
         flip.start()
         eventually(lambda: wave(rig.gateway) | wave(rig.gateway), lambda found: found == frozenset({200}), seconds=60)
