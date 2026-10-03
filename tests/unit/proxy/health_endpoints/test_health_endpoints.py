@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
@@ -762,10 +762,23 @@ async def test_test_model_connection_without_mode_probes_mantle_claude_over_mess
 
 
 @pytest.mark.asyncio
-async def test_test_model_connection_without_mode_honors_stored_operator_mode():
+@pytest.mark.parametrize(
+    ("request_params", "expected_mode"),
+    [
+        ({"model": "bedrock_mantle/anthropic.claude-haiku-4-5"}, "chat"),
+        ({}, "chat"),
+        ({"model": "bedrock_mantle/anthropic.claude-sonnet-4-5"}, "anthropic_messages"),
+    ],
+    ids=["stored_model", "no_model", "overridden_model"],
+)
+async def test_test_model_connection_stored_operator_mode_follows_the_stored_model(
+    request_params: Mapping[str, str], expected_mode: str
+):
     """
     A mode the operator stored on the deployment is the probe's mode when the request
-    carries none, ahead of the provider-native rule.
+    carries none, ahead of the provider-native rule, but only while the request probes
+    the deployment's own model. A request that selects the deployment by id and swaps in
+    another model resolves the mode from that model instead.
     """
     deployment: Final = MappingProxyType(
         {**MANTLE_CLAUDE_DEPLOYMENT, "model_info": {"id": "mantle-claude-id", "mode": "chat"}}
@@ -774,12 +787,45 @@ async def test_test_model_connection_without_mode_honors_stored_operator_mode():
         await health_test_model_connection(
             request=MagicMock(),
             mode=None,
-            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5"},
+            litellm_params=dict(request_params),
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == expected_mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params_mode", [123, ["chat"], {"mode": "chat"}, False], ids=["int", "list", "dict", "bool"])
+async def test_test_model_connection_non_string_params_mode_is_a_bad_request(params_mode: object):
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode=None,
+                litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5", "mode": params_mode},
+                model_info={"id": "mantle-claude-id"},
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "litellm_params.mode must be a string" in exc_info.value.detail["error"]
+    ahealth_check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_string_params_mode_is_the_probe_mode():
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5", "mode": "chat"},
             model_info={"id": "mantle-claude-id"},
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
         )
 
     assert ahealth_check.call_args.kwargs["mode"] == "chat"
+    assert "mode" not in ahealth_check.call_args.kwargs["model_params"]
 
 
 @pytest.mark.asyncio
