@@ -5770,12 +5770,20 @@ class Router:
                 healthy_deployments=healthy_deployments,
                 all_deployments=all_deployments,
                 context_window_fallbacks=_request_fallback_list(
-                    kwargs, "context_window_fallbacks", self.context_window_fallbacks
+                    kwargs,
+                    "context_window_fallbacks",
+                    cast("list[object] | None", self.context_window_fallbacks),  # cast-ok: untyped router attribute
                 ),
                 content_policy_fallbacks=_request_fallback_list(
-                    kwargs, "content_policy_fallbacks", self.content_policy_fallbacks
+                    kwargs,
+                    "content_policy_fallbacks",
+                    cast("list[object] | None", self.content_policy_fallbacks),  # cast-ok: untyped router attribute
                 ),
-                regular_fallbacks=_request_fallback_list(kwargs, "fallbacks", self.fallbacks),
+                regular_fallbacks=_request_fallback_list(
+                    kwargs,
+                    "fallbacks",
+                    cast("list[object] | None", self.fallbacks),  # cast-ok: untyped router attribute
+                ),
             )
         except Exception:  # noqa: BLE001  # should_retry_this_error declines by raising the error it was given
             return False
