@@ -8,6 +8,7 @@ import re
 import sys
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
@@ -42,6 +43,39 @@ class TenantIdentity(BaseModel):
     team_id: str
     api_key: str
     user: str
+
+
+@dataclass(frozen=True, slots=True)
+class FixtureReplay:
+    name: str
+    export: JsonValue
+    offset_ms: int
+    namespace: str
+
+
+def fixture_replays(
+    directory: Path, now_ms: int, namespace: str, response_pattern: re.Pattern[str]
+) -> tuple[FixtureReplay, ...]:
+    exports: Final = tuple(
+        (path.stem, JSON.validate_json(path.read_bytes())) for path in sorted(directory.glob("*.json"))
+    )
+    query_latest: Final = max(
+        (max(timestamps(export)) for name, export in exports if name.startswith("query_")), default=0
+    )
+
+    def replay(name: str, export: JsonValue) -> FixtureReplay:
+        group: Final = "query" if name.startswith("query_") else name
+        latest_ns: Final = query_latest if group == "query" else max(timestamps(export))
+        offset_ms: Final = now_ms - latest_ns // 1_000_000 - 1000
+        capture_namespace: Final = f"{namespace}-{group}"
+        return FixtureReplay(
+            name=name,
+            export=rebase(export, offset_ms * 1_000_000, capture_namespace, response_pattern),
+            offset_ms=offset_ms,
+            namespace=capture_namespace,
+        )
+
+    return tuple(replay(name, export) for name, export in exports)
 
 
 def timestamps(value: JsonValue) -> Iterator[int]:
@@ -133,30 +167,23 @@ def postgres_row(row: SpendLogRecord) -> LiteLLM_SpendLogsCreateWithoutRelations
 
 
 async def seed() -> int:
-    exports: Final = tuple(
-        JSON.validate_json((TRACE_FIXTURES / name).read_bytes())
-        for name in ("deeplite_swarm.json", "deeplite_auth_error.json")
-    )
     spends: Final = SPEND_ROWS.validate_python(
         tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
     )
     namespace: Final = uuid4().hex
     response_pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
-    latest_ns: Final = max(max(timestamps(export)) for export in exports)
-    offset_ms: Final = time.time_ns() // 1_000_000 - latest_ns // 1_000_000 - 1000
-    rebased_exports: Final = tuple(
-        rebase(export, offset_ms * 1_000_000, namespace, response_pattern) for export in exports
-    )
-    rebased_spends: Final = rebase_spend(spends, offset_ms, namespace, response_pattern)
+    replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, namespace, response_pattern)
+    swarm: Final = next(replay for replay in replays if replay.name == "deeplite_swarm")
+    rebased_spends: Final = rebase_spend(spends, swarm.offset_ms, swarm.namespace, response_pattern)
     master_key: Final = os.environ["LITELLM_MASTER_KEY"]
     proxy_url: Final = os.environ.get("PROXY_BASE_URL", "http://127.0.0.1:4002")
     async with httpx.AsyncClient(
         base_url=proxy_url, headers={"Authorization": f"Bearer {master_key}"}, timeout=60
     ) as client:
-        for export in rebased_exports:
+        for replay in replays:
             (
                 await client.post(
-                    "/v1/traces", content=json.dumps(export), headers={"Content-Type": "application/json"}
+                    "/v1/traces", content=json.dumps(replay.export), headers={"Content-Type": "application/json"}
                 )
             ).raise_for_status()
         storage: Final = ClickHouseStorage(trace_storage_config({}))
@@ -182,6 +209,7 @@ async def seed() -> int:
             json.dumps(
                 {
                     "fixture": "deeplite_swarm",
+                    "trace_fixtures": tuple(replay.name for replay in replays),
                     "spend_rows": len(stamped_spends),
                     "synthetic_spend": True,
                     "summary": trace["summary"],

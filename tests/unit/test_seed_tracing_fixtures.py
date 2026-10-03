@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -13,16 +14,59 @@ from scripts.seed_tracing_fixtures import (
     SPEND_FIXTURE,
     SPEND_ROWS,
     TRACE_FIXTURES,
+    fixture_replays,
     postgres_row,
     rebase,
     rebase_spend,
+    seed_id,
     timestamps,
 )
 
 DATETIMES: Final = TypeAdapter(tuple[datetime, datetime])
+SPAN_IDENTITY: Final = TypeAdapter(tuple[str, str, str, int])
 JSON_FIELDS: Final[TypeAdapter[tuple[Json, Json, Json]]] = TypeAdapter(
     tuple[InstanceOf[Json], InstanceOf[Json], InstanceOf[Json]]
 )
+
+
+@pytest.mark.requires_rust_extension
+@pytest.mark.parametrize(
+    "path",
+    sorted(TRACE_FIXTURES.glob("*.json")),
+    ids=tuple(path.stem for path in sorted(TRACE_FIXTURES.glob("*.json"))),
+)
+def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
+    export: Final = JSON.validate_json(path.read_bytes())
+    now_ms: Final = max(timestamps(export)) // 1_000_000 + 86_400_000
+    replays: Final = fixture_replays(TRACE_FIXTURES, now_ms, "all-fixtures", re.compile(r"(?!)"))
+    replay: Final = next(item for item in replays if item.name == path.stem)
+    original: Final = span_rows(path.read_bytes(), "application/json")
+    replayed: Final = span_rows(json.dumps(replay.export).encode(), "application/json")
+    group: Final = tuple(item for item in replays if item.namespace == replay.namespace)
+
+    assert max(max(timestamps(item.export)) for item in group) // 1_000_000 == now_ms - 1000
+    assert len(frozenset(item.offset_ms for item in group)) == 1
+    assert tuple(timestamps(replay.export)) == tuple(
+        timestamp + replay.offset_ms * 1_000_000 for timestamp in timestamps(export)
+    )
+    for before, after in zip(original, replayed, strict=True):
+        trace_id, span_id, parent_id, timestamp = SPAN_IDENTITY.validate_python(
+            (before["TraceId"], before["SpanId"], before["ParentSpanId"], before["Timestamp"])
+        )
+        assert after["TraceId"] == seed_id(trace_id, replay.namespace, 32)
+        assert after["SpanId"] == seed_id(span_id, replay.namespace, 16)
+        assert after["ParentSpanId"] == seed_id(parent_id, replay.namespace, 16)
+        assert after["Timestamp"] == timestamp + replay.offset_ms * 1_000_000
+        assert (after["Duration"], after["InputTokens"], after["OutputTokens"], after["StatusCode"]) == (
+            before["Duration"],
+            before["InputTokens"],
+            before["OutputTokens"],
+            before["StatusCode"],
+        )
+    if path.stem.startswith("query_"):
+        assert all(item.namespace == replay.namespace for item in replays if item.name.startswith("query_"))
+    else:
+        assert all(item.namespace != replay.namespace for item in replays if item.name != path.stem)
 
 
 @pytest.mark.requires_rust_extension
@@ -62,10 +106,10 @@ def test_paired_fixture_joins_every_successful_llm_span_after_replay() -> None:
         tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
     )
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
-    rebased_spends: Final = rebase_spend(spends, 123, "paired-run", pattern)
-    spans: Final = span_rows(
-        json.dumps(rebase(export, 123_000_000, "paired-run", pattern)).encode(), "application/json"
-    )
+    replays: Final = fixture_replays(TRACE_FIXTURES, max(timestamps(export)) // 1_000_000 + 1123, "paired-run", pattern)
+    replay: Final = next(item for item in replays if item.name == "deeplite_swarm")
+    rebased_spends: Final = rebase_spend(spends, replay.offset_ms, replay.namespace, pattern)
+    spans: Final = span_rows(json.dumps(replay.export).encode(), "application/json")
     llm_spans: Final = tuple(span for span in spans if span["ObservationType"] == "llm")
     by_response: Final = {row["response_id"]: row for row in rebased_spends}
 
