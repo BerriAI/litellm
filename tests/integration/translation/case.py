@@ -12,12 +12,12 @@ class TranslationTestCase:
     scenario: str
     litellm_endpoint: str
     litellm_request: Mapping[str, JsonValue]
-    provider_endpoint: str
-    provider_headers: Mapping[str, str]
-    provider_request: Mapping[str, JsonValue]
-    provider_response: Mapping[str, JsonValue]
-    litellm_status_code: int = 200
-    litellm_response: Mapping[str, JsonValue]
+    expected_provider_endpoint: str
+    expected_provider_headers: Mapping[str, str]
+    expected_provider_request: Mapping[str, JsonValue]
+    mock_provider_response: Mapping[str, JsonValue]
+    expected_litellm_status_code: int = 200
+    expected_litellm_response: Mapping[str, JsonValue]
 
     @property
     def id(self) -> str:

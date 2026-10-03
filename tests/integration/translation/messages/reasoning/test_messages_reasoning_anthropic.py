@@ -23,13 +23,13 @@ THINKING_BUDGET: Final = replace(
         "max_tokens": 2048,
         "thinking": {"type": "enabled", "budget_tokens": 1024},
     },
-    provider_request={
-        **BASE.provider_request,
+    expected_provider_request={
+        **BASE.expected_provider_request,
         "max_tokens": 2048,
         "thinking": {"type": "enabled", "budget_tokens": 1024},
     },
-    provider_response={
-        **BASE.provider_response,
+    mock_provider_response={
+        **BASE.mock_provider_response,
         "id": "msg_011CffzUREgTzMm1dXRqP2LR",
         "content": [
             {"type": "thinking", "thinking": "Hello!", "signature": SIGNATURE_1},
@@ -46,8 +46,8 @@ THINKING_BUDGET: Final = replace(
             "inference_geo": "global",
         },
     },
-    litellm_response={
-        **BASE.litellm_response,
+    expected_litellm_response={
+        **BASE.expected_litellm_response,
         "id": "msg_011CffzUREgTzMm1dXRqP2LR",
         "content": [
             {"type": "thinking", "thinking": "Hello!", "signature": SIGNATURE_1},

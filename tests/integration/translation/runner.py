@@ -10,12 +10,12 @@ TRANSPORT_HEADERS: Final = frozenset({"host", "accept", "accept-encoding", "conn
 
 
 def run(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    provider.expect(Reply(body=json.dumps(case.provider_response).encode()))
+    provider.expect(Reply(body=json.dumps(case.mock_provider_response).encode()))
     response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
     received: Final = provider.received()
-    assert [(request.method, request.target) for request in received] == [("POST", case.provider_endpoint)]
+    assert [(request.method, request.target) for request in received] == [("POST", case.expected_provider_endpoint)]
     sent: Final = received[0]
-    assert {name: value for name, value in sent.headers.items() if name not in TRANSPORT_HEADERS} == dict(case.provider_headers)
-    assert json.loads(sent.body) == case.provider_request
-    assert response.status_code == case.litellm_status_code, response.text
-    assert response.json() == case.litellm_response
+    assert {name: value for name, value in sent.headers.items() if name not in TRANSPORT_HEADERS} == dict(case.expected_provider_headers)
+    assert json.loads(sent.body) == case.expected_provider_request
+    assert response.status_code == case.expected_litellm_status_code, response.text
+    assert response.json() == case.expected_litellm_response

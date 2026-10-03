@@ -12,20 +12,20 @@ CLAUDE_SONNET_4_6: Final = TranslationTestCase(
         "messages": [{"role": "user", "content": "Say hello."}],
         "cache": {"no-cache": True},
     },
-    provider_endpoint="/v1/messages",
-    provider_headers={
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
         "x-api-key": "synthetic-anthropic-key",
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     },
-    provider_request={
+    expected_provider_request={
         "model": "claude-sonnet-4-6",
         "max_tokens": 64,
         "stream": False,
         "system": "You are a terse assistant.",
         "messages": [{"role": "user", "content": "Say hello."}],
     },
-    provider_response={
+    mock_provider_response={
         "model": "claude-sonnet-4-6",
         "id": "msg_011CffzUNHaEfzVxCh5hskBG",
         "type": "message",
@@ -46,7 +46,7 @@ CLAUDE_SONNET_4_6: Final = TranslationTestCase(
         },
         "diagnostics": None,
     },
-    litellm_response={
+    expected_litellm_response={
         "model": "anthropic/claude-sonnet-4-6",
         "id": "msg_011CffzUNHaEfzVxCh5hskBG",
         "type": "message",
