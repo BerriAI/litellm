@@ -3,12 +3,34 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::Value;
 
-use super::{
-    CallEvidence, Extraction, ObservationType, RoleEvidence, SpanContext, SpanFacts, attr,
-    messages::{RawMessage, encode, langchain_result},
-    usage_tokens,
+use super::{Convention, Extraction, SpanFacts};
+use crate::{
+    Error,
+    normalize::{
+        CallEvidence, ObservationType, RoleEvidence, SpanContext, attr,
+        messages::{RawMessage, encode, langchain_result},
+        present, usage_tokens,
+    },
 };
-use crate::Error;
+
+/// LangSmith's OpenTelemetry exporter: spans carry `langsmith.span.kind`.
+pub(crate) struct LangSmith;
+
+const MIDDLEWARE_SUFFIXES: [&str; 6] = [
+    ".wrap_model_call",
+    ".wrap_tool_call",
+    ".before_agent",
+    ".after_agent",
+    ".before_model",
+    ".after_model",
+];
+
+/// LangChain agent middleware hooks, which run around the agent's steps rather than being one.
+pub(crate) fn is_langchain_middleware(name: &str) -> bool {
+    MIDDLEWARE_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+}
 
 enum MessageBatch {
     Flat(Vec<RawMessage>),
@@ -112,19 +134,7 @@ fn span_type(
         {
             ObservationType::Agent
         }
-        _ if [
-            ".wrap_model_call",
-            ".wrap_tool_call",
-            ".before_agent",
-            ".after_agent",
-            ".before_model",
-            ".after_model",
-        ]
-        .iter()
-        .any(|suffix| name.ends_with(suffix)) =>
-        {
-            ObservationType::Framework
-        }
+        _ if is_langchain_middleware(name) => ObservationType::Framework,
         _ => ObservationType::Chain,
     }
 }
@@ -210,35 +220,35 @@ fn span_io(kind: ObservationType, attributes: &BTreeMap<String, String>) -> Span
     }
 }
 
-pub(super) fn matches(context: &SpanContext<'_>) -> bool {
-    context.scope == "langsmith" || context.attributes.contains_key("langsmith.span.kind")
-}
+impl Convention for LangSmith {
+    fn matches(&self, context: &SpanContext<'_>) -> bool {
+        context.scope == "langsmith" || context.attributes.contains_key("langsmith.span.kind")
+    }
 
-pub(super) fn extract(context: &SpanContext<'_>) -> Result<Extraction, Error> {
-    let attributes = context.attributes;
-    let (input_tokens, output_tokens) = usage_tokens(attributes)?;
-    let observation_type = span_type(context.name, context.parent_span_id, attributes);
-    let io = span_io(observation_type, attributes);
-    let agent_name = attr(attributes, "langsmith.metadata.lc_agent_name");
-    let model = attr(attributes, "gen_ai.request.model");
-    Ok(Extraction {
-        facts: SpanFacts {
-            role: Some(RoleEvidence::Declared(observation_type)),
-            agent_name: (!agent_name.is_empty()).then(|| agent_name.to_owned()),
-            model: (!model.is_empty()).then(|| model.to_owned()),
-            input_tokens,
-            output_tokens,
-            input: io.input,
-            output: io.output,
-            calls: io.calls,
-            ..SpanFacts::default()
-        },
-        display_name: None,
-        consumed_attributes: ["gen_ai.prompt", "gen_ai.completion"]
-            .into_iter()
-            .filter(|key| attributes.contains_key(*key))
-            .collect(),
-    })
+    fn extract(&self, context: &SpanContext<'_>) -> Result<Extraction, Error> {
+        let attributes = context.attributes;
+        let (input_tokens, output_tokens) = usage_tokens(attributes)?;
+        let observation_type = span_type(context.name, context.parent_span_id, attributes);
+        let io = span_io(observation_type, attributes);
+        Ok(Extraction {
+            facts: SpanFacts {
+                role: Some(RoleEvidence::Declared(observation_type)),
+                agent_name: present(attributes, &["langsmith.metadata.lc_agent_name"]),
+                model: present(attributes, &["gen_ai.request.model"]),
+                input_tokens,
+                output_tokens,
+                input: io.input,
+                output: io.output,
+                calls: io.calls,
+                ..SpanFacts::default()
+            },
+            display_name: None,
+            consumed_attributes: ["gen_ai.prompt", "gen_ai.completion"]
+                .into_iter()
+                .filter(|key| attributes.contains_key(*key))
+                .collect(),
+        })
+    }
 }
 
 #[cfg(test)]

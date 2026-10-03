@@ -11,17 +11,14 @@ use std::{
 use crate::{Error, otlp::DecodedEvent};
 use serde::{Serialize, Serializer};
 
-mod claude_code;
-mod genai;
+mod convention;
 mod instrumentation;
-mod langsmith;
 mod messages;
 mod metadata;
-mod openinference;
 
-pub(crate) use claude_code::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
-pub(crate) use messages::{HIDDEN_BLOCK_TYPES, encode};
+pub(crate) use convention::claude_code::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE};
 use instrumentation::Instrumentation;
+pub(crate) use messages::{HIDDEN_BLOCK_TYPES, encode};
 pub use metadata::{AgentMetadata, AgentType, Integration};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, strum::EnumString)]
@@ -84,6 +81,16 @@ impl CallEvidence {
         Self::Complete(BTreeSet::from([key]))
     }
 
+    /// The same evidence with one more key: an id named outside the convention adds to what the
+    /// convention found, but says nothing about completeness.
+    fn with(self, key: CallKey) -> Self {
+        match self {
+            Self::Unknown => Self::complete(key),
+            Self::Partial(keys) => Self::Partial(keys.into_iter().chain([key]).collect()),
+            Self::Complete(keys) => Self::Complete(keys.into_iter().chain([key]).collect()),
+        }
+    }
+
     fn key_set(&self) -> Option<&BTreeSet<CallKey>> {
         match self {
             Self::Unknown => None,
@@ -117,29 +124,6 @@ pub(crate) struct SpanContext<'a> {
     pub events: &'a [DecodedEvent],
 }
 
-/// What a span records, read in its convention's format.
-#[derive(Debug, Default)]
-pub(crate) struct SpanFacts {
-    pub role: Option<RoleEvidence>,
-    pub agent_name: Option<String>,
-    pub model: Option<String>,
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    pub input: String,
-    pub output: String,
-    pub tool_call_id: Option<String>,
-    pub calls: CallEvidence,
-    /// Set when the latest user message is not simply read from `input`.
-    pub input_preview: Option<String>,
-}
-
-/// A convention's complete reading of a span, including which attributes it consumed.
-pub(crate) struct Extraction {
-    pub facts: SpanFacts,
-    pub display_name: Option<String>,
-    pub consumed_attributes: Vec<&'static str>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct NormalizedSpan {
     pub observation_type: ObservationType,
@@ -165,59 +149,6 @@ pub(crate) struct Normalization {
     pub consumed_attributes: Box<[&'static str]>,
 }
 
-/// An attribute payload together with the key it came from, so consumption follows extraction.
-pub(crate) struct AttributeText<'a> {
-    pub source: &'static str,
-    pub text: &'a str,
-}
-
-pub(crate) fn select_attribute<'a>(
-    attributes: &'a BTreeMap<String, String>,
-    keys: &[&'static str],
-) -> Option<AttributeText<'a>> {
-    keys.iter().copied().find_map(|source| {
-        attributes
-            .get(source)
-            .filter(|text| !text.is_empty())
-            .map(|text| AttributeText {
-                source,
-                text: text.as_str(),
-            })
-    })
-}
-
-/// The span formats spans are recorded in, in precedence order.
-#[derive(Clone, Copy)]
-enum Convention {
-    ClaudeCode,
-    LangSmith,
-    OpenInference,
-    GenAi,
-}
-
-impl Convention {
-    fn detect(context: &SpanContext<'_>) -> Self {
-        if context.scope == CLAUDE_CODE_SCOPE {
-            Self::ClaudeCode
-        } else if langsmith::matches(context) {
-            Self::LangSmith
-        } else if context.attributes.contains_key("openinference.span.kind") {
-            Self::OpenInference
-        } else {
-            Self::GenAi
-        }
-    }
-
-    fn extract(self, context: &SpanContext<'_>) -> Result<Extraction, Error> {
-        match self {
-            Self::ClaudeCode => claude_code::extract(context),
-            Self::LangSmith => langsmith::extract(context),
-            Self::OpenInference => openinference::extract(context),
-            Self::GenAi => genai::extract(context),
-        }
-    }
-}
-
 pub fn normalize(
     scope_name: &str,
     name: &str,
@@ -232,7 +163,7 @@ pub fn normalize(
         attributes,
         events,
     };
-    let extraction = Convention::detect(&context).extract(&context)?;
+    let extraction = convention::extract(&context)?;
     Ok(Instrumentation::detect(&context).interpret(
         &context,
         extraction,
@@ -240,17 +171,34 @@ pub fn normalize(
     ))
 }
 
-fn attr<'a>(attributes: &'a BTreeMap<String, String>, key: &str) -> &'a str {
-    attributes.get(key).map(String::as_str).unwrap_or_default()
+/// An attribute's text together with the key it came from, so consumption follows extraction.
+pub(crate) struct AttributeText<'a> {
+    pub source: &'static str,
+    pub text: &'a str,
 }
 
-fn first<'a>(attributes: &'a BTreeMap<String, String>, left: &str, right: &str) -> &'a str {
-    let value = attr(attributes, left);
-    if value.is_empty() {
-        attr(attributes, right)
-    } else {
-        value
-    }
+/// The first of `keys` that is recorded and not empty.
+fn select_attribute<'a>(
+    attributes: &'a BTreeMap<String, String>,
+    keys: &[&'static str],
+) -> Option<AttributeText<'a>> {
+    keys.iter().copied().find_map(|source| {
+        attributes
+            .get(source)
+            .filter(|text| !text.is_empty())
+            .map(|text| AttributeText {
+                source,
+                text: text.as_str(),
+            })
+    })
+}
+
+fn present(attributes: &BTreeMap<String, String>, keys: &[&'static str]) -> Option<String> {
+    select_attribute(attributes, keys).map(|attribute| attribute.text.to_owned())
+}
+
+fn attr<'a>(attributes: &'a BTreeMap<String, String>, key: &str) -> &'a str {
+    attributes.get(key).map(String::as_str).unwrap_or_default()
 }
 
 fn tokens(attributes: &BTreeMap<String, String>, key: &str) -> Result<u32, Error> {

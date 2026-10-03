@@ -5,9 +5,12 @@
 use serde_json::Value;
 
 use super::{
-    AgentMetadata, AgentType, CLAUDE_CODE_SCOPE, CallEvidence, CallKey, Extraction, Integration,
-    Normalization, NormalizedSpan, ObservationType, RoleEvidence, SpanContext, SpanFacts, attr,
-    claude_code, messages, select_attribute,
+    AgentMetadata, AgentType, CLAUDE_CODE_SCOPE, CallEvidence, CallKey, Integration, Normalization,
+    NormalizedSpan, ObservationType, RoleEvidence, SpanContext, attr,
+    convention::{
+        Extraction, SpanFacts, claude_code, genai::Operation, langsmith::is_langchain_middleware,
+    },
+    messages, present, select_attribute,
 };
 
 const OPENINFERENCE_PREFIX: &str = "openinference.instrumentation.";
@@ -65,97 +68,43 @@ impl Instrumentation {
         }
     }
 
-    fn adjust(&self, context: &SpanContext<'_>, extraction: &mut Extraction) {
-        let facts = &mut extraction.facts;
+    fn adjust(&self, context: &SpanContext<'_>, extraction: Extraction) -> Extraction {
         match self {
-            Self::ClaudeCode => {
-                // Started from a TRACEPARENT in the environment: an Agent SDK query span may
-                // already stand for this agent turn.
-                if attr(context.attributes, "parent.source") == "env"
-                    && facts.role == Some(RoleEvidence::Declared(ObservationType::Agent))
-                {
-                    facts.role = Some(RoleEvidence::WrapperCandidate(ObservationType::Agent));
-                }
-            }
+            Self::ClaudeCode => extraction.map_facts(|facts| claude_code_turn(context, facts)),
             Self::OpenInference(Integration::Langchain) => {
-                if !context.parent_span_id.is_empty() && is_langchain_middleware(context.name) {
-                    facts.role = Some(RoleEvidence::Declared(ObservationType::Framework));
-                }
-                // LangGraph state: `{"messages": [...]}`.
-                facts.input_preview = state_messages_preview(&facts.input, "messages");
+                extraction.map_facts(|facts| langchain(context, facts))
             }
             Self::OpenInference(Integration::LlamaIndex) => {
-                if context.name.ends_with(".run_agent_step") {
-                    if let Some(agent) = current_agent_name(attr(context.attributes, "input.value"))
-                    {
-                        facts.role = Some(RoleEvidence::Declared(ObservationType::Agent));
-                        facts.agent_name = Some(agent.to_owned());
-                    }
-                } else if context.name.ends_with("._prepare_chat_with_tools") {
-                    // Builds the request; the `achat` that follows sends it.
-                    facts.role = Some(RoleEvidence::Declared(ObservationType::Chain));
-                }
-                // A workflow run's arguments are engine state; the user message is not recorded.
-                if context.parent_span_id.is_empty() && has_key(&facts.input, "start_event") {
-                    facts.input_preview = Some(String::new());
-                }
+                extraction.map_facts(|facts| llama_index(context, facts))
             }
             Self::OpenInference(Integration::ClaudeAgentSdk) => {
-                // The subagent span is named after the `Agent` tool, not the subagent it runs.
-                if facts.agent_name.as_deref() == Some("Agent") {
-                    facts.role = Some(RoleEvidence::WrapperCandidate(ObservationType::Agent));
-                    facts.agent_name = Some(String::new());
-                }
+                extraction.map_facts(claude_agent_sdk)
             }
-            Self::OpenInference(Integration::GoogleAdk) => {
-                // `Runner.run_async` arguments: the user turn is `new_message`.
-                if let Some(preview) = state_messages_preview(&facts.input, "new_message") {
-                    facts.input_preview = Some(preview);
-                }
-            }
-            Self::PydanticAi => {
-                // An agent run records its messages and result only under pydantic-ai's names.
-                if matches!(
-                    super::genai::Operation::from_context(context),
-                    Some(super::genai::Operation::InvokeAgent)
-                ) {
-                    if facts.input.is_empty()
-                        && let Some(payload) =
-                            select_attribute(context.attributes, &["pydantic_ai.all_messages"])
-                    {
-                        facts.input = messages::canonical(payload.text);
-                        extraction.consumed_attributes.push(payload.source);
-                    }
-                    if facts.output.is_empty()
-                        && let Some(payload) =
-                            select_attribute(context.attributes, &["final_result"])
-                    {
-                        facts.output = payload.text.to_owned();
-                        extraction.consumed_attributes.push(payload.source);
-                    }
-                }
-            }
-            Self::HttpClient => {
-                facts.role = Some(RoleEvidence::Declared(ObservationType::Framework));
-                facts.calls = CallEvidence::complete(CallKey::Transport);
-            }
-            Self::OpenInference(_) | Self::Named(_) | Self::Unknown => {}
+            Self::OpenInference(Integration::GoogleAdk) => extraction.map_facts(google_adk),
+            Self::PydanticAi => pydantic_ai(context, extraction),
+            Self::HttpClient => extraction.map_facts(|facts| SpanFacts {
+                role: Some(RoleEvidence::Declared(ObservationType::Framework)),
+                calls: CallEvidence::complete(CallKey::Transport),
+                ..facts
+            }),
+            Self::OpenInference(_) | Self::Named(_) | Self::Unknown => extraction,
         }
     }
 
     pub(super) fn interpret(
         &self,
         context: &SpanContext<'_>,
-        mut extraction: Extraction,
+        extraction: Extraction,
         metadata: AgentMetadata,
     ) -> Normalization {
-        add_response_id(context, &mut extraction.facts);
-        self.adjust(context, &mut extraction);
         let Extraction {
             facts,
             display_name,
             consumed_attributes,
-        } = extraction;
+        } = self.adjust(
+            context,
+            extraction.map_facts(|facts| with_response_id(context, facts)),
+        );
         let role = match (facts.role, metadata.ls_agent_type) {
             (
                 None
@@ -236,23 +185,136 @@ impl Instrumentation {
 }
 
 /// `gen_ai.response.id` names one provider response, whichever convention recorded it.
-fn add_response_id(context: &SpanContext<'_>, facts: &mut SpanFacts) {
-    let id = attr(context.attributes, "gen_ai.response.id");
-    if id.is_empty() {
-        return;
+fn with_response_id(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
+    match present(context.attributes, &["gen_ai.response.id"]) {
+        Some(id) => SpanFacts {
+            calls: facts.calls.with(CallKey::ProviderResponse(id)),
+            ..facts
+        },
+        None => facts,
     }
-    let key = CallKey::ProviderResponse(id.to_owned());
-    facts.calls = match std::mem::take(&mut facts.calls) {
-        CallEvidence::Unknown => CallEvidence::complete(key),
-        CallEvidence::Partial(mut keys) => {
-            keys.insert(key);
-            CallEvidence::Partial(keys)
+}
+
+/// Started from a TRACEPARENT in the environment: an Agent SDK query span may already stand for
+/// this agent turn.
+fn claude_code_turn(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
+    if attr(context.attributes, "parent.source") != "env"
+        || facts.role != Some(RoleEvidence::Declared(ObservationType::Agent))
+    {
+        return facts;
+    }
+    SpanFacts {
+        role: Some(RoleEvidence::WrapperCandidate(ObservationType::Agent)),
+        ..facts
+    }
+}
+
+/// LangGraph state is `{"messages": [...]}`.
+fn langchain(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
+    let middleware = !context.parent_span_id.is_empty() && is_langchain_middleware(context.name);
+    SpanFacts {
+        role: if middleware {
+            Some(RoleEvidence::Declared(ObservationType::Framework))
+        } else {
+            facts.role
+        },
+        input_preview: state_messages_preview(&facts.input, "messages"),
+        ..facts
+    }
+}
+
+fn llama_index(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
+    let agent = context
+        .name
+        .ends_with(".run_agent_step")
+        .then(|| current_agent_name(attr(context.attributes, "input.value")))
+        .flatten();
+    let role = match agent {
+        Some(_) => Some(RoleEvidence::Declared(ObservationType::Agent)),
+        // Builds the request; the `achat` that follows sends it.
+        None if context.name.ends_with("._prepare_chat_with_tools") => {
+            Some(RoleEvidence::Declared(ObservationType::Chain))
         }
-        CallEvidence::Complete(mut keys) => {
-            keys.insert(key);
-            CallEvidence::Complete(keys)
-        }
+        None => facts.role,
     };
+    // A workflow run's arguments are engine state; the user message is not recorded.
+    let engine_state = context.parent_span_id.is_empty() && has_key(&facts.input, "start_event");
+    SpanFacts {
+        role,
+        agent_name: agent.map(str::to_owned).or(facts.agent_name),
+        input_preview: if engine_state {
+            Some(String::new())
+        } else {
+            facts.input_preview
+        },
+        ..facts
+    }
+}
+
+/// The subagent span is named after the `Agent` tool, not the subagent it runs.
+fn claude_agent_sdk(facts: SpanFacts) -> SpanFacts {
+    if facts.agent_name.as_deref() != Some("Agent") {
+        return facts;
+    }
+    SpanFacts {
+        role: Some(RoleEvidence::WrapperCandidate(ObservationType::Agent)),
+        agent_name: Some(String::new()),
+        ..facts
+    }
+}
+
+/// `Runner.run_async` arguments: the user turn is `new_message`.
+fn google_adk(facts: SpanFacts) -> SpanFacts {
+    SpanFacts {
+        input_preview: state_messages_preview(&facts.input, "new_message").or(facts.input_preview),
+        ..facts
+    }
+}
+
+/// An agent run records its messages and result only under pydantic-ai's names.
+fn pydantic_ai(context: &SpanContext<'_>, extraction: Extraction) -> Extraction {
+    if !matches!(
+        Operation::from_context(context),
+        Some(Operation::InvokeAgent)
+    ) {
+        return extraction;
+    }
+    let Extraction {
+        facts,
+        display_name,
+        consumed_attributes,
+    } = extraction;
+    let input = facts
+        .input
+        .is_empty()
+        .then(|| select_attribute(context.attributes, &["pydantic_ai.all_messages"]))
+        .flatten();
+    let output = facts
+        .output
+        .is_empty()
+        .then(|| select_attribute(context.attributes, &["final_result"]))
+        .flatten();
+    Extraction {
+        facts: SpanFacts {
+            input: input
+                .as_ref()
+                .map_or(facts.input, |payload| messages::canonical(payload.text)),
+            output: output
+                .as_ref()
+                .map_or(facts.output, |payload| payload.text.to_owned()),
+            ..facts
+        },
+        display_name,
+        consumed_attributes: consumed_attributes
+            .into_iter()
+            .chain(
+                [input, output]
+                    .into_iter()
+                    .flatten()
+                    .map(|payload| payload.source),
+            )
+            .collect(),
+    }
 }
 
 /// The convention's agent name when it read one (even "none"), else the generic agent attributes.
@@ -296,19 +358,6 @@ fn recorded_agent_name(
         }
     }
     String::new()
-}
-
-fn is_langchain_middleware(name: &str) -> bool {
-    [
-        ".wrap_model_call",
-        ".wrap_tool_call",
-        ".before_agent",
-        ".after_agent",
-        ".before_model",
-        ".after_model",
-    ]
-    .iter()
-    .any(|suffix| name.ends_with(suffix))
 }
 
 /// The run step's `ev` repr names the agent it runs: `current_agent_name='search_agent'`.

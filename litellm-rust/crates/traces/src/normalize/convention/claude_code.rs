@@ -2,15 +2,21 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
 
-use super::{
-    CallEvidence, CallKey, Extraction, ObservationType, RoleEvidence, SpanContext, SpanFacts, attr,
-    first, tokens,
+use super::{Convention, Extraction, SpanFacts};
+use crate::{
+    Error,
+    normalize::{
+        CallEvidence, CallKey, ObservationType, RoleEvidence, SpanContext, attr, present, tokens,
+    },
+    otlp::DecodedEvent,
 };
-use crate::{Error, otlp::DecodedEvent};
 
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 const AGENT_SDK_FRAMEWORK: &str = "claude-agent-sdk";
+
+/// Claude Code's built-in tracing, identified by its instrumentation scope.
+pub(crate) struct ClaudeCode;
 
 enum SpanType {
     Interaction,
@@ -34,7 +40,7 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
     }
 }
 
-pub(super) fn framework(attributes: &BTreeMap<String, String>) -> &'static str {
+pub(crate) fn framework(attributes: &BTreeMap<String, String>) -> &'static str {
     if attr(attributes, "query_source_safe") == "sdk"
         || attr(attributes, "system_prompt_preview").contains("cc_entrypoint=sdk")
     {
@@ -164,71 +170,71 @@ fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
         })
 }
 
-pub(super) fn extract(context: &SpanContext<'_>) -> Result<Extraction, Error> {
-    let attributes = context.attributes;
-    let kind = span_type(context.name, attributes);
-    let base = SpanFacts {
-        role: Some(RoleEvidence::Declared(ObservationType::Framework)),
-        agent_name: Some(CLAUDE_CODE_AGENT.to_owned()),
-        tool_call_id: Some(attr(attributes, "gen_ai.tool.call.id"))
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned),
-        ..SpanFacts::default()
-    };
-    let (facts, consumed): (SpanFacts, Vec<&'static str>) = match kind {
-        SpanType::Interaction => (
-            SpanFacts {
-                role: Some(RoleEvidence::Declared(ObservationType::Agent)),
-                input: user_prompt(attributes),
-                ..base
-            },
-            vec!["user_prompt"],
-        ),
-        SpanType::LlmRequest => {
-            let request_id = first(attributes, "gen_ai.response.id", "request_id");
-            (
+impl Convention for ClaudeCode {
+    fn matches(&self, context: &SpanContext<'_>) -> bool {
+        context.scope == CLAUDE_CODE_SCOPE
+    }
+
+    fn extract(&self, context: &SpanContext<'_>) -> Result<Extraction, Error> {
+        let attributes = context.attributes;
+        let kind = span_type(context.name, attributes);
+        let base = SpanFacts {
+            role: Some(RoleEvidence::Declared(ObservationType::Framework)),
+            agent_name: Some(CLAUDE_CODE_AGENT.to_owned()),
+            tool_call_id: present(attributes, &["gen_ai.tool.call.id"]),
+            ..SpanFacts::default()
+        };
+        let (facts, consumed): (SpanFacts, Vec<&'static str>) = match kind {
+            SpanType::Interaction => (
+                SpanFacts {
+                    role: Some(RoleEvidence::Declared(ObservationType::Agent)),
+                    input: user_prompt(attributes),
+                    ..base
+                },
+                vec!["user_prompt"],
+            ),
+            SpanType::LlmRequest => (
                 SpanFacts {
                     role: Some(RoleEvidence::Declared(ObservationType::Llm)),
                     agent_name: Some(subagent(attributes).unwrap_or(CLAUDE_CODE_AGENT).to_owned()),
-                    model: Some(first(attributes, "model", "gen_ai.request.model"))
-                        .filter(|model| !model.is_empty())
-                        .map(str::to_owned),
+                    model: present(attributes, &["model", "gen_ai.request.model"]),
                     input_tokens: input_tokens(attributes)?,
                     output_tokens: tokens(attributes, "output_tokens")?,
                     input: llm_input(attributes),
                     output: llm_output(attributes),
-                    calls: if request_id.is_empty() {
-                        CallEvidence::Unknown
-                    } else {
-                        CallEvidence::complete(CallKey::ProviderResponse(request_id.to_owned()))
-                    },
+                    calls: present(attributes, &["gen_ai.response.id", "request_id"])
+                        .map_or(CallEvidence::Unknown, |id| {
+                            CallEvidence::complete(CallKey::ProviderResponse(id))
+                        }),
                     ..base
                 },
                 vec!["new_context", "response.model_output"],
-            )
-        }
-        SpanType::Tool => (
-            SpanFacts {
-                role: Some(RoleEvidence::Declared(ObservationType::Tool)),
-                input: tool_input(attributes),
-                output: tool_output(attributes, context.events),
-                ..base
-            },
-            if tool_arguments(attributes).is_some() {
-                vec!["tool_input"]
+            ),
+            SpanType::Tool => (
+                SpanFacts {
+                    role: Some(RoleEvidence::Declared(ObservationType::Tool)),
+                    input: tool_input(attributes),
+                    output: tool_output(attributes, context.events),
+                    ..base
+                },
+                if tool_arguments(attributes).is_some() {
+                    vec!["tool_input"]
+                } else {
+                    Vec::new()
+                },
+            ),
+            SpanType::Other => (base, Vec::new()),
+        };
+        Ok(Extraction {
+            facts,
+            display_name: if matches!(kind, SpanType::Tool) {
+                present(attributes, &["tool_name"])
             } else {
-                Vec::new()
+                None
             },
-        ),
-        SpanType::Other => (base, Vec::new()),
-    };
-    let tool_name = attr(attributes, "tool_name");
-    Ok(Extraction {
-        facts,
-        display_name: (matches!(kind, SpanType::Tool) && !tool_name.is_empty())
-            .then(|| tool_name.to_owned()),
-        consumed_attributes: consumed,
-    })
+            consumed_attributes: consumed,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -255,7 +261,6 @@ mod tests {
 
     fn normalize(
         name: &str,
-        _parent: &str,
         attributes: &BTreeMap<String, String>,
         events: &[DecodedEvent],
     ) -> Result<NormalizedSpan, Error> {
@@ -273,7 +278,6 @@ mod tests {
     fn tool_without_detailed_input_lists_known_arguments() {
         let span = normalize(
             "claude_code.tool",
-            "parent",
             &attributes(&[
                 ("span.type", "tool"),
                 ("tool_name", "Bash"),
@@ -297,7 +301,7 @@ mod tests {
             ("tool_input", "[TOOL INPUT: Read]\nnot json"),
             ("file_path", "/workspace/a.py"),
         ]);
-        let span = normalize("claude_code.tool", "parent", &attrs, &[]).expect("valid span");
+        let span = normalize("claude_code.tool", &attrs, &[]).expect("valid span");
         let input: Value = serde_json::from_str(&span.input).expect("argument object");
         assert_eq!(input["file_path"], "/workspace/a.py");
         assert!(
@@ -327,7 +331,6 @@ mod tests {
     ) {
         let span = normalize(
             "claude_code.tool",
-            "parent",
             &attributes(&[
                 ("span.type", "tool"),
                 ("new_context", "[TOOL RESULT: Bash]\n{\"stdout\":\"ctx\"}"),
@@ -342,7 +345,6 @@ mod tests {
     fn llm_tool_result_context_becomes_tool_message() {
         let span = normalize(
             "claude_code.llm_request",
-            "parent",
             &attributes(&[
                 ("span.type", "llm_request"),
                 ("new_context", "[TOOL RESULT: toolu_1]\n1\timport os"),
@@ -361,7 +363,6 @@ mod tests {
     fn llm_token_sum_overflow_is_rejected() {
         let result = normalize(
             "claude_code.llm_request",
-            "parent",
             &attributes(&[
                 ("span.type", "llm_request"),
                 ("input_tokens", "4294967295"),
@@ -386,7 +387,7 @@ mod tests {
         } else {
             attributes(&[("span.type", kind)])
         };
-        let span = normalize(name, "parent", &attrs, &[]).expect("valid span");
+        let span = normalize(name, &attrs, &[]).expect("valid span");
         assert_eq!(span.observation_type, expected);
     }
 }
