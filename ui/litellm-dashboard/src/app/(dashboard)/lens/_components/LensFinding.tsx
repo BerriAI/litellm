@@ -2,6 +2,7 @@ import { ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { LensAgentFix } from "./LensAgentFix";
 import { evidenceTarget, runTime, type Finding, type Sample } from "./lensData";
 
 export function LensFinding({
@@ -54,11 +55,15 @@ export function LensFinding({
                 <p className="mb-2 text-sm font-medium">What happened</p>
                 <p className="text-sm leading-6 whitespace-pre-wrap">{finding.description}</p>
               </div>
-              {finding.suggestion && (
-                <div className="border-y py-4">
-                  <p className="text-sm font-medium">What to do next</p>
-                  <p className="mt-2 text-sm leading-6">{finding.suggestion}</p>
-                </div>
+              {finding.fix ? (
+                <LensAgentFix title={finding.title} fix={finding.fix} />
+              ) : (
+                finding.suggestion && (
+                  <div className="border-y py-4">
+                    <p className="text-sm font-medium">What to do next</p>
+                    <p className="mt-2 text-sm leading-6">{finding.suggestion}</p>
+                  </div>
+                )
               )}
               {finding.limitation && (
                 <details className="text-sm">
