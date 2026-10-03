@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { apiClient } from "@/components/networking";
+import { AutoRouterAvailabilityDebounceContext } from "@/components/add_model/autoRouterAvailabilityDebounce";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import type { components } from "@/lib/http/schema";
 
@@ -20,11 +21,14 @@ export const AutoRouterAvailabilityContext = createContext<AvailabilityState>({ 
 
 export const useAutoRouterAvailability = (accessToken: string, body: Request, enabled = true) => {
   const serialized = JSON.stringify(body.complexity_router_config ?? null);
-  const [debounced, setDebounced] = useState(serialized);
+  const [debouncedState, setDebounced] = useState(serialized);
+  const debounceMs = useContext(AutoRouterAvailabilityDebounceContext);
   useEffect(() => {
-    const timeout = setTimeout(() => setDebounced(serialized), 300);
+    if (debounceMs === 0) return;
+    const timeout = setTimeout(() => setDebounced(serialized), debounceMs);
     return () => clearTimeout(timeout);
-  }, [serialized]);
+  }, [serialized, debounceMs]);
+  const debounced = debounceMs === 0 ? serialized : debouncedState;
   const options: UseQueryOptions<Availability> = {
     queryKey: ["autoRouterAvailability", accessToken, body.team_id, body.saved_model_id, debounced],
     queryFn: ({ signal }) =>
