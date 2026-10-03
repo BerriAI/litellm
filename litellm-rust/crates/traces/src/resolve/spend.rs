@@ -107,14 +107,14 @@ impl<'a> KeyMatch<'a> {
             Self::Missing => false,
             Self::Unique(request) => selected
                 .iter()
-                .any(|row| row.request_id == request.request_id),
+                .any(|row| row.identity() == request.identity()),
             Self::Ambiguous(requests) => {
                 requests
                     .iter()
                     .filter(|request| {
                         selected
                             .iter()
-                            .any(|row| row.request_id == request.request_id)
+                            .any(|row| row.identity() == request.identity())
                     })
                     .count()
                     == 1
@@ -136,7 +136,7 @@ impl<'a> SpendEvidence<'a> {
                 let requests: Requests<'a> = matches
                     .iter()
                     .filter_map(KeyMatch::unique)
-                    .map(|request| (request.request_id.as_str(), request))
+                    .map(|request| (request.identity(), request))
                     .collect::<IndexMap<_, _>>()
                     .into_values()
                     .collect();
@@ -164,12 +164,16 @@ fn matches<'a>(
     spend_rows: &'a [SpendRow],
     key: &CallKey,
     row: &TraceSpansRow,
-) -> IndexMap<&'a str, &'a SpendRow> {
+) -> IndexMap<(&'a str, i64, &'a str), &'a SpendRow> {
     let matches = |spend: &SpendRow| match key {
         CallKey::ProviderResponse(id) => {
             !id.is_empty() && (spend.response_id == *id || spend.upstream_response_id == *id)
         }
-        CallKey::LiteLlmRequest(id) => !id.is_empty() && spend.request_id == *id,
+        CallKey::LiteLlmRequest(id) => {
+            !id.is_empty()
+                && (spend.litellm_call_id == *id
+                    || (spend.litellm_call_id.is_empty() && spend.request_id == *id))
+        }
         CallKey::Transport => {
             !row.trace_id.is_empty()
                 && !row.span_id.is_empty()
@@ -180,7 +184,7 @@ fn matches<'a>(
     spend_rows
         .iter()
         .filter(|spend| ownership.owns(spend) && matches(spend))
-        .map(|spend| (spend.request_id.as_str(), spend))
+        .map(|spend| (spend.identity(), spend))
         .collect()
 }
 
@@ -190,17 +194,34 @@ pub(super) fn requests<'a>(
     spend_rows: &'a [SpendRow],
 ) -> SpendEvidence<'a> {
     let evidence = CallEvidence::from_row(row);
-    let matches = evidence
+    let keyed: Vec<(&CallKey, Requests<'a>)> = evidence
         .key_set()
         .into_iter()
         .flatten()
         .map(|key| {
-            KeyMatch::new(
+            (
+                key,
                 matches(ownership, spend_rows, key, row)
                     .into_values()
                     .collect(),
             )
         })
+        .collect();
+    let anchored: Vec<&SpendRow> = keyed
+        .iter()
+        .filter(|(key, _)| !matches!(key, CallKey::LiteLlmRequest(_)))
+        .flat_map(|(_, requests)| requests.iter().copied())
+        .collect();
+    let legacy_rows = !anchored.is_empty()
+        && anchored
+            .iter()
+            .all(|request| request.litellm_call_id.is_empty());
+    let matches = keyed
+        .into_iter()
+        .filter(|(key, requests)| {
+            !(legacy_rows && requests.is_empty() && matches!(key, CallKey::LiteLlmRequest(_)))
+        })
+        .map(|(_, requests)| KeyMatch::new(requests))
         .collect();
     match evidence.kind() {
         CallEvidenceKind::Complete => SpendEvidence::Complete(matches),
@@ -226,9 +247,9 @@ pub(super) fn total(calls: &[Option<Requests<'_>>]) -> Option<f64> {
         .map(|requests| requests.as_ref())
         .collect::<Option<Vec<_>>>()
         .map(|calls| calls.into_iter().flatten().copied().collect());
-    let unique: IndexMap<&str, &SpendRow> = requests?
+    let unique: IndexMap<(&str, i64, &str), &SpendRow> = requests?
         .into_iter()
-        .map(|request| (request.request_id.as_str(), request))
+        .map(|request| (request.identity(), request))
         .collect();
     request_cost(&unique.into_values().collect::<Vec<_>>())
 }
