@@ -4897,17 +4897,17 @@ async def _spend_log_read_scope(user_api_key_dict: UserAPIKeyAuth, log_team_look
 
 def read_scope_sql(scope: ReadScope, next_param: int) -> tuple[str, tuple[object, ...]]:
     if isinstance(scope, AllRows):
-        return ("", ())
-    user_grant: Final[tuple[tuple[str, object], ...]] = (
-        (('"user" = ${}', scope.user_id),) if scope.user_id is not None else ()
-    )
-    team_grant: Final = (("team_id = ANY(${}::text[])", scope.team_ids),) if scope.team_ids else ()
-    grants: Final = user_grant + team_grant
-    if not grants:
-        return ("FALSE", ())
-    clauses: Final = tuple(template.format(next_param + index) for index, (template, _) in enumerate(grants))
-    sql: Final = clauses[0] if len(clauses) == 1 else f"({' OR '.join(clauses)})"
-    return (sql, tuple(param for _, param in grants))
+        return "", ()
+    if scope.user_id is not None and scope.team_ids:
+        return (
+            f'("user" = ${next_param} OR team_id = ANY(${next_param + 1}::text[]))',
+            (scope.user_id, scope.team_ids),
+        )
+    if scope.user_id is not None:
+        return f'"user" = ${next_param}', (scope.user_id,)
+    if scope.team_ids:
+        return f"team_id = ANY(${next_param}::text[])", (scope.team_ids,)
+    return "FALSE", ()
 
 
 def _read_scope_where(scope: ReadScope) -> Mapping[str, object]:

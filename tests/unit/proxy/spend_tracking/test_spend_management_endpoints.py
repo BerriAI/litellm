@@ -1764,9 +1764,12 @@ _SCOPE_ROWS: Final = tuple(
         (AllRows(), None, ("foreign", "own", "ownerless", "team-1", "team-2", "team-ownerless")),
         (OwnedRows("caller"), None, ("own",)),
         (OwnedRows(None), None, ()),
+        (OwnedRows(None, ("first", "second")), None, ("team-1", "team-2", "team-ownerless")),
+        (OwnedRows(None, ("first", "second")), "other", ("team-1",)),
         (OwnedRows("caller", ("first", "second")), None, ("own", "team-1", "team-2", "team-ownerless")),
         (OwnedRows("caller", ("first", "second")), "other", ("team-1",)),
         (OwnedRows("caller", ("first' OR TRUE --",)), None, ("own",)),
+        (OwnedRows("caller' OR TRUE --", ("first",)), None, ("team-1", "team-ownerless")),
     ],
 )
 def test_log_scope_sql_selects_owned_rows_and_intersects_explicit_user_filter(
