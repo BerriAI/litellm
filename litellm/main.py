@@ -7879,7 +7879,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     ### PASS ARGS TO Image Generation ###
     kwargs["atranscription"] = True
     file: Final = kwargs.get("file", None)
-    custom_llm_provider = None
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
     try:
         # Use a partial function to pass your keyword arguments
         func: Final = partial(transcription, *args, **kwargs)
@@ -7888,7 +7888,11 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=kwargs.get("api_base", None),
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -8213,7 +8217,11 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=kwargs.get("api_base", None),
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
