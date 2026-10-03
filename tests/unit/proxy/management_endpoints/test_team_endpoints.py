@@ -9339,9 +9339,11 @@ def _wire_team_delete_with_owned_tags(mock_prisma_client, team_ids, tag_rows):
     mock_prisma_client.db.litellm_tagtable.find_many = AsyncMock(side_effect=find_owned_tags)
 
     async def drop_teams(**kwargs):
+        dropped = len(kwargs["where"]["team_id"]["in"])
         for row in tag_rows:
             if row.team_id in kwargs["where"]["team_id"]["in"]:
                 row.team_id = None
+        return dropped
 
     mock_prisma_client.db.litellm_teamtable.delete_many = AsyncMock(side_effect=drop_teams)
 
