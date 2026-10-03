@@ -180,3 +180,29 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   const time = formatActivityTimestamp(lens.next_run_at);
   return `Next check ${time} · ${relative}`;
 }
+
+export type AgentFix = NonNullable<Finding["fix"]>;
+
+export function fixSummary(fix: AgentFix): string {
+  return [
+    `**Problem:** ${fix.problem}`,
+    `**User goal:** ${fix.user_goal}`,
+    `**What happened:** ${fix.what_happened}`,
+    "### Test cases",
+    ...fix.test_cases.map((t) => `- **Input:** ${t.input}\n  **Expect:** ${t.expected}`),
+  ].join("\n\n");
+}
+
+export function fixPrompt(title: string, fix: AgentFix, option: AgentFix["options"][number]): string {
+  return [
+    `# Fix: ${title}`,
+    `**Problem:** ${fix.problem}`,
+    `**User goal:** ${fix.user_goal}`,
+    `**What happened:** ${fix.what_happened}`,
+    `## Change to make: ${option.title}`,
+    option.change,
+    "## Test cases",
+    ...fix.test_cases.map((t) => `- **Input:** ${t.input}\n  **Expect:** ${t.expected}`),
+    "Find where this agent is defined in this repository, make the change above, and verify each test case.",
+  ].join("\n\n");
+}
