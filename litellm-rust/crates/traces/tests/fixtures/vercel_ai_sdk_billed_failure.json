@@ -1,0 +1,382 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.name",
+            "value": {
+              "stringValue": "Yujongs-MacBook-Pro-2.local"
+            }
+          },
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "host.id",
+            "value": {
+              "stringValue": "0CED4796-41E3-5964-96A8-70915F7FCC94"
+            }
+          },
+          {
+            "key": "process.pid",
+            "value": {
+              "intValue": "46532"
+            }
+          },
+          {
+            "key": "process.executable.name",
+            "value": {
+              "stringValue": "node"
+            }
+          },
+          {
+            "key": "process.executable.path",
+            "value": {
+              "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+            }
+          },
+          {
+            "key": "process.command_args",
+            "value": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+                  },
+                  {
+                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+                  },
+                  {
+                    "stringValue": "response-loss"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "key": "process.runtime.version",
+            "value": {
+              "stringValue": "24.18.0"
+            }
+          },
+          {
+            "key": "process.runtime.name",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "process.runtime.description",
+            "value": {
+              "stringValue": "Node.js"
+            }
+          },
+          {
+            "key": "process.command",
+            "value": {
+              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/validate-attempts.ts"
+            }
+          },
+          {
+            "key": "process.owner",
+            "value": {
+              "stringValue": "yujonglee"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:node"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "2.11.0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "cd2a0f2cf44ca1af",
+              "parentSpanId": "b5f6c50aeeeb3aa8",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057930934000000",
+              "endTimeUnixNano": "1791057932198693208",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "1f0e8328-d49e-4f4d-8d1e-ac1c2a24d872"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 257
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "gen_ai"
+          },
+          "spans": [
+            {
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "b5f6c50aeeeb3aa8",
+              "parentSpanId": "3fb380320f4f6e31",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791057930924000000",
+              "endTimeUnixNano": "1791057932203362917",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]}]"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791057932203337834",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "AI_APICallError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Failed to process successful response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Failed to process successful response",
+                "code": 2
+              },
+              "flags": 257
+            },
+            {
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "3fb380320f4f6e31",
+              "parentSpanId": "9cde23100b204eb5",
+              "name": "step 1",
+              "kind": 1,
+              "startTimeUnixNano": "1791057930923000000",
+              "endTimeUnixNano": "1791057932202662875",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "agent_step"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791057932202650750",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "AI_APICallError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Failed to process successful response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Failed to process successful response",
+                "code": 2
+              },
+              "flags": 257
+            },
+            {
+              "traceId": "dd3530951aa4bd990ecf77922832d078",
+              "spanId": "9cde23100b204eb5",
+              "name": "invoke_agent openai/gpt-6-luna",
+              "kind": 1,
+              "startTimeUnixNano": "1791057930917000000",
+              "endTimeUnixNano": "1791057932202577917",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "vercel_response-loss"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Reply with one short sentence about agent traces.\"}]}]"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791057932202568875",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "AI_APICallError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Failed to process successful response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "AI_APICallError: Failed to process successful response\n    at Object.pull (file:///Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/node_modules/@ai-sdk/provider-utils/dist/index.js:3711:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Failed to process successful response",
+                "code": 2
+              },
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

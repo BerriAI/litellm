@@ -50,6 +50,7 @@ fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpan
         input_tokens: 100,
         output_tokens: 20,
         litellm_request_id: response_id.into(),
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
         ..at(row(span_id, parent, "ChatOpenAI", "llm", agent), 1, 100)
     }
 }
@@ -72,6 +73,7 @@ fn spend(
     SpendByResponseIdsRow {
         request_id: request_id.into(),
         response_id: response_id.into(),
+        litellm_call_id: String::new(),
         upstream_response_id: String::new(),
         trace_id: String::new(),
         span_id: String::new(),
@@ -803,7 +805,7 @@ fn complete_wrapper_accounts_for_retries_missing_from_the_call_span() {
 }
 
 #[rstest]
-#[case::legacy(None, Some(0.25))]
+#[case::legacy(None, None)]
 #[case::unknown(Some(litellm_traces::CallEvidenceKind::Unknown), None)]
 #[case::partial(Some(litellm_traces::CallEvidenceKind::Partial), None)]
 #[case::complete(Some(litellm_traces::CallEvidenceKind::Complete), Some(0.25))]
@@ -927,4 +929,188 @@ fn empty_root_preview_uses_the_earliest_agent_or_model_input() {
     assert_eq!(trace.summary.name, rows[1].name);
     assert_eq!(trace.spans[0].start_offset_ms, 20.0);
     assert_eq!(trace.spans[3].start_offset_ms, 10.0);
+}
+
+#[rstest]
+#[case::oldest_first(false)]
+#[case::newest_first(true)]
+fn repeated_request_ids_preserve_storage_identity(#[case] reverse: bool) {
+    let first = SpendByResponseIdsRow {
+        start_ms: 100,
+        ..spend("same", "response", "team", "", "key", 0.25)
+    };
+    let second = SpendByResponseIdsRow {
+        start_ms: 200,
+        ..spend("same", "response", "team", "", "key", 0.5)
+    };
+    let logs = if reverse {
+        [second, first]
+    } else {
+        [first, second]
+    };
+    let rows = [owned(
+        llm("call", "", "agent", "response"),
+        "team",
+        "",
+        "key",
+    )];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, None);
+    assert_eq!(trace.spans[0].spend, None);
+}
+
+#[rstest]
+#[case::gateway(false)]
+#[case::transport(true)]
+fn independent_key_disambiguates_repeated_request_ids(#[case] transport: bool) {
+    let rows = [owned(
+        TraceSpansRow {
+            trace_id: "trace".into(),
+            call_keys: vec![
+                litellm_traces::CallKey::ProviderResponse("response".into()),
+                if transport {
+                    litellm_traces::CallKey::Transport
+                } else {
+                    litellm_traces::CallKey::LiteLlmRequest("gateway".into())
+                },
+            ],
+            ..llm("call", "", "agent", "response")
+        },
+        "team",
+        "",
+        "key",
+    )];
+    let logs = [
+        SpendByResponseIdsRow {
+            start_ms: 100,
+            litellm_call_id: "gateway".into(),
+            trace_id: "trace".into(),
+            span_id: "call".into(),
+            ..spend("same", "response", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            start_ms: 200,
+            litellm_call_id: "other".into(),
+            ..spend("same", "response", "team", "", "key", 0.5)
+        },
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.25));
+    assert_eq!(trace.spans[0].spend, Some(0.25));
+}
+
+#[rstest]
+#[case::same_row(true, Some(0.25))]
+#[case::distinct_rows(false, Some(0.75))]
+fn totals_deduplicate_only_equal_storage_identities(
+    #[case] duplicate: bool,
+    #[case] expected: Option<f64>,
+) {
+    let rows = [
+        owned(llm("first", "", "agent", "a"), "team", "", "key"),
+        owned(
+            llm("second", "", "agent", if duplicate { "a" } else { "b" }),
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        SpendByResponseIdsRow {
+            start_ms: 100,
+            ..spend("same", "a", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            start_ms: if duplicate { 100 } else { 200 },
+            ..spend(
+                "same",
+                if duplicate { "a" } else { "b" },
+                "team",
+                "",
+                "key",
+                if duplicate { 0.25 } else { 0.5 },
+            )
+        },
+    ];
+    assert_eq!(
+        resolve_trace("trace", "ref", &rows, &logs)
+            .unwrap()
+            .summary
+            .spend,
+        expected
+    );
+}
+
+#[rstest]
+fn conflicting_keys_cannot_agree_on_request_id_alone() {
+    let rows = [
+        owned(
+            TraceSpansRow {
+                call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
+                ..llm("wrapper", "", "agent", "")
+            },
+            "team",
+            "",
+            "key",
+        ),
+        owned(
+            llm("call", "wrapper", "agent", "response"),
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        SpendByResponseIdsRow {
+            start_ms: 100,
+            ..spend("same", "response", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            start_ms: 200,
+            litellm_call_id: "gateway".into(),
+            ..spend("same", "other", "team", "", "key", 0.5)
+        },
+    ];
+    assert_eq!(
+        resolve_trace("trace", "ref", &rows, &logs)
+            .unwrap()
+            .summary
+            .spend,
+        None
+    );
+}
+
+#[rstest]
+#[case::gateway("gateway", "provider-id", "team", "key", Some(0.25))]
+#[case::legacy("", "gateway", "team", "key", Some(0.25))]
+#[case::conflict("other", "gateway", "team", "key", None)]
+#[case::other_team("gateway", "provider-id", "other-team", "key", None)]
+#[case::other_key("gateway", "provider-id", "team", "other-key", None)]
+fn gateway_lookup_respects_legacy_fallback_and_ownership(
+    #[case] call_id: &str,
+    #[case] request_id: &str,
+    #[case] team: &str,
+    #[case] key: &str,
+    #[case] expected: Option<f64>,
+) {
+    let rows = [owned(
+        TraceSpansRow {
+            call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
+            ..llm("call", "", "agent", "")
+        },
+        "team",
+        "",
+        "key",
+    )];
+    let logs = [SpendByResponseIdsRow {
+        litellm_call_id: call_id.into(),
+        ..spend(request_id, "provider", team, "", key, 0.25)
+    }];
+    assert_eq!(
+        resolve_trace("trace", "ref", &rows, &logs)
+            .unwrap()
+            .summary
+            .spend,
+        expected
+    );
 }

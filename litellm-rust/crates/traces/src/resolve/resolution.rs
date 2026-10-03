@@ -133,7 +133,7 @@ impl<'a> Resolution<'a> {
         Some(
             selected
                 .into_iter()
-                .map(|request| (request.request_id.as_str(), request))
+                .map(|request| (request.identity(), request))
                 .collect::<IndexMap<_, _>>()
                 .into_values()
                 .collect(),

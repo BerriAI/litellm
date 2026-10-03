@@ -24,7 +24,7 @@
           {
             "key": "process.pid",
             "value": {
-              "intValue": "12732"
+              "intValue": "51976"
             }
           },
           {
@@ -36,7 +36,7 @@
           {
             "key": "process.executable.path",
             "value": {
-              "stringValue": "/fixture-user/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+              "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
             }
           },
           {
@@ -45,10 +45,10 @@
               "arrayValue": {
                 "values": [
                   {
-                    "stringValue": "/fixture-user/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+                    "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
                   },
                   {
-                    "stringValue": "/fixture-user/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
+                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
                   }
                 ]
               }
@@ -75,7 +75,7 @@
           {
             "key": "process.command",
             "value": {
-              "stringValue": "/fixture-user/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
+              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
             }
           },
           {
@@ -87,7 +87,7 @@
           {
             "key": "service.name",
             "value": {
-              "stringValue": "vercel-ai-sdk-swarm"
+              "stringValue": "unknown_service:node"
             }
           },
           {
@@ -113,17 +113,110 @@
       "scopeSpans": [
         {
           "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "3321520564bde29d",
+              "parentSpanId": "28cba6e4191fb05e",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057946610000000",
+              "endTimeUnixNano": "1791057948609376917",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "44750614-73bd-4acb-92fa-f328746af396"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "d3266f4b05b80f06",
+              "parentSpanId": "23548af15592875f",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057948613000000",
+              "endTimeUnixNano": "1791057952844804083",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "e53b32d5-ff8e-4318-bf1e-8de5bdc72eb5"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        },
+        {
+          "scope": {
             "name": "gen_ai"
           },
           "spans": [
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "fbb16e1152cd0881",
-              "parentSpanId": "1adf3c78e9c0984d",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "28cba6e4191fb05e",
+              "parentSpanId": "4455f9f11e867c6f",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791013030242000000",
-              "endTimeUnixNano": "1791013032182906417",
+              "startTimeUnixNano": "1791057946609000000",
+              "endTimeUnixNano": "1791057948611857958",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -164,7 +257,7 @@
                 {
                   "key": "gen_ai.client.operation.duration",
                   "value": {
-                    "doubleValue": 1.940445
+                    "doubleValue": 2.002120208
                   }
                 },
                 {
@@ -182,7 +275,7 @@
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "resp_06b1e9e142af3c39006ac0b0a6586c87d0ab79b981ad664844"
+                    "stringValue": "resp_0a20d31604503fbc006ac1601ab7c887d09c181e7b6e4d1d13"
                   }
                 },
                 {
@@ -200,7 +293,7 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "76"
+                    "intValue": "70"
                   }
                 },
                 {
@@ -212,7 +305,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_gnvV80wCiKg4qfE6KILVdyLK\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an “agent trace” is in AI/software agent systems. Find a concise general definition and key elements typically recorded (steps/actions, observations, tool calls, outputs, timestamps/state), plus why useful. Distinguish from distributed tracing only if relevant. Provide reliable, concise factual framing.\"}}],\"finish_reason\":\"tool_call\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_hKjLBi95XhJ5895ni96rvAo5\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an agent trace is in the context of AI agents/software systems. Gather concise definition, what it records (steps/tool calls/inputs outputs decisions/timing/errors), why useful (debugging, observability, evaluation/audit), and note terminology can vary.\"}}],\"finish_reason\":\"tool_call\"}]"
                   }
                 }
               ],
@@ -220,13 +313,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "e2eaa18d8017e5af",
-              "parentSpanId": "5f26bbd224210128",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "23548af15592875f",
+              "parentSpanId": "82a468e5d9279e3e",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791013032184000000",
-              "endTimeUnixNano": "1791013036653620875",
+              "startTimeUnixNano": "1791057948613000000",
+              "endTimeUnixNano": "1791057952846018334",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -255,13 +348,13 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Explain what an “agent trace” is in AI/software agent systems. Find a concise general definition and key elements typically recorded (steps/actions, observations, tool calls, outputs, timestamps/state), plus why useful. Distinguish from distributed tracing only if relevant. Provide reliable, concise factual framing.\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Explain what an agent trace is in the context of AI agents/software systems. Gather concise definition, what it records (steps/tool calls/inputs outputs decisions/timing/errors), why useful (debugging, observability, evaluation/audit), and note terminology can vary.\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.client.operation.duration",
                   "value": {
-                    "doubleValue": 4.469299332999999
+                    "doubleValue": 4.232856042
                   }
                 },
                 {
@@ -279,7 +372,7 @@
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EUoaudqZBkAiqLcgrxTo3bE0XXkCi"
+                    "stringValue": "chatcmpl-EV0HM4sww1d3Gq6emTqONxJkiZQvV"
                   }
                 },
                 {
@@ -291,13 +384,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "76"
+                    "intValue": "70"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "449"
+                    "intValue": "326"
                   }
                 },
                 {
@@ -309,7 +402,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: what it received, what it did, what it observed in response, and how the run ended. The term has no single universally adopted schema.\\n\\nA trace commonly records:\\n\\n- **Run context:** input, agent or model version, session/run ID, and relevant state.\\n- **Steps and actions:** step order, decisions or action types, and state changes.\\n- **Model and tool interactions:** prompts or requests, tool names and arguments, and returned results.\\n- **Observations and outputs:** information the agent received and its final response or other result.\\n- **Timing and status:** timestamps or durations, errors, and sometimes token or cost data.\\n\\n**Why it’s useful:** Traces help developers debug failures, understand tool use, evaluate behavior, compare runs, and audit or monitor production systems. They may record model inputs and outputs, but **need not include the model’s private internal reasoning**.\\n\\n**Not the same as distributed tracing:** Distributed tracing follows a request across services using spans and timing data. An agent trace focuses on the agent’s steps and interactions; it may link to distributed traces when the agent calls services.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of how an AI agent handled a particular task, from its initial input through its final response. It often represents the run as an ordered or nested sequence of events.\\n\\nA trace may record:\\n- **Steps and decisions:** model calls, intermediate reasoning summaries, routing choices, and state changes.\\n- **Tool calls:** which tools were used, with their inputs and outputs.\\n- **Inputs and outputs:** user messages, model responses, and relevant context.\\n- **Timing and usage:** timestamps, durations, token counts, or costs.\\n- **Errors and retries:** failures, exceptions, and recovery attempts.\\n\\nTraces help developers **debug** unexpected behavior, monitor **observability** and performance, **evaluate** agent quality, and support **audits** of how an outcome was produced. They can contain sensitive information, so access and retention should be managed carefully.\\n\\nThe term **\u201cagent trace\u201d** is not standardized: systems may use it for a full task history, a set of spans or events, or a more limited execution log. It does not necessarily capture every internal model process.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],
@@ -317,13 +410,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "5f26bbd224210128",
-              "parentSpanId": "5913711fef7cd183",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "82a468e5d9279e3e",
+              "parentSpanId": "233d61067b71ab35",
               "name": "step 1",
               "kind": 1,
-              "startTimeUnixNano": "1791013032184000000",
-              "endTimeUnixNano": "1791013036654409875",
+              "startTimeUnixNano": "1791057948613000000",
+              "endTimeUnixNano": "1791057952846591166",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -336,13 +429,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "5913711fef7cd183",
-              "parentSpanId": "48ead9c3c6accbb9",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "233d61067b71ab35",
+              "parentSpanId": "eb20fd79a2db305a",
               "name": "invoke_agent search_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013032184000000",
-              "endTimeUnixNano": "1791013036655291459",
+              "startTimeUnixNano": "1791057948613000000",
+              "endTimeUnixNano": "1791057952847214292",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -377,7 +470,7 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Explain what an “agent trace” is in AI/software agent systems. Find a concise general definition and key elements typically recorded (steps/actions, observations, tool calls, outputs, timestamps/state), plus why useful. Distinguish from distributed tracing only if relevant. Provide reliable, concise factual framing.\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Explain what an agent trace is in the context of AI agents/software systems. Gather concise definition, what it records (steps/tool calls/inputs outputs decisions/timing/errors), why useful (debugging, observability, evaluation/audit), and note terminology can vary.\"}]}]"
                   }
                 },
                 {
@@ -395,13 +488,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "76"
+                    "intValue": "70"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "449"
+                    "intValue": "326"
                   }
                 },
                 {
@@ -413,7 +506,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: what it received, what it did, what it observed in response, and how the run ended. The term has no single universally adopted schema.\\n\\nA trace commonly records:\\n\\n- **Run context:** input, agent or model version, session/run ID, and relevant state.\\n- **Steps and actions:** step order, decisions or action types, and state changes.\\n- **Model and tool interactions:** prompts or requests, tool names and arguments, and returned results.\\n- **Observations and outputs:** information the agent received and its final response or other result.\\n- **Timing and status:** timestamps or durations, errors, and sometimes token or cost data.\\n\\n**Why it’s useful:** Traces help developers debug failures, understand tool use, evaluate behavior, compare runs, and audit or monitor production systems. They may record model inputs and outputs, but **need not include the model’s private internal reasoning**.\\n\\n**Not the same as distributed tracing:** Distributed tracing follows a request across services using spans and timing data. An agent trace focuses on the agent’s steps and interactions; it may link to distributed traces when the agent calls services.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of how an AI agent handled a particular task, from its initial input through its final response. It often represents the run as an ordered or nested sequence of events.\\n\\nA trace may record:\\n- **Steps and decisions:** model calls, intermediate reasoning summaries, routing choices, and state changes.\\n- **Tool calls:** which tools were used, with their inputs and outputs.\\n- **Inputs and outputs:** user messages, model responses, and relevant context.\\n- **Timing and usage:** timestamps, durations, token counts, or costs.\\n- **Errors and retries:** failures, exceptions, and recovery attempts.\\n\\nTraces help developers **debug** unexpected behavior, monitor **observability** and performance, **evaluate** agent quality, and support **audits** of how an outcome was produced. They can contain sensitive information, so access and retention should be managed carefully.\\n\\nThe term **\u201cagent trace\u201d** is not standardized: systems may use it for a full task history, a set of spans or events, or a more limited execution log. It does not necessarily capture every internal model process.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],
@@ -421,13 +514,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "48ead9c3c6accbb9",
-              "parentSpanId": "1adf3c78e9c0984d",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "eb20fd79a2db305a",
+              "parentSpanId": "4455f9f11e867c6f",
               "name": "execute_tool search_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013032183000000",
-              "endTimeUnixNano": "1791013036655084375",
+              "startTimeUnixNano": "1791057948612000000",
+              "endTimeUnixNano": "1791057952847076833",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -444,7 +537,7 @@
                 {
                   "key": "gen_ai.tool.call.id",
                   "value": {
-                    "stringValue": "call_gnvV80wCiKg4qfE6KILVdyLK"
+                    "stringValue": "call_hKjLBi95XhJ5895ni96rvAo5"
                   }
                 },
                 {
@@ -456,19 +549,19 @@
                 {
                   "key": "gen_ai.tool.call.arguments",
                   "value": {
-                    "stringValue": "{\"request\":\"Explain what an “agent trace” is in AI/software agent systems. Find a concise general definition and key elements typically recorded (steps/actions, observations, tool calls, outputs, timestamps/state), plus why useful. Distinguish from distributed tracing only if relevant. Provide reliable, concise factual framing.\"}"
+                    "stringValue": "{\"request\":\"Explain what an agent trace is in the context of AI agents/software systems. Gather concise definition, what it records (steps/tool calls/inputs outputs decisions/timing/errors), why useful (debugging, observability, evaluation/audit), and note terminology can vary.\"}"
                   }
                 },
                 {
                   "key": "gen_ai.execute_tool.duration",
                   "value": {
-                    "doubleValue": 4.471869915999999
+                    "doubleValue": 4.234799874999999
                   }
                 },
                 {
                   "key": "gen_ai.tool.call.result",
                   "value": {
-                    "stringValue": "\"An **agent trace** is a time-ordered record of an AI agent’s execution: what it received, what it did, what it observed in response, and how the run ended. The term has no single universally adopted schema.\\n\\nA trace commonly records:\\n\\n- **Run context:** input, agent or model version, session/run ID, and relevant state.\\n- **Steps and actions:** step order, decisions or action types, and state changes.\\n- **Model and tool interactions:** prompts or requests, tool names and arguments, and returned results.\\n- **Observations and outputs:** information the agent received and its final response or other result.\\n- **Timing and status:** timestamps or durations, errors, and sometimes token or cost data.\\n\\n**Why it’s useful:** Traces help developers debug failures, understand tool use, evaluate behavior, compare runs, and audit or monitor production systems. They may record model inputs and outputs, but **need not include the model’s private internal reasoning**.\\n\\n**Not the same as distributed tracing:** Distributed tracing follows a request across services using spans and timing data. An agent trace focuses on the agent’s steps and interactions; it may link to distributed traces when the agent calls services.\""
+                    "stringValue": "\"An **agent trace** is a record of how an AI agent handled a particular task, from its initial input through its final response. It often represents the run as an ordered or nested sequence of events.\\n\\nA trace may record:\\n- **Steps and decisions:** model calls, intermediate reasoning summaries, routing choices, and state changes.\\n- **Tool calls:** which tools were used, with their inputs and outputs.\\n- **Inputs and outputs:** user messages, model responses, and relevant context.\\n- **Timing and usage:** timestamps, durations, token counts, or costs.\\n- **Errors and retries:** failures, exceptions, and recovery attempts.\\n\\nTraces help developers **debug** unexpected behavior, monitor **observability** and performance, **evaluate** agent quality, and support **audits** of how an outcome was produced. They can contain sensitive information, so access and retention should be managed carefully.\\n\\nThe term **\u201cagent trace\u201d** is not standardized: systems may use it for a full task history, a set of spans or events, or a more limited execution log. It does not necessarily capture every internal model process.\""
                   }
                 }
               ],
@@ -476,13 +569,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "1adf3c78e9c0984d",
-              "parentSpanId": "b6102b2bee5ee3fd",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "4455f9f11e867c6f",
+              "parentSpanId": "bd501a3ee7d1e6f7",
               "name": "step 1",
               "kind": 1,
-              "startTimeUnixNano": "1791013030242000000",
-              "endTimeUnixNano": "1791013036655785000",
+              "startTimeUnixNano": "1791057946609000000",
+              "endTimeUnixNano": "1791057952847858625",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -522,7 +615,7 @@
           {
             "key": "process.pid",
             "value": {
-              "intValue": "12732"
+              "intValue": "51976"
             }
           },
           {
@@ -534,7 +627,7 @@
           {
             "key": "process.executable.path",
             "value": {
-              "stringValue": "/fixture-user/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+              "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
             }
           },
           {
@@ -543,10 +636,10 @@
               "arrayValue": {
                 "values": [
                   {
-                    "stringValue": "/fixture-user/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
+                    "stringValue": "/Users/yujonglee/.local/share/fnm/node-versions/v24.18.0/installation/bin/node"
                   },
                   {
-                    "stringValue": "/fixture-user/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
+                    "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
                   }
                 ]
               }
@@ -573,7 +666,7 @@
           {
             "key": "process.command",
             "value": {
-              "stringValue": "/fixture-user/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
+              "stringValue": "/Users/yujonglee/dev/litellm-lens-example/vercel-ai-sdk/swarm/main.ts"
             }
           },
           {
@@ -585,7 +678,7 @@
           {
             "key": "service.name",
             "value": {
-              "stringValue": "vercel-ai-sdk-swarm"
+              "stringValue": "unknown_service:node"
             }
           },
           {
@@ -611,17 +704,153 @@
       "scopeSpans": [
         {
           "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "46fa8ce394e7eda3",
+              "parentSpanId": "34c76fe203e989a8",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057952849000000",
+              "endTimeUnixNano": "1791057955158746333",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "760e6d40-f148-4b70-a0ed-4a9276f469f8"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "19a16dccb289f576",
+              "parentSpanId": "efcbbfc11002c627",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057955162000000",
+              "endTimeUnixNano": "1791057957086773959",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "0a9c4a64-2d08-49ac-ab84-3585b6633d5e"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "004ec462f2f3bc08",
+              "parentSpanId": "c7fa9f17f6fdb310",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057957088000000",
+              "endTimeUnixNano": "1791057959119533834",
+              "attributes": [
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "c3c6065c-2e7b-4bd5-95c2-2f6def18e447"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        },
+        {
+          "scope": {
             "name": "gen_ai"
           },
           "spans": [
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "fbd779c4b7cfd22f",
-              "parentSpanId": "4260cc415bb75b33",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "34c76fe203e989a8",
+              "parentSpanId": "26c3b7e0e31a1380",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791013036656000000",
-              "endTimeUnixNano": "1791013038767568334",
+              "startTimeUnixNano": "1791057952849000000",
+              "endTimeUnixNano": "1791057955159730125",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -650,7 +879,7 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_gnvV80wCiKg4qfE6KILVdyLK\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an “agent trace” is in AI/software agent systems. Find a concise general definition and key elements typically recorded (steps/actions, observations, tool calls, outputs, timestamps/state), plus why useful. Distinguish from distributed tracing only if relevant. Provide reliable, concise factual framing.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_gnvV80wCiKg4qfE6KILVdyLK\",\"response\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: what it received, what it did, what it observed in response, and how the run ended. The term has no single universally adopted schema.\\n\\nA trace commonly records:\\n\\n- **Run context:** input, agent or model version, session/run ID, and relevant state.\\n- **Steps and actions:** step order, decisions or action types, and state changes.\\n- **Model and tool interactions:** prompts or requests, tool names and arguments, and returned results.\\n- **Observations and outputs:** information the agent received and its final response or other result.\\n- **Timing and status:** timestamps or durations, errors, and sometimes token or cost data.\\n\\n**Why it’s useful:** Traces help developers debug failures, understand tool use, evaluate behavior, compare runs, and audit or monitor production systems. They may record model inputs and outputs, but **need not include the model’s private internal reasoning**.\\n\\n**Not the same as distributed tracing:** Distributed tracing follows a request across services using spans and timing data. An agent trace focuses on the agent’s steps and interactions; it may link to distributed traces when the agent calls services.\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_hKjLBi95XhJ5895ni96rvAo5\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an agent trace is in the context of AI agents/software systems. Gather concise definition, what it records (steps/tool calls/inputs outputs decisions/timing/errors), why useful (debugging, observability, evaluation/audit), and note terminology can vary.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_hKjLBi95XhJ5895ni96rvAo5\",\"response\":\"An **agent trace** is a record of how an AI agent handled a particular task, from its initial input through its final response. It often represents the run as an ordered or nested sequence of events.\\n\\nA trace may record:\\n- **Steps and decisions:** model calls, intermediate reasoning summaries, routing choices, and state changes.\\n- **Tool calls:** which tools were used, with their inputs and outputs.\\n- **Inputs and outputs:** user messages, model responses, and relevant context.\\n- **Timing and usage:** timestamps, durations, token counts, or costs.\\n- **Errors and retries:** failures, exceptions, and recovery attempts.\\n\\nTraces help developers **debug** unexpected behavior, monitor **observability** and performance, **evaluate** agent quality, and support **audits** of how an outcome was produced. They can contain sensitive information, so access and retention should be managed carefully.\\n\\nThe term **\u201cagent trace\u201d** is not standardized: systems may use it for a full task history, a set of spans or events, or a more limited execution log. It does not necessarily capture every internal model process.\"}]}]"
                   }
                 },
                 {
@@ -662,7 +891,7 @@
                 {
                   "key": "gen_ai.client.operation.duration",
                   "value": {
-                    "doubleValue": 2.1115470829999996
+                    "doubleValue": 2.3105230839999993
                   }
                 },
                 {
@@ -680,7 +909,7 @@
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "resp_0224497a6bbc0f84006ac0b0acc53887d08a8f3bbae0af3981"
+                    "stringValue": "resp_06126a702d67e759006ac16020fd4887d0b3da6498d42dab8b"
                   }
                 },
                 {
@@ -692,13 +921,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "423"
+                    "intValue": "399"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "107"
+                    "intValue": "96"
                   }
                 },
                 {
@@ -710,7 +939,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_Wo2IVMhWqlc00P78Y22KxOaC\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Write a clear concise answer to: “What is an agent trace?” Use the supplied facts: time-ordered record of AI agent execution showing input, actions, observations/responses, and result; schema varies; may include run context, ordered steps, model/tool interactions, outputs, timing/errors/cost; useful for debugging, evaluation, audit/monitoring; does not necessarily contain private internal reasoning. Briefly distinguish from distributed trace only if useful.\"}}],\"finish_reason\":\"tool_call\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_FSQYYpC41Kg2K1vFXQqCCuoQ\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Write a clear concise response answering 'What is an agent trace?' Use provided facts: an ordered/nested record of an AI agent run from input to outcome, often includes model steps, tool calls and their inputs/outputs, state, timing, errors/retries; purposes debugging, monitoring, evaluation, audits. Mention term varies and traces don't necessarily expose every internal model process. Note sensitive data.\"}}],\"finish_reason\":\"tool_call\"}]"
                   }
                 }
               ],
@@ -718,13 +947,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "972c7471c7fd1d91",
-              "parentSpanId": "37dadcbf981597ec",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "efcbbfc11002c627",
+              "parentSpanId": "e33872edec5dab3e",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791013038769000000",
-              "endTimeUnixNano": "1791013040042067583",
+              "startTimeUnixNano": "1791057955161000000",
+              "endTimeUnixNano": "1791057957086935292",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -753,13 +982,13 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Write a clear concise answer to: “What is an agent trace?” Use the supplied facts: time-ordered record of AI agent execution showing input, actions, observations/responses, and result; schema varies; may include run context, ordered steps, model/tool interactions, outputs, timing/errors/cost; useful for debugging, evaluation, audit/monitoring; does not necessarily contain private internal reasoning. Briefly distinguish from distributed trace only if useful.\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Write a clear concise response answering 'What is an agent trace?' Use provided facts: an ordered/nested record of an AI agent run from input to outcome, often includes model steps, tool calls and their inputs/outputs, state, timing, errors/retries; purposes debugging, monitoring, evaluation, audits. Mention term varies and traces don't necessarily expose every internal model process. Note sensitive data.\"}]}]"
                   }
                 },
                 {
                   "key": "gen_ai.client.operation.duration",
                   "value": {
-                    "doubleValue": 1.2729631250000002
+                    "doubleValue": 1.926292875000001
                   }
                 },
                 {
@@ -777,7 +1006,7 @@
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "chatcmpl-EUob1yJkxHmB6I2mZwPITilfIMaVZ"
+                    "stringValue": "chatcmpl-EV0HT7OeI7JY8CSTutjFbo4HkU9Ly"
                   }
                 },
                 {
@@ -789,13 +1018,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "109"
+                    "intValue": "98"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "85"
+                    "intValue": "90"
                   }
                 },
                 {
@@ -807,7 +1036,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: its input, actions, observations or responses, and final result. The format varies, but traces may also include run context, model and tool interactions, outputs, timing, errors, and cost. They’re useful for debugging, evaluation, auditing, and monitoring, and don’t necessarily include the agent’s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An agent trace is an ordered, sometimes nested record of an AI agent\u2019s run from input to outcome. It may include model steps, tool calls and their inputs and outputs, state changes, timing, errors, and retries. Traces help with debugging, monitoring, evaluation, and audits.\\n\\nThe term varies across systems, and a trace doesn\u2019t necessarily reveal every internal model process. It may contain sensitive data, so handle it accordingly.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],
@@ -815,13 +1044,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "37dadcbf981597ec",
-              "parentSpanId": "3182ea6c59ec6ab3",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "e33872edec5dab3e",
+              "parentSpanId": "05b55a129022e6e7",
               "name": "step 1",
               "kind": 1,
-              "startTimeUnixNano": "1791013038769000000",
-              "endTimeUnixNano": "1791013040042186333",
+              "startTimeUnixNano": "1791057955161000000",
+              "endTimeUnixNano": "1791057957087612750",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -834,13 +1063,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "3182ea6c59ec6ab3",
-              "parentSpanId": "982e47a818dcf46e",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "05b55a129022e6e7",
+              "parentSpanId": "e574546e27ec92ac",
               "name": "invoke_agent writer_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013038769000000",
-              "endTimeUnixNano": "1791013040042408125",
+              "startTimeUnixNano": "1791057955161000000",
+              "endTimeUnixNano": "1791057957088059500",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -875,7 +1104,7 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Write a clear concise answer to: “What is an agent trace?” Use the supplied facts: time-ordered record of AI agent execution showing input, actions, observations/responses, and result; schema varies; may include run context, ordered steps, model/tool interactions, outputs, timing/errors/cost; useful for debugging, evaluation, audit/monitoring; does not necessarily contain private internal reasoning. Briefly distinguish from distributed trace only if useful.\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"Write a clear concise response answering 'What is an agent trace?' Use provided facts: an ordered/nested record of an AI agent run from input to outcome, often includes model steps, tool calls and their inputs/outputs, state, timing, errors/retries; purposes debugging, monitoring, evaluation, audits. Mention term varies and traces don't necessarily expose every internal model process. Note sensitive data.\"}]}]"
                   }
                 },
                 {
@@ -893,13 +1122,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "109"
+                    "intValue": "98"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "85"
+                    "intValue": "90"
                   }
                 },
                 {
@@ -911,7 +1140,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: its input, actions, observations or responses, and final result. The format varies, but traces may also include run context, model and tool interactions, outputs, timing, errors, and cost. They’re useful for debugging, evaluation, auditing, and monitoring, and don’t necessarily include the agent’s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An agent trace is an ordered, sometimes nested record of an AI agent\u2019s run from input to outcome. It may include model steps, tool calls and their inputs and outputs, state changes, timing, errors, and retries. Traces help with debugging, monitoring, evaluation, and audits.\\n\\nThe term varies across systems, and a trace doesn\u2019t necessarily reveal every internal model process. It may contain sensitive data, so handle it accordingly.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],
@@ -919,13 +1148,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "982e47a818dcf46e",
-              "parentSpanId": "4260cc415bb75b33",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "e574546e27ec92ac",
+              "parentSpanId": "26c3b7e0e31a1380",
               "name": "execute_tool writer_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013038768000000",
-              "endTimeUnixNano": "1791013040041950625",
+              "startTimeUnixNano": "1791057955160000000",
+              "endTimeUnixNano": "1791057957087795166",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -942,7 +1171,7 @@
                 {
                   "key": "gen_ai.tool.call.id",
                   "value": {
-                    "stringValue": "call_Wo2IVMhWqlc00P78Y22KxOaC"
+                    "stringValue": "call_FSQYYpC41Kg2K1vFXQqCCuoQ"
                   }
                 },
                 {
@@ -954,19 +1183,19 @@
                 {
                   "key": "gen_ai.tool.call.arguments",
                   "value": {
-                    "stringValue": "{\"request\":\"Write a clear concise answer to: “What is an agent trace?” Use the supplied facts: time-ordered record of AI agent execution showing input, actions, observations/responses, and result; schema varies; may include run context, ordered steps, model/tool interactions, outputs, timing/errors/cost; useful for debugging, evaluation, audit/monitoring; does not necessarily contain private internal reasoning. Briefly distinguish from distributed trace only if useful.\"}"
+                    "stringValue": "{\"request\":\"Write a clear concise response answering 'What is an agent trace?' Use provided facts: an ordered/nested record of an AI agent run from input to outcome, often includes model steps, tool calls and their inputs/outputs, state, timing, errors/retries; purposes debugging, monitoring, evaluation, audits. Mention term varies and traces don't necessarily expose every internal model process. Note sensitive data.\"}"
                   }
                 },
                 {
                   "key": "gen_ai.execute_tool.duration",
                   "value": {
-                    "doubleValue": 1.2738818329999995
+                    "doubleValue": 1.927702292
                   }
                 },
                 {
                   "key": "gen_ai.tool.call.result",
                   "value": {
-                    "stringValue": "\"An **agent trace** is a time-ordered record of an AI agent’s execution: its input, actions, observations or responses, and final result. The format varies, but traces may also include run context, model and tool interactions, outputs, timing, errors, and cost. They’re useful for debugging, evaluation, auditing, and monitoring, and don’t necessarily include the agent’s private internal reasoning.\""
+                    "stringValue": "\"An agent trace is an ordered, sometimes nested record of an AI agent\u2019s run from input to outcome. It may include model steps, tool calls and their inputs and outputs, state changes, timing, errors, and retries. Traces help with debugging, monitoring, evaluation, and audits.\\n\\nThe term varies across systems, and a trace doesn\u2019t necessarily reveal every internal model process. It may contain sensitive data, so handle it accordingly.\""
                   }
                 }
               ],
@@ -974,13 +1203,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "4260cc415bb75b33",
-              "parentSpanId": "b6102b2bee5ee3fd",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "26c3b7e0e31a1380",
+              "parentSpanId": "bd501a3ee7d1e6f7",
               "name": "step 2",
               "kind": 1,
-              "startTimeUnixNano": "1791013036656000000",
-              "endTimeUnixNano": "1791013040041951458",
+              "startTimeUnixNano": "1791057952849000000",
+              "endTimeUnixNano": "1791057957088042250",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -993,13 +1222,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "536f1f5290454bca",
-              "parentSpanId": "dc7f1d192649947b",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "c7fa9f17f6fdb310",
+              "parentSpanId": "f56402bcb93b81fd",
               "name": "chat openai/gpt-6-luna",
               "kind": 3,
-              "startTimeUnixNano": "1791013040042000000",
-              "endTimeUnixNano": "1791013042268431500",
+              "startTimeUnixNano": "1791057957088000000",
+              "endTimeUnixNano": "1791057959120126625",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -1028,7 +1257,7 @@
                 {
                   "key": "gen_ai.input.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_gnvV80wCiKg4qfE6KILVdyLK\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an “agent trace” is in AI/software agent systems. Find a concise general definition and key elements typically recorded (steps/actions, observations, tool calls, outputs, timestamps/state), plus why useful. Distinguish from distributed tracing only if relevant. Provide reliable, concise factual framing.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_gnvV80wCiKg4qfE6KILVdyLK\",\"response\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: what it received, what it did, what it observed in response, and how the run ended. The term has no single universally adopted schema.\\n\\nA trace commonly records:\\n\\n- **Run context:** input, agent or model version, session/run ID, and relevant state.\\n- **Steps and actions:** step order, decisions or action types, and state changes.\\n- **Model and tool interactions:** prompts or requests, tool names and arguments, and returned results.\\n- **Observations and outputs:** information the agent received and its final response or other result.\\n- **Timing and status:** timestamps or durations, errors, and sometimes token or cost data.\\n\\n**Why it’s useful:** Traces help developers debug failures, understand tool use, evaluate behavior, compare runs, and audit or monitor production systems. They may record model inputs and outputs, but **need not include the model’s private internal reasoning**.\\n\\n**Not the same as distributed tracing:** Distributed tracing follows a request across services using spans and timing data. An agent trace focuses on the agent’s steps and interactions; it may link to distributed traces when the agent calls services.\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_Wo2IVMhWqlc00P78Y22KxOaC\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Write a clear concise answer to: “What is an agent trace?” Use the supplied facts: time-ordered record of AI agent execution showing input, actions, observations/responses, and result; schema varies; may include run context, ordered steps, model/tool interactions, outputs, timing/errors/cost; useful for debugging, evaluation, audit/monitoring; does not necessarily contain private internal reasoning. Briefly distinguish from distributed trace only if useful.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_Wo2IVMhWqlc00P78Y22KxOaC\",\"response\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: its input, actions, observations or responses, and final result. The format varies, but traces may also include run context, model and tool interactions, outputs, timing, errors, and cost. They’re useful for debugging, evaluation, auditing, and monitoring, and don’t necessarily include the agent’s private internal reasoning.\"}]}]"
+                    "stringValue": "[{\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"content\":\"What is an agent trace?\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_hKjLBi95XhJ5895ni96rvAo5\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an agent trace is in the context of AI agents/software systems. Gather concise definition, what it records (steps/tool calls/inputs outputs decisions/timing/errors), why useful (debugging, observability, evaluation/audit), and note terminology can vary.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_hKjLBi95XhJ5895ni96rvAo5\",\"response\":\"An **agent trace** is a record of how an AI agent handled a particular task, from its initial input through its final response. It often represents the run as an ordered or nested sequence of events.\\n\\nA trace may record:\\n- **Steps and decisions:** model calls, intermediate reasoning summaries, routing choices, and state changes.\\n- **Tool calls:** which tools were used, with their inputs and outputs.\\n- **Inputs and outputs:** user messages, model responses, and relevant context.\\n- **Timing and usage:** timestamps, durations, token counts, or costs.\\n- **Errors and retries:** failures, exceptions, and recovery attempts.\\n\\nTraces help developers **debug** unexpected behavior, monitor **observability** and performance, **evaluate** agent quality, and support **audits** of how an outcome was produced. They can contain sensitive information, so access and retention should be managed carefully.\\n\\nThe term **\u201cagent trace\u201d** is not standardized: systems may use it for a full task history, a set of spans or events, or a more limited execution log. It does not necessarily capture every internal model process.\"}]},{\"role\":\"assistant\",\"parts\":[{\"type\":\"tool_call\",\"id\":\"call_FSQYYpC41Kg2K1vFXQqCCuoQ\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Write a clear concise response answering 'What is an agent trace?' Use provided facts: an ordered/nested record of an AI agent run from input to outcome, often includes model steps, tool calls and their inputs/outputs, state, timing, errors/retries; purposes debugging, monitoring, evaluation, audits. Mention term varies and traces don't necessarily expose every internal model process. Note sensitive data.\"}}]},{\"role\":\"tool\",\"parts\":[{\"type\":\"tool_call_response\",\"id\":\"call_FSQYYpC41Kg2K1vFXQqCCuoQ\",\"response\":\"An agent trace is an ordered, sometimes nested record of an AI agent\u2019s run from input to outcome. It may include model steps, tool calls and their inputs and outputs, state changes, timing, errors, and retries. Traces help with debugging, monitoring, evaluation, and audits.\\n\\nThe term varies across systems, and a trace doesn\u2019t necessarily reveal every internal model process. It may contain sensitive data, so handle it accordingly.\"}]}]"
                   }
                 },
                 {
@@ -1040,7 +1269,7 @@
                 {
                   "key": "gen_ai.client.operation.duration",
                   "value": {
-                    "doubleValue": 2.2263527080000003
+                    "doubleValue": 2.032086665999999
                   }
                 },
                 {
@@ -1058,7 +1287,7 @@
                 {
                   "key": "gen_ai.response.id",
                   "value": {
-                    "stringValue": "resp_0b9083534b7d1014006ac0b0b0245087d0bbd437dd17888851"
+                    "stringValue": "resp_04dc4435ae3ecad7006ac1602536d487d0880ba6a278b7c417"
                   }
                 },
                 {
@@ -1070,13 +1299,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "623"
+                    "intValue": "593"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "81"
+                    "intValue": "99"
                   }
                 },
                 {
@@ -1088,7 +1317,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a time-ordered record of an AI agent’s run: what it received, what actions or tool calls it made, what responses it observed, and how the run ended. It can also include timing, errors, and other run details.\\n\\nTraces help with debugging, evaluation, and monitoring. They don’t necessarily include the agent’s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is an ordered record of an AI agent\u2019s run, from the initial input to the final outcome. It may include model steps, tool calls and their inputs and outputs, state changes, timing, errors, and retries.\\n\\nDevelopers use traces to debug behavior, monitor performance, evaluate results, and audit how an outcome was produced. The term varies across systems, and a trace may not reveal every internal model process. It can also contain sensitive data.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],
@@ -1096,13 +1325,13 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "dc7f1d192649947b",
-              "parentSpanId": "b6102b2bee5ee3fd",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "f56402bcb93b81fd",
+              "parentSpanId": "bd501a3ee7d1e6f7",
               "name": "step 3",
               "kind": 1,
-              "startTimeUnixNano": "1791013040042000000",
-              "endTimeUnixNano": "1791013042268600583",
+              "startTimeUnixNano": "1791057957088000000",
+              "endTimeUnixNano": "1791057959120299500",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -1115,12 +1344,12 @@
               "flags": 257
             },
             {
-              "traceId": "96d53d9d62dfee34f3002c0ed5b9bc88",
-              "spanId": "b6102b2bee5ee3fd",
+              "traceId": "0b9c16a25e1f9164d1df8b086d79b3c5",
+              "spanId": "bd501a3ee7d1e6f7",
               "name": "invoke_agent research_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791013030239000000",
-              "endTimeUnixNano": "1791013042268929041",
+              "startTimeUnixNano": "1791057946606000000",
+              "endTimeUnixNano": "1791057959120507458",
               "attributes": [
                 {
                   "key": "gen_ai.operation.name",
@@ -1173,13 +1402,13 @@
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "1138"
+                    "intValue": "1084"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "264"
+                    "intValue": "265"
                   }
                 },
                 {
@@ -1191,7 +1420,7 @@
                 {
                   "key": "gen_ai.output.messages",
                   "value": {
-                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a time-ordered record of an AI agent’s run: what it received, what actions or tool calls it made, what responses it observed, and how the run ended. It can also include timing, errors, and other run details.\\n\\nTraces help with debugging, evaluation, and monitoring. They don’t necessarily include the agent’s private internal reasoning.\"},{\"type\":\"tool_call\",\"id\":\"call_gnvV80wCiKg4qfE6KILVdyLK\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an “agent trace” is in AI/software agent systems. Find a concise general definition and key elements typically recorded (steps/actions, observations, tool calls, outputs, timestamps/state), plus why useful. Distinguish from distributed tracing only if relevant. Provide reliable, concise factual framing.\"}},{\"type\":\"tool_call\",\"id\":\"call_Wo2IVMhWqlc00P78Y22KxOaC\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Write a clear concise answer to: “What is an agent trace?” Use the supplied facts: time-ordered record of AI agent execution showing input, actions, observations/responses, and result; schema varies; may include run context, ordered steps, model/tool interactions, outputs, timing/errors/cost; useful for debugging, evaluation, audit/monitoring; does not necessarily contain private internal reasoning. Briefly distinguish from distributed trace only if useful.\"}},{\"type\":\"tool_call_response\",\"id\":\"call_gnvV80wCiKg4qfE6KILVdyLK\",\"response\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: what it received, what it did, what it observed in response, and how the run ended. The term has no single universally adopted schema.\\n\\nA trace commonly records:\\n\\n- **Run context:** input, agent or model version, session/run ID, and relevant state.\\n- **Steps and actions:** step order, decisions or action types, and state changes.\\n- **Model and tool interactions:** prompts or requests, tool names and arguments, and returned results.\\n- **Observations and outputs:** information the agent received and its final response or other result.\\n- **Timing and status:** timestamps or durations, errors, and sometimes token or cost data.\\n\\n**Why it’s useful:** Traces help developers debug failures, understand tool use, evaluate behavior, compare runs, and audit or monitor production systems. They may record model inputs and outputs, but **need not include the model’s private internal reasoning**.\\n\\n**Not the same as distributed tracing:** Distributed tracing follows a request across services using spans and timing data. An agent trace focuses on the agent’s steps and interactions; it may link to distributed traces when the agent calls services.\"},{\"type\":\"tool_call_response\",\"id\":\"call_Wo2IVMhWqlc00P78Y22KxOaC\",\"response\":\"An **agent trace** is a time-ordered record of an AI agent’s execution: its input, actions, observations or responses, and final result. The format varies, but traces may also include run context, model and tool interactions, outputs, timing, errors, and cost. They’re useful for debugging, evaluation, auditing, and monitoring, and don’t necessarily include the agent’s private internal reasoning.\"}],\"finish_reason\":\"stop\"}]"
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is an ordered record of an AI agent\u2019s run, from the initial input to the final outcome. It may include model steps, tool calls and their inputs and outputs, state changes, timing, errors, and retries.\\n\\nDevelopers use traces to debug behavior, monitor performance, evaluate results, and audit how an outcome was produced. The term varies across systems, and a trace may not reveal every internal model process. It can also contain sensitive data.\"},{\"type\":\"tool_call\",\"id\":\"call_hKjLBi95XhJ5895ni96rvAo5\",\"name\":\"search_agent\",\"arguments\":{\"request\":\"Explain what an agent trace is in the context of AI agents/software systems. Gather concise definition, what it records (steps/tool calls/inputs outputs decisions/timing/errors), why useful (debugging, observability, evaluation/audit), and note terminology can vary.\"}},{\"type\":\"tool_call\",\"id\":\"call_FSQYYpC41Kg2K1vFXQqCCuoQ\",\"name\":\"writer_agent\",\"arguments\":{\"request\":\"Write a clear concise response answering 'What is an agent trace?' Use provided facts: an ordered/nested record of an AI agent run from input to outcome, often includes model steps, tool calls and their inputs/outputs, state, timing, errors/retries; purposes debugging, monitoring, evaluation, audits. Mention term varies and traces don't necessarily expose every internal model process. Note sensitive data.\"}},{\"type\":\"tool_call_response\",\"id\":\"call_hKjLBi95XhJ5895ni96rvAo5\",\"response\":\"An **agent trace** is a record of how an AI agent handled a particular task, from its initial input through its final response. It often represents the run as an ordered or nested sequence of events.\\n\\nA trace may record:\\n- **Steps and decisions:** model calls, intermediate reasoning summaries, routing choices, and state changes.\\n- **Tool calls:** which tools were used, with their inputs and outputs.\\n- **Inputs and outputs:** user messages, model responses, and relevant context.\\n- **Timing and usage:** timestamps, durations, token counts, or costs.\\n- **Errors and retries:** failures, exceptions, and recovery attempts.\\n\\nTraces help developers **debug** unexpected behavior, monitor **observability** and performance, **evaluate** agent quality, and support **audits** of how an outcome was produced. They can contain sensitive information, so access and retention should be managed carefully.\\n\\nThe term **\u201cagent trace\u201d** is not standardized: systems may use it for a full task history, a set of spans or events, or a more limited execution log. It does not necessarily capture every internal model process.\"},{\"type\":\"tool_call_response\",\"id\":\"call_FSQYYpC41Kg2K1vFXQqCCuoQ\",\"response\":\"An agent trace is an ordered, sometimes nested record of an AI agent\u2019s run from input to outcome. It may include model steps, tool calls and their inputs and outputs, state changes, timing, errors, and retries. Traces help with debugging, monitoring, evaluation, and audits.\\n\\nThe term varies across systems, and a trace doesn\u2019t necessarily reveal every internal model process. It may contain sensitive data, so handle it accordingly.\"}],\"finish_reason\":\"stop\"}]"
                   }
                 }
               ],

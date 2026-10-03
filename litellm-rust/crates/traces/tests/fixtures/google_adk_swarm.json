@@ -22,15 +22,15 @@
             }
           },
           {
-            "key": "service.name",
-            "value": {
-              "stringValue": "google-adk-swarm"
-            }
-          },
-          {
             "key": "telemetry.auto.version",
             "value": {
               "stringValue": "0.63b1"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service"
             }
           }
         ]
@@ -38,18 +38,217 @@
       "scopeSpans": [
         {
           "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "df1b8e9d59ac425f",
+              "parentSpanId": "7aea526a2f62f7bb",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057927900631000",
+              "endTimeUnixNano": "1791057930070293000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "685c7899-67b2-47d8-acd7-746d02b1c8ca"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.42.1"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.63b1"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "538ac13dfe75cac0",
+              "parentSpanId": "33f51c5fa3ff95e7",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057930109871000",
+              "endTimeUnixNano": "1791057937952024000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "fc535448-aca9-4142-845c-ef77da78b468"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "8c694befa79f84e0",
+              "parentSpanId": "99096fa404196965",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057937962958000",
+              "endTimeUnixNano": "1791057940219679000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "b9bf6ed9-bf80-449a-bce1-0131897ffa5b"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
             "name": "openinference.instrumentation.google_adk",
             "version": "1.0.2"
           },
           "spans": [
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "b0493a69e24a1f02",
-              "parentSpanId": "db984df614adf157",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "33f51c5fa3ff95e7",
+              "parentSpanId": "f8a8aa88ea7f754f",
               "name": "call_llm",
               "kind": 1,
-              "startTimeUnixNano": "1791012848102038444",
-              "endTimeUnixNano": "1791012859382330555",
+              "startTimeUnixNano": "1791057930104679000",
+              "endTimeUnixNano": "1791057937955910000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -78,7 +277,7 @@
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "4cfc716c-8ad3-44ff-8318-83fbb25819fb"
+                    "stringValue": "d41f5b2d-7959-4e22-898a-0b7f159aee73"
                   }
                 },
                 {
@@ -90,49 +289,49 @@
                 {
                   "key": "gen_ai.request.model",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.invocation_id",
                   "value": {
-                    "stringValue": "e-1f878a3b-5cc6-4bcf-85eb-1d7232e8421d"
+                    "stringValue": "e-0e7135d1-8b2a-4950-a8d4-21f2ce72440d"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.session_id",
                   "value": {
-                    "stringValue": "4cfc716c-8ad3-44ff-8318-83fbb25819fb"
+                    "stringValue": "d41f5b2d-7959-4e22-898a-0b7f159aee73"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "dc85a626-ba3d-40da-b91d-712a4d72df98"
+                    "stringValue": "c32a48a2-4c5a-4400-a449-caeaa20bf2e3"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_request",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"config\":{\"system_instruction\":\"List a few key facts about the question.\\n\\nYou are an agent. Your internal name is \\\"search_agent\\\". The description about you is \\\"Gathers key facts about the question.\\\".\",\"labels\":{\"adk_agent_name\":\"search_agent\"}},\"contents\":[{\"parts\":[{\"text\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}],\"role\":\"user\"}]}"
+                    "stringValue": "{\"model\": \"openai/openai/gpt-6-luna\", \"config\": {\"system_instruction\": \"List a few key facts about the question.\\n\\nYou are an agent. Your internal name is \\\"search_agent\\\". The description about you is \\\"Gathers key facts about the question.\\\".\", \"labels\": {\"adk_agent_name\": \"search_agent\"}}, \"contents\": [{\"parts\": [{\"text\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}], \"role\": \"user\"}]}"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_response",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":850,\"prompt_token_count\":84,\"thoughts_token_count\":463,\"total_token_count\":934}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":548,\"prompt_token_count\":113,\"thoughts_token_count\":298,\"total_token_count\":661}}"
                   }
                 },
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "84"
+                    "intValue": "113"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "1313"
+                    "intValue": "846"
                   }
                 },
                 {
@@ -144,7 +343,7 @@
                 {
                   "key": "gen_ai.usage.reasoning.output_tokens",
                   "value": {
-                    "intValue": "463"
+                    "intValue": "298"
                   }
                 },
                 {
@@ -168,7 +367,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"List a few key facts about the question.\\n\\nYou are an agent. Your internal name is \\\"search_agent\\\". The description about you is \\\"Gathers key facts about the question.\\\".\",\"labels\":{\"adk_agent_name\":\"search_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
+                    "stringValue": "{\"model\":\"openai/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"List a few key facts about the question.\\n\\nYou are an agent. Your internal name is \\\"search_agent\\\". The description about you is \\\"Gathers key facts about the question.\\\".\",\"labels\":{\"adk_agent_name\":\"search_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
                   }
                 },
                 {
@@ -180,7 +379,7 @@
                 {
                   "key": "llm.model_name",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
@@ -210,7 +409,7 @@
                 {
                   "key": "llm.input_messages.1.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts."
+                    "stringValue": "Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful."
                   }
                 },
                 {
@@ -222,7 +421,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":850,\"prompt_token_count\":84,\"thoughts_token_count\":463,\"total_token_count\":934}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":548,\"prompt_token_count\":113,\"thoughts_token_count\":298,\"total_token_count\":661}}"
                   }
                 },
                 {
@@ -234,25 +433,25 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "934"
+                    "intValue": "661"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "84"
+                    "intValue": "113"
                   }
                 },
                 {
                   "key": "llm.token_count.completion_details.reasoning",
                   "value": {
-                    "intValue": "463"
+                    "intValue": "298"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "850"
+                    "intValue": "548"
                   }
                 },
                 {
@@ -264,19 +463,13 @@
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\n\n**References**\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces."
+                    "stringValue": "- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\n\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs."
                   }
                 },
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.type",
                   "value": {
                     "stringValue": "text"
-                  }
-                },
-                {
-                  "key": "gen_ai.response.id",
-                  "value": {
-                    "stringValue": "chatcmpl-EUoXwjDHp3pkAQH7ZniBNfSnJsZfs"
                   }
                 },
                 {
@@ -292,13 +485,13 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "db984df614adf157",
-              "parentSpanId": "090620d88ed8575d",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "f8a8aa88ea7f754f",
+              "parentSpanId": "63f7a2198eeb37e0",
               "name": "agent_run [search_agent]",
               "kind": 1,
-              "startTimeUnixNano": "1791012848101393661",
-              "endTimeUnixNano": "1791012859382589468",
+              "startTimeUnixNano": "1791057930101261000",
+              "endTimeUnixNano": "1791057937956063000",
               "attributes": [
                 {
                   "key": "agent.name",
@@ -339,13 +532,13 @@
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "4cfc716c-8ad3-44ff-8318-83fbb25819fb"
+                    "stringValue": "d41f5b2d-7959-4e22-898a-0b7f159aee73"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":850,\"prompt_token_count\":84,\"thoughts_token_count\":463,\"total_token_count\":934},\"invocation_id\":\"e-1f878a3b-5cc6-4bcf-85eb-1d7232e8421d\",\"author\":\"search_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"\"},\"id\":\"dc85a626-ba3d-40da-b91d-712a4d72df98\",\"timestamp\":1791012848.102001}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":548,\"prompt_token_count\":113,\"thoughts_token_count\":298,\"total_token_count\":661},\"invocation_id\":\"e-0e7135d1-8b2a-4950-a8d4-21f2ce72440d\",\"author\":\"search_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"\"},\"id\":\"c32a48a2-4c5a-4400-a449-caeaa20bf2e3\",\"timestamp\":1791057930.104604}"
                   }
                 },
                 {
@@ -367,18 +560,18 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "090620d88ed8575d",
-              "parentSpanId": "a71630600b9af518",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "63f7a2198eeb37e0",
+              "parentSpanId": "78fe393e4a4d4316",
               "name": "invocation [research_app]",
               "kind": 1,
-              "startTimeUnixNano": "1791012848099847015",
-              "endTimeUnixNano": "1791012859382893422",
+              "startTimeUnixNano": "1791057930098337000",
+              "endTimeUnixNano": "1791057937956448000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"user_id\":\"debug_user_id\",\"session_id\":\"4cfc716c-8ad3-44ff-8318-83fbb25819fb\",\"invocation_id\":null,\"new_message\":{\"parts\":[{\"text\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}],\"role\":\"user\"},\"state_delta\":null,\"run_config\":{\"save_input_blobs_as_artifacts\":false,\"support_cfc\":false,\"streaming_mode\":\"StreamingMode.NONE\",\"output_audio_transcription\":{},\"input_audio_transcription\":{},\"save_live_blob\":false,\"save_live_audio\":false,\"max_llm_calls\":500,\"include_thoughts_from_other_agents\":false},\"yield_user_message\":false,\"abort_signal\":\"<asyncio.locks.Event object at 0xffff9f005a90 [unset, waiters:1]>\"}"
+                    "stringValue": "{\"user_id\": \"debug_user_id\", \"session_id\": \"d41f5b2d-7959-4e22-898a-0b7f159aee73\", \"invocation_id\": null, \"new_message\": {\"parts\": [{\"text\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}], \"role\": \"user\"}, \"state_delta\": null, \"run_config\": {\"save_input_blobs_as_artifacts\": false, \"support_cfc\": false, \"streaming_mode\": \"StreamingMode.NONE\", \"output_audio_transcription\": {}, \"input_audio_transcription\": {}, \"save_live_blob\": false, \"save_live_audio\": false, \"max_llm_calls\": 500, \"include_thoughts_from_other_agents\": false}, \"yield_user_message\": false, \"abort_signal\": \"<asyncio.locks.Event object at 0x10cde2270 [unset, waiters:1]>\"}"
                   }
                 },
                 {
@@ -402,7 +595,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":850,\"prompt_token_count\":84,\"thoughts_token_count\":463,\"total_token_count\":934},\"invocation_id\":\"e-1f878a3b-5cc6-4bcf-85eb-1d7232e8421d\",\"author\":\"search_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"search_agent@1\"},\"id\":\"dc85a626-ba3d-40da-b91d-712a4d72df98\",\"timestamp\":1791012848.102001}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":548,\"prompt_token_count\":113,\"thoughts_token_count\":298,\"total_token_count\":661},\"invocation_id\":\"e-0e7135d1-8b2a-4950-a8d4-21f2ce72440d\",\"author\":\"search_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"search_agent@1\"},\"id\":\"c32a48a2-4c5a-4400-a449-caeaa20bf2e3\",\"timestamp\":1791057930.104604}"
                   }
                 },
                 {
@@ -424,13 +617,13 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "a71630600b9af518",
-              "parentSpanId": "01216ee6d4e6de74",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "78fe393e4a4d4316",
+              "parentSpanId": "4ac695065bf0cc97",
               "name": "execute_tool search_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791012848099574143",
-              "endTimeUnixNano": "1791012859385227100",
+              "startTimeUnixNano": "1791057930097849000",
+              "endTimeUnixNano": "1791057937958270000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -489,25 +682,25 @@
                 {
                   "key": "gcp.vertex.agent.tool_call_args",
                   "value": {
-                    "stringValue": "{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}"
+                    "stringValue": "{\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}"
                   }
                 },
                 {
                   "key": "gen_ai.tool.call.id",
                   "value": {
-                    "stringValue": "call_Shm2S2R92CxzIfHdYHkhDhBy"
+                    "stringValue": "call_XTAhdf3WOJ3xEnaTkGvKtd06"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "5d28b340-5681-4ba8-8df7-423b7569f861"
+                    "stringValue": "819f3972-f189-436f-91cb-e3202fc8f00c"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.tool_response",
                   "value": {
-                    "stringValue": "{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}"
+                    "stringValue": "{\"result\": \"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}"
                   }
                 },
                 {
@@ -525,13 +718,13 @@
                 {
                   "key": "tool.parameters",
                   "value": {
-                    "stringValue": "{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}"
+                    "stringValue": "{\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}"
+                    "stringValue": "{\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}"
                   }
                 },
                 {
@@ -543,13 +736,13 @@
                 {
                   "key": "tool.id",
                   "value": {
-                    "stringValue": "call_Shm2S2R92CxzIfHdYHkhDhBy"
+                    "stringValue": "call_XTAhdf3WOJ3xEnaTkGvKtd06"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}}"
+                    "stringValue": "{\"id\":\"call_XTAhdf3WOJ3xEnaTkGvKtd06\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}}"
                   }
                 },
                 {
@@ -571,13 +764,13 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "a21651d924f03833",
-              "parentSpanId": "01216ee6d4e6de74",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "7aea526a2f62f7bb",
+              "parentSpanId": "4ac695065bf0cc97",
               "name": "call_llm",
               "kind": 1,
-              "startTimeUnixNano": "1791012846251464373",
-              "endTimeUnixNano": "1791012859385806926",
+              "startTimeUnixNano": "1791057926249912000",
+              "endTimeUnixNano": "1791057937958848000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -618,13 +811,13 @@
                 {
                   "key": "gen_ai.request.model",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.invocation_id",
                   "value": {
-                    "stringValue": "e-8c7cce47-1cd6-4faa-ba95-c211e078fb68"
+                    "stringValue": "e-a0f84c81-dcd3-4483-8b58-2d07b34de04d"
                   }
                 },
                 {
@@ -636,19 +829,19 @@
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "40520608-7fe0-4bcf-bf34-6289c58f04b0"
+                    "stringValue": "0ff4c0d4-8cf4-4fc3-9547-ad96f54e0760"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_request",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"}]}"
+                    "stringValue": "{\"model\": \"openai/openai/gpt-6-luna\", \"config\": {\"system_instruction\": \"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\", \"tools\": [{\"function_declarations\": [{\"description\": \"Gathers key facts about the question.\", \"name\": \"search_agent\", \"parameters_json_schema\": {\"type\": \"object\", \"properties\": {\"request\": {\"type\": \"string\"}}, \"required\": [\"request\"]}}, {\"description\": \"Writes the final answer from the gathered facts.\", \"name\": \"writer_agent\", \"parameters_json_schema\": {\"type\": \"object\", \"properties\": {\"request\": {\"type\": \"string\"}}, \"required\": [\"request\"]}}]}], \"labels\": {\"adk_agent_name\": \"research_agent\"}}, \"contents\": [{\"parts\": [{\"text\": \"What is an agent trace?\"}], \"role\": \"user\"}]}"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_response",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"args\":{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":55,\"prompt_token_count\":107,\"total_token_count\":162}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_XTAhdf3WOJ3xEnaTkGvKtd06\",\"args\":{\"request\":\"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":84,\"prompt_token_count\":107,\"total_token_count\":191}}"
                   }
                 },
                 {
@@ -660,7 +853,7 @@
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "55"
+                    "intValue": "84"
                   }
                 },
                 {
@@ -690,7 +883,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
+                    "stringValue": "{\"model\":\"openai/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
                   }
                 },
                 {
@@ -714,7 +907,7 @@
                 {
                   "key": "llm.model_name",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
@@ -756,7 +949,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"args\":{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":55,\"prompt_token_count\":107,\"total_token_count\":162}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_XTAhdf3WOJ3xEnaTkGvKtd06\",\"args\":{\"request\":\"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":84,\"prompt_token_count\":107,\"total_token_count\":191}}"
                   }
                 },
                 {
@@ -768,7 +961,7 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "162"
+                    "intValue": "191"
                   }
                 },
                 {
@@ -780,7 +973,7 @@
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "55"
+                    "intValue": "84"
                   }
                 },
                 {
@@ -792,7 +985,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_Shm2S2R92CxzIfHdYHkhDhBy"
+                    "stringValue": "call_XTAhdf3WOJ3xEnaTkGvKtd06"
                   }
                 },
                 {
@@ -804,13 +997,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}"
-                  }
-                },
-                {
-                  "key": "gen_ai.response.id",
-                  "value": {
-                    "stringValue": "resp_07f16ec09777d227006ac0afee795887d0980442e7579cab4b"
+                    "stringValue": "{\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}"
                   }
                 },
                 {
@@ -851,15 +1038,15 @@
             }
           },
           {
-            "key": "service.name",
-            "value": {
-              "stringValue": "google-adk-swarm"
-            }
-          },
-          {
             "key": "telemetry.auto.version",
             "value": {
               "stringValue": "0.63b1"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service"
             }
           }
         ]
@@ -867,18 +1054,123 @@
       "scopeSpans": [
         {
           "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "83a213a93e93070d",
+              "parentSpanId": "f8b7712882ec827a",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057940226363000",
+              "endTimeUnixNano": "1791057942836813000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "3730dedd-a714-44a0-b754-ee539e8cd1d4"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "ab7a693adaa87e03",
+              "parentSpanId": "1d0c03a7cec74b9a",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791057942842890000",
+              "endTimeUnixNano": "1791057944610675000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://127.0.0.1:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "af5054ea-f211-49aa-a258-56ab9331d6b2"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
             "name": "openinference.instrumentation.google_adk",
             "version": "1.0.2"
           },
           "spans": [
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "09b952a796a4c767",
-              "parentSpanId": "446988cdc0f71da7",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "f8b7712882ec827a",
+              "parentSpanId": "88ffc7b4d14ee358",
               "name": "call_llm",
               "kind": 1,
-              "startTimeUnixNano": "1791012861864074781",
-              "endTimeUnixNano": "1791012864376564022",
+              "startTimeUnixNano": "1791057940224908000",
+              "endTimeUnixNano": "1791057942838798000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -907,7 +1199,7 @@
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "aff4bbc0-1581-4dde-89aa-deacf98f041a"
+                    "stringValue": "b54b3c58-9fdd-4e3a-89fc-fc106783f3a2"
                   }
                 },
                 {
@@ -919,61 +1211,55 @@
                 {
                   "key": "gen_ai.request.model",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.invocation_id",
                   "value": {
-                    "stringValue": "e-167f8261-fe50-4386-9027-dba3375c0d90"
+                    "stringValue": "e-40cdfd81-cf9f-43e4-8417-96750e4d8073"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.session_id",
                   "value": {
-                    "stringValue": "aff4bbc0-1581-4dde-89aa-deacf98f041a"
+                    "stringValue": "b54b3c58-9fdd-4e3a-89fc-fc106783f3a2"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "8e19b603-492e-4dbf-b2fd-5a7047783c60"
+                    "stringValue": "6f95a0d4-7d14-4508-a9d6-00ec506a3c5f"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_request",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"config\":{\"system_instruction\":\"Write a short answer to the question from the given facts.\\n\\nYou are an agent. Your internal name is \\\"writer_agent\\\". The description about you is \\\"Writes the final answer from the gathered facts.\\\".\",\"labels\":{\"adk_agent_name\":\"writer_agent\"}},\"contents\":[{\"parts\":[{\"text\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}],\"role\":\"user\"}]}"
+                    "stringValue": "{\"model\": \"openai/openai/gpt-6-luna\", \"config\": {\"system_instruction\": \"Write a short answer to the question from the given facts.\\n\\nYou are an agent. Your internal name is \\\"writer_agent\\\". The description about you is \\\"Writes the final answer from the gathered facts.\\\".\", \"labels\": {\"adk_agent_name\": \"writer_agent\"}}, \"contents\": [{\"parts\": [{\"text\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}], \"role\": \"user\"}]}"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_response",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":140,\"prompt_token_count\":147,\"thoughts_token_count\":9,\"total_token_count\":287}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":86,\"prompt_token_count\":183,\"total_token_count\":269}}"
                   }
                 },
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "147"
+                    "intValue": "183"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "149"
+                    "intValue": "86"
                   }
                 },
                 {
                   "key": "gen_ai.usage.cache_read.input_tokens",
                   "value": {
                     "intValue": "0"
-                  }
-                },
-                {
-                  "key": "gen_ai.usage.reasoning.output_tokens",
-                  "value": {
-                    "intValue": "9"
                   }
                 },
                 {
@@ -997,7 +1283,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Write a short answer to the question from the given facts.\\n\\nYou are an agent. Your internal name is \\\"writer_agent\\\". The description about you is \\\"Writes the final answer from the gathered facts.\\\".\",\"labels\":{\"adk_agent_name\":\"writer_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
+                    "stringValue": "{\"model\":\"openai/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Write a short answer to the question from the given facts.\\n\\nYou are an agent. Your internal name is \\\"writer_agent\\\". The description about you is \\\"Writes the final answer from the gathered facts.\\\".\",\"labels\":{\"adk_agent_name\":\"writer_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
                   }
                 },
                 {
@@ -1009,7 +1295,7 @@
                 {
                   "key": "llm.model_name",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
@@ -1039,7 +1325,7 @@
                 {
                   "key": "llm.input_messages.1.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible."
+                    "stringValue": "Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted."
                   }
                 },
                 {
@@ -1051,7 +1337,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":140,\"prompt_token_count\":147,\"thoughts_token_count\":9,\"total_token_count\":287}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":86,\"prompt_token_count\":183,\"total_token_count\":269}}"
                   }
                 },
                 {
@@ -1063,25 +1349,19 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "287"
+                    "intValue": "269"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "147"
-                  }
-                },
-                {
-                  "key": "llm.token_count.completion_details.reasoning",
-                  "value": {
-                    "intValue": "9"
+                    "intValue": "183"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "140"
+                    "intValue": "86"
                   }
                 },
                 {
@@ -1093,19 +1373,13 @@
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\n\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another."
+                    "stringValue": "An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted."
                   }
                 },
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.type",
                   "value": {
                     "stringValue": "text"
-                  }
-                },
-                {
-                  "key": "gen_ai.response.id",
-                  "value": {
-                    "stringValue": "chatcmpl-EUoYAGzeBlSewz8v2r3FO6DeEIKik"
                   }
                 },
                 {
@@ -1121,13 +1395,13 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "446988cdc0f71da7",
-              "parentSpanId": "5fb2836bfe98e9b2",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "88ffc7b4d14ee358",
+              "parentSpanId": "6f1e4f8501878a79",
               "name": "agent_run [writer_agent]",
               "kind": 1,
-              "startTimeUnixNano": "1791012861862753215",
-              "endTimeUnixNano": "1791012864376853185",
+              "startTimeUnixNano": "1791057940224428000",
+              "endTimeUnixNano": "1791057942838899000",
               "attributes": [
                 {
                   "key": "agent.name",
@@ -1168,13 +1442,13 @@
                 {
                   "key": "gen_ai.conversation.id",
                   "value": {
-                    "stringValue": "aff4bbc0-1581-4dde-89aa-deacf98f041a"
+                    "stringValue": "b54b3c58-9fdd-4e3a-89fc-fc106783f3a2"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":140,\"prompt_token_count\":147,\"thoughts_token_count\":9,\"total_token_count\":287},\"invocation_id\":\"e-167f8261-fe50-4386-9027-dba3375c0d90\",\"author\":\"writer_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"\"},\"id\":\"8e19b603-492e-4dbf-b2fd-5a7047783c60\",\"timestamp\":1791012861.863974}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":86,\"prompt_token_count\":183,\"total_token_count\":269},\"invocation_id\":\"e-40cdfd81-cf9f-43e4-8417-96750e4d8073\",\"author\":\"writer_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"\"},\"id\":\"6f95a0d4-7d14-4508-a9d6-00ec506a3c5f\",\"timestamp\":1791057940.2248409}"
                   }
                 },
                 {
@@ -1196,18 +1470,18 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "5fb2836bfe98e9b2",
-              "parentSpanId": "a279195fe8664806",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "6f1e4f8501878a79",
+              "parentSpanId": "97c678f33db38781",
               "name": "invocation [research_app]",
               "kind": 1,
-              "startTimeUnixNano": "1791012861857091956",
-              "endTimeUnixNano": "1791012864377007808",
+              "startTimeUnixNano": "1791057940222181000",
+              "endTimeUnixNano": "1791057942839240000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"user_id\":\"debug_user_id\",\"session_id\":\"aff4bbc0-1581-4dde-89aa-deacf98f041a\",\"invocation_id\":null,\"new_message\":{\"parts\":[{\"text\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}],\"role\":\"user\"},\"state_delta\":null,\"run_config\":{\"save_input_blobs_as_artifacts\":false,\"support_cfc\":false,\"streaming_mode\":\"StreamingMode.NONE\",\"output_audio_transcription\":{},\"input_audio_transcription\":{},\"save_live_blob\":false,\"save_live_audio\":false,\"max_llm_calls\":500,\"include_thoughts_from_other_agents\":false},\"yield_user_message\":false,\"abort_signal\":\"<asyncio.locks.Event object at 0xffff9f005a90 [unset, waiters:1]>\"}"
+                    "stringValue": "{\"user_id\": \"debug_user_id\", \"session_id\": \"b54b3c58-9fdd-4e3a-89fc-fc106783f3a2\", \"invocation_id\": null, \"new_message\": {\"parts\": [{\"text\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}], \"role\": \"user\"}, \"state_delta\": null, \"run_config\": {\"save_input_blobs_as_artifacts\": false, \"support_cfc\": false, \"streaming_mode\": \"StreamingMode.NONE\", \"output_audio_transcription\": {}, \"input_audio_transcription\": {}, \"save_live_blob\": false, \"save_live_audio\": false, \"max_llm_calls\": 500, \"include_thoughts_from_other_agents\": false}, \"yield_user_message\": false, \"abort_signal\": \"<asyncio.locks.Event object at 0x10cde2270 [unset, waiters:1]>\"}"
                   }
                 },
                 {
@@ -1231,7 +1505,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":140,\"prompt_token_count\":147,\"thoughts_token_count\":9,\"total_token_count\":287},\"invocation_id\":\"e-167f8261-fe50-4386-9027-dba3375c0d90\",\"author\":\"writer_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"writer_agent@1\"},\"id\":\"8e19b603-492e-4dbf-b2fd-5a7047783c60\",\"timestamp\":1791012861.863974}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":86,\"prompt_token_count\":183,\"total_token_count\":269},\"invocation_id\":\"e-40cdfd81-cf9f-43e4-8417-96750e4d8073\",\"author\":\"writer_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"writer_agent@1\"},\"id\":\"6f95a0d4-7d14-4508-a9d6-00ec506a3c5f\",\"timestamp\":1791057940.2248409}"
                   }
                 },
                 {
@@ -1253,13 +1527,13 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "a279195fe8664806",
-              "parentSpanId": "01216ee6d4e6de74",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "97c678f33db38781",
+              "parentSpanId": "4ac695065bf0cc97",
               "name": "execute_tool writer_agent",
               "kind": 1,
-              "startTimeUnixNano": "1791012861856060386",
-              "endTimeUnixNano": "1791012864377394095",
+              "startTimeUnixNano": "1791057940221920000",
+              "endTimeUnixNano": "1791057942839500000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -1318,25 +1592,25 @@
                 {
                   "key": "gcp.vertex.agent.tool_call_args",
                   "value": {
-                    "stringValue": "{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}"
+                    "stringValue": "{\"request\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}"
                   }
                 },
                 {
                   "key": "gen_ai.tool.call.id",
                   "value": {
-                    "stringValue": "call_MaHgWrfYuvjMv2IPXPwbaDN9"
+                    "stringValue": "call_0cLoHKE2Avk3kR3p9Wnpc0Xz"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "e9a0c8b5-ccb8-457b-a496-35de2e3509ad"
+                    "stringValue": "e984d327-90c8-4b72-92ca-5bb869d86701"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.tool_response",
                   "value": {
-                    "stringValue": "{\"result\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}"
+                    "stringValue": "{\"result\": \"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}"
                   }
                 },
                 {
@@ -1354,13 +1628,13 @@
                 {
                   "key": "tool.parameters",
                   "value": {
-                    "stringValue": "{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}"
+                    "stringValue": "{\"request\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}"
                   }
                 },
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}"
+                    "stringValue": "{\"request\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}"
                   }
                 },
                 {
@@ -1372,13 +1646,13 @@
                 {
                   "key": "tool.id",
                   "value": {
-                    "stringValue": "call_MaHgWrfYuvjMv2IPXPwbaDN9"
+                    "stringValue": "call_0cLoHKE2Avk3kR3p9Wnpc0Xz"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"id\":\"call_MaHgWrfYuvjMv2IPXPwbaDN9\",\"name\":\"writer_agent\",\"response\":{\"result\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}}"
+                    "stringValue": "{\"id\":\"call_0cLoHKE2Avk3kR3p9Wnpc0Xz\",\"name\":\"writer_agent\",\"response\":{\"result\":\"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}}"
                   }
                 },
                 {
@@ -1400,13 +1674,13 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "ee8a40e8cadc1fd6",
-              "parentSpanId": "01216ee6d4e6de74",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "99096fa404196965",
+              "parentSpanId": "4ac695065bf0cc97",
               "name": "call_llm",
               "kind": 1,
-              "startTimeUnixNano": "1791012859388277727",
-              "endTimeUnixNano": "1791012864377609425",
+              "startTimeUnixNano": "1791057937960010000",
+              "endTimeUnixNano": "1791057942839964000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -1447,13 +1721,13 @@
                 {
                   "key": "gen_ai.request.model",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.invocation_id",
                   "value": {
-                    "stringValue": "e-8c7cce47-1cd6-4faa-ba95-c211e078fb68"
+                    "stringValue": "e-a0f84c81-dcd3-4483-8b58-2d07b34de04d"
                   }
                 },
                 {
@@ -1465,31 +1739,31 @@
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "ecbeae4e-722d-459e-9323-625103e43425"
+                    "stringValue": "214f39ba-19ab-47de-bcd1-d3b00b0acfc1"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_request",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"args\":{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}}}],\"role\":\"user\"}]}"
+                    "stringValue": "{\"model\": \"openai/openai/gpt-6-luna\", \"config\": {\"system_instruction\": \"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\", \"tools\": [{\"function_declarations\": [{\"description\": \"Gathers key facts about the question.\", \"name\": \"search_agent\", \"parameters_json_schema\": {\"type\": \"object\", \"properties\": {\"request\": {\"type\": \"string\"}}, \"required\": [\"request\"]}}, {\"description\": \"Writes the final answer from the gathered facts.\", \"name\": \"writer_agent\", \"parameters_json_schema\": {\"type\": \"object\", \"properties\": {\"request\": {\"type\": \"string\"}}, \"required\": [\"request\"]}}]}], \"labels\": {\"adk_agent_name\": \"research_agent\"}}, \"contents\": [{\"parts\": [{\"text\": \"What is an agent trace?\"}], \"role\": \"user\"}, {\"parts\": [{\"function_call\": {\"id\": \"call_XTAhdf3WOJ3xEnaTkGvKtd06\", \"args\": {\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}, \"name\": \"search_agent\"}}], \"role\": \"model\"}, {\"parts\": [{\"function_response\": {\"id\": \"call_XTAhdf3WOJ3xEnaTkGvKtd06\", \"name\": \"search_agent\", \"response\": {\"result\": \"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}}}], \"role\": \"user\"}]}"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_response",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_MaHgWrfYuvjMv2IPXPwbaDN9\",\"args\":{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"},\"name\":\"writer_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":114,\"prompt_token_count\":564,\"total_token_count\":678}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_0cLoHKE2Avk3kR3p9Wnpc0Xz\",\"args\":{\"request\":\"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"},\"name\":\"writer_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":150,\"prompt_token_count\":452,\"total_token_count\":602}}"
                   }
                 },
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "564"
+                    "intValue": "452"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "114"
+                    "intValue": "150"
                   }
                 },
                 {
@@ -1519,7 +1793,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"args\":{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}}}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
+                    "stringValue": "{\"model\":\"openai/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_XTAhdf3WOJ3xEnaTkGvKtd06\",\"args\":{\"request\":\"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_XTAhdf3WOJ3xEnaTkGvKtd06\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}}}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
                   }
                 },
                 {
@@ -1543,7 +1817,7 @@
                 {
                   "key": "llm.model_name",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
@@ -1591,7 +1865,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_Shm2S2R92CxzIfHdYHkhDhBy"
+                    "stringValue": "call_XTAhdf3WOJ3xEnaTkGvKtd06"
                   }
                 },
                 {
@@ -1603,7 +1877,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}"
+                    "stringValue": "{\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}"
                   }
                 },
                 {
@@ -1621,19 +1895,19 @@
                 {
                   "key": "llm.input_messages.3.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_Shm2S2R92CxzIfHdYHkhDhBy"
+                    "stringValue": "call_XTAhdf3WOJ3xEnaTkGvKtd06"
                   }
                 },
                 {
                   "key": "llm.input_messages.3.message.content",
                   "value": {
-                    "stringValue": "{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}"
+                    "stringValue": "{\"result\": \"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_MaHgWrfYuvjMv2IPXPwbaDN9\",\"args\":{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"},\"name\":\"writer_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":114,\"prompt_token_count\":564,\"total_token_count\":678}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"function_call\":{\"id\":\"call_0cLoHKE2Avk3kR3p9Wnpc0Xz\",\"args\":{\"request\":\"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"},\"name\":\"writer_agent\"}}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":150,\"prompt_token_count\":452,\"total_token_count\":602}}"
                   }
                 },
                 {
@@ -1645,19 +1919,19 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "678"
+                    "intValue": "602"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "564"
+                    "intValue": "452"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "114"
+                    "intValue": "150"
                   }
                 },
                 {
@@ -1669,7 +1943,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_MaHgWrfYuvjMv2IPXPwbaDN9"
+                    "stringValue": "call_0cLoHKE2Avk3kR3p9Wnpc0Xz"
                   }
                 },
                 {
@@ -1681,13 +1955,7 @@
                 {
                   "key": "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}"
-                  }
-                },
-                {
-                  "key": "gen_ai.response.id",
-                  "value": {
-                    "stringValue": "resp_01e7a046a3b96aa0006ac0affb7b7c87d0b0d26e68817a086f"
+                    "stringValue": "{\"request\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}"
                   }
                 },
                 {
@@ -1701,61 +1969,15 @@
                 "code": 1
               },
               "flags": 256
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "resource": {
-        "attributes": [
-          {
-            "key": "telemetry.sdk.language",
-            "value": {
-              "stringValue": "python"
-            }
-          },
-          {
-            "key": "telemetry.sdk.name",
-            "value": {
-              "stringValue": "opentelemetry"
-            }
-          },
-          {
-            "key": "telemetry.sdk.version",
-            "value": {
-              "stringValue": "1.42.1"
-            }
-          },
-          {
-            "key": "service.name",
-            "value": {
-              "stringValue": "google-adk-swarm"
-            }
-          },
-          {
-            "key": "telemetry.auto.version",
-            "value": {
-              "stringValue": "0.63b1"
-            }
-          }
-        ]
-      },
-      "scopeSpans": [
-        {
-          "scope": {
-            "name": "openinference.instrumentation.google_adk",
-            "version": "1.0.2"
-          },
-          "spans": [
+            },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "8ced0c4d86b9e190",
-              "parentSpanId": "01216ee6d4e6de74",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "1d0c03a7cec74b9a",
+              "parentSpanId": "4ac695065bf0cc97",
               "name": "call_llm",
               "kind": 1,
-              "startTimeUnixNano": "1791012864378528038",
-              "endTimeUnixNano": "1791012866674075744",
+              "startTimeUnixNano": "1791057942840879000",
+              "endTimeUnixNano": "1791057944612960000",
               "attributes": [
                 {
                   "key": "session.id",
@@ -1796,13 +2018,13 @@
                 {
                   "key": "gen_ai.request.model",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.invocation_id",
                   "value": {
-                    "stringValue": "e-8c7cce47-1cd6-4faa-ba95-c211e078fb68"
+                    "stringValue": "e-a0f84c81-dcd3-4483-8b58-2d07b34de04d"
                   }
                 },
                 {
@@ -1814,31 +2036,31 @@
                 {
                   "key": "gcp.vertex.agent.event_id",
                   "value": {
-                    "stringValue": "1f1a2071-0466-48bd-9d58-0f9ea3c184d0"
+                    "stringValue": "07fbc87e-5f76-47ad-8ac5-c066586e741b"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_request",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"args\":{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}}}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_MaHgWrfYuvjMv2IPXPwbaDN9\",\"args\":{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"},\"name\":\"writer_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_MaHgWrfYuvjMv2IPXPwbaDN9\",\"name\":\"writer_agent\",\"response\":{\"result\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}}}],\"role\":\"user\"}]}"
+                    "stringValue": "{\"model\": \"openai/openai/gpt-6-luna\", \"config\": {\"system_instruction\": \"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\", \"tools\": [{\"function_declarations\": [{\"description\": \"Gathers key facts about the question.\", \"name\": \"search_agent\", \"parameters_json_schema\": {\"type\": \"object\", \"properties\": {\"request\": {\"type\": \"string\"}}, \"required\": [\"request\"]}}, {\"description\": \"Writes the final answer from the gathered facts.\", \"name\": \"writer_agent\", \"parameters_json_schema\": {\"type\": \"object\", \"properties\": {\"request\": {\"type\": \"string\"}}, \"required\": [\"request\"]}}]}], \"labels\": {\"adk_agent_name\": \"research_agent\"}}, \"contents\": [{\"parts\": [{\"text\": \"What is an agent trace?\"}], \"role\": \"user\"}, {\"parts\": [{\"function_call\": {\"id\": \"call_XTAhdf3WOJ3xEnaTkGvKtd06\", \"args\": {\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}, \"name\": \"search_agent\"}}], \"role\": \"model\"}, {\"parts\": [{\"function_response\": {\"id\": \"call_XTAhdf3WOJ3xEnaTkGvKtd06\", \"name\": \"search_agent\", \"response\": {\"result\": \"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}}}], \"role\": \"user\"}, {\"parts\": [{\"function_call\": {\"id\": \"call_0cLoHKE2Avk3kR3p9Wnpc0Xz\", \"args\": {\"request\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}, \"name\": \"writer_agent\"}}], \"role\": \"model\"}, {\"parts\": [{\"function_response\": {\"id\": \"call_0cLoHKE2Avk3kR3p9Wnpc0Xz\", \"name\": \"writer_agent\", \"response\": {\"result\": \"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}}}], \"role\": \"user\"}]}"
                   }
                 },
                 {
                   "key": "gcp.vertex.agent.llm_response",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of a single agent execution. It connects steps such as model calls, tool calls and results, handoffs, and errors, often with timing and metadata like token usage or cost.\\n\\nTraces help people understand and debug an agent’s behavior, investigate delays or failures, and monitor or evaluate performance. What they capture varies by system, and a trace may not be complete or replayable. Unlike ordinary logs, a trace links events together to show how they relate within an execution.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":108,\"prompt_token_count\":818,\"total_token_count\":926}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a time-ordered record of one agent run, linking events such as model calls and tool use. Depending on the system, it may show inputs and outputs, timings, and errors. Traces help people understand, debug, and evaluate an agent\u2019s behavior. Unlike a single log entry, a trace connects multiple events from the same execution. Details vary, and sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":91,\"prompt_token_count\":701,\"total_token_count\":792}}"
                   }
                 },
                 {
                   "key": "gen_ai.usage.input_tokens",
                   "value": {
-                    "intValue": "818"
+                    "intValue": "701"
                   }
                 },
                 {
                   "key": "gen_ai.usage.output_tokens",
                   "value": {
-                    "intValue": "108"
+                    "intValue": "91"
                   }
                 },
                 {
@@ -1868,7 +2090,7 @@
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"model\":\"litellm_proxy/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"args\":{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_Shm2S2R92CxzIfHdYHkhDhBy\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}}}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_MaHgWrfYuvjMv2IPXPwbaDN9\",\"args\":{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"},\"name\":\"writer_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_MaHgWrfYuvjMv2IPXPwbaDN9\",\"name\":\"writer_agent\",\"response\":{\"result\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}}}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
+                    "stringValue": "{\"model\":\"openai/openai/gpt-6-luna\",\"contents\":[{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_XTAhdf3WOJ3xEnaTkGvKtd06\",\"args\":{\"request\":\"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"},\"name\":\"search_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_XTAhdf3WOJ3xEnaTkGvKtd06\",\"name\":\"search_agent\",\"response\":{\"result\":\"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}}}],\"role\":\"user\"},{\"parts\":[{\"function_call\":{\"id\":\"call_0cLoHKE2Avk3kR3p9Wnpc0Xz\",\"args\":{\"request\":\"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"},\"name\":\"writer_agent\"}}],\"role\":\"model\"},{\"parts\":[{\"function_response\":{\"id\":\"call_0cLoHKE2Avk3kR3p9Wnpc0Xz\",\"name\":\"writer_agent\",\"response\":{\"result\":\"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}}}],\"role\":\"user\"}],\"config\":{\"system_instruction\":\"Use search_agent to gather facts, then writer_agent to write the answer from them.\\n\\nYou are an agent. Your internal name is \\\"research_agent\\\".\",\"tools\":[{\"function_declarations\":[{\"description\":\"Gathers key facts about the question.\",\"name\":\"search_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}},{\"description\":\"Writes the final answer from the gathered facts.\",\"name\":\"writer_agent\",\"parameters_json_schema\":{\"type\":\"object\",\"properties\":{\"request\":{\"type\":\"string\"}},\"required\":[\"request\"]}}]}],\"labels\":{\"adk_agent_name\":\"research_agent\"}},\"live_connect_config\":{\"input_audio_transcription\":{},\"output_audio_transcription\":{}}}"
                   }
                 },
                 {
@@ -1892,7 +2114,7 @@
                 {
                   "key": "llm.model_name",
                   "value": {
-                    "stringValue": "litellm_proxy/openai/gpt-6-luna"
+                    "stringValue": "openai/openai/gpt-6-luna"
                   }
                 },
                 {
@@ -1940,7 +2162,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_Shm2S2R92CxzIfHdYHkhDhBy"
+                    "stringValue": "call_XTAhdf3WOJ3xEnaTkGvKtd06"
                   }
                 },
                 {
@@ -1952,7 +2174,7 @@
                 {
                   "key": "llm.input_messages.2.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"request\":\"Find clear definition of an agent trace in AI/LLM agent systems: what it records, typical contents, purpose, and distinguish from ordinary logs if relevant. Gather reliable, general facts.\"}"
+                    "stringValue": "{\"request\": \"Gather concise authoritative explanation of what an agent trace is in AI/LLM agent systems. Cover what it records (steps, tool calls, inputs/outputs, decisions, timestamps/errors), purpose (debugging, observability, evaluation/audit), and note terminology may vary. Distinguish trace from a single log/event if helpful.\"}"
                   }
                 },
                 {
@@ -1970,13 +2192,13 @@
                 {
                   "key": "llm.input_messages.3.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_Shm2S2R92CxzIfHdYHkhDhBy"
+                    "stringValue": "call_XTAhdf3WOJ3xEnaTkGvKtd06"
                   }
                 },
                 {
                   "key": "llm.input_messages.3.message.content",
                   "value": {
-                    "stringValue": "{\"result\":\"- **Definition:** An *agent trace* is a structured record of one agent execution, usually represented as a top-level trace containing related steps or “spans.” It lets someone follow how the system handled a request from start to finish. The term is not fully standardized; platforms differ in what they include and how they name the pieces.\\n- **Typical contents:** A trace may record the agent run, model calls, tool calls and their results, handoffs between agents, guardrail checks, errors, and timing. It commonly includes identifiers and parent–child relationships, timestamps and durations, plus metadata such as model, token usage, or cost. Whether prompts, outputs, and tool data are captured depends on the system and its privacy settings.\\n- **Purpose:** Traces help reconstruct execution to debug unexpected behavior, locate latency or failures, and assess usage and cost. They can also support evaluation and monitoring. A trace is an observation record, not necessarily a complete or replayable account of everything the agent did.\\n- **Compared with ordinary logs:** Logs are typically individual timestamped messages or events. A trace connects related work into a structured, often hierarchical sequence; logs may be associated with a trace or span, but are not themselves necessarily traces.\\n\\n**References**\\n- [OpenAI Agents SDK: Tracing](https://openai.github.io/openai-agents-python/tracing/) — describes traces and spans for agent runs, model generations, tool calls, handoffs, and guardrails.\\n- [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) — general explanation of traces and spans as records of a request’s path through a system.\\n- [OpenTelemetry: Logs](https://opentelemetry.io/docs/concepts/signals/logs/) — explains logs as timestamped records and how they can be correlated with traces.\"}"
+                    "stringValue": "{\"result\": \"- **An agent trace** is a record of one agent execution, often represented as a **trace** made up of related, time-ordered spans or events. It may show the overall run and nested operations such as model calls and tool use.\\n- **What it records:** depending on instrumentation, steps and decisions or actions, model and tool inputs and outputs, timestamps and durations, and errors. It does **not** necessarily include every internal reasoning process or raw payload.\\n- **Why it\u2019s useful:** to understand execution, debug failures, monitor behavior and performance, evaluate results, and support audits.\\n- **Trace vs. log/event:** a log or event usually describes one occurrence; a trace links multiple occurrences into the context of a single execution. In practice, systems use these terms differently\u2014some call an execution a \u201crun\u201d or \u201ctrace\u201d\u2014and the captured detail varies by implementation.\\n\\nReferences: [OpenTelemetry: Traces](https://opentelemetry.io/docs/concepts/signals/traces/) describes traces as collections of related spans; [LangSmith: Observability concepts](https://docs.smith.langchain.com/observability/concepts) describes tracing agent and application runs.\"}"
                   }
                 },
                 {
@@ -1988,7 +2210,7 @@
                 {
                   "key": "llm.input_messages.4.message.tool_calls.0.tool_call.id",
                   "value": {
-                    "stringValue": "call_MaHgWrfYuvjMv2IPXPwbaDN9"
+                    "stringValue": "call_0cLoHKE2Avk3kR3p9Wnpc0Xz"
                   }
                 },
                 {
@@ -2000,7 +2222,7 @@
                 {
                   "key": "llm.input_messages.4.message.tool_calls.0.tool_call.function.arguments",
                   "value": {
-                    "stringValue": "{\"request\":\"Answer the user simply: “What is an agent trace?” Define it as a structured record of one agent execution, explain typical contents and purpose, mention variation/privacy and distinction from ordinary logs. Use facts from research: a top-level trace with related spans covering model/tool calls/results, handoffs, guardrails/errors, timing, IDs, token/cost metadata; useful for debugging, latency/failure, evaluation/monitoring; not necessarily complete/replayable. Keep clear and accessible.\"}"
+                    "stringValue": "{\"request\": \"Answer the user \u201cWhat is an agent trace?\u201d in clear concise terms, based on these facts: An agent trace is a record of one agent execution, often time-ordered related spans/events, showing overall run and nested operations such as model calls and tool use. Depending on instrumentation, records steps/actions/decisions, model/tool inputs and outputs, timestamps/durations, errors; may not include every internal reasoning process or raw payload. Useful for understanding execution, debugging, monitoring, evaluation, audits. A log/event captures one occurrence; trace links occurrences into a single execution, though terminology/detail varies. Keep answer approachable and mention privacy-sensitive payloads can be omitted.\"}"
                   }
                 },
                 {
@@ -2018,19 +2240,19 @@
                 {
                   "key": "llm.input_messages.5.message.tool_call_id",
                   "value": {
-                    "stringValue": "call_MaHgWrfYuvjMv2IPXPwbaDN9"
+                    "stringValue": "call_0cLoHKE2Avk3kR3p9Wnpc0Xz"
                   }
                 },
                 {
                   "key": "llm.input_messages.5.message.content",
                   "value": {
-                    "stringValue": "{\"result\":\"An **agent trace** is a structured record of one agent execution. It typically has a top-level trace with related spans for steps such as model and tool calls, their results, handoffs, guardrails, and errors, along with timing, IDs, and sometimes token or cost metadata.\\n\\nTraces help debug behavior, investigate latency or failures, and support evaluation and monitoring. Their contents vary by system, and they may omit sensitive details or other information—so a trace isn’t necessarily a complete, replayable account. Unlike ordinary logs, traces organize events by execution and show how steps relate to one another.\"}"
+                    "stringValue": "{\"result\": \"An **agent trace** is a record of one agent run, linking events such as model calls and tool use into a time-ordered view. It may include inputs, outputs, timings, and errors, helping people understand, debug, and evaluate the run. A log or event records one occurrence; a trace connects occurrences into a single execution. Details vary, and privacy-sensitive data or internal reasoning may be omitted.\"}"
                   }
                 },
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of a single agent execution. It connects steps such as model calls, tool calls and results, handoffs, and errors, often with timing and metadata like token usage or cost.\\n\\nTraces help people understand and debug an agent’s behavior, investigate delays or failures, and monitor or evaluate performance. What they capture varies by system, and a trace may not be complete or replayable. Unlike ordinary logs, a trace links events together to show how they relate within an execution.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":108,\"prompt_token_count\":818,\"total_token_count\":926}}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a time-ordered record of one agent run, linking events such as model calls and tool use. Depending on the system, it may show inputs and outputs, timings, and errors. Traces help people understand, debug, and evaluate an agent\u2019s behavior. Unlike a single log entry, a trace connects multiple events from the same execution. Details vary, and sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":91,\"prompt_token_count\":701,\"total_token_count\":792}}"
                   }
                 },
                 {
@@ -2042,19 +2264,19 @@
                 {
                   "key": "llm.token_count.total",
                   "value": {
-                    "intValue": "926"
+                    "intValue": "792"
                   }
                 },
                 {
                   "key": "llm.token_count.prompt",
                   "value": {
-                    "intValue": "818"
+                    "intValue": "701"
                   }
                 },
                 {
                   "key": "llm.token_count.completion",
                   "value": {
-                    "intValue": "108"
+                    "intValue": "91"
                   }
                 },
                 {
@@ -2066,19 +2288,13 @@
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.text",
                   "value": {
-                    "stringValue": "An **agent trace** is a structured record of a single agent execution. It connects steps such as model calls, tool calls and results, handoffs, and errors, often with timing and metadata like token usage or cost.\n\nTraces help people understand and debug an agent’s behavior, investigate delays or failures, and monitor or evaluate performance. What they capture varies by system, and a trace may not be complete or replayable. Unlike ordinary logs, a trace links events together to show how they relate within an execution."
+                    "stringValue": "An **agent trace** is a time-ordered record of one agent run, linking events such as model calls and tool use. Depending on the system, it may show inputs and outputs, timings, and errors. Traces help people understand, debug, and evaluate an agent\u2019s behavior. Unlike a single log entry, a trace connects multiple events from the same execution. Details vary, and sensitive data or internal reasoning may be omitted."
                   }
                 },
                 {
                   "key": "llm.output_messages.0.message.contents.0.message_content.type",
                   "value": {
                     "stringValue": "text"
-                  }
-                },
-                {
-                  "key": "gen_ai.response.id",
-                  "value": {
-                    "stringValue": "resp_0e2c4cd591f948a8006ac0b00083e087d0b6d451915250f60c"
                   }
                 },
                 {
@@ -2094,13 +2310,13 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "01216ee6d4e6de74",
-              "parentSpanId": "a1447c3ec438c4cf",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "4ac695065bf0cc97",
+              "parentSpanId": "5efca5b08aa2370c",
               "name": "agent_run [research_agent]",
               "kind": 1,
-              "startTimeUnixNano": "1791012846230327525",
-              "endTimeUnixNano": "1791012866674358240",
+              "startTimeUnixNano": "1791057926224571000",
+              "endTimeUnixNano": "1791057944613053000",
               "attributes": [
                 {
                   "key": "agent.name",
@@ -2147,7 +2363,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of a single agent execution. It connects steps such as model calls, tool calls and results, handoffs, and errors, often with timing and metadata like token usage or cost.\\n\\nTraces help people understand and debug an agent’s behavior, investigate delays or failures, and monitor or evaluate performance. What they capture varies by system, and a trace may not be complete or replayable. Unlike ordinary logs, a trace links events together to show how they relate within an execution.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":108,\"prompt_token_count\":818,\"total_token_count\":926},\"invocation_id\":\"e-8c7cce47-1cd6-4faa-ba95-c211e078fb68\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"\"},\"id\":\"1f1a2071-0466-48bd-9d58-0f9ea3c184d0\",\"timestamp\":1791012864.3784232}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a time-ordered record of one agent run, linking events such as model calls and tool use. Depending on the system, it may show inputs and outputs, timings, and errors. Traces help people understand, debug, and evaluate an agent\u2019s behavior. Unlike a single log entry, a trace connects multiple events from the same execution. Details vary, and sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":91,\"prompt_token_count\":701,\"total_token_count\":792},\"invocation_id\":\"e-a0f84c81-dcd3-4483-8b58-2d07b34de04d\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"\"},\"id\":\"07fbc87e-5f76-47ad-8ac5-c066586e741b\",\"timestamp\":1791057942.840814}"
                   }
                 },
                 {
@@ -2169,17 +2385,17 @@
               "flags": 256
             },
             {
-              "traceId": "873125379b609137b64ad1add4a5315a",
-              "spanId": "a1447c3ec438c4cf",
+              "traceId": "aa58b95158757f3f741b5791a3ebee8a",
+              "spanId": "5efca5b08aa2370c",
               "name": "invocation [research_app]",
               "kind": 1,
-              "startTimeUnixNano": "1791012846188111786",
-              "endTimeUnixNano": "1791012866674643986",
+              "startTimeUnixNano": "1791057926108830000",
+              "endTimeUnixNano": "1791057944613309000",
               "attributes": [
                 {
                   "key": "input.value",
                   "value": {
-                    "stringValue": "{\"user_id\":\"debug_user_id\",\"session_id\":\"debug_session_id\",\"invocation_id\":null,\"new_message\":{\"parts\":[{\"text\":\"What is an agent trace?\"}],\"role\":\"user\"},\"state_delta\":null,\"run_config\":{\"save_input_blobs_as_artifacts\":false,\"support_cfc\":false,\"streaming_mode\":\"StreamingMode.NONE\",\"output_audio_transcription\":{},\"input_audio_transcription\":{},\"save_live_blob\":false,\"save_live_audio\":false,\"max_llm_calls\":500,\"include_thoughts_from_other_agents\":false},\"yield_user_message\":false,\"abort_signal\":null}"
+                    "stringValue": "{\"user_id\": \"debug_user_id\", \"session_id\": \"debug_session_id\", \"invocation_id\": null, \"new_message\": {\"parts\": [{\"text\": \"What is an agent trace?\"}], \"role\": \"user\"}, \"state_delta\": null, \"run_config\": {\"save_input_blobs_as_artifacts\": false, \"support_cfc\": false, \"streaming_mode\": \"StreamingMode.NONE\", \"output_audio_transcription\": {}, \"input_audio_transcription\": {}, \"save_live_blob\": false, \"save_live_audio\": false, \"max_llm_calls\": 500, \"include_thoughts_from_other_agents\": false}, \"yield_user_message\": false, \"abort_signal\": null}"
                   }
                 },
                 {
@@ -2203,7 +2419,7 @@
                 {
                   "key": "output.value",
                   "value": {
-                    "stringValue": "{\"model_version\":\"litellm_proxy/openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a structured record of a single agent execution. It connects steps such as model calls, tool calls and results, handoffs, and errors, often with timing and metadata like token usage or cost.\\n\\nTraces help people understand and debug an agent’s behavior, investigate delays or failures, and monitor or evaluate performance. What they capture varies by system, and a trace may not be complete or replayable. Unlike ordinary logs, a trace links events together to show how they relate within an execution.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":108,\"prompt_token_count\":818,\"total_token_count\":926},\"invocation_id\":\"e-8c7cce47-1cd6-4faa-ba95-c211e078fb68\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"research_agent@1\"},\"id\":\"1f1a2071-0466-48bd-9d58-0f9ea3c184d0\",\"timestamp\":1791012864.3784232}"
+                    "stringValue": "{\"model_version\":\"openai/gpt-6-luna\",\"content\":{\"parts\":[{\"text\":\"An **agent trace** is a time-ordered record of one agent run, linking events such as model calls and tool use. Depending on the system, it may show inputs and outputs, timings, and errors. Traces help people understand, debug, and evaluate an agent\u2019s behavior. Unlike a single log entry, a trace connects multiple events from the same execution. Details vary, and sensitive data or internal reasoning may be omitted.\"}],\"role\":\"model\"},\"partial\":false,\"finish_reason\":\"STOP\",\"usage_metadata\":{\"cached_content_token_count\":0,\"candidates_token_count\":91,\"prompt_token_count\":701,\"total_token_count\":792},\"invocation_id\":\"e-a0f84c81-dcd3-4483-8b58-2d07b34de04d\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"research_agent@1\"},\"id\":\"07fbc87e-5f76-47ad-8ac5-c066586e741b\",\"timestamp\":1791057942.840814}"
                   }
                 },
                 {
