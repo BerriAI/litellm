@@ -4,7 +4,7 @@ import re
 import traceback
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Protocol, cast
+from typing import Final, Optional, Protocol, cast
 
 import httpx
 
@@ -419,18 +419,22 @@ def _map_openai_exception(
             request=_request,
             litellm_debug_info=extra_information,
         )
-    _status_code = None
-    try:
-        if hasattr(original_exception, "status_code") and getattr(original_exception, "status_code", None) is not None:
-            _status_code = int(original_exception.status_code)
-        elif (
-            hasattr(original_exception, "response")
-            and hasattr(original_exception.response, "status_code")
-            and getattr(original_exception.response, "status_code", None) is not None
-        ):
-            _status_code = int(original_exception.response.status_code)
-    except (ValueError, TypeError, AttributeError):
-        pass
+    def _extract_status_code() -> Optional[int]:
+        try:
+            if hasattr(original_exception, "status_code") and getattr(original_exception, "status_code", None) is not None:
+                return int(original_exception.status_code)
+            elif (
+                hasattr(original_exception, "response")
+                and hasattr(original_exception.response, "status_code")
+                and getattr(original_exception.response, "status_code", None) is not None
+            ):
+                return int(original_exception.response.status_code)
+        except (ValueError, TypeError, AttributeError):
+            # Ignore parsing errors for malformed status codes and fall back to None
+            pass
+        return None
+
+    _status_code: Final = _extract_status_code()
 
     if _status_code is not None:
         if _status_code == 400:
