@@ -417,7 +417,7 @@ function Report({
           )}
         </div>
       </PageHeader>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Popover>
           <PopoverTrigger render={<Button size="sm" variant="outline" className="self-start" />}>
             {number(snapshot.repos.length)} {snapshot.repos.length === 1 ? "repository" : "repositories"}
@@ -432,7 +432,7 @@ function Report({
             </ul>
           </PopoverContent>
         </Popover>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Select
             value={String(days)}
             disabled={readOnly || syncing}
