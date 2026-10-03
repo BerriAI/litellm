@@ -4489,14 +4489,10 @@ async def delete_team(
     async with prisma_client.tx() as tx:
         for team_id in sorted(data.team_ids):
             await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
-        await delete_many_in(
-            cast(
-                DeleteManyTable, tx.litellm_teamtable
-            ),  # cast-ok: generated where input narrows the Mapping the protocol accepts
-            "team_id",
-            data.team_ids,
-            atomicity="caller_transaction",
+        team_table: Final = cast(  # cast-ok: generated where input narrows Mapping
+            DeleteManyTable, tx.litellm_teamtable
         )
+        await delete_many_in(team_table, "team_id", data.team_ids, atomicity="caller_transaction")
         await _sweep_deleted_team_references_tx(team_ids=data.team_ids, tx=tx)
 
     deleted_teams: Final[_DeletedTeamsResult] = {"deleted_teams": data.team_ids}
