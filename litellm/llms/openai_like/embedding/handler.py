@@ -95,6 +95,14 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         custom_endpoint: bool | None = None,
         headers: dict | None = None,
     ) -> EmbeddingResponse:
+        extra_headers = optional_params.pop("extra_headers", None)
+        if extra_headers:
+            if headers is None:
+                headers = {}
+            else:
+                headers = dict(headers)
+            headers.update(extra_headers)
+
         api_base, headers = self._validate_environment(
             api_base=api_base,
             api_key=api_key,
@@ -110,7 +118,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={"complete_input_dict": data, "api_base": api_base},
+            additional_args={"complete_input_dict": data, "api_base": api_base, "headers": headers},
         )
 
         if aembedding is True:

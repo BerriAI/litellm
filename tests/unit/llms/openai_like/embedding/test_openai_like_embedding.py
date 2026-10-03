@@ -346,3 +346,173 @@ class TestOpenAILikeEmbeddingHandler:
         assert sent_data["model"] == "test-model"
         assert sent_data["input"] == ["test input"]
         assert "encoding_format" not in sent_data
+
+    def test_extra_headers_sent_as_http_headers_not_body(self):
+        """
+        Test that extra headers passed via headers argument are sent as HTTP headers
+        and NOT included in the JSON payload body.
+        """
+        handler = OpenAILikeEmbeddingHandler()
+
+        mock_client = MagicMock()
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "test-model",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        mock_logging = MagicMock()
+
+        handler.embedding(
+            model="test-model",
+            input=["test input"],
+            timeout=60.0,
+            logging_obj=mock_logging,
+            api_key="test-key",
+            api_base="http://test.com",
+            optional_params={},
+            client=mock_client,
+            headers={"X-Custom-Header": "test-value"},
+        )
+
+        assert mock_client.post.called
+        call_args = mock_client.post.call_args
+        sent_headers = call_args[1]["headers"]
+        sent_data = json.loads(call_args[1]["data"])
+
+        # Header must be present in HTTP headers
+        assert sent_headers.get("X-Custom-Header") == "test-value"
+        assert sent_headers.get("Authorization") == "Bearer test-key"
+        assert sent_headers.get("Content-Type") == "application/json"
+
+        # extra_headers must NOT be in JSON payload body
+        assert "extra_headers" not in sent_data
+        assert sent_data["model"] == "test-model"
+        assert sent_data["input"] == ["test input"]
+
+    def test_extra_headers_in_optional_params_extracted_to_http_headers(self):
+        """
+        Test that extra_headers inside optional_params are extracted to HTTP headers
+        and stripped from the request body.
+        """
+        handler = OpenAILikeEmbeddingHandler()
+
+        mock_client = MagicMock()
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "test-model",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        mock_logging = MagicMock()
+        optional_params = {"extra_headers": {"X-Tenant-ID": "tenant-99"}}
+
+        handler.embedding(
+            model="test-model",
+            input=["test input"],
+            timeout=60.0,
+            logging_obj=mock_logging,
+            api_key="test-key",
+            api_base="http://test.com",
+            optional_params=optional_params,
+            client=mock_client,
+        )
+
+        assert mock_client.post.called
+        call_args = mock_client.post.call_args
+        sent_headers = call_args[1]["headers"]
+        sent_data = json.loads(call_args[1]["data"])
+
+        assert sent_headers.get("X-Tenant-ID") == "tenant-99"
+        assert "extra_headers" not in sent_data
+        assert "extra_headers" not in optional_params
+
+    def test_litellm_embedding_openai_like_extra_headers(self):
+        """
+        Integration test through litellm.embedding:
+        Ensure extra_headers passed to litellm.embedding(custom_llm_provider="openai_like", ...)
+        are forwarded as HTTP request headers and not sent in the JSON body.
+        """
+        import litellm
+
+        mock_client = MagicMock()
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "test-model",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        litellm.embedding(
+            model="test-model",
+            input=["hello world"],
+            custom_llm_provider="openai_like",
+            api_base="http://test.com/v1",
+            api_key="sk-test",
+            extra_headers={"X-User-Id": "user-42"},
+            client=mock_client,
+        )
+
+        assert mock_client.post.called
+        call_args = mock_client.post.call_args
+        sent_headers = call_args[1]["headers"]
+        sent_data = json.loads(call_args[1]["data"])
+
+        assert sent_headers.get("X-User-Id") == "user-42"
+        assert "extra_headers" not in sent_data
+        assert sent_data["model"] == "test-model"
+        assert sent_data["input"] == ["hello world"]
+
+    @pytest.mark.asyncio
+    async def test_litellm_aembedding_openai_like_extra_headers(self):
+        """
+        Integration test through litellm.aembedding:
+        Ensure extra_headers passed to litellm.aembedding(custom_llm_provider="openai_like", ...)
+        are forwarded as HTTP request headers and not sent in the JSON body.
+        """
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        mock_client = AsyncMock(spec=AsyncHTTPHandler)
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "test-model",
+            "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+        mock_response.raise_for_status = Mock()
+        mock_client.post.return_value = mock_response
+
+        await litellm.aembedding(
+            model="test-model",
+            input=["hello world"],
+            custom_llm_provider="openai_like",
+            api_base="http://test.com/v1",
+            api_key="sk-test",
+            extra_headers={"X-User-Id": "user-42"},
+            client=mock_client,
+        )
+
+        assert mock_client.post.called
+        call_args = mock_client.post.call_args
+        sent_headers = call_args[1]["headers"]
+        sent_data = json.loads(call_args[1]["data"])
+
+        assert sent_headers.get("X-User-Id") == "user-42"
+        assert "extra_headers" not in sent_data
+        assert sent_data["model"] == "test-model"
+        assert sent_data["input"] == ["hello world"]
