@@ -2990,19 +2990,62 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert result == {"type": "response.inject.created", "sequence_number": 1, "response_id": client_id}
 
     @pytest.mark.asyncio
-    async def test_response_inject_with_an_unwrapped_id_is_forwarded_untouched(self):
+    async def test_response_inject_with_an_unwrapped_id_round_trips_the_raw_id(self):
         from unittest.mock import AsyncMock
+
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
         frame = json.dumps({"type": "response.inject", "response_id": "resp_raw", "input": []})
         backend_ws = MagicMock()
         backend_ws.send = AsyncMock()
+        backend_ws.recv = AsyncMock(
+            side_effect=[
+                json.dumps({"type": "response.inject.created", "sequence_number": 1, "response_id": "resp_raw"}),
+                Exception("stop"),
+            ]
+        )
         websocket = MagicMock()
+        websocket.send_text = AsyncMock()
         websocket.receive_text = AsyncMock(side_effect=[frame, Exception("stop")])
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            logging_obj=logging_obj,
+            request_data={"litellm_metadata": {"model_info": {"id": "dep-1"}}},
+            custom_llm_provider="openai",
+        )
+
+        await handler.client_to_backend()
+        await handler.backend_to_client()
+
+        assert backend_ws.send.await_args_list[0][0][0] == frame
+        result = json.loads(websocket.send_text.await_args_list[0][0][0])
+        assert result == {"type": "response.inject.created", "sequence_number": 1, "response_id": "resp_raw"}
+
+    @pytest.mark.asyncio
+    async def test_response_inject_restores_wrapped_input_items(self):
+        from unittest.mock import AsyncMock
+
+        frame = {
+            "type": "response.inject",
+            "response_id": "resp_raw",
+            "input": [_wrapped_reasoning_item(), {"type": "message", "role": "user", "content": "hi"}],
+        }
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket = MagicMock()
+        websocket.receive_text = AsyncMock(side_effect=[json.dumps(frame), Exception("stop")])
         handler = _make_streaming(websocket=websocket, backend_ws=backend_ws, request_data={})
 
         await handler.client_to_backend()
 
-        assert backend_ws.send.await_args_list[0][0][0] == frame
+        sent = json.loads(backend_ws.send.await_args_list[0][0][0])
+        assert sent["response_id"] == "resp_raw"
+        assert sent["input"][0]["id"] == "rs_orig"
+        assert sent["input"][0]["encrypted_content"] == "gAAAA-blob"
+        assert sent["input"][1] == {"type": "message", "role": "user", "content": "hi"}
 
     @pytest.mark.asyncio
     async def test_backend_to_client_wraps_ids_when_affinity_is_enabled(self):
