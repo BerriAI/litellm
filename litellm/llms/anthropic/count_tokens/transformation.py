@@ -11,6 +11,7 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.llms.anthropic.wif import resolve_anthropic_base
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
@@ -26,14 +27,21 @@ class AnthropicCountTokensConfig:
     - Response: {"input_tokens": <number>}
     """
 
-    def get_anthropic_count_tokens_endpoint(self) -> str:
+    def get_anthropic_count_tokens_endpoint(self, api_base: str | None = None) -> str:
         """
         Get the Anthropic CountTokens API endpoint.
+
+        Args:
+            api_base: The deployment's api_base, which names the chat surface (a host, or a
+                base already carrying ``/v1`` or ``/v1/messages``); the count-tokens path is
+                appended to it, so it is never the full count-tokens URL. Unset or empty falls
+                back to ``ANTHROPIC_API_BASE`` / ``ANTHROPIC_BASE_URL`` and then Anthropic's
+                host, the same resolution chat and the federated exchange use
 
         Returns:
             The endpoint URL for the CountTokens API
         """
-        return "https://api.anthropic.com/v1/messages/count_tokens"
+        return resolve_anthropic_base(api_base) + "/v1/messages/count_tokens"
 
     def transform_request_to_count_tokens(
         self,
