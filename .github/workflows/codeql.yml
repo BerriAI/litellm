@@ -42,6 +42,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # py/log-injection passes CodeQL's 2 GiB result-set limit on a full scan
+      # and fails the whole Python analysis. PR scans are diff-informed, which
+      # keeps the query small enough to finish there
+      - name: Skip py/log-injection on full Python scans
+        if: matrix.language == 'python' && github.event_name != 'pull_request'
+        run: |
+          yq -i '.query-filters += [{"exclude": {"id": "py/log-injection"}}]' .github/codeql/codeql-config.yml
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3 # v3.34.1
         with:
