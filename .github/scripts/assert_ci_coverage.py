@@ -22,7 +22,7 @@ TESTS_ROOT = REPO_ROOT / "tests"
 
 ALLOWLIST_KEYS = frozenset({"description", "test_paths", "dockerfiles"})
 PATH_FILTER_KEYS = frozenset({"paths", "paths-ignore"})
-TEST_PATH_KEYS = frozenset({"test-path", "test-paths"})
+TEST_PATH_KEYS = frozenset({"test-path", "test-paths", "test_path"})
 DOCKERFILE_INPUT_KEYS = frozenset({"file", "dockerfile"})
 TEST_RUNNER_RE = re.compile(r"\bpytest\b|\bcircleci tests\b|\bhelm unittest\b|\bplaywright test\b|\bpython[0-9.]*\s")
 IMAGE_BUILD_RE = re.compile(r"\bdocker\s+(?:buildx\s+)?build\b")
