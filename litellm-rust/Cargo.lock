@@ -4478,6 +4478,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hmac 0.12.1",
+ "itertools 0.14.0",
  "jsonschema",
  "litellm-http",
  "litellm-migrate",

@@ -2,7 +2,7 @@
 import { useLensDemo } from "@/components/lens/LensDemoContext";
 import { useTracesApi } from "@/components/lens/services";
 
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -374,6 +374,7 @@ function initialSpanMissing(trace: Trace | undefined, spanId?: string): boolean 
 
 export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
   const traces = useTracesApi(accessToken);
+  const queryClient = useQueryClient();
   const [view, setView] = useState<TraceView>("steps");
   const traceQueryOptions = {
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
@@ -381,9 +382,13 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage: Trace) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
     retry: false,
   };
   const traceQuery = useInfiniteQuery(traceQueryOptions);
+  const refreshTrace = () => queryClient.resetQueries({ queryKey: traceQueryOptions.queryKey, exact: true });
   const trace = useMemo(() => {
     const pages = traceQuery.data?.pages;
     if (!pages?.length) return undefined;
@@ -426,7 +431,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
         </button>
         <h1 className="mb-2 text-[13px] font-medium">Could not load trace</h1>
         <span className="text-muted-foreground">{traceQuery.error?.message ?? "Unknown error"}</span>
-        <Button variant="outline" size="sm" className="ml-3" onClick={() => void traceQuery.refetch()}>
+        <Button variant="outline" size="sm" className="ml-3" onClick={() => void refreshTrace()}>
           Retry
         </Button>
       </div>
@@ -451,12 +456,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
               : `Showing ${trace.spans.length.toLocaleString()} of ${trace.summary.span_count.toLocaleString()} steps`}
           </span>
           {traceQuery.isError && (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={traceQuery.isFetching}
-              onClick={() => void traceQuery.refetch()}
-            >
+            <Button size="xs" variant="ghost" disabled={traceQuery.isFetching} onClick={() => void refreshTrace()}>
               Refresh trace
             </Button>
           )}
@@ -464,7 +464,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
             size="xs"
             variant="outline"
             disabled={traceQuery.isFetching}
-            onClick={() => void (traceQuery.hasNextPage ? traceQuery.fetchNextPage() : traceQuery.refetch())}
+            onClick={() => void (traceQuery.hasNextPage ? traceQuery.fetchNextPage() : refreshTrace())}
           >
             {traceQuery.isFetching ? "Loading…" : pageAction}
           </Button>

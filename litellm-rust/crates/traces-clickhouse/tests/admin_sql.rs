@@ -174,7 +174,7 @@ async fn admin_sql_enforces_result_row_limit(
         matches!(
             result,
             Err(Error::Storage(
-                litellm_storage_clickhouse::Error::QueryFailed(_)
+                litellm_storage_clickhouse::Error::ResponseTooLarge
             ))
         ),
         "{result:?}"
