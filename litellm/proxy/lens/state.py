@@ -1,7 +1,7 @@
 import hashlib
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 from litellm.proxy.lens.models import (
     MAX_STEPS,
@@ -38,11 +38,16 @@ SETTLE_DELAY = timedelta(minutes=2)
 
 
 def scheduled_window(lens: Lens, now: datetime) -> tuple[datetime, datetime]:
-    """New traces only: start where the last successful scan stopped, capped at the lookback window."""
     end: Final = now - SETTLE_DELAY
     floor: Final = now - timedelta(hours=lens.settings.lookback_hours)
     start: Final = max(lens.last_scan_at, floor) if lens.last_scan_at else floor
     return min(start, end), end
+
+
+def next_scan_start(lens: Lens, job: Job, failed: bool) -> datetime | None:
+    if failed or job.trigger == "manual":
+        return lens.last_scan_at
+    return max(lens.last_scan_at or job.end, job.end)
 
 
 def queue_job(
@@ -52,11 +57,11 @@ def queue_job(
     lookback_hours: int | None = None,
     settings: LensSettings | None = None,
     window: tuple[datetime, datetime] | None = None,
+    trigger: Literal["schedule", "manual"] = "schedule",
 ) -> Lens:
     if current_job(lens):
         return lens
     selected: Final = settings or lens.settings
-    manual: Final = window is not None or lookback_hours is not None or settings is not None
     hours: Final = lookback_hours if lookback_hours is not None else (selected.lookback_hours if settings else None)
     start, end = window or (
         (now - timedelta(hours=hours), now - SETTLE_DELAY) if hours is not None else scheduled_window(lens, now)
@@ -68,7 +73,7 @@ def queue_job(
         end=end,
         settings=selected,
         revision=lens.revision,
-        trigger="manual" if manual else "schedule",
+        trigger=trigger,
     )
     return lens.model_copy(update=MappingProxyType({"jobs": (job,)}))
 
