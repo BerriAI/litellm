@@ -723,6 +723,19 @@ def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
     assert (ui_root / "litellm-asset-prefix" / "ignore.html").read_text() == "asset"
 
 
+def test_restructure_continues_when_another_worker_moves_a_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    route: Final = tmp_path / "login.html"
+    route.write_text("login")
+
+    def already_moved(source: str, destination: str) -> None:
+        Path(source).rename(destination)
+        raise FileNotFoundError(source)
+
+    monkeypatch.setattr(os, "replace", already_moved)
+    proxy_server_module._restructure_ui_html_files(str(tmp_path))
+    assert (tmp_path / "login" / "index.html").read_text() == "login"
+
+
 def test_ui_extensionless_route_requires_restructure(tmp_path):
     """
     Regression for non-root fallback: /ui/login expects login/index.html.
