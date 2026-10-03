@@ -6897,7 +6897,7 @@ async def test_user_api_key_auth_builder_updates_cached_token_end_user():
     )
 
     request_data = {"user": "bob"}
-    
+
     mock_request = MagicMock(spec=Request)
     mock_request.url = URL("http://testserver/v1/chat/completions")
     mock_request.headers = {"authorization": f"Bearer {api_key}"}
@@ -6905,20 +6905,32 @@ async def test_user_api_key_auth_builder_updates_cached_token_end_user():
     mock_request.state = MagicMock()
     mock_request.state.litellm_received_at = None
 
+    # Inject a mocked IdentityStore so the test doesn't depend on its internals.
+    mock_identity_store = MagicMock()
+    mock_identity_store.return_value.resolve = AsyncMock()
+    mock_identity_store.key_from_principal.return_value = cached_token
+
+    auth_module = "litellm.proxy.auth.user_api_key_auth"
     with (
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.llm_router", None),
-        patch("litellm.proxy.auth.user_api_key_auth.pre_db_read_auth_checks", new_callable=AsyncMock),
-        patch("litellm.proxy.auth.user_api_key_auth.get_end_user_id_from_request_body", return_value="bob"),
-        patch("litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id", new_callable=AsyncMock, return_value="bob"),
-        patch("litellm.proxy.auth.user_api_key_auth.get_api_key", return_value=(api_key, True)),
-        patch("litellm.proxy.auth.user_api_key_auth.IdentityStore.key_from_principal", return_value=cached_token),
-        patch("litellm.proxy.auth.user_api_key_auth.IdentityStore.resolve", new_callable=AsyncMock),
-        patch("litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None),
-        patch("litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access", new_callable=AsyncMock),
-        patch("litellm.proxy.auth.user_api_key_auth._update_key_budget_with_temp_budget_increase", side_effect=lambda x: x)
+        patch(f"{auth_module}.pre_db_read_auth_checks", new_callable=AsyncMock),
+        patch(f"{auth_module}.get_end_user_id_from_request_body", return_value="bob"),
+        patch(
+            f"{auth_module}.resolve_and_validate_end_user_id",
+            new_callable=AsyncMock,
+            return_value="bob",
+        ),
+        patch(f"{auth_module}.get_api_key", return_value=(api_key, True)),
+        patch(f"{auth_module}.IdentityStore", mock_identity_store),
+        patch(f"{auth_module}.get_user_object", new_callable=AsyncMock, return_value=None),
+        patch(f"{auth_module}._enforce_key_and_fallback_model_access", new_callable=AsyncMock),
+        patch(
+            f"{auth_module}._update_key_budget_with_temp_budget_increase",
+            side_effect=lambda x: x,
+        ),
     ):
         result = await _user_api_key_auth_builder(
             request=mock_request,
