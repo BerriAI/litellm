@@ -3,14 +3,13 @@ import logging
 import os
 import sqlite3
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from types import MappingProxyType
 from typing import Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .analysis import analyze_sample
+from .analysis import AnalysisResponseError, analyze_sample, validation_details
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 
 logger: Final = logging.getLogger("litellm.lens.worker")
@@ -27,7 +26,21 @@ class ClaimIdentity(BaseModel):
     job: ClaimedJobIdentity
 
 
+class PublicModelError(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    lens_error: str
+
+
+class ModelErrorEnvelope(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    detail: PublicModelError
+
+
 def failure_message(error: Exception) -> str:
+    if isinstance(error, AnalysisResponseError):
+        return str(error)
+    if isinstance(error, ValidationError):
+        return f"Invalid {error.title} response (ValidationError):\n{validation_details(error)}"
     if isinstance(error, (OSError, sqlite3.Error)):
         return "Worker temporary storage failed. Increase its capacity or reduce analysis parallelism."
     if isinstance(error, httpx.TimeoutException):
@@ -46,6 +59,12 @@ def failure_message(error: Exception) -> str:
             else "Worker request"
         )
         status: Final = error.response.status_code
+        if path.endswith("/model"):
+            try:
+                diagnostic: Final = ModelErrorEnvelope.model_validate_json(error.response.content)
+                return f"Model request failed (HTTP {status}):\n{diagnostic.detail.lens_error}"
+            except ValueError:
+                pass
         guidance: Final = MappingProxyType(
             {
                 400: "Check the configured model and whether the worker's billing key is enabled.",
@@ -62,15 +81,33 @@ def failure_message(error: Exception) -> str:
 
 
 class LensWorker:
-    def __init__(self, client: httpx.AsyncClient, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        heartbeat_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self.client: Final = client
         self.sleep: Final = sleep
+        self.heartbeat_wait: Final = heartbeat_wait
 
     async def model_request(self, path: str, body: ModelRequest, attempt: int = 0) -> ModelResult:
         try:
-            result: Final = await self.client.post(path, json=body.model_dump())
+            timeout: Final = httpx.Timeout(
+                None,
+                connect=self.client.timeout.connect,
+                write=self.client.timeout.write,
+                pool=self.client.timeout.pool,
+            )
+            result: Final = await self.client.post(path, json=body.model_dump(), timeout=timeout)
             result.raise_for_status()
-            return ModelResult.model_validate(result.json())
+            parsed: Final = ModelResult.model_validate(result.json())
+            reason: Final = result.headers.get("x-litellm-lens-finish-reason")
+            return (
+                parsed.model_copy(update=MappingProxyType({"finish_reason": reason}))
+                if reason in ("length", "content_filter")
+                else parsed
+            )
         except (httpx.TransportError, httpx.HTTPStatusError) as exc:
             retryable: Final = not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code in (
                 429,
@@ -84,7 +121,7 @@ class LensWorker:
             return await self.model_request(path, body, attempt + 1)
 
     async def run_once(self) -> bool:
-        response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 2}))
+        response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 3}))
         response.raise_for_status()
         payload: Final = response.json()
         if payload is None:
@@ -131,17 +168,30 @@ class LensWorker:
 
         async def heartbeat() -> None:
             while True:
-                await asyncio.sleep(30)
-                (await self.client.post(prefix + "/heartbeat")).raise_for_status()
+                await self.heartbeat_wait(30)
+                try:
+                    (await self.client.post(prefix + "/heartbeat")).raise_for_status()
+                except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                    if isinstance(exc, httpx.HTTPStatusError) and (
+                        exc.response.status_code < 500 and exc.response.status_code != 429
+                    ):
+                        raise
+                    logger.warning("Analysis %s heartbeat will retry (%s)", claim.job.id, type(exc).__name__)
 
-        pulse_task: Final = asyncio.create_task(heartbeat())
-        try:
+        async def investigate() -> None:
             data: Final = await self.client.get(prefix + "/sample")
             data.raise_for_status()
             sample: Final = Sample.model_validate(data.json())
             result: Final = await analyze_sample(claim, sample, read, model, progress)
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
+
+        pulse_task: Final = asyncio.create_task(heartbeat())
+        work_task: Final = asyncio.create_task(investigate())
+        try:
+            finished, _ = await asyncio.wait((pulse_task, work_task), return_when=asyncio.FIRST_COMPLETED)
+            for task in finished:
+                await task
         except (httpx.HTTPError, ValueError, OSError, sqlite3.Error) as exc:
             message: Final = failure_message(exc)
             logger.warning("Analysis %s interrupted (%s)", claim.job.id, type(exc).__name__)
@@ -152,8 +202,8 @@ class LensWorker:
                 failed.raise_for_status()
         finally:
             pulse_task.cancel()
-            with suppress(asyncio.CancelledError, httpx.HTTPError):
-                await pulse_task
+            work_task.cancel()
+            await asyncio.gather(pulse_task, work_task, return_exceptions=True)
         return True
 
 

@@ -69,29 +69,31 @@ function LensContent({
   const openDemo = onDemo ? () => onDemo(activeTab) : undefined;
   return (
     <LensPreviewTarget.Provider value={previewTarget}>
-      <main className="flex w-full min-w-0 flex-1 flex-col gap-5 p-6 md:p-8">
-        <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <Aperture aria-hidden="true" className="size-7" strokeWidth={1.75} />
-            Lens
-          </h1>
-          <div ref={setPreviewTarget} />
-        </div>
+      <main className="flex min-h-full w-full min-w-0 flex-1 flex-col gap-2 px-3 pt-2 pb-3">
         {demo && <DemoNotice onExit={onExit} />}
         <Tabs
           value={activeTab}
           onValueChange={(value) => (demo ? setDemoTab(value as Tab) : void setTab(value as Tab))}
-          className="min-h-0 flex-1 gap-4"
+          className="min-h-0 flex-1 gap-2"
         >
-          <TabsList variant="line" aria-label="Lens" className="w-full justify-start gap-6 border-b px-0">
-            <TabsTrigger value="traces" className="flex-none px-0">
-              Traces
-            </TabsTrigger>
-            <TabsTrigger value="investigations" className="flex-none px-0">
-              Investigations
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="traces" keepMounted className="min-h-0">
+          <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <h1 className="flex items-center gap-1.5 text-sm font-semibold tracking-tight">
+                <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
+                Lens
+              </h1>
+              <TabsList aria-label="Lens" className="h-8">
+                <TabsTrigger value="traces" className="px-3">
+                  Traces
+                </TabsTrigger>
+                <TabsTrigger value="investigations" className="px-3">
+                  Investigations
+                </TabsTrigger>
+              </TabsList>
+            </div>
+            <div ref={setPreviewTarget} />
+          </div>
+          <TabsContent value="traces" keepMounted className="flex min-h-0 flex-col">
             <AgentTracesPage
               accessToken={accessToken}
               isActive={activeTab === "traces"}
