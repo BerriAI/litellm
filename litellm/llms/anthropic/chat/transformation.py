@@ -104,6 +104,7 @@ from ..common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
+from ..pass_through.utils import normalize_reasoning_effort_value
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -413,6 +414,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if effort == "xhigh" and not AnthropicConfig._supports_effort_level(model, "xhigh", custom_llm_provider):
             return f"effort='xhigh' is not supported by this model. Got model: {model}"
         return None
+
+    @staticmethod
+    def degrade_alias_effort_for_model(model: str, effort: str, custom_llm_provider: str) -> str:
+        """Keep an alias-derived effort the gate accepts, else lower it to a tier the model is known to accept.
+
+        Explicit ``output_config.effort`` must not be routed here: a caller naming a native tier gets a 400.
+        """
+        if AnthropicConfig._validate_effort_for_model(model, effort, custom_llm_provider) is None:
+            return effort
+        return normalize_reasoning_effort_value(effort, model, custom_llm_provider)
 
     @staticmethod
     def _model_supports_effort_param(model: str, custom_llm_provider: str) -> bool:
@@ -1264,32 +1275,33 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="adaptive",
                 display="summarized",
             )
-        elif reasoning_effort == "low":
+        resolved_effort: Final = normalize_reasoning_effort_value(reasoning_effort, model, custom_llm_provider)
+        if resolved_effort == "low":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
             )
-        elif reasoning_effort == "medium":
+        elif resolved_effort == "medium":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
             )
-        elif reasoning_effort == "high":
+        elif resolved_effort == "high":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
-        elif reasoning_effort == "xhigh":
+        elif resolved_effort == "xhigh":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
             )
-        elif reasoning_effort == "max":
+        elif resolved_effort == "max":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
             )
-        elif reasoning_effort == "minimal":
+        elif resolved_effort == "minimal":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=max(
@@ -1622,7 +1634,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                                 value=effort_value,
                                 llm_provider=self._resolved_provider,
                             )
-                        optional_params["output_config"] = {"effort": mapped_effort}
+                        optional_params["output_config"] = {
+                            "effort": AnthropicConfig.degrade_alias_effort_for_model(
+                                model, mapped_effort, self._resolved_provider
+                            )
+                        }
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(cast(OpenAIWebSearchOptions, value))
                 self._add_tools_to_optional_params(optional_params=optional_params, tools=[hosted_web_search_tool])
