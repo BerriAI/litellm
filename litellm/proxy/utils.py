@@ -119,6 +119,7 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
+from litellm._internal_context import service_target
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
@@ -4267,6 +4268,9 @@ class _ConfigRow:
         self.param_value = param_value
 
 
+CONFIG_PARAMS_TARGET: Final = "config_params"
+
+
 def _config_cache_key(param_name: str) -> str:
     return f"litellm_config:param:{param_name}"
 
@@ -4286,18 +4290,21 @@ def _unpack_config_row(cached: object) -> _ConfigRow | None:
 async def get_config_param(prisma_client: "PrismaClient", param_name: str) -> Any | None:
     """Cached read of a LiteLLM_Config row; returns row, _ConfigRow shim, or None."""
     cache_key: Final = _config_cache_key(param_name)
-    cached: Final = await litellm_config_cache.async_get_cache(cache_key)
+    with service_target(CONFIG_PARAMS_TARGET):
+        cached: Final = await litellm_config_cache.async_get_cache(cache_key)
     if cached is not None:
         return _unpack_config_row(cached)
 
     row: Final = await prisma_client.get_generic_data(key="param_name", value=param_name, table_name="config")
     cache_value: Final[Mapping[str, object] | str] = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
-    await litellm_config_cache.async_set_cache(cache_key, cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS)
+    with service_target(CONFIG_PARAMS_TARGET):
+        await litellm_config_cache.async_set_cache(cache_key, cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS)
     return row
 
 
 async def evict_config_param(param_name: str) -> None:
-    await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+    with service_target(CONFIG_PARAMS_TARGET):
+        await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
 
 
 async def invalidate_config_param(param_name: str) -> None:
@@ -4322,12 +4329,13 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
         )
         return
     by_name: Final = {row.param_name: row for row in rows}
-    for name in param_names:
-        row = by_name.get(name)
-        cache_value: Mapping[str, object] | str = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
-        await litellm_config_cache.async_set_cache(
-            _config_cache_key(name), cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
-        )
+    with service_target(CONFIG_PARAMS_TARGET):
+        for name in param_names:
+            row = by_name.get(name)
+            cache_value: Mapping[str, object] | str = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+            await litellm_config_cache.async_set_cache(
+                _config_cache_key(name), cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
+            )
 
 
 _WRITER_WRITABILITY_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"

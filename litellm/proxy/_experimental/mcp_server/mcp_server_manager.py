@@ -52,6 +52,7 @@ from pydantic import AnyUrl, BaseModel, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
@@ -155,6 +156,7 @@ from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
     scan_tool_descriptions,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
+    MCP_SERVERS_TARGET,
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
@@ -3354,6 +3356,7 @@ class MCPServerManager:
     def get_byom_submitted_servers_cache_key(user_id: str) -> str:
         return f"byom_submitted_servers:{user_id}"
 
+    @with_service_target(MCP_SERVERS_TARGET)
     async def invalidate_byom_submitted_servers_cache(self, user_id: str | None) -> None:
         if not user_id:
             return
@@ -3364,6 +3367,7 @@ class MCPServerManager:
         except Exception as e:  # noqa: BLE001
             verbose_logger.warning("Failed to invalidate BYOM submitted MCP server cache: %s", e)
 
+    @with_service_target(MCP_SERVERS_TARGET)
     async def _get_active_submitted_mcp_server_ids_for_user(
         self, user_api_key_auth: UserAPIKeyAuth | None
     ) -> list[str]:
@@ -3597,6 +3601,7 @@ class MCPServerManager:
                 if not explicit_grants_only and (scope is None or server_id == scope)
             ]
 
+    @with_service_target(MCP_SERVERS_TARGET)
     async def resolve_toolset_tool_permissions(
         self,
         toolset_ids: list[str],
@@ -3691,6 +3696,7 @@ class MCPServerManager:
         except Exception as e:
             verbose_logger.warning("invalidate_toolset_cache: failed to evict in-memory entries: %s", e)
 
+    @with_service_target(MCP_SERVERS_TARGET)
     async def get_toolset_by_name_cached(
         self,
         prisma_client: PrismaClient,

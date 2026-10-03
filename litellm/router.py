@@ -46,6 +46,7 @@ from typing_extensions import overload
 import litellm
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
+from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import (
@@ -71,6 +72,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel.runtime import phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -260,7 +262,7 @@ from litellm.router_utils.routing_groups import (
     parse_routing_groups,
     validate_routing_strategy,
 )
-from litellm.router_utils.routing_read_batch import RoutingPrefetch, RoutingReadBatch
+from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
@@ -441,6 +443,7 @@ _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key"
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
+CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
 
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
@@ -8347,12 +8350,13 @@ class Router:
 
         ## RPM
         rpm_key: Final = RouterCacheEnum.RPM.value.format(id=id, current_minute=current_minute, model=deployment_name)
-        await self.cache.async_increment_cache(
-            key=rpm_key,
-            value=1,
-            parent_otel_span=parent_otel_span,
-            ttl=RoutingArgs.ttl.value,
-        )
+        with service_target(ROUTER_USAGE_TARGET):
+            await self.cache.async_increment_cache(
+                key=rpm_key,
+                value=1,
+                parent_otel_span=parent_otel_span,
+                ttl=RoutingArgs.ttl.value,
+            )
 
     def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:
         """
@@ -13274,6 +13278,23 @@ class Router:
 
         Allows all cache calls to be made async => 10x perf impact (8rps -> 100 rps).
         """
+        with phase_span(f"route {model}"):
+            return await self._async_get_available_deployment(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+    async def _async_get_available_deployment(
+        self,
+        model: str,
+        request_kwargs: dict,
+        messages: list[dict[str, str]] | None,
+        input: str | list | None,
+        specific_deployment: bool | None,
+    ):
         if (
             self.routing_strategy != "usage-based-routing-v2"
             and self.routing_strategy != "simple-shuffle"
@@ -13425,6 +13446,23 @@ class Router:
 
         Only returns deployments configured with use_in_pass_through=True
         """
+        with phase_span(f"route {model}"):
+            return await self._async_get_available_deployment_for_pass_through(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+    async def _async_get_available_deployment_for_pass_through(
+        self,
+        model: str,
+        request_kwargs: dict,
+        messages: list[dict[str, str]] | None,
+        input: str | list | None,
+        specific_deployment: bool | None,
+    ):
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(request_kwargs)
 
@@ -13709,6 +13747,7 @@ class Router:
             return None
         return f"claude_code_session_router:v1:{caller_scope}:{session_id}"
 
+    @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
     async def _delete_claude_code_session_router_binding(self, cache_key: str) -> None:
         try:
             await self._claude_code_session_router_cache.async_delete_cache(key=cache_key)
@@ -13718,6 +13757,7 @@ class Router:
                 e,
             )
 
+    @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
     async def _get_claude_code_session_router_binding(self, cache_key: str) -> object:
         session_cache: Final = self._claude_code_session_router_cache
         try:
@@ -13733,6 +13773,7 @@ class Router:
             )
             return None
 
+    @with_service_target(CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET)
     async def _resolve_claude_code_session_router(
         self,
         model: str,
