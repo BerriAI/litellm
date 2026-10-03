@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -192,6 +193,8 @@ class InMemoryCache(BaseCache):
         """
         # get the value
         init_value: Final = self.get_cache(key=key) or set()
+        if not isinstance(init_value, set):
+            raise TypeError("Cached value is not a set")
         for val in value:
             init_value.add(val)
         self.set_cache(key, init_value, ttl=ttl)
@@ -215,8 +218,10 @@ class InMemoryCache(BaseCache):
             original_cached_response: Final = self.cache_dict[key]
             try:
                 cached_response = json.loads(original_cached_response)
-            except Exception:
-                cached_response = original_cached_response
+            except (TypeError, ValueError):
+                if isinstance(original_cached_response, (dict, list, BaseModel)):
+                    return deepcopy(original_cached_response)
+                return original_cached_response
             return cached_response
         return None
 
@@ -231,6 +236,8 @@ class InMemoryCache(BaseCache):
         with self._increment_lock:
             # keep read-modify-write atomic
             init_value: Final = self.get_cache(key=key) or 0
+            if not isinstance(init_value, (int, float)):
+                raise TypeError("Cached value is not numeric")
             value = init_value + value
             self.set_cache(key, value, **kwargs)
             return value
