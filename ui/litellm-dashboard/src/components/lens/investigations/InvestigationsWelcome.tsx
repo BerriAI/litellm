@@ -2,37 +2,30 @@ import Link from "next/link";
 import { Check, Loader2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { LensPreviewButton } from "../LensPreviewButton";
+import type { ActivityCheck, Readiness } from "../model/status";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 
+export interface InvestigationsWelcomeProps {
+  readonly readiness: Readiness;
+  readonly activity: ActivityCheck;
+  readonly readOnly: boolean;
+  readonly onConnect: () => void;
+  readonly onCreate: () => void;
+  readonly onRetry: () => void;
+}
+
 export function InvestigationsWelcome({
-  tracesReady,
-  requestsReady = false,
-  checking,
-  traceError,
-  connected,
+  readiness,
+  activity,
   readOnly,
   onConnect,
   onCreate,
   onRetry,
-  showPreview = false,
-}: {
-  tracesReady: boolean;
-  requestsReady?: boolean;
-  checking: boolean;
-  traceError?: string;
-  connected: boolean;
-  readOnly: boolean;
-  onConnect: () => void;
-  onCreate: () => void;
-  onRetry: () => void;
-  showPreview?: boolean;
-}) {
-  const activityReady = tracesReady || requestsReady;
+}: InvestigationsWelcomeProps) {
+  const { tracesReady, requestsReady, activityReady, connected, ready } = readiness;
+  const checking = activity.kind === "checking";
   const workerReady = activityReady && connected;
-  const canCreate = workerReady && !readOnly;
-  const canConnect = activityReady && !readOnly;
-  const traceStatus = activityStatus(tracesReady, requestsReady, checking);
   const waitingForWorker = activityReady && !connected;
   const firstStepTitle = requestsReady && !tracesReady ? "Recorded activity" : "Set up traces";
   const traceButtonClass = buttonVariants({
@@ -41,7 +34,7 @@ export function InvestigationsWelcome({
   });
   return (
     <section aria-labelledby="lens-welcome" className="m-auto w-full max-w-2xl py-10">
-      {showPreview && <LensPreviewButton />}
+      {activity.kind === "checked" && !ready && <LensPreviewButton />}
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
         Find what needs attention
       </h2>
@@ -53,7 +46,7 @@ export function InvestigationsWelcome({
           <Step number={1} complete={activityReady} checking={checking} active={!activityReady} />
           <div>
             <h3 className="text-sm font-medium">{firstStepTitle}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{traceStatus}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{activityStatus(readiness, checking)}</p>
           </div>
           <Link href={uiHref("lens/?tab=traces")} className={traceButtonClass}>
             {tracesReady ? "View traces" : "Set up traces"}
@@ -73,7 +66,7 @@ export function InvestigationsWelcome({
           <Button
             className="col-start-2 w-fit sm:col-start-auto"
             variant={waitingForWorker ? "default" : "ghost"}
-            disabled={!canConnect}
+            disabled={!activityReady || readOnly}
             onClick={onConnect}
           >
             {connected ? "Manage worker" : "Connect worker"}
@@ -90,16 +83,16 @@ export function InvestigationsWelcome({
           <Button
             className="col-start-2 w-fit sm:col-start-auto"
             variant={workerReady ? "default" : "ghost"}
-            disabled={!canCreate}
+            disabled={!workerReady || readOnly}
             onClick={onCreate}
           >
             New investigation
           </Button>
         </li>
       </ol>
-      {traceError && (
+      {activity.kind === "failed" && (
         <div role="alert" className="mt-6 text-sm text-destructive">
-          Could not check recorded activity. {traceError}{" "}
+          Could not check recorded activity. {activity.message}{" "}
           <Button variant="link" onClick={onRetry}>
             Retry
           </Button>
@@ -147,8 +140,8 @@ function stepState(complete: boolean, active?: boolean) {
   return "inactive";
 }
 
-function activityStatus(traces: boolean, requests: boolean, checking: boolean) {
-  if (traces) return "Traces received";
-  if (requests) return "Request logs received";
+function activityStatus({ tracesReady, requestsReady }: Readiness, checking: boolean) {
+  if (tracesReady) return "Traces received";
+  if (requestsReady) return "Request logs received";
   return checking ? "Checking for activity…" : "Connect your agent and send a trace.";
 }

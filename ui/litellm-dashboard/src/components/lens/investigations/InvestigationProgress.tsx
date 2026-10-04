@@ -2,7 +2,6 @@
 
 import { useNow } from "@/hooks/useNow";
 
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   analysisElapsed,
@@ -12,8 +11,8 @@ import {
   analysisStages,
   remainingLabel,
   stageDurations,
-  type ProgressSample,
 } from "../model/progress";
+import { useProgressSamples } from "./useProgressSamples";
 import { durationText } from "../model/format";
 import { type Job } from "../model/types";
 import { cn } from "@/lib/cva.config";
@@ -31,11 +30,7 @@ export function InvestigationProgress({ job, onCancel }: { job: Job; onCancel?: 
   const now = useNow(1000);
   const progress = analysisProgress(job);
   const fraction = analysisFraction(progress);
-  const [samples, setSamples] = useState<ProgressSample[]>([]);
-  const latest = samples.at(-1);
-  if (!latest || latest.step !== progress.step || latest.done !== progress.done) {
-    setSamples([...samples, { at: now, step: progress.step, done: progress.done, fraction }].slice(-120));
-  }
+  const samples = useProgressSamples(progress);
   const pace = analysisPace(samples, now);
   const percent = Math.round(fraction * 100);
   const queued = progress.step < 0;
