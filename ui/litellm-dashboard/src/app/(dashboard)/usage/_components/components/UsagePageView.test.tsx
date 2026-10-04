@@ -1290,6 +1290,24 @@ describe("UsagePage", () => {
         within(modelActivityTab).getByText('No models match "missing model" in this date range'),
       ).toBeInTheDocument();
     });
+
+    it("does not show the no-match state when model data is empty", async () => {
+      vi.mocked(processActivityData).mockReturnValue({});
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("tab", { name: "Model Activity" }));
+
+      const modelActivityTab = screen.getByRole("tabpanel", { name: "Model Activity" });
+      const searchInput = within(modelActivityTab).getByRole("textbox", { name: "Search models" });
+      fireEvent.change(searchInput, { target: { value: "missing model" } });
+
+      expect(
+        within(modelActivityTab).queryByText('No models match "missing model" in this date range'),
+      ).not.toBeInTheDocument();
+    });
   });
 
   describe("customer usage banner", () => {

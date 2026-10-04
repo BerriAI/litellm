@@ -895,7 +895,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     </InputGroup>
                     <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
                   </div>
-                  {trimmedModelQuery !== "" && Object.keys(filteredModelMetrics).length === 0 ? (
+                  {trimmedModelQuery !== "" &&
+                  Object.keys(modelMetrics).length > 0 &&
+                  Object.keys(filteredModelMetrics).length === 0 ? (
                     <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
                       No models match &quot;{trimmedModelQuery}&quot; in this date range
                     </p>
