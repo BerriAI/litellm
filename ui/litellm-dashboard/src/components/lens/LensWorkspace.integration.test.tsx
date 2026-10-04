@@ -39,7 +39,6 @@ describe("Lens interactive demo", () => {
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
     expect(screen.queryByRole("button", { name: "Set up tracing" })).not.toBeInTheDocument();
     network.mockClear();
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(screen.getByText("Where is order #1042?")).toBeVisible();
     const search = screen.getByRole("combobox", { name: "Search runs" });
     await user.type(search, "headphones");

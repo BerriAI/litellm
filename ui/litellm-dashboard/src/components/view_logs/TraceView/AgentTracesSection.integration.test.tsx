@@ -589,25 +589,6 @@ describe("AgentTracesSection", () => {
     expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
     expect(rowCount()).toBe(runs.length);
   });
-
-  it("clears timeline zoom when refreshed", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
-    renderWindowed({ rangeHours: 24, onRangeHoursChange: () => {}, onLiveChange: () => {} });
-    await screen.findAllByTestId("agent-trace-row");
-    const area = screen.getByTestId("timeline-area");
-    const x = (bucket: number) => bucket * 10 + 5;
-
-    fireEvent.pointerDown(area, { clientX: x(0), pointerId: 1 });
-    fireEvent.pointerMove(area, { clientX: x(1), pointerId: 1 });
-    fireEvent.pointerUp(area, { clientX: x(1), pointerId: 1 });
-    expect(screen.getByTestId("timeline-selection")).toBeInTheDocument();
-    expect(screen.queryAllByTestId("agent-trace-row")).toHaveLength(0);
-
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
-  });
 });
 
 describe("AgentTracesPage", () => {
@@ -636,18 +617,6 @@ describe("AgentTracesPage", () => {
     expect(live).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(live);
     expect(live).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
-  });
-
-  it("refreshes the trace list", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
-    renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
-    await screen.findByTestId("runs-table");
-
-    const callsBeforeRefresh = vi.mocked(agentTraceListCall).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.length).toBeGreaterThan(callsBeforeRefresh));
   });
 
   it("keeps the time controls on an empty range the user picked, instead of showing onboarding", async () => {
