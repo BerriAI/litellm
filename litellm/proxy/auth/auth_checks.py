@@ -317,12 +317,6 @@ class _VectorStorePermissionsRow(Protocol):
     def vector_stores(self) -> Sequence[str] | None: ...
 
 
-def _object_permission_table(
-    repo: _PrismaTableHolder[_VectorStorePermissionsRow],
-) -> _PrismaAuthTable[_VectorStorePermissionsRow]:
-    return _DeadlineBoundedTable(repo.table, "object_permission")
-
-
 class _PrismaTagRow(Protocol):
     tag_name: str
 
@@ -6798,11 +6792,65 @@ def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | 
     return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
 
 
-def _is_strict_vector_store_identity(valid_token: UserAPIKeyAuth | None) -> bool:
+GrantLayer = Literal["key", "team", "user"]
+
+
+def _is_strict_grant_identity(valid_token: UserAPIKeyAuth | None) -> bool:
     return (
         valid_token is not None
         and valid_token.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS
         and valid_token.team_id != UI_TEAM_ID
+    )
+
+
+def _strict_grant_layers(
+    deny_by_default: bool, valid_token: UserAPIKeyAuth | None, team_object: LiteLLM_TeamTable | None
+) -> frozenset[GrantLayer]:
+    """
+    The identities that must each grant an object under a deny-by-default policy: a virtual key and its team,
+    a keyless team member's team, or a keyless user's own grant. The master key and dashboard sessions need none
+    """
+    if not deny_by_default or valid_token is None or not _is_strict_grant_identity(valid_token):
+        return frozenset()
+    virtual_key: Final = valid_token.via_virtual_key and not valid_token.is_session_token
+    has_team: Final = team_object is not None or valid_token.team_id is not None
+    if not virtual_key and not has_team:
+        return frozenset(("user",))
+    return frozenset(layer for layer, required in (("key", virtual_key), ("team", has_team)) if required)
+
+
+async def _identity_grants(
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    user_object: LiteLLM_UserTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[tuple[GrantLayer, LiteLLM_ObjectPermissionTable | None], ...]:
+    return (
+        (
+            "key",
+            None
+            if valid_token is None
+            else await _cached_object_permission(
+                valid_token.object_permission_id, valid_token.object_permission, prisma_client, user_api_key_cache
+            ),
+        ),
+        (
+            "team",
+            None
+            if team_object is None
+            else await _cached_object_permission(
+                team_object.object_permission_id, team_object.object_permission, prisma_client, user_api_key_cache
+            ),
+        ),
+        (
+            "user",
+            None
+            if user_object is None
+            else await _cached_object_permission(
+                user_object.object_permission_id, user_object.object_permission, prisma_client, user_api_key_cache
+            ),
+        ),
     )
 
 
@@ -6874,7 +6922,7 @@ def _strict_requested_vector_store_ids(request_body: Mapping[str, object]) -> tu
 
 
 def _require_vector_store_grant(
-    object_type: Literal["key", "team", "user"],
+    object_type: GrantLayer,
     vector_store_ids_to_run: Sequence[str],
     object_permission: _VectorStorePermissionsRow | None,
 ) -> None:
@@ -6889,6 +6937,27 @@ def _require_vector_store_grant(
         object_type=object_type,
         vector_store_ids_to_run=vector_store_ids_to_run,
         object_permissions=object_permission,
+    )
+
+
+async def _cached_object_permission(
+    object_permission_id: str | None,
+    loaded: LiteLLM_ObjectPermissionTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> LiteLLM_ObjectPermissionTable | None:
+    """
+    The grant row auth already attached to the key, team or user, else the cached row by id. Both are
+    evicted on every worker when the grant changes, so the request path never reads the table directly.
+    """
+    if object_permission_id is None:
+        return None
+    if loaded is not None:
+        return loaded
+    return await get_object_permission(
+        object_permission_id=object_permission_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
     )
 
 
@@ -6957,56 +7026,23 @@ async def vector_store_access_check(
     #########################################################
     # Check if the object (key, team, org) has access to the vector store
     #########################################################
-    # Check if the key can access the vector store
-    key_object_permission: Final = (
-        await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
-            where={"object_permission_id": valid_token.object_permission_id},
-        )
-        if valid_token is not None and valid_token.object_permission_id is not None
-        else None
+    strict_layers: Final = _strict_grant_layers(deny_by_default, valid_token, team_object)
+    grants: Final = await _identity_grants(
+        valid_token,
+        team_object,
+        user_object if "user" in strict_layers else None,
+        prisma_client,
+        user_api_key_cache,
     )
-    strict_identity: Final = deny_by_default and _is_strict_vector_store_identity(valid_token)
-    strict_key: Final = (
-        strict_identity and valid_token is not None and valid_token.via_virtual_key and not valid_token.is_session_token
-    )
-    has_team: Final = team_object is not None or (valid_token is not None and valid_token.team_id is not None)
-    if strict_key:
-        _require_vector_store_grant("key", vector_store_ids_to_run, key_object_permission)
-    elif key_object_permission is not None:
-        _can_object_call_vector_stores(
-            object_type="key",
-            vector_store_ids_to_run=vector_store_ids_to_run,
-            object_permissions=key_object_permission,
-        )
-
-    # Check if the team can access the vector store
-    team_object_permission: Final = (
-        await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
-            where={"object_permission_id": team_object.object_permission_id},
-        )
-        if team_object is not None and team_object.object_permission_id is not None
-        else None
-    )
-    if strict_identity and has_team:
-        _require_vector_store_grant("team", vector_store_ids_to_run, team_object_permission)
-    elif team_object_permission is not None:
-        _can_object_call_vector_stores(
-            object_type="team",
-            vector_store_ids_to_run=vector_store_ids_to_run,
-            object_permissions=team_object_permission,
-        )
-
-    if strict_identity and not strict_key and not has_team:
-        user_object_permission: Final = (
-            await get_object_permission(
-                object_permission_id=user_object.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
+    for layer, grant in grants:
+        if layer in strict_layers:
+            _require_vector_store_grant(layer, vector_store_ids_to_run, grant)
+        elif grant is not None:
+            _can_object_call_vector_stores(
+                object_type=layer,
+                vector_store_ids_to_run=vector_store_ids_to_run,
+                object_permissions=grant,
             )
-            if user_object is not None and user_object.object_permission_id is not None
-            else None
-        )
-        _require_vector_store_grant("user", vector_store_ids_to_run, user_object_permission)
     return True
 
 

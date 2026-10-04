@@ -1649,8 +1649,9 @@ async def test_vector_store_access_check_with_permissions():
     )
 
     mock_prisma_client = MagicMock()
-    mock_permissions = MagicMock()
-    mock_permissions.vector_stores = ["store-1", "store-2"]
+    mock_permissions = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-123", vector_stores=["store-1", "store-2"]
+    )
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=mock_permissions)
 
     mock_vector_store_registry = MagicMock()
@@ -1691,12 +1692,12 @@ async def test_vector_store_access_check_with_team_permissions():
     request_body = {}
     valid_token = UserAPIKeyAuth(token="team-test-token", object_permission_id=None)
 
-    team_object = MagicMock()
-    team_object.object_permission_id = "team-permission"
+    team_object = LiteLLM_TeamTable(team_id="team-1", object_permission_id="team-permission")
 
     mock_prisma_client = MagicMock()
-    team_permissions = MagicMock()
-    team_permissions.vector_stores = ["team-store-allowed"]
+    team_permissions = LiteLLM_ObjectPermissionTable(
+        object_permission_id="team-permission", vector_stores=["team-store-allowed"]
+    )
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=team_permissions)
 
     mock_vector_store_registry = MagicMock()
@@ -1758,12 +1759,12 @@ async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
     }
     valid_token = UserAPIKeyAuth(token="team-test-token", object_permission_id=None)
 
-    team_object = MagicMock()
-    team_object.object_permission_id = "team-permission"
+    team_object = LiteLLM_TeamTable(team_id="team-1", object_permission_id="team-permission")
 
     mock_prisma_client = MagicMock()
-    team_permissions = MagicMock()
-    team_permissions.vector_stores = ["KBALLOWED123"]
+    team_permissions = LiteLLM_ObjectPermissionTable(
+        object_permission_id="team-permission", vector_stores=["KBALLOWED123"]
+    )
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=team_permissions)
 
     with (
@@ -1789,7 +1790,6 @@ async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
     assert exc_info.value.type == expected_error_type
 
 
-
 _KEY_DENIED: Final = ProxyErrorTypes.key_vector_store_access_denied
 _TEAM_DENIED: Final = ProxyErrorTypes.team_vector_store_access_denied
 _USER_DENIED: Final = ProxyErrorTypes.user_vector_store_access_denied
@@ -1812,6 +1812,16 @@ def _virtual_key(
     return key
 
 
+def _permission_row(
+    object_permission_id: str, permission: SimpleNamespace | LiteLLM_ObjectPermissionTable | None
+) -> LiteLLM_ObjectPermissionTable | None:
+    if isinstance(permission, SimpleNamespace):
+        return LiteLLM_ObjectPermissionTable(
+            object_permission_id=object_permission_id, vector_stores=permission.vector_stores
+        )
+    return permission
+
+
 async def _common_checks_for_rag_query(
     general_settings: Mapping[str, object],
     valid_token: UserAPIKeyAuth,
@@ -1825,15 +1835,9 @@ async def _common_checks_for_rag_query(
     vector_store_registry: VectorStoreRegistry | None = None,
 ) -> bool:
     permissions: Final = {
-        "key-permission": key_permission,
-        "team-permission": team_permission,
-        "user-permission": (
-            LiteLLM_ObjectPermissionTable(
-                object_permission_id="user-permission", vector_stores=user_permission.vector_stores
-            )
-            if isinstance(user_permission, SimpleNamespace)
-            else user_permission
-        ),
+        "key-permission": _permission_row("key-permission", key_permission),
+        "team-permission": _permission_row("team-permission", team_permission),
+        "user-permission": _permission_row("user-permission", user_permission),
     }
     mock_prisma_client: Final = MagicMock()
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
@@ -1906,7 +1910,11 @@ async def _team_key_rag_query(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("general_settings", "denied_by"),
-    [({}, None), ({"vector_store_deny_by_default": False}, None), ({"vector_store_deny_by_default": True}, _KEY_DENIED)],
+    [
+        ({}, None),
+        ({"vector_store_deny_by_default": False}, None),
+        ({"vector_store_deny_by_default": True}, _KEY_DENIED),
+    ],
     ids=["flag-omitted", "flag-false", "flag-true"],
 )
 async def test_standalone_key_without_vector_store_permission_follows_deny_by_default(
@@ -1968,7 +1976,9 @@ async def test_proxy_admin_virtual_key_keeps_flag_off_vector_store_behavior(
     )
     key_permission: Final = None if vector_stores is None else SimpleNamespace(vector_stores=vector_stores)
 
-    await _assert_rag_query_outcome(_common_checks_for_rag_query(general_settings, admin_key, key_permission), denied_by)
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(general_settings, admin_key, key_permission), denied_by
+    )
 
 
 @pytest.mark.asyncio
@@ -2018,7 +2028,9 @@ async def test_team_key_keeps_legacy_vector_store_behavior_when_flag_off(
 
 @pytest.mark.asyncio
 async def test_user_owned_team_key_without_key_grant_is_denied_despite_team_membership():
-    team_member: Final = LiteLLM_UserTable(user_id="key-owner", teams=["team-1"], user_role=LitellmUserRoles.INTERNAL_USER)
+    team_member: Final = LiteLLM_UserTable(
+        user_id="key-owner", teams=["team-1"], user_role=LitellmUserRoles.INTERNAL_USER
+    )
 
     await _assert_rag_query_outcome(
         _team_key_rag_query({"vector_store_deny_by_default": True}, [], ["KBSTOREA"], team_member), _KEY_DENIED
@@ -2052,8 +2064,7 @@ async def _keyless_rag_query(
         ),
         None if team_vector_stores is None else SimpleNamespace(vector_stores=team_vector_stores),
         _user_row(user_vector_stores, teams=() if team_id is None else (team_id,)),
-        user_permission
-        or (None if user_vector_stores is None else SimpleNamespace(vector_stores=user_vector_stores)),
+        user_permission or (None if user_vector_stores is None else SimpleNamespace(vector_stores=user_vector_stores)),
     )
 
 
@@ -2338,6 +2349,30 @@ async def test_keyless_user_grant_is_read_through_the_object_permission_cache():
             user_api_key_cache=cache,
         ),
         None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deny_by_default", [True, False], ids=["strict", "default"])
+async def test_key_and_team_grants_are_read_through_the_object_permission_cache(deny_by_default: bool):
+    cache: Final = UserApiKeyCache(default_in_memory_ttl=60)
+    for object_permission_id, vector_stores in (("key-permission", ["KBSTOREA"]), ("team-permission", ["KBSTOREB"])):
+        await cache.async_set_cache(
+            key=object_permission_cache_key(object_permission_id),
+            value=LiteLLM_ObjectPermissionTable(object_permission_id=object_permission_id, vector_stores=vector_stores),
+            model_type=LiteLLM_ObjectPermissionTable,
+        )
+
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission", team_id="team-1"),
+            None,
+            LiteLLM_TeamTable(team_id="team-1", object_permission_id="team-permission"),
+            None,
+            user_api_key_cache=cache,
+        ),
+        _TEAM_DENIED,
     )
 
 
@@ -10901,7 +10936,9 @@ async def test_authoritative_access_group_reads_writer_despite_stale_allow_cache
     from litellm.proxy._types import LiteLLM_AccessGroupTable
     from litellm.proxy.auth.auth_checks import get_access_object
 
-    stale: Final = LiteLLM_AccessGroupTable(access_group_id="group", access_group_name="Policy", access_model_names=["old"])
+    stale: Final = LiteLLM_AccessGroupTable(
+        access_group_id="group", access_group_name="Policy", access_model_names=["old"]
+    )
     current: Final = stale.model_copy(update={"access_model_names": ["new"] if allowed else []})
     client: Final = MagicMock()
     client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=current)
@@ -11053,9 +11090,12 @@ async def test_authoritative_key_cannot_keep_grants_when_permission_is_unavailab
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     database: Final = MagicMock()
-    database.get_data = AsyncMock(return_value=UserAPIKeyAuth(
-        object_permission_id="grant", object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["allowed"])
-    ))
+    database.get_data = AsyncMock(
+        return_value=UserAPIKeyAuth(
+            object_permission_id="grant",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["allowed"]),
+        )
+    )
     database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=None, side_effect=None if missing else RuntimeError("writer unavailable")
     )
@@ -11078,7 +11118,9 @@ async def test_authoritative_group_grants_propagate_policy_outages(
 
     database: Final = MagicMock()
     database.db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
-    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     if strict:
