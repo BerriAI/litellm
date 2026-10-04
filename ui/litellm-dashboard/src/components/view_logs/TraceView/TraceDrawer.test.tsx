@@ -316,12 +316,14 @@ describe("RunView", () => {
   });
 
   it("does not navigate steps while typing or moving the search cursor", async () => {
-    const user = userEvent.setup();
     renderRun(research);
     const search = await screen.findByRole("textbox", { name: "Search steps" });
     const selected = screen.getByTestId("detail-pane").getAttribute("data-row-id");
-    await user.type(search, "jk{ArrowDown}{ArrowUp}");
-    await waitFor(() => expect(search).toHaveValue("jk"));
+    fireEvent.change(search, { target: { value: "jk" } });
+    expect(search).toHaveValue("jk");
+    for (const key of ["j", "k", "ArrowDown", "ArrowUp"]) {
+      fireEvent.keyDown(search, { key });
+    }
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selected);
   });
 
