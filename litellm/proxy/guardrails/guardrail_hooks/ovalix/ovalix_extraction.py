@@ -3,6 +3,7 @@ import json
 import posixpath
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NamedTuple
 from urllib.parse import unquote, urlparse
@@ -169,15 +170,16 @@ def _file_parts_of_message(
             yield part
 
 
+def _file_parts_of_messages(structured_messages: Sequence[object], size_limit: int | None) -> Iterator[FilePart]:
+    for message_index, message in enumerate(structured_messages):
+        if isinstance(message, Mapping):
+            yield from _file_parts_of_message(message, size_limit, message_index)
+
+
 def extract_file_parts_from_messages(
     structured_messages: Sequence[object] | None, size_limit: int | None = None
 ) -> tuple[FilePart, ...]:
-    return tuple(
-        part
-        for message_index, message in enumerate(structured_messages or ())
-        if isinstance(message, Mapping)
-        for part in _file_parts_of_message(message, size_limit, message_index)
-    )
+    return tuple(_file_parts_of_messages(structured_messages or (), size_limit))
 
 
 def _file_part_of_image(value: str, size_limit: int | None, index: int) -> FilePart | None:
@@ -261,8 +263,8 @@ def tool_call_to_tool_data(tool_call: object) -> Mapping[str, object] | None:
     return make_tool_data(name, content, tool_input)
 
 
-def _message_tool_calls(message: Mapping[str, object]) -> Sequence[object]:
-    tool_calls: Final = message.get("tool_calls")
+def _message_tool_calls(message: object) -> Sequence[object]:
+    tool_calls: Final = message.get("tool_calls") if isinstance(message, Mapping) else None
     return tool_calls if isinstance(tool_calls, list) else ()
 
 
@@ -272,12 +274,7 @@ def extract_tool_calls_from_messages(structured_messages: Sequence[object] | Non
     Surfaces such as the Anthropic request path populate ``structured_messages`` but leave the
     top-level ``tool_calls`` input empty, so calls made in prior assistant turns are only visible here.
     """
-    return tuple(
-        tool_call
-        for message in structured_messages or ()
-        if isinstance(message, Mapping)
-        for tool_call in _message_tool_calls(message)
-    )
+    return tuple(chain.from_iterable(_message_tool_calls(message) for message in structured_messages or ()))
 
 
 def tool_data_key(tool_data: Mapping[str, object]) -> str:
@@ -310,7 +307,9 @@ def _extract_tool_content(content: object) -> str | None:
     return text
 
 
-def _declared_names_for_call(message: Mapping[str, object], call_id: str) -> Iterator[str]:
+def _declared_names_for_call(message: object, call_id: str) -> Iterator[str]:
+    if not isinstance(message, Mapping) or message.get("role") != "assistant":
+        return
     tool_calls: Final = message.get("tool_calls")
     if not isinstance(tool_calls, list):
         return
@@ -327,10 +326,7 @@ def _resolve_tool_name(messages: Sequence[object], tool_index: int, tool_call_id
     if not isinstance(tool_call_id, str) or not tool_call_id:
         return _DEFAULT_TOOL_RESULT_NAME
     declared: Final = tuple(
-        name
-        for message in messages[:tool_index]
-        if isinstance(message, Mapping) and message.get("role") == "assistant"
-        for name in _declared_names_for_call(message, tool_call_id)
+        chain.from_iterable(_declared_names_for_call(message, tool_call_id) for message in messages[:tool_index])
     )
     return declared[-1] if declared else _DEFAULT_TOOL_RESULT_NAME
 
