@@ -36,20 +36,26 @@ interface TimeRangeControlsProps {
 }
 
 /** Joined control group: the time range (opens presets) and Live. */
-export function TimeRangeControls({ range, zoom, onHoursChange, showLive = true, onLiveChange }: TimeRangeControlsProps) {
+export function TimeRangeControls({
+  range,
+  zoom,
+  onHoursChange,
+  showLive = true,
+  onLiveChange,
+}: TimeRangeControlsProps) {
   const live = isLive(range);
   return (
     <div className="flex items-stretch divide-x divide-border border-l border-border">
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Time range"
-          className={cn(SEGMENT, "text-foreground hover:bg-muted/60")}
+          className={cn(SEGMENT, "min-w-40 justify-between text-foreground hover:bg-muted/60")}
           data-testid="time-range-trigger"
         >
           <span className="tabular-nums">{rangeLabel(range, zoom)}</span>
           <ChevronDown className="size-3.5 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-auto min-w-44">
+        <DropdownMenuContent align="end" sideOffset={1} className="min-w-0 rounded-t-none">
           <DropdownMenuRadioGroup
             value={String(range.hours)}
             onValueChange={(value: string) => onHoursChange(Number(value))}
