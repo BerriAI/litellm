@@ -1,4 +1,4 @@
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Final
 
@@ -8,7 +8,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing import TraceReceiver
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(
@@ -29,7 +29,7 @@ async def provide_receiver(request: Request) -> TraceReceiver | None:
 
 async def provide_storage(request: Request) -> ClickHouseStorage | None:
     tracing: Final = await provide_receiver(request)
-    return tracing.store.storage if tracing is not None else None
+    return tracing.storage if tracing is not None else None
 
 
 async def _start_receiver(factory: Callable[[], TraceReceiver]) -> TraceReceiver | None:
@@ -44,14 +44,17 @@ async def _start_receiver(factory: Callable[[], TraceReceiver]) -> TraceReceiver
 
 @asynccontextmanager
 async def manage_tracing(
-    enabled: bool, receiver_factory: Callable[[], TraceReceiver] = TraceReceiver.from_env
+    enabled: bool,
+    receiver_factory: Callable[[], TraceReceiver] | None = None,
+    settings: Mapping[str, object] | None = None,
 ) -> AsyncGenerator[TraceReceiver | None, None]:
-    tracing: Final = await _start_receiver(receiver_factory) if enabled else None
+    factory: Final = receiver_factory or (lambda: TraceReceiver.from_settings(settings or {}))
+    tracing: Final = await _start_receiver(factory) if enabled else None
     if tracing is None:
         yield tracing
         return
 
-    spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
+    spend_logger: Final = ClickHouseSpendLogger(storage=tracing.storage)
     manager: Final = litellm.logging_callback_manager
     manager.add_litellm_callback(spend_logger)
     manager.add_litellm_success_callback(spend_logger)
