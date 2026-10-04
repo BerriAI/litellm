@@ -26,16 +26,16 @@ import { scopeLabel } from "../model/format";
 import { type Finding, type Lens } from "../model/types";
 import { useListSearchRoute } from "../route";
 
-const PRIORITY_COLOR = { high: "text-[#e5484d]", medium: "text-amber-500", low: "text-muted-foreground" } as const;
+const PRIORITY_COLOR = { high: "text-destructive", medium: "text-amber-500", low: "text-muted-foreground" } as const;
 const ROW =
   "border-b border-border/60 transition-colors duration-150 hover:bg-trace-row-hover motion-reduce:transition-none";
-const META = "truncate text-[11px] text-muted-foreground";
+const META = "truncate text-xs text-muted-foreground";
 
 function JobIcon({ lens }: { lens: Lens }) {
   const status = lens.jobs[0]?.status;
   const className = "size-4 shrink-0";
   if (status === "queued" || status === "running")
-    return <CircleDashed aria-hidden="true" className={cn(className, "text-[#3b5bfd]")} />;
+    return <CircleDashed aria-hidden="true" className={cn(className, "text-info")} />;
   if (status === "failed") return <CircleX aria-hidden="true" className={cn(className, "text-destructive")} />;
   if (status === "cancelled")
     return <CircleSlash aria-hidden="true" className={cn(className, "text-muted-foreground")} />;
@@ -47,7 +47,7 @@ function TwoLine({ meta, title, className }: { meta: ReactNode; title: ReactNode
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span className={META}>{meta}</span>
-      <span className={cn("truncate text-[13px] text-foreground", className)}>{title}</span>
+      <span className={cn("truncate text-sm text-foreground", className)}>{title}</span>
     </span>
   );
 }
@@ -87,7 +87,7 @@ export function InvestigationList({
           <Input
             aria-label="Search investigations"
             placeholder="Search investigations"
-            className="h-7 bg-background pl-8 text-[12px]"
+            className="h-7 bg-background pl-8 text-xs"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -149,7 +149,7 @@ export function InvestigationList({
                     </td>
                     <td
                       className={cn(
-                        "w-[180px] truncate px-3 text-right text-[12px]",
+                        "w-[180px] truncate px-3 text-right text-xs",
                         latest?.status === "failed" ? "text-destructive" : "text-muted-foreground",
                       )}
                     >
@@ -159,14 +159,14 @@ export function InvestigationList({
                       {findings.length > 0 && (
                         <span
                           title={`${findings.length} open ${findings.length === 1 ? "finding" : "findings"}`}
-                          className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 font-mono text-[11px] tabular-nums text-foreground"
+                          className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 font-mono text-xs tabular-nums text-foreground"
                         >
                           {findings.length}
                         </span>
                       )}
                     </td>
                     <td
-                      className="w-[120px] px-3 text-right text-[12px] text-muted-foreground"
+                      className="w-[120px] px-3 text-right text-xs text-muted-foreground"
                       title={latest ? formatActivityTimestamp(latest.created_at) : undefined}
                     >
                       {latest ? agoLabel(Date.parse(latest.created_at), now) : "never run"}
@@ -227,12 +227,12 @@ export function InvestigationList({
                               />
                             </span>
                           </td>
-                          <td className="px-3 text-right text-[12px] text-muted-foreground">
+                          <td className="px-3 text-right text-xs text-muted-foreground">
                             {runs} {runs === 1 ? "run" : "runs"}
                           </td>
                           <td />
                           <td
-                            className="px-3 text-right text-[12px] text-muted-foreground"
+                            className="px-3 text-right text-xs text-muted-foreground"
                             title={formatActivityTimestamp(finding.last_seen)}
                           >
                             {agoLabel(Date.parse(finding.last_seen), now)}
@@ -249,12 +249,10 @@ export function InvestigationList({
           </tbody>
         </table>
         {!shown.length && (
-          <div className="py-16 text-center text-[12px] text-muted-foreground">
-            No investigations match your search.
-          </div>
+          <div className="py-16 text-center text-xs text-muted-foreground">No investigations match your search.</div>
         )}
       </div>
-      <footer className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground">
+      <footer className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-xs text-muted-foreground">
         {shown.length} {shown.length === 1 ? "investigation" : "investigations"} ·{" "}
         {lenses.filter((l) => l.settings.enabled).length} watching
       </footer>

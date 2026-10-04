@@ -227,11 +227,11 @@ function FieldHeader({ runs, range }: { runs: readonly TraceSummary[]; range: Ti
   const lastMs = latestStart(runs);
   const live = isReceiving(lastMs, now);
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 font-mono text-[11px] leading-none">
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 font-mono text-xs leading-none">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground tabular-nums">
         <span className="flex items-center gap-2" role="status" data-testid="traces-last-seen">
           <LivePulse live={live} />
-          <span className={cn("font-semibold", live ? "text-[#0011b3] dark:text-[#8b9bff]" : "text-foreground")}>
+          <span className={cn("font-semibold", live ? "text-info" : "text-foreground")}>
             {live ? "receiving" : "idle"}
           </span>
           {lastMs !== null && <span>last trace {agoLabel(lastMs, now)}</span>}
@@ -241,7 +241,7 @@ function FieldHeader({ runs, range }: { runs: readonly TraceSummary[]; range: Ti
           {runs.length === 1 ? "run" : "runs"} from{" "}
           <span className="font-semibold text-foreground">{agents.length}</span>{" "}
           {agents.length === 1 ? "agent" : "agents"}
-          {failed > 0 && <span className="text-[#e5484d]"> · {failed} failed</span>}
+          {failed > 0 && <span className="text-destructive"> · {failed} failed</span>}
         </span>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-muted-foreground">
@@ -277,7 +277,7 @@ function NowEdge() {
 function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
   return (
     <div
-      className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-[11px] text-popover-foreground shadow-md"
+      className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-xs text-popover-foreground shadow-md"
       style={{ left: pct(Math.min(0.8, index / BUCKETS)) }}
       role="tooltip"
     >
@@ -288,7 +288,7 @@ function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
         {bucket.runs} {bucket.runs === 1 ? "run" : "runs"}
         {bucket.failed > 0 && `, ${bucket.failed} failed`}
       </div>
-      <div className="text-[#0011b3] dark:text-[#8b9bff]">drag to zoom</div>
+      <div className="text-info">drag to zoom</div>
     </div>
   );
 }
@@ -351,8 +351,7 @@ function SelectionBracket({
   const handle = "absolute inset-y-0 w-[2px] cursor-ew-resize bg-[#0011b3] dark:bg-[#8b9bff]";
   const tick =
     "before:absolute before:top-0 before:h-[2px] before:w-2 before:bg-inherit after:absolute after:bottom-0 after:h-[2px] after:w-2 after:bg-inherit";
-  const edgeLabel =
-    "pointer-events-none absolute -bottom-5 font-mono text-[10px] whitespace-nowrap text-[#0011b3] tabular-nums dark:text-[#8b9bff]";
+  const edgeLabel = "pointer-events-none absolute -bottom-5 font-mono text-xs whitespace-nowrap text-info tabular-nums";
   return (
     <>
       <div
@@ -372,7 +371,7 @@ function SelectionBracket({
           onPointerDown={onHandleDown("resize-hi")}
         />
         {widthPx >= MIN_DURATION_LABEL_PX && (
-          <span className="pointer-events-none absolute inset-x-0 top-2 text-center font-mono text-[11px] font-semibold text-[#0011b3] dark:text-[#8b9bff]">
+          <span className="pointer-events-none absolute inset-x-0 top-2 text-center font-mono text-xs font-semibold text-info">
             {formatSpan(window.endMs - window.startMs)}
           </span>
         )}
@@ -404,7 +403,7 @@ function TickAxis({ range }: { range: TimeWindow }) {
           style={{ left: pct(t), transform: tickShift(t) }}
         >
           <span className="h-1 w-px bg-border" />
-          <span className="font-mono text-[10px] whitespace-nowrap text-muted-foreground tabular-nums">
+          <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">
             {moment(range.startMs + (range.endMs - range.startMs) * t).format(format)}
           </span>
         </div>

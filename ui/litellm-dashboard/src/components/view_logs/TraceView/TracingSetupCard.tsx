@@ -131,7 +131,7 @@ function CodeBlock({
 }
 
 function FileLabel({ children }: { children: React.ReactNode }) {
-  return <span className="text-[12.5px] text-foreground">{children}</span>;
+  return <span className="text-xs text-foreground">{children}</span>;
 }
 
 function LineTabs<T extends string>({
@@ -155,7 +155,7 @@ function LineTabs<T extends string>({
           aria-selected={value === option}
           onClick={() => onChange(option)}
           className={cn(
-            "-mb-px inline-flex h-9 items-center gap-1.5 border-b-2 text-[12.5px]",
+            "-mb-px inline-flex h-9 items-center gap-1.5 border-b-2 text-xs",
             value === option
               ? "border-foreground text-foreground"
               : "border-transparent text-muted-foreground hover:text-foreground",
@@ -362,7 +362,7 @@ function EndpointValue({ value }: { value: string }) {
       type="button"
       onClick={() => void copy()}
       aria-label={`Copy ${value}`}
-      className="group inline-flex min-w-0 items-center gap-2 text-left font-mono text-[12.5px] text-foreground"
+      className="group inline-flex min-w-0 items-center gap-2 text-left font-mono text-xs text-foreground"
     >
       <span className="break-all">{value}</span>
       {copied ? (
@@ -387,9 +387,9 @@ function Endpoints({ proxyUrl, children }: { proxyUrl: string; children?: React.
       <dl className="mt-3 grid gap-x-6 gap-y-3 rounded-md border bg-muted/30 p-4 md:grid-cols-2">
         {otlpEndpoints(proxyUrl).map(([label, value, copyable]) => (
           <div key={label} className={cn("min-w-0", label === "Traces endpoint" && "md:col-span-2")}>
-            <dt className="text-[12px] text-muted-foreground">{label}</dt>
+            <dt className="text-xs text-muted-foreground">{label}</dt>
             <dd className="mt-0.5">
-              {copyable ? <EndpointValue value={value} /> : <span className="text-[12.5px]">{value}</span>}
+              {copyable ? <EndpointValue value={value} /> : <span className="text-xs">{value}</span>}
             </dd>
           </div>
         ))}

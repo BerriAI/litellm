@@ -100,7 +100,7 @@ export function AgentTracesTable({
         className="w-full min-w-[900px] table-fixed border-collapse text-left"
       >
         <thead className="sticky top-0 z-sticky bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))]">
-          <tr className="h-8 border-b border-border text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
+          <tr className="h-8 border-b border-border text-xs tracking-wider text-muted-foreground uppercase">
             <th className={`w-[170px] ${TH}`}>
               <span className="inline-flex items-center gap-1 whitespace-nowrap">
                 Time <ArrowDown className="size-2.5" />
@@ -128,14 +128,14 @@ export function AgentTracesTable({
               onClick={() => onOpenTrace(run)}
               aria-selected={selectedKey === (run.trace_ref || run.trace_id)}
               className={cn(
-                "h-9 cursor-pointer border-b border-border/60 text-[12px] transition-colors duration-150 motion-reduce:transition-none",
+                "h-9 cursor-pointer border-b border-border/60 text-xs transition-colors duration-150 motion-reduce:transition-none",
                 selectedKey === (run.trace_ref || run.trace_id)
                   ? "bg-trace-row-selected shadow-[inset_2px_0_0_var(--trace-brand)]"
                   : "hover:bg-trace-row-hover",
               )}
             >
               <td
-                className="px-3 font-mono text-[11px] whitespace-nowrap tabular-nums text-muted-foreground"
+                className="px-3 font-mono text-xs whitespace-nowrap tabular-nums text-muted-foreground"
                 title={formatActivityTimestamp(run.start_time)}
               >
                 {formatRunTimestamp(run.start_time)}
@@ -149,13 +149,13 @@ export function AgentTracesTable({
                   </span>
                   {run.resolution_limited && (
                     <span
-                      className="shrink-0 text-[10px] text-muted-foreground"
+                      className="shrink-0 text-xs text-muted-foreground"
                       title="This run is too large to calculate all totals in this view"
                     >
                       Partial totals
                     </span>
                   )}
-                  <span className="hidden shrink-0 font-mono text-[10px] text-muted-foreground 2xl:inline">
+                  <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline">
                     {run.trace_id}
                   </span>
                 </div>
@@ -170,7 +170,7 @@ export function AgentTracesTable({
                 {run.error_count > 0 ? (
                   <StatusMark status="error" count={run.error_count} />
                 ) : (
-                  <span className="font-mono text-[11px] text-muted-foreground/60">0</span>
+                  <span className="font-mono text-xs text-muted-foreground/60">0</span>
                 )}
               </td>
               <td>
@@ -182,9 +182,9 @@ export function AgentTracesTable({
             PLACEHOLDER_ROWS.map((row) => <PlaceholderRow key={row} rowRef={row === 0 ? tailRef : undefined} />)}
         </tbody>
       </table>
-      {isLoading && <div className="py-16 text-center text-[12px] text-muted-foreground">Loading runs…</div>}
+      {isLoading && <div className="py-16 text-center text-xs text-muted-foreground">Loading runs…</div>}
       {error && (
-        <div role="alert" className="flex items-center justify-center gap-3 py-6 text-[12px] text-muted-foreground">
+        <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
           <span>
             {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
           </span>
@@ -196,16 +196,14 @@ export function AgentTracesTable({
         </div>
       )}
       {canContinue && traces.length === 0 && (
-        <div className="flex items-center justify-center gap-3 py-16 text-[12px] text-muted-foreground">
+        <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
           <span>No loaded runs match these filters.</span>
           <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
             Load older runs
           </Button>
         </div>
       )}
-      {isEmpty && (
-        <div className="py-16 text-center text-[12px] text-muted-foreground">No runs match these filters.</div>
-      )}
+      {isEmpty && <div className="py-16 text-center text-xs text-muted-foreground">No runs match these filters.</div>}
     </div>
   );
 }

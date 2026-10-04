@@ -89,7 +89,7 @@ function CopyForAgent({ handoff }: { handoff: TraceHandoff }) {
     <Button
       variant="outline"
       size="xs"
-      className="h-7 shrink-0 gap-1.5 rounded-md text-[12px] shadow-none"
+      className="h-7 shrink-0 gap-1.5 rounded-md text-xs shadow-none"
       onClick={async () => setCopied(await copyToClipboard(handoff.text, handoff.copied))}
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
@@ -416,15 +416,15 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
   }
   if (!trace) {
     return (
-      <div className="p-6 text-[12px]" data-testid="run-view-error">
+      <div className="p-6 text-xs" data-testid="run-view-error">
         <button
           type="button"
           onClick={onBack}
-          className="mb-4 inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+          className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" /> Back to traces
         </button>
-        <h1 className="mb-2 text-[13px] font-medium">Could not load trace</h1>
+        <h1 className="mb-2 text-sm font-medium">Could not load trace</h1>
         <span className="text-muted-foreground">{traceQuery.error?.message ?? "Unknown error"}</span>
         <Button variant="outline" size="sm" className="ml-3" onClick={() => void refreshTrace()}>
           Retry

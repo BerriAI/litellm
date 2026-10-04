@@ -21,8 +21,8 @@ import { useSpanProvider } from "./spanProvider";
 import type { SpanType } from "./traceTypes";
 
 const SIZE = {
-  sm: "size-4 rounded-[2px]",
-  card: "size-[18px] rounded-[3px]",
+  sm: "size-4 rounded-sm",
+  card: "size-[18px] rounded-sm",
   md: "size-5 rounded-full",
   lg: "size-5 rounded-full",
 } as const;

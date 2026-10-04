@@ -48,7 +48,7 @@ export function RunsToolbar({
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search input or trace ID"
           aria-label="Search runs"
-          className="h-7 pl-8 text-[12px]"
+          className="h-7 pl-8 text-xs"
         />
       </div>
       <Select
@@ -56,7 +56,7 @@ export function RunsToolbar({
         value={agent}
         onValueChange={(value: string | null) => value !== null && onAgentChange(value)}
       >
-        <SelectTrigger size="sm" className="h-7 min-w-[130px] text-[12px]" aria-label="Filter by agent">
+        <SelectTrigger size="sm" className="h-7 min-w-[130px] text-xs" aria-label="Filter by agent">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -72,7 +72,7 @@ export function RunsToolbar({
         value={status}
         onValueChange={(value: RunStatusFilter | null) => value !== null && onStatusChange(value)}
       >
-        <SelectTrigger size="sm" className="h-7 min-w-[110px] text-[12px]" aria-label="Filter by status">
+        <SelectTrigger size="sm" className="h-7 min-w-[110px] text-xs" aria-label="Filter by status">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
