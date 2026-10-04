@@ -8725,7 +8725,7 @@ def speech(
 
 async def ahealth_check(
     model_params: dict,
-    mode: str | None = "chat",
+    mode: str | None = None,
     prompt: str | None = None,
     input: list | None = None,
 ):
@@ -8740,7 +8740,8 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
-    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
+    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
@@ -8765,28 +8766,25 @@ async def ahealth_check(
     )
     #########################################################
     try:
-        model: str | None = model_params.get("model", None)
-        if model is None:
+        requested_model: Final = OPTIONAL_STR.validate_python(model_params.get("model", None))
+        if requested_model is None:
             raise Exception("model not set")
-
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
 
         custom_llm_provider_from_params: Final = model_params.get("custom_llm_provider", None)
         api_base_from_params: Final = model_params.get("api_base", None)
         api_key_from_params: Final = model_params.get("api_key", None)
 
         model, custom_llm_provider, _, _ = get_llm_provider(
-            model=model,
+            model=requested_model,
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
-        mode = mode or "chat"
+        mode = mode or default_health_check_mode(
+            requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
+        )
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
@@ -8814,12 +8812,6 @@ async def ahealth_check(
         stack_trace = _redact_string(traceback.format_exc())
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
-
-        if mode is None:
-            return {
-                "error": f"error:{e}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
-                "exception": e,
-            }
 
         error_to_return: Final = str(e) + "\nstack trace: " + stack_trace
 

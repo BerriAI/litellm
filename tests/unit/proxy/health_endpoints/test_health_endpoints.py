@@ -5,14 +5,14 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
@@ -692,6 +692,181 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
         model_params = mock_ahealth_check.call_args.kwargs.get("model_params", {})
         assert model_params.get("api_base") == "https://deployment-A-base.invalid/v1"
         assert model_params.get("api_key") == "fake-key-A"
+
+
+@contextmanager
+def _test_connection_probe(
+    deployment: Mapping[str, object],
+) -> Iterator[AsyncMock]:
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    router: Final = MagicMock()
+    router.get_deployment.side_effect = lambda model_id: (
+        Deployment(
+            model_name=str(deployment["model_name"]),
+            litellm_params=LiteLLM_Params(**deployment["litellm_params"]),  # pyright: ignore[reportArgumentType]  # test fixture dict
+            model_info=deployment["model_info"],  # pyright: ignore[reportArgumentType]  # test fixture dict
+        )
+        if model_id == deployment["model_info"]["id"]  # pyright: ignore[reportIndexIssue]  # test fixture dict
+        else None
+    )
+    ahealth_check: Final = AsyncMock(return_value={"status": "healthy"})
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            AsyncMock(),
+        ),
+        patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            AsyncMock(return_value={"status": "healthy"}),
+        ),
+    ):
+        yield ahealth_check
+
+
+MANTLE_CLAUDE_DEPLOYMENT: Final = MappingProxyType(
+    {
+        "model_name": "claude-haiku-4-5",
+        "litellm_params": {
+            "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
+            "api_key": "fake-mantle-key",
+            "aws_region_name": "us-east-2",
+        },
+        "model_info": {"id": "mantle-claude-id"},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_without_mode_probes_mantle_claude_over_messages():
+    """
+    The Admin UI model page sends the row's id and no mode. The probe must then resolve
+    the mode the way /health does, so a Bedrock Mantle Claude deployment is checked over
+    the Anthropic Messages API instead of chat completions, which Mantle rejects.
+    """
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        result: Final = await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5"},
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert result["status"] == "success"
+    assert ahealth_check.call_args.kwargs["mode"] == "anthropic_messages"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_params", "expected_mode"),
+    [
+        ({"model": "bedrock_mantle/anthropic.claude-haiku-4-5"}, "chat"),
+        ({}, "chat"),
+        ({"model": "bedrock_mantle/anthropic.claude-sonnet-4-5"}, "anthropic_messages"),
+    ],
+    ids=["stored_model", "no_model", "overridden_model"],
+)
+async def test_test_model_connection_stored_operator_mode_follows_the_stored_model(
+    request_params: Mapping[str, str], expected_mode: str
+):
+    """
+    A mode the operator stored on the deployment is the probe's mode when the request
+    carries none, ahead of the provider-native rule, but only while the request probes
+    the deployment's own model. A request that selects the deployment by id and swaps in
+    another model resolves the mode from that model instead.
+    """
+    deployment: Final = MappingProxyType(
+        {**MANTLE_CLAUDE_DEPLOYMENT, "model_info": {"id": "mantle-claude-id", "mode": "chat"}}
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params=dict(request_params),
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == expected_mode
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_overridden_model_probe_params_follow_the_probed_model():
+    """
+    When the request selects a deployment by id and swaps in another model, the probe's
+    params are shaped for that model, so the stored mode must not inject `max_tokens`
+    into what is now an embedding probe (Mistral rejects it with a 422 extra_forbidden).
+    """
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "anthropic-claude-haiku-4-5",
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "fake-anthropic-key"},
+            "model_info": {"id": "anthropic-messages-id", "mode": "anthropic_messages"},
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "mistral/mistral-embed", "api_key": "fake-mistral-key"},
+            model_info={"id": "anthropic-messages-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == "embedding"
+    assert "max_tokens" not in ahealth_check.call_args.kwargs["model_params"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params_mode", [123, ["chat"], {"mode": "chat"}, False], ids=["int", "list", "dict", "bool"])
+async def test_test_model_connection_non_string_params_mode_is_a_bad_request(params_mode: object):
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode=None,
+                litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5", "mode": params_mode},
+                model_info={"id": "mantle-claude-id"},
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "litellm_params.mode must be a string" in exc_info.value.detail["error"]
+    ahealth_check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_string_params_mode_is_the_probe_mode():
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5", "mode": "chat"},
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == "chat"
+    assert "mode" not in ahealth_check.call_args.kwargs["model_params"]
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_request_mode_wins_over_resolved_mode():
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5"},
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == "chat"
 
 
 @pytest.mark.asyncio
