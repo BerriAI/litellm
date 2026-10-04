@@ -68,8 +68,11 @@ def test_audio_transcriptions_records_provider_response_headers():
         ("vtt", "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n\n00:00:01.000 --> 00:00:12.500\nWorld\n", 12.5),
         ("srt", "", None),
         ("text", "Hello world", None),
+        ("text", "The timecode is 00:00:12.500", None),
+        ("text", "00:00:01.000 --> 00:00:12.500\nHello world", None),
+        ("vtt", "WEBVTT\n\n00:01.500 --> 00:02.000\nHello world\n", 2.0),
     ),
-    ids=("srt", "vtt", "empty-subtitle", "plain-text"),
+    ids=("srt", "vtt", "empty-subtitle", "plain-text", "text-timecode", "text-cue", "short-vtt"),
 )
 def test_sync_transcription_retains_text_and_charges_subtitle_duration(
     response_format: Literal["srt", "vtt", "text"], subtitle: str, expected_duration: float | None
