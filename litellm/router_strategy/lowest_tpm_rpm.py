@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Final
 
 from litellm import token_counter
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -28,6 +29,7 @@ class LowestTPMLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
+    @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
             return
@@ -82,6 +84,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             )
             verbose_router_logger.debug(traceback.format_exc())
 
+    @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
             return
@@ -146,6 +149,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             )
             verbose_router_logger.debug(traceback.format_exc())
 
+    @with_service_target("router_usage")
     def get_available_deployments(
         self,
         model_group: str,

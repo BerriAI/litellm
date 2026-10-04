@@ -64,8 +64,6 @@
 }
 
 @theme inline {
-  --animate-slide-left: slide-left 200ms cubic-bezier(0, 0, 0.2, 1) both;
-  --animate-view-fade-in: view-fade-in 100ms cubic-bezier(0.4, 0, 0.2, 1) both;
   --animate-slot-slide-in: slot-slide-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
   --animate-trace-drawer-in: trace-drawer-in 200ms cubic-bezier(0.25, 1, 0.5, 1) both;
   --animate-trace-drawer-out: trace-drawer-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
@@ -91,24 +89,6 @@
     }
   }
 
-  @keyframes slide-left {
-    from {
-      opacity: 0;
-      transform: translateX(2rem) scaleX(0.98);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-  @keyframes view-fade-in {
-    from {
-      opacity: 0;
-    }
-    to {
-      opacity: 1;
-    }
-  }
   @keyframes slot-slide-in {
     from {
       opacity: 0;
@@ -137,8 +117,6 @@
   @media (prefers-reduced-motion: reduce) {
     .animate-trace-drawer-in,
     .animate-trace-drawer-out,
-    .animate-slide-left,
-    .animate-view-fade-in,
     .animate-slot-slide-in {
       animation: none !important;
     }
@@ -472,4 +450,13 @@
    showing its own edges around a differently sized child. */
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
+}
+
+@keyframes lens-sweep {
+  from {
+    left: -6rem;
+  }
+  to {
+    left: 100%;
+  }
 }

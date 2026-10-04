@@ -94,6 +94,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
 )
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
 def _rendered_log_message(call):
@@ -106,25 +107,6 @@ def _rendered_log_message(call):
 def set_salt_key(monkeypatch):
     """Automatically set LITELLM_SALT_KEY for all tests"""
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
-
-
-@pytest.fixture(autouse=True)
-def reset_constants_module():
-    """Reset constants module to ensure clean state before each test"""
-    import importlib
-
-    from litellm import constants
-    from litellm.proxy.auth import auth_checks
-
-    # Reload modules before test
-    importlib.reload(constants)
-    importlib.reload(auth_checks)
-
-    yield
-
-    # Reload modules after test to clean up
-    importlib.reload(constants)
-    importlib.reload(auth_checks)
 
 
 @pytest.fixture
@@ -874,19 +856,10 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
 
 
 def test_get_cli_jwt_auth_token_custom_expiration(valid_sso_user_defined_values, monkeypatch):
-    """Test generating CLI JWT token with custom expiration via environment variable"""
-    import importlib
-
-    from litellm import constants
+    """Test generating a CLI JWT token with custom expiration via the configured constant"""
     from litellm.proxy.auth import auth_checks
 
-    # Set custom expiration to 48 hours
-    monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
-
-    # Reload the constants module to pick up the new env var
-    importlib.reload(constants)
-    # Also reload auth_checks to pick up the new constant value
-    importlib.reload(auth_checks)
+    monkeypatch.setattr(auth_checks, "CLI_JWT_EXPIRATION_HOURS", 48)
 
     token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
@@ -1751,6 +1724,65 @@ async def test_vector_store_access_check_with_team_permissions():
             )
 
     assert exc_info.value.type == ProxyErrorTypes.team_vector_store_access_denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_vector_store_id,expected_error_type",
+    [
+        ("KBOTHERTEAM99", ProxyErrorTypes.team_vector_store_access_denied),
+        ("KBALLOWED123", None),
+    ],
+)
+@pytest.mark.parametrize("vector_store_registry", [VectorStoreRegistry(), None], ids=["registry", "no-registry"])
+async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
+    requested_vector_store_id: str,
+    expected_error_type: ProxyErrorTypes | None,
+    vector_store_registry: VectorStoreRegistry | None,
+):
+    """
+    /v1/rag/query carries its vector store in retrieval_config.vector_store_id,
+    not in tools[].vector_store_ids. The team allowlist must apply either way.
+    """
+    request_body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "what is in this KB?"}],
+        "retrieval_config": {
+            "vector_store_id": requested_vector_store_id,
+            "custom_llm_provider": "bedrock",
+        },
+    }
+    valid_token = UserAPIKeyAuth(token="team-test-token", object_permission_id=None)
+
+    team_object = MagicMock()
+    team_object.object_permission_id = "team-permission"
+
+    mock_prisma_client = MagicMock()
+    team_permissions = MagicMock()
+    team_permissions.vector_stores = ["KBALLOWED123"]
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=team_permissions)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", vector_store_registry),
+    ):
+        if expected_error_type is None:
+            result = await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=valid_token,
+            )
+            assert result is True
+            return
+
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=valid_token,
+            )
+
+    assert exc_info.value.type == expected_error_type
 
 
 def test_can_object_call_model_with_alias():

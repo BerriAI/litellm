@@ -106,7 +106,7 @@ async def _release_line_item_claim(claim_cache: DualCache, claim_key: str, token
         )
 
 
-def _json_fallback(value: object) -> dict[str, object] | str:
+def _json_fallback(value: object) -> Mapping[str, object] | str:
     mapping: Final = _as_object_mapping(value)
     if mapping is None:
         return str(value)

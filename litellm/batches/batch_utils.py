@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
 )
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
 
@@ -138,7 +139,7 @@ async def _handle_completed_batch_with_files(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
     model_name: str | None = None,
-    litellm_params: dict | None = None,
+    litellm_params: dict[str, object] | None = None,  # mutable-ok: file fetchers require a plain dict
     model_info: ModelInfo | None = None,
 ) -> "tuple[BatchCostUsageResult, BatchResultFiles]":
     """_handle_completed_batch plus the raw output/error bytes it fetched, so
@@ -517,7 +518,7 @@ async def _fetch_batch_output_file_content(
 async def fetch_batch_error_file_content(
     batch: Batch,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
-    litellm_params: dict | None,
+    litellm_params: dict[str, object] | None,  # mutable-ok: file fetchers require a plain dict
 ) -> bytes | None:
     """Fetch the batch's separate error file bytes; None when it has none or the fetch fails."""
     if batch.error_file_id is None:
@@ -589,6 +590,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "max_retries",
             "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
+            # A federated deployment holds no api_key, so without these the fetch that reads a
+            # finished batch's output has nothing to authenticate with and its cost is never billed.
+            *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:

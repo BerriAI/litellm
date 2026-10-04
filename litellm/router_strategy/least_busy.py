@@ -5,6 +5,7 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import log_redis_failure
@@ -120,9 +121,11 @@ class LeastBusyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.router_cache_id = str(id(router_cache))
 
+    @with_service_target("router_usage")
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         self._increment(kwargs, 1)
 
+    @with_service_target("router_usage")
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -130,6 +133,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_success += 1
 
+    @with_service_target("router_usage")
     def log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -137,6 +141,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_failure += 1
 
+    @with_service_target("router_usage")
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -144,6 +149,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_success += 1
 
+    @with_service_target("router_usage")
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
@@ -151,6 +157,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         if self.test_flag:
             self.logged_failure += 1
 
+    @with_service_target("router_usage")
     def get_available_deployments(
         self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
     ) -> Mapping[str, object] | None:
@@ -166,6 +173,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         local: Final = _local_counts(self.router_cache.batch_get_cache(list(keys), local_only=True), keys)
         return _least_busy(healthy_deployments, local)
 
+    @with_service_target("router_usage")
     async def async_get_available_deployments(
         self, model_group: str, healthy_deployments: Sequence[Mapping[str, object]]
     ) -> Mapping[str, object] | None:

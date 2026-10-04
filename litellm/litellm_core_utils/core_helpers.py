@@ -5,7 +5,7 @@ import logging
 import re
 from collections.abc import Collection, Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -18,9 +18,9 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = _Span | Any
+    Span = _Span | object
 else:
-    Span = Any
+    Span = object
 
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
@@ -270,7 +270,7 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
 
-def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
+def remove_items_at_indices(items: list[object] | None, indices: Iterable[int]) -> None:
     """Remove items from a list in-place by index"""
     if items is None:
         return
@@ -713,9 +713,9 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
 
 
 def redact_nested_match_and_regex_keys(
-    payload: dict | list[Any] | str | None,
+    payload: dict | list[object] | str | None,
     keys: Collection[str] = ("match", "regex"),
-) -> dict | list[Any] | str | None:
+) -> dict | list[object] | str | None:
     """
     Deep-copy `payload` and replace every configured string field with "[REDACTED]"
     anywhere in nested dict/list structures.
@@ -725,7 +725,7 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
+        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 
@@ -775,12 +775,10 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
 def is_batch_line_item_event(kwargs: object) -> bool:
     if not isinstance(kwargs, Mapping):
         return False
-    typed_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: isinstance leaves Mapping unparameterized
-    litellm_params: Final = typed_kwargs.get("litellm_params")
+    litellm_params: Final[object] = kwargs.get("litellm_params")
     if not isinstance(litellm_params, Mapping):
         return False
-    typed_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: same narrowing limit
-    return bool(typed_params.get("batch_parent_id"))
+    return bool(litellm_params.get("batch_parent_id"))
 
 
 _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])

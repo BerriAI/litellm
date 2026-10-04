@@ -190,7 +190,7 @@ async def _get_tag_list_scope(
     return {"api_key": {"in": scoped_api_keys}}
 
 
-async def _get_tag_daily_activity_api_key_filter(
+async def get_tag_daily_activity_api_key_filter(
     prisma_client: "PrismaClient",
     user_api_key_dict: UserAPIKeyAuth,
     requested_api_key: str | None,
@@ -438,7 +438,7 @@ async def update_tag(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
-            budget_duration_cleared="budget_duration" in tag.model_fields_set and tag.budget_duration is None,
+            cleared_budget_fields=frozenset(field for field in tag.model_fields_set if getattr(tag, field) is None),
         )
 
         # Get model names for model_info
@@ -757,7 +757,7 @@ async def get_tag_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     tag_list: Final = tags.split(",") if tags else None
-    scoped_api_key_filter: Final = await _get_tag_daily_activity_api_key_filter(
+    scoped_api_key_filter: Final = await get_tag_daily_activity_api_key_filter(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
         requested_api_key=api_key,

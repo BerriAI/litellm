@@ -176,6 +176,27 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
 
 
 @pytest.mark.asyncio
+async def test_search_tool_litellm_params_are_moved_to_the_new_key():
+    tables: Tables = {
+        "LiteLLM_SearchToolsTable": [
+            {
+                "search_tool_id": "search-tool-1",
+                "litellm_params": {"search_provider": _encrypted("tavily"), "api_key": _encrypted("tvly-secret")},
+            },
+            {"search_tool_id": "legacy-search-tool", "litellm_params": {"api_key": "tvly-plaintext"}},
+        ]
+    }
+
+    migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert migrated == 2
+    search_tool_params = tables["LiteLLM_SearchToolsTable"][0]["litellm_params"]
+    assert decrypt_if_encrypted_with(search_tool_params["api_key"], NEW_KEY) == "tvly-secret"
+    assert decrypt_if_encrypted_with(search_tool_params["search_provider"], NEW_KEY) == "tavily"
+    assert tables["LiteLLM_SearchToolsTable"][1]["litellm_params"] == {"api_key": "tvly-plaintext"}
+
+
+@pytest.mark.asyncio
 async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
     database = _FakeDatabase(_seeded_tables())
 
@@ -561,3 +582,29 @@ async def test_boot_leaves_the_database_alone_unless_a_migration_was_requested_a
     assert result is outcome
     assert len(database_handles_taken) == (0 if outcome is None else 1)
     assert len(logged) == (0 if outcome is None else 1)
+
+
+@pytest.mark.asyncio
+async def test_guardrail_params_move_to_the_new_key_and_legacy_plaintext_rows_are_left_alone():
+    legacy_params = {"guardrail": "generic_guardrail_api", "api_key": "legacy-plaintext-key"}
+    tables: Tables = {
+        "LiteLLM_GuardrailsTable": [
+            {
+                "guardrail_id": "guardrail-1",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "api_key": "litellm_enc::" + _encrypted("guardrail-vendor-key"),
+                },
+            },
+            {"guardrail_id": "guardrail-legacy", "litellm_params": dict(legacy_params)},
+        ]
+    }
+    database = _FakeDatabase(tables)
+
+    assert await reencrypt_stored_values(database, from_key=PREVIOUS_KEY, to_key=NEW_KEY) == 1
+
+    migrated_key = tables["LiteLLM_GuardrailsTable"][0]["litellm_params"]["api_key"]
+    assert migrated_key.startswith("litellm_enc::")
+    assert decrypt_if_encrypted_with(migrated_key.removeprefix("litellm_enc::"), NEW_KEY) == "guardrail-vendor-key"
+    assert tables["LiteLLM_GuardrailsTable"][1]["litellm_params"] == legacy_params
+    assert database.writes == [("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1")]

@@ -9,15 +9,16 @@ from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from io import BytesIO
-from types import MappingProxyType, SimpleNamespace
+from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from fastapi import HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -27,12 +28,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    SafeRouteAdder,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _with_trace_context,
@@ -1470,7 +1473,7 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         # Create mock request
                         mock_request = MagicMock(spec=Request)
                         mock_request.method = "POST"
-                        mock_request.url = "http://test-proxy.com/api/endpoint"
+                        mock_request.url = httpx.URL("http://test-proxy.com/api/endpoint")
                         mock_request.body = AsyncMock(return_value=b'{"message": "test request"}')
                         mock_request.headers = Headers({})
                         mock_request.query_params = QueryParams({})
@@ -1575,7 +1578,7 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
 
                 mock_request = MagicMock(spec=Request)
                 mock_request.method = "POST"
-                mock_request.url = "http://test-proxy.com/v1/messages"
+                mock_request.url = httpx.URL("http://test-proxy.com/v1/messages")
                 mock_request.body = AsyncMock(return_value=b'{"model": "claude-3", "stream": true}')
                 mock_request.headers = Headers({})
                 mock_request.query_params = QueryParams({})
@@ -1637,7 +1640,7 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
 
                 mock_request = MagicMock(spec=Request)
                 mock_request.method = "POST"
-                mock_request.url = "http://test-proxy.com/v1/messages"
+                mock_request.url = httpx.URL("http://test-proxy.com/v1/messages")
                 mock_request.body = AsyncMock(return_value=b'{"model": "claude-3"}')
                 mock_request.headers = Headers({})
                 mock_request.query_params = QueryParams({})
@@ -2507,7 +2510,7 @@ async def test_pass_through_request_query_params_forwarding():
                         # Create mock request with query parameters (Azure API version)
                         mock_request = MagicMock(spec=Request)
                         mock_request.method = "POST"
-                        mock_request.url = "http://localhost:4000/azure-assistant/openai/assistants"
+                        mock_request.url = httpx.URL("http://localhost:4000/azure-assistant/openai/assistants")
                         mock_request.body = AsyncMock(return_value=json.dumps(test_body).encode())
                         mock_request.headers = Headers({"Content-Type": "application/json"})
 
@@ -3016,7 +3019,7 @@ async def test_bedrock_router_passthrough_metadata_initialization():
         # Create mock request with headers
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
-        mock_request.url = "http://localhost:4000/bedrock/model/my-model/invoke"
+        mock_request.url = httpx.URL("http://localhost:4000/bedrock/model/my-model/invoke")
         mock_request.headers = Headers(
             {
                 "content-type": "application/json",
@@ -3850,7 +3853,7 @@ def _lit3538_request():
     r = MagicMock()
     r.method = "POST"
     r.query_params = {}
-    r.url = "http://testserver/mock/echo"
+    r.url = httpx.URL("http://testserver/mock/echo")
     r.state = SimpleNamespace()
     headers = MagicMock()
     headers.copy.return_value = {}
@@ -3983,7 +3986,7 @@ async def test_pass_through_request_non_streaming_upstream_error_returned_unchan
 
                     mock_request = MagicMock(spec=Request)
                     mock_request.method = "POST"
-                    mock_request.url = "http://test-proxy.com/mock-upstream/api/denied"
+                    mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/api/denied")
                     mock_request.body = AsyncMock(return_value=b'{"action": "read"}')
                     mock_request.headers = Headers({"content-type": "application/json"})
                     mock_request.query_params = QueryParams({})
@@ -4069,7 +4072,7 @@ async def test_pass_through_request_upstream_error_failure_hook_exception_is_swa
 
                     mock_request = MagicMock(spec=Request)
                     mock_request.method = "POST"
-                    mock_request.url = "http://test-proxy.com/mock-upstream/api/denied"
+                    mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/api/denied")
                     mock_request.body = AsyncMock(return_value=b'{"action": "read"}')
                     mock_request.headers = Headers({"content-type": "application/json"})
                     mock_request.query_params = QueryParams({})
@@ -4118,7 +4121,7 @@ async def test_pass_through_request_streaming_upstream_error_returned_unchanged(
 
                 mock_request = MagicMock(spec=Request)
                 mock_request.method = "GET"
-                mock_request.url = "http://test-proxy.com/mock-upstream/api/stream-denied"
+                mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/api/stream-denied")
                 mock_request.body = AsyncMock(return_value=b"")
                 mock_request.headers = Headers({})
                 mock_request.query_params = QueryParams({})
@@ -4169,7 +4172,7 @@ class _UpstreamErrorBodyStream(httpx.AsyncByteStream):
 def _upstream_error_request() -> MagicMock:
     mock_request: Final = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = "http://test-proxy.com/mock-upstream/v1beta/models/claude-nope-9:generateContent"
+    mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/v1beta/models/claude-nope-9:generateContent")
     mock_request.body = AsyncMock(return_value=b'{"contents": []}')
     mock_request.headers = Headers({"content-type": "application/json"})
     mock_request.query_params = QueryParams({})
@@ -4966,7 +4969,7 @@ async def test_pass_through_request_non_streaming_success_unchanged():
 
                     mock_request = MagicMock(spec=Request)
                     mock_request.method = "GET"
-                    mock_request.url = "http://test-proxy.com/mock-upstream/api/success"
+                    mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/api/success")
                     mock_request.body = AsyncMock(return_value=b"")
                     mock_request.headers = Headers({})
                     mock_request.query_params = QueryParams({})
@@ -5029,7 +5032,7 @@ async def test_pass_through_request_claims_the_budget_reservation_only_when_its_
         mock_get_client.return_value = MagicMock(client=async_client)
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
-        mock_request.url = "http://test-proxy.com/mock-upstream/api/generate"
+        mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/api/generate")
         mock_request.body = AsyncMock(return_value=b'{"prompt": "hi"}')
         mock_request.headers = Headers({"content-type": "application/json"})
         mock_request.query_params = QueryParams({})
@@ -5081,7 +5084,7 @@ async def test_pass_through_request_leaves_the_budget_reservation_for_the_reques
         mock_get_client.return_value = MagicMock(client=async_client)
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
-        mock_request.url = "http://test-proxy.com/mock-upstream/api/generate"
+        mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/api/generate")
         mock_request.body = AsyncMock(return_value=b'{"prompt": "hi"}')
         mock_request.headers = Headers({"content-type": "application/json"})
         mock_request.query_params = QueryParams({})
@@ -5112,7 +5115,7 @@ async def test_pass_through_request_internal_failure_still_raises_proxy_exceptio
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "GET"
-        mock_request.url = "http://test-proxy.com/mock-upstream/api/success"
+        mock_request.url = httpx.URL("http://test-proxy.com/mock-upstream/api/success")
         mock_request.body = AsyncMock(return_value=b"")
         mock_request.headers = Headers({})
         mock_request.query_params = QueryParams({})
@@ -5213,7 +5216,7 @@ def _enter_relay_logging_mocks(stack, parsed_body):
 def _relay_client_request(method="GET"):
     mock_request = MagicMock(spec=Request)
     mock_request.method = method
-    mock_request.url = "http://localhost:4000/passthrough-relay/results"
+    mock_request.url = httpx.URL("http://localhost:4000/passthrough-relay/results")
     mock_request.body = AsyncMock(return_value=b"")
     mock_request.headers = Headers({})
     mock_request.query_params = QueryParams({})
@@ -6650,7 +6653,7 @@ def _passthrough_kwargs_for_reservation(
 ) -> dict:
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent")
     mock_request.headers = Headers({})
     mock_request.scope = {"endpoint": _marked_pass_through_endpoint()} if user_defined_route else {}
 
@@ -6797,7 +6800,7 @@ async def _drive_streaming_pass_through(upstream_content_type, chunk_delay_secon
 
         mock_request = MagicMock(spec=Request)
         mock_request.method = "POST"
-        mock_request.url = "http://test-proxy.com/v1/messages"
+        mock_request.url = httpx.URL("http://test-proxy.com/v1/messages")
         mock_request.body = AsyncMock(
             return_value=b'{"model": "claude-3", "stream": true}'
             if client_asked_for_stream
@@ -6985,36 +6988,82 @@ def _marked_pass_through_endpoint():
     return _endpoint
 
 
-def test_user_defined_passthrough_is_neither_tracked_nor_enforced():
-    """
-    `get_model_from_request` returns None for a user-defined pass-through on
-    purpose: the body is forwarded verbatim, so its `model` names an UPSTREAM
-    model rather than a LiteLLM-managed one, and enforcing key/team allowlists
-    against it would reject valid requests. Enforcement is therefore skipped
-    on those routes.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
+async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata_slot: str) -> None:
+    from datetime import datetime
 
-    Attaching the budget metadata anyway would charge a counter that nothing on
-    that route can refuse, and would attribute the spend to a budget the operator
-    scoped to a LiteLLM model that merely shares the name. Tracking and
-    enforcement have to agree: both on for the built-in provider routes, both off
-    here.
-    """
-    kwargs = _passthrough_kwargs_for_reservation(
-        UserAPIKeyAuth(
-            token="hash",
-            user_id="u-1",
-            model_max_budget={"claude-opus-4-8": {"budget_limit": 1.0, "time_period": "18h"}},
-        ),
-        user_defined_route=True,
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.auth.auth_utils import get_model_from_request
+    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+
+    budget: Final = {"managed-model": {"budget_limit": 0.1, "time_period": "1d"}}
+    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
+    auth: Final = UserAPIKeyAuth(
+        api_key="custom-key", token="custom-key", team_id="shared-team", team_model_max_budget=budget,
     )
+    endpoint: Final = create_pass_through_route(
+        endpoint="/custom-budget-test", target="https://upstream.test/echo", custom_headers={}, cost_per_request=0.25,
+    )
+    request: Final = Request({
+        "type": "http", "method": "POST", "path": "/custom-budget-test", "headers": [],
+        "query_string": b"", "endpoint": endpoint,
+    })
+    body: Final = {
+        "model": "upstream-only-model", metadata_slot: {
+            "model_group": "managed-model", "customer_label": "retained",
+            "user_api_key_team_model_max_budget": budget,
+        },
+    }
+    assert get_model_from_request(body, "/custom-budget-test", request=request) is None
+    assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
+    start: Final = datetime.now()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="upstream-only-model", messages=[], stream=False, call_type="pass_through_endpoint",
+        start_time=start, litellm_call_id="custom-budget", function_id="custom-budget", kwargs={},
+        dynamic_async_success_callbacks=[limiter],
+    )
+    payload: Final = {
+        "url": "https://upstream.test/echo", "request_body": body, "request_method": "POST", "cost_per_request": 0.25,
+    }
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request, user_api_key_dict=auth, passthrough_logging_payload=payload, logging_obj=logging_obj,
+        _parsed_body=body, litellm_call_id="custom-budget",
+    )
+    logging_obj.update_environment_variables(
+        model="upstream-only-model", user="unknown", optional_params={},
+        litellm_params=kwargs["litellm_params"], call_type="pass_through_endpoint",
+    )
+    response: Final = httpx.Response(
+        200, request=httpx.Request("POST", "https://upstream.test/echo"), json={"ok": True},
+    )
+    await PassThroughEndpointLogging().pass_through_async_success_handler(
+        httpx_response=response, response_body={"ok": True}, request_body=body, logging_obj=logging_obj,
+        url_route="https://upstream.test/echo", result=response.text, start_time=start, end_time=datetime.now(),
+        cache_hit=False, **kwargs,
+    )
+    assert logging_obj.model_call_details["response_cost"] == 0.25
+    assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
+    metadata: Final = kwargs["litellm_params"]["metadata"]
+    assert (metadata["model_group"], metadata["customer_label"]) == ("managed-model", "retained")
+    assert metadata.keys().isdisjoint({
+        "user_api_key_model_max_budget", "user_api_key_team_model_max_budget",
+        "user_api_key_user_model_max_budget", "user_api_key_end_user_model_max_budget",
+    })
 
-    metadata = kwargs["litellm_params"]["metadata"]
-    for field in (
-        "user_api_key_model_max_budget",
-        "user_api_key_user_model_max_budget",
-        "user_api_key_end_user_model_max_budget",
-    ):
-        assert field not in metadata, f"{field} was attached on a route that never enforces it"
+
+@pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
+def test_builtin_passthrough_pins_model_group_to_the_resolved_model(metadata_slot: str) -> None:
+    request: Final = Request({
+        "type": "http", "method": "POST", "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+        "headers": [], "query_string": b"",
+    })
+    kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request, user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
+        passthrough_logging_payload=MagicMock(), logging_obj=MagicMock(),
+        _parsed_body={"contents": [], metadata_slot: {"model_group": "unbounded-client-choice"}},
+    )
+    assert kwargs["litellm_params"]["metadata"]["model_group"] == "gemini-2.5-flash"
 
 
 @pytest.mark.parametrize(
@@ -7344,7 +7393,7 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
 
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent")
     mock_request.headers = Headers({})
     mock_request.scope = {}
 
@@ -7377,7 +7426,7 @@ def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_bo
     the call to (LIT-1761: passthrough successes carried model_id="")."""
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent")
     mock_request.headers = Headers({})
     mock_request.scope = {}
     mock_request.state = SimpleNamespace(
@@ -7409,7 +7458,7 @@ _PROXY_SERVER_REQUEST: Final = TypeAdapter(dict[str, object])
 def _split_pass_through_body(body: str) -> _PassThroughSplit:
     mock_request: Final = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent")
     mock_request.headers = Headers()
     mock_request.scope = MappingProxyType({})
 
@@ -7546,6 +7595,61 @@ def test_passthrough_sees_the_public_list_rebound_after_import(monkeypatch: pyte
     assert split.forwarded_body == {"contents": [{"parts": [{"text": "hi"}]}]}
 
 
+def test_passthrough_metadata_carries_key_team_project_tags_and_key_spend_logs_metadata():
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/anthropic/v1/messages")
+    mock_request.headers = Headers({"x-litellm-tags": "caller-tag,key-tag"})
+    mock_request.scope = {}
+
+    cached_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"tags": ["key-tag", "shared-tag"], "spend_logs_metadata": {"cost_center": "key"}},
+        team_metadata={
+            "tags": ["team-tag", "shared-tag"],
+            "spend_logs_metadata": {"cost_center": "team", "team_field": "team"},
+        },
+        project_metadata={"tags": ["project-tag"]},
+    )
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=cached_key,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={
+            "metadata": {
+                "tags": ["body-tag"],
+                "spend_logs_metadata": {"request_id": "body"},
+                "user_api_key_auth_metadata": "forged",
+            }
+        },
+        litellm_call_id="lit-5359-call-id",
+    )
+    second = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=cached_key,
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={},
+        litellm_call_id="lit-5359-second-call-id",
+    )
+
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert metadata["tags"] == ["body-tag", "key-tag", "shared-tag", "team-tag", "project-tag", "caller-tag"]
+    assert metadata["spend_logs_metadata"] == {"request_id": "body", "cost_center": "key", "team_field": "team"}
+    assert metadata["user_api_key_auth_metadata"] == {
+        "tags": ["key-tag", "shared-tag"],
+        "spend_logs_metadata": {"cost_center": "key"},
+    }
+    assert second["litellm_params"]["metadata"]["spend_logs_metadata"] == {"cost_center": "key", "team_field": "team"}
+    assert cached_key.metadata == {"tags": ["key-tag", "shared-tag"], "spend_logs_metadata": {"cost_center": "key"}}
+    assert cached_key.team_metadata == {
+        "tags": ["team-tag", "shared-tag"],
+        "spend_logs_metadata": {"cost_center": "team", "team_field": "team"},
+    }
+
+
 @pytest.mark.asyncio
 async def test_chat_completion_pass_through_endpoint_answers_an_openai_typed_error_for_an_unknown_model(
     monkeypatch: pytest.MonkeyPatch,
@@ -7665,7 +7769,7 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
 
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = "http://0.0.0.0:4000/anthropic/v1/messages"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/anthropic/v1/messages")
     mock_request.headers = Headers({})
     mock_request.scope = {}
     session = UserAPIKeyAuth(
@@ -8218,3 +8322,31 @@ async def test_pass_throughs_stay_open_while_a_db_sync_reads_the_database(tmp_pa
     await sync
 
     assert (config_during_sync.status_code, db_during_sync.status_code) == (200, 200)
+
+
+def _lazy_feature(monkeypatch: pytest.MonkeyPatch, name: str, path: str) -> LazyFeature:
+    async def served() -> dict[str, str]:
+        return {"served_by": name}
+
+    router: Final = APIRouter()
+    router.add_api_route(path, served, methods=["POST"])
+    module: Final = ModuleType(f"tests.unit.proxy.pass_through_endpoints.lazy_fixture_{name}")
+    module.router = router  # pyright: ignore[reportAttributeAccessIssue]  # fixture module built at test time
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    return LazyFeature(name=name, module_path=module.__name__, path_prefixes=(path,))
+
+
+def test_a_pass_through_added_after_a_lazy_feature_loaded_takes_over_its_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_DISABLE_LAZY_ROUTES", raising=False)
+
+    async def pass_through() -> dict[str, str]:
+        return {"served_by": "pass-through"}
+
+    app: Final = FastAPI()
+    attach_lazy_features(app, (_lazy_feature(monkeypatch, "decider", "/v1/decider"),))
+    with TestClient(app) as client:
+        assert client.post("/v1/decider").json() == {"served_by": "decider"}
+        assert SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
+        assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
+        assert not SafeRouteAdder.add_api_route_if_not_exists(app, "/v1/decider", pass_through, ["POST"])
+        assert client.post("/v1/decider").json() == {"served_by": "pass-through"}
