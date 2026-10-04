@@ -133,7 +133,6 @@ describe("Lens interactive demo", () => {
     });
     await screen.findByRole("button", { name: "Preview sample" });
     await user.click(screen.getByRole("button", { name: "Preview sample" }));
-    await user.click(await screen.findByRole("tab", { name: "Findings" }));
     network.mockClear();
     await user.click(await screen.findByRole("row", { name: /Repeated lookups leave customers without an answer/ }));
     const finding = screen.getByRole("dialog");
@@ -153,7 +152,7 @@ describe("Lens interactive demo", () => {
       within(screen.getByRole("dialog", { name: "Original run" })).getByRole("button", { name: "Close" }),
     );
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
-    expect(await screen.findByRole("table", { name: "Findings" })).toBeVisible();
+    expect(await screen.findByRole("table", { name: "Investigations" })).toBeVisible();
     expect(network).not.toHaveBeenCalled();
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
     await expectUrl(onUrlUpdate, (url) => expect(url.has("span")).toBe(false));

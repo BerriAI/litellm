@@ -1,10 +1,11 @@
 "use client";
 
 import { useId, useState } from "react";
-import { Aperture, Info } from "lucide-react";
+import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
+import { Activity, Aperture, Info, ScanSearch } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { LensServicesProvider } from "./LensServicesProvider";
 import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
@@ -44,10 +45,36 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
   );
 }
 
+const MODE_ICONS = { traces: Activity, investigations: ScanSearch } as const;
+
+function LensModeSwitch() {
+  return (
+    <TabsPrimitive.List
+      aria-label="Lens"
+      className="relative inline-flex h-8 items-center rounded-full border border-border bg-muted/60 p-0.5"
+    >
+      <TabsPrimitive.Indicator className="absolute top-0.5 bottom-0.5 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-background shadow-sm ring-1 ring-border transition-[left,width] duration-200 ease-out motion-reduce:transition-none" />
+      {Object.entries(LENS_TABS).map(([view, label]) => {
+        const Icon = MODE_ICONS[view as LensTab];
+        return (
+          <TabsPrimitive.Tab
+            key={view}
+            value={view}
+            className="relative z-raised inline-flex h-full items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground"
+          >
+            <Icon aria-hidden="true" className="size-3.5" />
+            {label}
+          </TabsPrimitive.Tab>
+        );
+      })}
+    </TabsPrimitive.List>
+  );
+}
+
 function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   const { tab, lensId, demo, setTab, setDemo } = useLensRoute();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
-  const activeTab = tab ?? (lensId ? "findings" : "traces");
+  const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const preview = (view: LensTab) => ({
     target: previewTarget,
     open: !demo && activeTab === view ? () => setDemo(true) : undefined,
@@ -61,13 +88,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
               Lens
             </h1>
-            <TabsList aria-label="Lens" className="h-8">
-              {Object.entries(LENS_TABS).map(([view, label]) => (
-                <TabsTrigger key={view} value={view} className="px-3">
-                  {label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
+            <LensModeSwitch />
           </div>
           <div className="flex items-center gap-3">
             <div ref={setPreviewTarget} />
@@ -84,24 +105,21 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
             />
           </LensPreviewContext.Provider>
         </TabsContent>
-        {(["findings", "investigations"] as const).map((view) => (
-          <TabsContent key={view} value={view} className="flex min-h-0 flex-col overflow-y-auto">
-            <LensPreviewContext.Provider value={preview(view)}>
-              {isProxyAdminTierRole(userRole) ? (
-                <InvestigationsView
-                  view={view}
-                  active={activeTab === view}
-                  accessToken={accessToken}
-                  readOnly={readOnly || !isProxyAdminRole(userRole)}
-                />
-              ) : (
-                <p className="py-6 text-sm text-muted-foreground">
-                  Investigations require proxy administrator access. You can still view your traces.
-                </p>
-              )}
-            </LensPreviewContext.Provider>
-          </TabsContent>
-        ))}
+        <TabsContent value="investigations" className="flex min-h-0 flex-col overflow-y-auto">
+          <LensPreviewContext.Provider value={preview("investigations")}>
+            {isProxyAdminTierRole(userRole) ? (
+              <InvestigationsView
+                active={activeTab === "investigations"}
+                accessToken={accessToken}
+                readOnly={readOnly || !isProxyAdminRole(userRole)}
+              />
+            ) : (
+              <p className="py-6 text-sm text-muted-foreground">
+                Investigations require proxy administrator access. You can still view your traces.
+              </p>
+            )}
+          </LensPreviewContext.Provider>
+        </TabsContent>
       </Tabs>
     </main>
   );

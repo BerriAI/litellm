@@ -8,7 +8,7 @@ import { lensKeys } from "../api/queries";
 import { InvestigationsView } from "./InvestigationsView";
 import { LensPreviewContext } from "../LensPreviewButton";
 import { briefMarkdown } from "../model/findings";
-import { inboxRows } from "../model/inbox";
+import { findingKey } from "../model/inbox";
 import { runTime } from "../model/format";
 import { type Lens, type Finding } from "../model/types";
 
@@ -532,18 +532,17 @@ it("reopens the edit dialog from a shared link and drops it from the URL on canc
   expect(apiClient.request).not.toHaveBeenCalled();
 });
 
-it("reopens an inbox finding and a results section from shared links", async () => {
+it("reopens a finding and a results section from shared links", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return lens.jobs;
     return { data: [] };
   });
-  const [row] = inboxRows([lens]);
   const onUrlUpdate = vi.fn();
   const user = userEvent.setup();
   const { unmount } = renderWithProviders(<InvestigationsView accessToken="test" />, {
-    searchParams: `?issue=${encodeURIComponent(row.key)}`,
+    searchParams: `?issue=${encodeURIComponent(findingKey(lens, issue))}`,
     onUrlUpdate,
   });
   const sheet = await screen.findByRole("dialog");
@@ -557,7 +556,7 @@ it("reopens an inbox finding and a results section from shared links", async () 
   expect(await screen.findByRole("tab", { name: "Criteria", selected: true })).toBeVisible();
 });
 
-it("resolves every investigation's copy of a merged finding from one row", async () => {
+it("lists each finding under the investigation that owns it and resolves only that copy", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
@@ -570,15 +569,14 @@ it("resolves every investigation's copy of a merged finding from one row", async
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" />);
   const rows = await screen.findAllByRole("row", { name: issue.title });
-  expect(rows).toHaveLength(1);
-  await user.click(rows[0]);
+  expect(rows).toHaveLength(2);
+  await user.click(await screen.findByRole("button", { name: `Hide findings for ${lens.settings.name}` }));
+  const remaining = screen.getByRole("row", { name: issue.title });
+  expect(remaining.previousElementSibling).toBe(screen.getByRole("row", { name: twin.settings.name }));
+  await user.click(remaining);
   await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
-  await waitFor(() => expect(apiClient.patch).toHaveBeenCalledTimes(2));
-  const resolved = vi
-    .mocked(apiClient.patch)
-    .mock.calls.map(([path]) => path)
-    .sort();
-  expect(resolved).toEqual(["/lens/lens/findings/issue", "/lens/twin/findings/issue"]);
+  await waitFor(() => expect(apiClient.patch).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(apiClient.patch).mock.calls[0][0]).toBe("/lens/twin/findings/issue");
 });
 
 it("lists investigations without edit or run controls for read-only viewers", async () => {
@@ -590,7 +588,7 @@ it("lists investigations without edit or run controls for read-only viewers", as
     return { data: [] };
   });
   const user = userEvent.setup();
-  renderWithProviders(<InvestigationsView accessToken="test" view="investigations" readOnly />);
+  renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
   const row = await screen.findByRole("row", { name: lens.settings.name });
   expect(within(row).queryByRole("button", { name: /now/ })).not.toBeInTheDocument();
   await user.click(row);
@@ -617,7 +615,7 @@ it("shows the actual saved failure and run context without opening backend logs"
   expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();
 });
 
-it("keeps a merged finding open to retry when one investigation's update fails", async () => {
+it("keeps a finding open to retry when its update fails", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
@@ -632,7 +630,8 @@ it("keeps a merged finding open to retry when one investigation's update fails",
   });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" />);
-  await user.click(await screen.findByRole("row", { name: issue.title }));
+  await user.click(await screen.findByRole("button", { name: `Hide findings for ${lens.settings.name}` }));
+  await user.click(screen.getByRole("row", { name: issue.title }));
   await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
   expect(await screen.findByText("Twin reviews could not be updated")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Mark resolved" })).toBeVisible();
