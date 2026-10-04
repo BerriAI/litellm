@@ -312,7 +312,18 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	// second apply).
 	if keyTypePresetsRoutes(key.KeyType) && len(key.AllowedRoutes) > 0 &&
 		!slices.Equal(createdKey.AllowedRoutes, key.AllowedRoutes) {
-		if _, err := c.RestoreKeyRoutes(createdKey.TokenID, key.AllowedRoutes); err != nil {
+		// Echo the values the generate just stored for the two fields
+		// /key/update requires non-null; empty objects would clear
+		// configured or server-defaulted restrictions.
+		storedOrConfigured := func(stored, configured map[string]interface{}) map[string]interface{} {
+			if stored != nil {
+				return stored
+			}
+			return configured
+		}
+		if _, err := c.RestoreKeyRoutes(createdKey.TokenID, key.AllowedRoutes,
+			storedOrConfigured(createdKey.Permissions, key.Permissions),
+			storedOrConfigured(createdKey.ModelMaxBudget, key.ModelMaxBudget)); err != nil {
 			// For a proxy-minted key nothing is in state yet, so returning
 			// without cleanup would orphan an active key terraform cannot see
 			// or delete, and a retried apply would mint another one. Delete it

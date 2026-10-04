@@ -440,10 +440,13 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 	cases := map[string]struct {
 		generateRoutes []interface{}
 		suppliedKey    string
+		permissions    map[string]interface{}
+		generateStores bool
 		restoreFails   bool
 		wantUpdate     bool
 	}{
 		"preset overwrote declared":        {generateRoutes: []interface{}{"llm_api_routes"}, wantUpdate: true},
+		"declared permissions are echoed":  {generateRoutes: []interface{}{"llm_api_routes"}, permissions: map[string]interface{}{"get_server_info": "true"}, generateStores: true, wantUpdate: true},
 		"generate honored declared":        {generateRoutes: []interface{}{"/v1/models"}, wantUpdate: false},
 		"restore update rejected":          {generateRoutes: []interface{}{"llm_api_routes"}, restoreFails: true, wantUpdate: true},
 		"rejected restore keeps supplied":  {generateRoutes: []interface{}{"llm_api_routes"}, suppliedKey: "sk-custom", restoreFails: true, wantUpdate: true},
@@ -459,7 +462,11 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				switch r.URL.Path {
 				case "/key/generate":
 					json.Unmarshal(body, &generateBody)
-					w.Write([]byte(`{"key": "sk-new", "token_id": "hash-1", "allowed_routes": ["` + tc.generateRoutes[0].(string) + `"]}`))
+					extra := ""
+					if tc.generateStores {
+						extra = `, "permissions": {"get_server_info": true}`
+					}
+					w.Write([]byte(`{"key": "sk-new", "token_id": "hash-1", "allowed_routes": ["` + tc.generateRoutes[0].(string) + `"]` + extra + `}`))
 				case "/key/update":
 					updateCalled = true
 					json.Unmarshal(body, &updateBody)
@@ -483,6 +490,9 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				"key_alias":      "typed",
 				"key_type":       "llm_api",
 				"allowed_routes": []interface{}{"/v1/models"},
+			}
+			if tc.permissions != nil {
+				raw["permissions"] = tc.permissions
 			}
 			if tc.suppliedKey != "" {
 				raw["key"] = tc.suppliedKey
@@ -520,10 +530,14 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				if !updateCalled {
 					t.Fatal("create did not re-assert declared allowed_routes after the preset overwrote them")
 				}
+				wantPerms := map[string]interface{}{}
+				if tc.generateStores {
+					wantPerms = map[string]interface{}{"get_server_info": true}
+				}
 				wantBody := map[string]interface{}{
 					"key":              "hash-1",
 					"allowed_routes":   []interface{}{"/v1/models"},
-					"permissions":      map[string]interface{}{},
+					"permissions":      wantPerms,
 					"model_max_budget": map[string]interface{}{},
 				}
 				if len(updateBody) != len(wantBody) {
