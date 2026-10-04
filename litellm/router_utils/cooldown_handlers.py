@@ -8,10 +8,10 @@ Router cooldown handlers
 
 import asyncio
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # one narrowing of a model_info mapping, see _as_str_mapping
 
 import litellm
 from litellm._internal_context import service_target
@@ -497,16 +497,16 @@ def _as_str_mapping(value: object) -> Mapping[str, object] | None:
     return cast("Mapping[str, object]", value)  # cast-ok: model_info is a str-keyed mapping
 
 
-def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> list[str]:
+def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
     """Ids of the given deployments, so a cooldown lookup reads only those keys."""
     infos: Final = [_as_str_mapping(deployment.get("model_info")) for deployment in deployments]
-    return [str(info["id"]) for info in infos if info is not None and info.get("id") is not None]
+    return tuple(str(info["id"]) for info in infos if info is not None and info.get("id") is not None)
 
 
 async def _async_get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
-    model_ids: list[str] | None = None,
+    model_ids: Sequence[str] | None = None,
 ) -> list[str]:
     """
     Async implementation of '_get_cooldown_deployments'.
@@ -551,8 +551,8 @@ async def _async_get_cooldown_deployments_with_debug_info(
 def _get_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
     parent_otel_span: Span | None,
-    model_ids: list[str] | None = None,
-) -> list[str]:
+    model_ids: Sequence[str] | None = None,
+) -> list[str]:  # mutable-ok: callers pass this to _filter_cooldown_deployments(list[str])
     """
     Get the list of models being cooled down for this minute.
 

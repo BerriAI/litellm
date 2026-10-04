@@ -160,7 +160,7 @@ class CooldownCache:
         return cooldown_cache_value
 
     async def async_get_active_cooldowns(
-        self, model_ids: list[str], parent_otel_span: Span | None
+        self, model_ids: Sequence[str], parent_otel_span: Span | None
     ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
@@ -172,7 +172,7 @@ class CooldownCache:
         return self.active_cooldowns_from_results(model_ids, results)
 
     def active_cooldowns_from_results(
-        self, model_ids: list[str], results: Sequence[object] | None
+        self, model_ids: Sequence[str], results: Sequence[object] | None
     ) -> list[tuple[str, CooldownCacheValue]]:
         """The cooldowns still active in a `cooldown_store` batch read of `get_cooldown_cache_key(model_id)` per id."""
         active_cooldowns: Final[list[tuple[str, CooldownCacheValue]]] = []
@@ -191,7 +191,7 @@ class CooldownCache:
         return active_cooldowns
 
     def get_active_cooldowns(
-        self, model_ids: list[str], parent_otel_span: Span | None
+        self, model_ids: Sequence[str], parent_otel_span: Span | None
     ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
         keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
@@ -210,7 +210,7 @@ class CooldownCache:
 
         return active_cooldowns
 
-    def get_min_cooldown(self, model_ids: list[str], parent_otel_span: Span | None) -> float:
+    def get_min_cooldown(self, model_ids: Sequence[str], parent_otel_span: Span | None) -> float:
         """Return min cooldown time required for a group of model id's."""
 
         # Generate the keys for the deployments
