@@ -3,6 +3,7 @@ Utility helpers for reading and parsing environment variables.
 """
 
 import logging
+import math
 import os
 from typing import Final
 
@@ -57,3 +58,31 @@ def get_env_int_or_none(env_var: str) -> int | None:
         return int(raw.strip())
     except (ValueError, TypeError):
         return None
+
+
+def _float_or_nan(raw: str) -> float:
+    try:
+        return float(raw)
+    except ValueError:
+        return math.nan
+
+
+def get_env_positive_float(env_var: str, default: float) -> float:
+    """Parse an environment variable as a finite float above zero.
+
+    Anything else (unparseable, ``nan``, ``inf``, zero, negative) falls back to the default and
+    warns, so a misconfigured timeout can neither disable the deadline nor fire it immediately.
+    """
+    raw: Final = os.getenv(env_var)
+    if raw is None:
+        return default
+    value: Final = _float_or_nan(raw)
+    if math.isfinite(value) and value > 0:
+        return value
+    logging.getLogger("LiteLLM").warning(
+        "%s=%r is not a finite number above zero. Falling back to %s.",
+        env_var,
+        raw,
+        default,
+    )
+    return default

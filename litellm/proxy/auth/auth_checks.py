@@ -1815,6 +1815,10 @@ async def _load_bounded_registry(
     try:
         await asyncio.wait_for(load_lock.acquire(), timeout=load_timeout)
     except asyncio.TimeoutError:
+        cached_after_timeout: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+        if not isinstance(cached_after_timeout, _RegistryNotCached):
+            return cached_after_timeout
+
         verbose_proxy_logger.warning(
             "Registry %s is still being loaded by another request after %ss, so per-id lookups will "
             "run and the registry query is suppressed for %ss",

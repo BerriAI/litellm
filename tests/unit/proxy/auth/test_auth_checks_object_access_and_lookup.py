@@ -10482,6 +10482,32 @@ async def test_waiter_behind_a_stuck_registry_load_falls_back_without_touching_t
 
 
 @pytest.mark.asyncio
+async def test_waiter_timing_out_as_the_load_completes_uses_the_registry_instead_of_overwriting_it(
+    registry_case, monkeypatch
+):
+    """
+    A load can land in the cache while a waiter's lock timeout is firing. The waiter must serve
+    that registry, not replace it with the "unusable" marker and push every request onto per-id
+    reads for the negative-cache window.
+    """
+    monkeypatch.setattr(auth_checks, "REGISTRY_LOAD_TIMEOUT_SECONDS", _SHORT_LOAD_TIMEOUT)
+    lock = _registry_lock(registry_case)
+    prisma = _registry_prisma(registry_case, _scan_that_hangs_once(registry_case))
+    cache = _TtlRecordingCache()
+    await lock.acquire()
+
+    waiter = asyncio.create_task(_load_registry(registry_case, prisma, cache))
+    await asyncio.sleep(_SHORT_LOAD_TIMEOUT / 5)
+    await cache.async_set_cache(key=registry_case.cache_key, value=("registered-id",), ttl=60)
+
+    assert await waiter == frozenset({"registered-id"})
+    assert tuple(await cache.async_get_cache(key=registry_case.cache_key)) == ("registered-id",)
+    assert cache.writes == [(registry_case.cache_key, 60)]
+    _registry_find_many(registry_case, prisma).assert_not_awaited()
+    lock.release()
+
+
+@pytest.mark.asyncio
 async def test_cancelling_a_request_waiting_for_the_registry_lock_leaves_lock_and_cache_untouched(
     registry_case, monkeypatch
 ):
