@@ -158,6 +158,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const showWelcome = loaded && showEmpty && !onSetup;
   const showTables = !onDetail && !onSetup && lenses.length > 0;
   const showMissing = missingSelection && !lens && !onSetup;
+  const showReadinessBanner = showReadiness && !onSetup && !ready;
   return (
     <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
       {showDetailNav && (

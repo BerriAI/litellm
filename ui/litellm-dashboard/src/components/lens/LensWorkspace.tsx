@@ -18,7 +18,7 @@ import { lensKeys, lensQueries } from "./api/queries";
 import { useLensApi } from "./services";
 import { investigationActivity, workerConnected, type InvestigationActivity } from "./model/status";
 import { cn } from "@/lib/cva.config";
-import { LENS_TABS, useDialogRoute, useLensRoute, type LensTab } from "./route";
+import { LENS_TABS, useDialogRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
@@ -47,6 +47,9 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
 }
 
 const MODE_ICONS = { traces: Activity, investigations: ScanSearch, settings: Settings } as const;
+
+/** The inline investigation editor marks the tab so the notch says where you are, not just which tab is open. */
+const SETUP_LABELS: Partial<Record<LensDialog, string>> = { new: "New", edit: "Editing", duplicate: "Duplicate" };
 
 const ACTIVITY_DOT: Record<Exclude<InvestigationActivity, "idle">, { className: string; label: string }> = {
   running: { className: "bg-info motion-safe:animate-pulse", label: "An investigation is running" },
@@ -114,11 +117,13 @@ function LensModeSwitch({
   demo,
   activeTab,
   worker,
+  setup,
 }: {
   activity: InvestigationActivity;
   demo: boolean;
   activeTab: LensTab;
   worker: WorkerStatus;
+  setup?: string;
 }) {
   const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || worker);
   return (
@@ -156,6 +161,11 @@ function LensModeSwitch({
                 )}
               </span>
               <span className={cn(quiet && "sr-only")}>{label}</span>
+              {view === "investigations" && setup && (
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-xs leading-none font-medium text-muted-foreground animate-in fade-in-0 duration-200">
+                  {setup}
+                </span>
+              )}
               {view === "investigations" && <ActivityDot activity={activity} />}
             </TabsPrimitive.Tab>
           );
@@ -181,7 +191,7 @@ const PANEL =
 
 function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   const { tab, lensId, demo, setTab, setDemo } = useLensRoute();
-  const { openDialog } = useDialogRoute();
+  const { dialog, openDialog } = useDialogRoute();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
   const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canInvestigate = isProxyAdminTierRole(userRole);
@@ -223,7 +233,13 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               </a>
             </p>
           </div>
-          <LensModeSwitch activity={activity} demo={demo} activeTab={activeTab} worker={worker} />
+          <LensModeSwitch
+            activity={activity}
+            demo={demo}
+            activeTab={activeTab}
+            worker={worker}
+            setup={activeTab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined}
+          />
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
             <div ref={setPreviewTarget} />
             <DemoToggle demo={demo} onChange={setDemo} />

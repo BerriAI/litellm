@@ -223,6 +223,31 @@ describe("Lens interactive demo", () => {
     await waitFor(() => expect(tab).toHaveAccessibleDescription(""));
   });
 
+  it("marks the Investigations tab while the inline editor is open and clears it on back", async () => {
+    const user = userEvent.setup();
+    const saved = createLensDemoData().lenses[0];
+    network.mockImplementation(async (input) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/lens") return Response.json({ lenses: [saved], workers: [], tracing_enabled: true });
+      if (path.endsWith("/runs")) return Response.json(saved.jobs);
+      if (path === "/lens/agents") return Response.json([]);
+      if (path.startsWith("/lens/preview")) return Response.json({ eligible: 0, selected: 0, executions: [] });
+      if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+      return Response.json({ data: [], traces: true, requests: false });
+    });
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?tab=investigations&dialog=new",
+    });
+    const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
+    expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
+    const tab = tabs.getByRole("tab", { name: /^Investigations/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(within(tab).getByText("New")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back to investigations" }));
+    expect(await screen.findByRole("row", { name: new RegExp(saved.settings.name) })).toBeVisible();
+    expect(within(tab).queryByText("New")).not.toBeInTheDocument();
+  });
+
   it("adds a quiet Settings tab that manages the worker inline and reflects its health", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();

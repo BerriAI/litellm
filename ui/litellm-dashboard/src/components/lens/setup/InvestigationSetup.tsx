@@ -1,14 +1,17 @@
 "use client";
 
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, ChevronLeft } from "lucide-react";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/cva.config";
 import {
   investigationSchema,
   investigationDefaults,
   investigationSettings,
+  investigationStepFields,
   type InvestigationInput,
   type InvestigationOutput,
 } from "./investigationSchema";
@@ -19,16 +22,24 @@ import { RunFields } from "./fields/RunFields";
 import { MatchingActivityPreview } from "./MatchingActivityPreview";
 import { useMatchingActivity } from "./useMatchingActivity";
 import { TraceSheet } from "../investigations/TraceSheet";
+import { durationLabel } from "../model/format";
 import { type Settings } from "../model/types";
 import { type AnalysisModelInfo } from "./fields/analysisModels";
 
 type SetupMode = "new" | "edit" | "duplicate";
+type StepState = "done" | "current" | "upcoming";
 
 const TITLES: Record<SetupMode, string> = {
   new: "New investigation",
   edit: "Edit investigation",
   duplicate: "Duplicate investigation",
 };
+
+const STEPS = [
+  { title: "Activity", description: "Which traces or requests to review" },
+  { title: "Criteria", description: "What the agent should do and what to watch for" },
+  { title: "Run", description: "Schedule, analysis model, and budget" },
+] as const;
 
 interface ModelGate {
   readonly modelValid: boolean;
@@ -61,6 +72,70 @@ function saveLabelFor(mode: SetupMode, repeat: boolean): string {
   return repeat ? "Run and monitor" : "Run investigation";
 }
 
+function activitySummary(selection: InvestigationInput["selection"]): string {
+  const who = selection.agent_name || selection.service || "All activity";
+  const conditions = selection.filters.length ? ` · ${selection.filters.length} conditions` : "";
+  return `${who} · Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}${conditions}`;
+}
+
+function criteriaSummary(values: Pick<InvestigationInput, "context" | "watching" | "questions">): string {
+  const checks = values.watching.length + values.questions.filter((q) => q.instruction.trim()).length;
+  const checksLabel = `${checks} ${checks === 1 ? "check" : "checks"}`;
+  const headline = values.context.split("\n")[0]?.trim();
+  return headline ? `${headline} · ${checksLabel}` : checksLabel;
+}
+
+const STEP_BADGE: Record<StepState, string> = {
+  done: "border-foreground text-foreground",
+  current: "border-foreground bg-foreground text-background",
+  upcoming: "border-border text-muted-foreground",
+};
+
+/** One row of the vertical stepper: finished steps collapse to a summary and reopen on click. */
+function SetupStep({
+  index,
+  state,
+  summary,
+  onOpen,
+  children,
+}: {
+  index: number;
+  state: StepState;
+  summary: string;
+  onOpen: () => void;
+  children: ReactNode;
+}) {
+  const { title, description } = STEPS[index];
+  const last = index === STEPS.length - 1;
+  return (
+    <li className={cn("relative flex gap-4", !last && "pb-8")}>
+      {!last && <span aria-hidden="true" className="absolute top-7 bottom-0 left-3.5 w-px bg-border" />}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "z-raised flex size-7 shrink-0 items-center justify-center rounded-full border bg-card text-xs font-medium",
+          STEP_BADGE[state],
+        )}
+      >
+        {state === "done" ? <Check className="size-3.5" /> : index + 1}
+      </span>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <button
+          type="button"
+          disabled={state !== "done"}
+          aria-current={state === "current" ? "step" : undefined}
+          onClick={onOpen}
+          className="flex w-full flex-col items-start gap-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
+        >
+          <span className={cn("text-sm font-semibold", state === "upcoming" && "text-muted-foreground")}>{title}</span>
+          <span className="text-xs text-muted-foreground">{state === "done" ? summary : description}</span>
+        </button>
+        {state === "current" && <div className="mt-4 space-y-5">{children}</div>}
+      </div>
+    </li>
+  );
+}
+
 interface SetupProps {
   initial?: Settings;
   mode?: SetupMode;
@@ -76,7 +151,7 @@ interface SetupProps {
   onSave: (settings: Settings) => Promise<void>;
 }
 
-/** Replaces the Investigations tab body: matching activity on the left reacts live to the settings on the right. */
+/** Replaces the Investigations tab body: a three-step setup on the left, the activity it matches on the right. */
 export function InvestigationSetup(props: SetupProps) {
   const { initial, mode = initial ? "edit" : "new", defaultSource = "traces" } = props;
   const form = useZodForm(investigationSchema, {
@@ -104,10 +179,14 @@ function SetupEditor({
   onSave,
   form,
 }: SetupProps & { mode: SetupMode; form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
+  const [step, setStep] = useState(0);
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
-  const { control, register, setValue, subscribe, formState } = form;
-  const [selectedModel, repeat] = useWatch({ control, name: ["selectedModel", "repeat"] });
+  const { control, register, setValue, subscribe, trigger, formState } = form;
+  const [selectedModel, repeat, selection, context, watching, questions] = useWatch({
+    control,
+    name: ["selectedModel", "repeat", "selection", "context", "watching", "questions"],
+  });
   const activity = useMatchingActivity(accessToken);
   const model = selectedModel ?? defaultModel ?? "";
   useEffect(
@@ -128,6 +207,9 @@ function SetupEditor({
       }),
     [setValue, subscribe],
   );
+  const next = async () => {
+    if (await trigger(investigationStepFields[step])) setStep(step + 1);
+  };
   const save = form.handleSubmit(async (values) => {
     setError("");
     try {
@@ -143,35 +225,94 @@ function SetupEditor({
   const canSave = formReady && gate.modelValid && runReady;
   const saveLabel = saveLabelFor(mode, repeat);
   const offline = !ready && mode !== "edit";
+  const summaries = [activitySummary(selection), criteriaSummary({ context, watching, questions }), ""];
+  const stateOf = (index: number): StepState => {
+    if (index < step) return "done";
+    return index === step ? "current" : "upcoming";
+  };
+  const stepContent = (index: number) => {
+    if (index === 0)
+      return (
+        <>
+          <label className="grid gap-2 text-sm font-medium">
+            Investigation name
+            <Input {...register("name")} placeholder="e.g. Support quality" />
+          </label>
+          <ScopeFields {...activity.scope} />
+          <SampleFields />
+        </>
+      );
+    if (index === 1) return <ExpectationsFields />;
+    return (
+      <RunFields
+        modelValid={gate.modelValid}
+        models={models}
+        modelDetails={modelDetails}
+        modelsLoading={modelsLoading}
+        modelsError={modelsError}
+        unavailable={gate.unavailable}
+        unsupported={gate.unsupported}
+      />
+    );
+  };
   return (
     <section aria-label={TITLES[mode]} className="flex min-w-0 flex-1 flex-col gap-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight">{TITLES[mode]}</h2>
-          <p className="text-xs text-muted-foreground">
-            Matching activity on the left updates as you change the settings on the right.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" disabled={formState.isSubmitting} onClick={onClose}>
-            Cancel
+        <div className="flex items-start gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="-ml-2 shrink-0 text-muted-foreground"
+            aria-label="Back to investigations"
+            disabled={formState.isSubmitting}
+            onClick={onClose}
+          >
+            <ChevronLeft className="size-5" />
           </Button>
-          <Button disabled={!canSave} onClick={() => void save()}>
-            {formState.isSubmitting ? "Saving…" : saveLabel}
-          </Button>
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight">{TITLES[mode]}</h2>
+            <p className="text-xs text-muted-foreground">
+              Matching activity on the right updates as you change the setup.
+            </p>
+          </div>
         </div>
+        <Button variant="outline" disabled={formState.isSubmitting} onClick={onClose}>
+          Cancel
+        </Button>
       </header>
       {offline && (
         <p role="status" className="text-sm text-amber-700">
           The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
         </p>
       )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
       <div className="grid min-w-0 gap-8 lg:grid-cols-2">
+        <ol aria-label="Investigation setup" className="min-w-0">
+          {STEPS.map((_, index) => (
+            <SetupStep
+              key={index}
+              index={index}
+              state={stateOf(index)}
+              summary={summaries[index]}
+              onOpen={() => setStep(index)}
+            >
+              {stepContent(index)}
+              {error && index === STEPS.length - 1 && (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+              <div className="flex justify-end pt-1">
+                {index < STEPS.length - 1 ? (
+                  <Button onClick={() => void next()}>Continue</Button>
+                ) : (
+                  <Button disabled={!canSave} onClick={() => void save()}>
+                    {formState.isSubmitting ? "Saving…" : saveLabel}
+                  </Button>
+                )}
+              </div>
+            </SetupStep>
+          ))}
+        </ol>
         <div className="min-w-0 space-y-3 lg:sticky lg:top-0 lg:self-start">
           <MatchingActivityPreview
             {...activity.preview}
@@ -182,37 +323,6 @@ function SetupEditor({
               Clear {activity.selectedRunCount} selected runs
             </Button>
           )}
-        </div>
-        <div className="min-w-0 space-y-8">
-          <section aria-label="Activity" className="space-y-5">
-            <h3 className="text-sm font-semibold">Activity</h3>
-            <ScopeFields
-              {...activity.scope}
-              nameField={
-                <label className="grid gap-2 text-sm font-medium">
-                  Investigation name
-                  <Input {...register("name")} placeholder="e.g. Support quality" />
-                </label>
-              }
-            />
-            <SampleFields />
-          </section>
-          <section aria-label="Expectations" className="space-y-5">
-            <h3 className="text-sm font-semibold">Expectations</h3>
-            <ExpectationsFields />
-          </section>
-          <section aria-label="Run" className="space-y-5">
-            <h3 className="text-sm font-semibold">Run</h3>
-            <RunFields
-              modelValid={gate.modelValid}
-              models={models}
-              modelDetails={modelDetails}
-              modelsLoading={modelsLoading}
-              modelsError={modelsError}
-              unavailable={gate.unavailable}
-              unsupported={gate.unsupported}
-            />
-          </section>
         </div>
       </div>
       {trace && (

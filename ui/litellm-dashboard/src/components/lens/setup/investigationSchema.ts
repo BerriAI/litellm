@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { FieldPath } from "react-hook-form";
 import type { Settings } from "../model/types";
 import { normalizeFilters } from "./filters";
 import { initialWatches, isWatch, watchChecks } from "./watches";
@@ -145,6 +146,30 @@ export const investigationSchema = draftSchema
 
 export type InvestigationInput = z.input<typeof investigationSchema>;
 export type InvestigationOutput = z.output<typeof investigationSchema>;
+
+/** Fields validated when leaving each setup step: activity filter, criteria, then run details. */
+export const investigationStepFields: readonly (readonly FieldPath<InvestigationInput>[])[] = [
+  [
+    "name",
+    "selection.source",
+    "selection.service",
+    "selection.agent_name",
+    "selection.filters",
+    "selection.team_id",
+    "selection.lookback_hours",
+    "selection.sample_percent",
+  ],
+  ["context", "questions", "watching"],
+  [
+    "selection.execution_ids",
+    "selection.sample_size",
+    "selectedModel",
+    "budget",
+    "interval",
+    "repeat",
+    "manualSelection",
+  ],
+];
 
 function activitySelectionDefaults(
   initial: Settings | undefined,
