@@ -10,6 +10,7 @@ import lock. These tests pin the import to a single resolution.
 import builtins
 
 import litellm.integrations.otel.runtime as runtime
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
 def test_logger_not_reimported_after_first_resolution(monkeypatch):
@@ -69,3 +70,16 @@ def test_phase_event_no_ops_when_runtime_absent(monkeypatch):
 
     assert runtime.phase_event("litellm.request.body_parsed") is None
     assert runtime.phase_event("litellm.request.body_received", {"litellm.request.body_bytes": 3}) is None
+
+
+def test_phase_span_does_not_import_the_proxy_in_an_sdk_process():
+    probe = (
+        "import sys\n"
+        "from litellm.integrations.otel.runtime import phase_span\n"
+        "with phase_span('route gpt-5-mini'):\n"
+        "    pass\n"
+        "print('litellm.proxy.proxy_server' in sys.modules)\n"
+    )
+    result = run_child_interpreter(probe, timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().splitlines()[-1] == "False", result.stdout + result.stderr
