@@ -39,11 +39,15 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, TextChoices
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.proxy.guardrails.guardrail_hooks.llm_shield_proxy import (
+        LLMShieldProxyGuardrailConfigModel,
+    )
+    from litellm.types.utils import CallTypes, LLMResponseTypes
 
 GUARDRAIL_NAME: Final = "llm_shield_proxy"
 
@@ -202,6 +206,15 @@ def _as_array(value: object) -> MutableSeq | None:
     return value if isinstance(value, list) else None
 
 
+def _detached(value: object) -> object:
+    """A deep copy of a reply or chunk, for restoring without touching LiteLLM's own object.
+
+    LiteLLM keeps the object it handed the hooks to fill its response cache and its
+    logs, so writing restored plaintext into that object would put it there too.
+    """
+    return copy.deepcopy(value)
+
+
 def _is_container(value: object) -> bool:
     """Whether `value` is a JSON object or array, without narrowing it to unknown types."""
     return isinstance(value, (dict, list))
@@ -232,11 +245,15 @@ def _collect_prompt(data: MutableRequest, slots: _SlotSink) -> None:
     if prompt_object is not None:
         # A Responses API PromptObject. `variables` are substituted into the stored
         # prompt on the provider side, so they are caller text. `id` and `version`
-        # identify which prompt to use and must arrive unchanged.
+        # identify which prompt to use and must arrive unchanged. A variable is a string
+        # or a typed input such as `{"type": "input_text", "text": ...}`.
         variables: Final = _as_object(prompt_object.get("variables"))
         if variables is not None:
             for name in tuple(variables):
                 _collect(variables, name, slots)
+                typed = _as_object(variables[name])
+                if typed is not None:
+                    _collect(typed, "text", slots)
         return
     entries: Final = _as_array(prompt)
     if entries is None:
@@ -327,7 +344,9 @@ def _collect_responses_fields(data: MutableRequest, slots: _SlotSink, privileged
     """The Responses API sends text outside `messages`, in `instructions` and `input`.
 
     `instructions` is written by the application, not by the caller, so it is
-    collected into the privileged sink; `input` is the caller's own text.
+    collected into the privileged sink; `input` is the caller's own text, except for
+    system and developer items in it, which go to the privileged sink like their Chat
+    counterparts.
     """
     _collect(data, "instructions", privileged)
     request_input: Final = data.get("input")
@@ -345,10 +364,15 @@ def _collect_responses_fields(data: MutableRequest, slots: _SlotSink, privileged
         item = _as_object(entry)
         if item is None:
             continue
-        _collect_content(item, slots)
-        # A function_call item holds `arguments`; a function_call_output holds `output`.
+        _collect_content(item, privileged if item.get("role") in _PRIVILEGED_ROLES else slots)
+        # A function_call item holds `arguments`; a function_call_output holds `output`,
+        # as a string or as a list of input_text parts. A custom_tool_call holds `input`
+        # and a code_interpreter_call `code` -- the fields the reply side restores.
         _collect(item, "arguments", slots)
         _collect(item, "output", slots)
+        _collect_text_parts(item, "output", slots)
+        _collect(item, "input", slots)
+        _collect(item, "code", slots)
         # A replayed reasoning item carries the model's summary of its own reasoning,
         # which quotes whatever the conversation contained.
         _collect_text_parts(item, "summary", slots)
@@ -946,6 +970,30 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: parent's signature.
         return [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
+    @staticmethod
+    def get_config_model() -> type["LLMShieldProxyGuardrailConfigModel"]:
+        from litellm.types.proxy.guardrails.guardrail_hooks.llm_shield_proxy import (
+            LLMShieldProxyGuardrailConfigModel,
+        )
+
+        return LLMShieldProxyGuardrailConfigModel
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: MutableRequest,
+        response: "LLMResponseTypes",
+        call_type: "CallTypes | None",
+    ) -> "LLMResponseTypes | None":
+        """Leaves the reply alone at the deployment, where LiteLLM caches what this returns.
+
+        The inherited hook restores a model-level guardrail's reply here, before
+        `litellm/utils.py` writes it to the response cache, so the cache would hold this
+        caller's plaintext under a key built from the redacted request. The proxy's own
+        post-call hook runs model-level guardrails too, after the cache write, and
+        restores the reply there.
+        """
+        return None
+
     # --- transport ---------------------------------------------------------------
 
     def _headers(self, session_id: str) -> JsonBody:
@@ -1143,9 +1191,19 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
     ) -> Any:
-        """Restores the original values in a non-streaming response."""
+        """Restores the original values in a copy of a non-streaming response.
+
+        The copy is what keeps plaintext out of the response cache. LiteLLM caches the
+        reply it received from the provider, and on some paths -- a native Anthropic dict,
+        an in-memory cache -- it stores the object itself rather than a serialised
+        snapshot. Restoring that object in place would cache this caller's values under a
+        key built from the redacted request, which another caller's identical-looking
+        request then hits. Left untouched, the cached reply holds placeholders, and a hit
+        is restored against the new caller's own vault.
+        """
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return response
+        response = _detached(response)  # rebind-ok: everything below restores the copy.
 
         if self._is_anthropic_message_response(response):
             return await self._restore_anthropic_response(response, data)
@@ -1168,6 +1226,10 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         for choice in choices:
             message = getattr(choice, "message", None)
             if message is None:
+                # A Completions reply carries its text on the choice itself.
+                text = _read_field(choice, "text")
+                if isinstance(text, str) and text:
+                    pending.append((text, functools.partial(_write_field, choice, "text")))
                 continue
             content = getattr(message, "content", None)
             if isinstance(content, str) and content:
@@ -1290,14 +1352,18 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 for frames in await sse.feed(chunk):
                     yield frames
                 continue
+            # Chunks are restored as copies, for the reason the non-streaming hook copies:
+            # LiteLLM keeps the chunks it yielded to assemble the reply it caches and logs,
+            # so restoring them in place would cache this caller's plaintext.
             if _responses_event_type(chunk) is not None:
-                for event in await events.restore(chunk):
+                for event in await events.restore(_detached(chunk)):
                     yield event
                 continue
-            last_chunk = chunk
-            for choice in getattr(chunk, "choices", None) or ():
+            restored_chunk = _detached(chunk)
+            last_chunk = restored_chunk
+            for choice in getattr(restored_chunk, "choices", None) or ():
                 await self._restore_choice(choice, carries, session_id)
-            yield chunk
+            yield restored_chunk
 
         # A stream that ended early can still leave text held back, in any shape.
         for frames in await sse.finish():
@@ -1308,7 +1374,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             async for trailing in self._flush_trailing(last_chunk, carries, session_id):
                 yield trailing
 
-    async def _restore_choice(self, choice: Any, carries: _CarryWindows, session_id: str) -> None:
+    async def _restore_choice(self, choice: object, carries: _CarryWindows, session_id: str) -> None:
         """Restores one choice's delta, advancing that choice's own windows.
 
         Content and each tool call are separate token streams, so each gets its own
@@ -1317,10 +1383,15 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         held back for one stream onto another.
         """
         delta: Final = getattr(choice, "delta", None)
-        if delta is None:
-            return
         index: Final = _choice_index(choice)
         is_final: Final = bool(getattr(choice, "finish_reason", None))
+        if isinstance(choice, TextChoices):
+            # A Completions stream carries its text on the choice itself, with no delta
+            # and no tool calls: one window, the content one.
+            await self._restore_text_window(choice, (index, None), carries, session_id, is_final)
+            return
+        if delta is None:
+            return
 
         await self._restore_content_window(delta, (index, None), carries, session_id, is_final)
 
@@ -1332,6 +1403,25 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             # every window this choice still holds has to land in *this* chunk. Flushing
             # after it produces argument JSON the client has already stopped waiting for.
             await self._flush_finished_choice(delta, index, carries, session_id)
+
+    async def _restore_text_window(
+        self,
+        choice: object,
+        key: _CarryKey,
+        carries: _CarryWindows,
+        session_id: str,
+        is_final: bool,
+    ) -> None:
+        """Restores a Completions stream choice's `text` through its window."""
+        carry: Final = carries.get(key, "")
+        text: Final = _read_field(choice, "text")
+        if not isinstance(text, str) or not text:
+            if not (is_final and carry):
+                return
+        emitted, remaining = await self._stream_step(text if isinstance(text, str) else "", carry, is_final, session_id)
+        carries[key] = remaining  # rebind-ok: this stream's window advances.
+        if emitted or text:
+            _write_field(choice, "text", emitted)
 
     async def _restore_content_window(
         self,
@@ -1446,7 +1536,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             chunk = self._chunk_for_choice(last_chunk, choice_index)
             if chunk is None:
                 continue
-            if tool_index is None:
+            if isinstance(chunk.choices[0], TextChoices):
+                chunk.choices[0].text = text
+            elif tool_index is None:
                 chunk.choices[0].delta.content = text
             else:
                 # The copy carried this chunk's own content and tool calls, both already
@@ -1470,7 +1562,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         choices: Final[tuple[object, ...]] = tuple(raw_choices)
         position: Final = next((at for at, choice in enumerate(choices) if _choice_index(choice) == index), 0)
         kept: Final = raw_choices[position]
-        if getattr(kept, "delta", None) is None:
+        if getattr(kept, "delta", None) is None and not isinstance(kept, TextChoices):
             return None
         kept.index = index
         # The terminal signal, if there was one, already went out with the real chunk.

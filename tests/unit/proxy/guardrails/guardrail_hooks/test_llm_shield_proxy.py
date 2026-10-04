@@ -19,7 +19,16 @@ from litellm.types.llms.openai import (
     OutputTextDoneEvent,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 
 def _guardrail(**overrides: object) -> LLMShieldProxyGuardrail:
@@ -388,6 +397,53 @@ class TestRequestCoverage:
         assert data["input"][1]["output"] == "sent to [EMAIL_1]"
 
     @pytest.mark.asyncio
+    async def test_responses_tool_output_parts_are_redacted(self):
+        """A function_call_output can carry its result as a list of input_text parts."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["sent to [EMAIL_1]"]})
+
+        data = {
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "c1",
+                    "output": [{"type": "input_text", "text": "sent to jane.doe@example.com"}],
+                },
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["sent to jane.doe@example.com"]
+        assert data["input"][0]["output"][0]["text"] == "sent to [EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_responses_custom_tool_call_input_is_redacted(self):
+        """A replayed custom_tool_call carries its payload in `input`, not `arguments`."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["email [EMAIL_1]"]})
+
+        data = {
+            "input": [
+                {"type": "custom_tool_call", "call_id": "c1", "name": "mail", "input": "email jane.doe@example.com"},
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert data["input"][0]["input"] == "email [EMAIL_1]"
+        assert data["input"][0]["name"] == "mail"
+
+    @pytest.mark.asyncio
+    async def test_responses_code_interpreter_code_is_redacted(self):
+        """A replayed code_interpreter_call carries the code the model wrote, which the reply side restores."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["send('[EMAIL_1]')"]})
+
+        data = {"input": [{"type": "code_interpreter_call", "id": "ci_1", "code": "send('jane.doe@example.com')"}]}
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert data["input"][0]["code"] == "send('[EMAIL_1]')"
+
+    @pytest.mark.asyncio
     async def test_anthropic_system_prompt_is_redacted(self):
         """/v1/messages carries its system prompt at the top level, not in messages."""
         guardrail = _guardrail()
@@ -550,6 +606,26 @@ class TestRequestCoverage:
         assert data["prompt"]["variables"]["customer"] == "[EMAIL_1]"
         assert data["prompt"]["id"] == "pmpt_123"
         assert data["prompt"]["version"] == "2"
+
+    @pytest.mark.asyncio
+    async def test_responses_typed_prompt_variables_are_redacted(self):
+        """A variable can be a typed input rather than a string; its `text` is caller text."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+
+        data = {
+            "prompt": {
+                "id": "pmpt_123",
+                "variables": {
+                    "customer": {"type": "input_text", "text": "jane.doe@example.com"},
+                    "logo": {"type": "input_image", "image_url": "https://example.com/logo.png"},
+                },
+            }
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert data["prompt"]["variables"]["customer"] == {"type": "input_text", "text": "[EMAIL_1]"}
+        assert data["prompt"]["variables"]["logo"]["image_url"] == "https://example.com/logo.png"
 
     @pytest.mark.asyncio
     async def test_completions_suffix_is_redacted(self):
@@ -720,9 +796,9 @@ class TestRequestCoverage:
         call = SimpleNamespace(function=SimpleNamespace(name="notify", arguments='{"to": "[EMAIL_1]"}'))
         reply = ModelResponse(choices=[Choices(message=Message(content=None, tool_calls=None))])
         reply.choices[0].message.tool_calls = [call]
-        await guardrail.async_post_call_success_hook(data=data, user_api_key_dict=None, response=reply)
+        restored = await guardrail.async_post_call_success_hook(data=data, user_api_key_dict=None, response=reply)
 
-        assert json.loads(call.function.arguments) == {"to": "ops@example.com"}
+        assert json.loads(restored.choices[0].message.tool_calls[0].function.arguments) == {"to": "ops@example.com"}
 
     def test_schema_nesting_past_the_bound_is_refused(self):
         schema: dict = {"type": "object", "description": "past-the-bound@example.com"}
@@ -773,9 +849,11 @@ class TestRestoration:
 
         block = SimpleNamespace(text="[EMAIL_1]")
         response = SimpleNamespace(output=[SimpleNamespace(content=[block])])
-        await guardrail.async_post_call_success_hook(data={"messages": []}, user_api_key_dict=None, response=response)
+        result = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
 
-        assert block.text == "a@b.com"
+        assert result.output[0].content[0].text == "a@b.com"
 
     @pytest.mark.asyncio
     async def test_anthropic_message_shape_is_restored(self):
@@ -1026,6 +1104,24 @@ class TestVaultIsolation:
 
         privileged_id = mock.call_args_list[0].kwargs["headers"]["X-Session-ID"]
         assert privileged_id not in json.dumps(data, default=str)
+
+    def test_responses_system_and_developer_items_are_privileged(self) -> None:
+        """Responses `input` carries system and developer turns as items, like Chat messages.
+
+        In the caller's vault, a caller could have the model echo a placeholder out of a
+        system message they cannot see and receive the plaintext behind it.
+        """
+        data = {
+            "input": [
+                {"role": "system", "content": "S"},
+                {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "D"}]},
+                {"role": "user", "content": "U"},
+            ]
+        }
+        caller, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
+
+        assert [text for text, _ in caller] == ["U"]
+        assert [text for text, _ in privileged] == ["S", "D"]
 
 
 class TestFailClosed:
@@ -1522,10 +1618,11 @@ class TestResponsesStreamRestoration:
             response=SimpleNamespace(output=[SimpleNamespace(content=[block]), call]),
         )
 
-        await _restore_stream(guardrail, [completed])
+        (out,) = await _restore_stream(guardrail, [completed])
 
-        assert block["text"] == "Mail a@example.com"
-        assert call.arguments == '{"to": "a@example.com"}'
+        restored_block, restored_call = out.response.output[0].content[0], out.response.output[1]
+        assert restored_block["text"] == "Mail a@example.com"
+        assert restored_call.arguments == '{"to": "a@example.com"}'
 
     @pytest.mark.asyncio
     async def test_streams_on_different_parts_do_not_share_a_window(self):
@@ -1552,9 +1649,9 @@ class TestResponsesStreamRestoration:
             type="response.reasoning_summary_part.done", item_id="rs_1", output_index=0, summary_index=0, part=part
         )
 
-        await _restore_stream(guardrail, [event])
+        (out,) = await _restore_stream(guardrail, [event])
 
-        assert part.text == "asked about a@example.com"
+        assert out.part.text == "asked about a@example.com"
 
     @pytest.mark.asyncio
     async def test_mcp_call_arguments_are_restored(self):
@@ -1586,4 +1683,145 @@ class TestResponsesStreamRestoration:
         out = await _restore_stream(guardrail, [audio])
 
         assert out == [audio]
+        assert shield.urls == []
+
+
+class TestResponseCacheIsolation:
+    """The reply LiteLLM caches must keep its placeholders.
+
+    Placeholders are numbered per request, so two callers' redacted requests can be
+    identical and share a cache key. LiteLLM keeps the provider's reply object -- for a
+    native Anthropic dict or an in-memory cache, the object itself -- so restoring it in
+    place would hand one caller's values to the next caller who hits that key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_cache_hit_is_restored_against_the_new_callers_vault(self):
+        cache = litellm.caching.caching.InMemoryCache()
+        provider_reply = {"type": "message", "content": [{"type": "text", "text": "Repeat [EMAIL_1]"}]}
+        cache.set_cache("redacted-request", provider_reply)
+
+        alice, _ = _shielded({"[EMAIL_1]": "alice@example.com"})
+        to_alice = await alice.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=cache.get_cache("redacted-request")
+        )
+        bob, _ = _shielded({"[EMAIL_1]": "bob@example.com"})
+        to_bob = await bob.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=cache.get_cache("redacted-request")
+        )
+
+        assert to_alice["content"][0]["text"] == "Repeat alice@example.com"
+        assert to_bob["content"][0]["text"] == "Repeat bob@example.com"
+        assert cache.get_cache("redacted-request")["content"][0]["text"] == "Repeat [EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_a_model_response_is_restored_as_a_copy(self):
+        """A reply as `acompletion` returns it, hidden params and all."""
+        reply = await litellm.acompletion(
+            model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}], mock_response="Mail [EMAIL_1]"
+        )
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@example.com"})
+
+        restored = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=reply
+        )
+
+        assert restored.choices[0].message.content == "Mail a@example.com"
+        assert reply.choices[0].message.content == "Mail [EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_responses_reply_is_restored_as_a_copy(self):
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@example.com"})
+        block = {"type": "output_text", "text": "Mail [EMAIL_1]"}
+        reply = SimpleNamespace(output=[SimpleNamespace(content=[block])])
+
+        restored = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=reply
+        )
+
+        assert restored.output[0].content[0]["text"] == "Mail a@example.com"
+        assert block["text"] == "Mail [EMAIL_1]"
+
+    @pytest.mark.asyncio
+    async def test_stream_chunks_are_restored_as_copies(self):
+        """LiteLLM assembles the reply it caches from the chunks it yielded."""
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@example.com"})
+        chunk = _chunk("Mail [EMAIL_1]", finish_reason="stop")
+        event = OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="Mail [EMAIL_1]",
+        )
+
+        out = await _restore_stream(guardrail, [chunk, event])
+
+        assert out[0].choices[0].delta.content == "Mail a@example.com"
+        assert chunk.choices[0].delta.content == "Mail [EMAIL_1]"
+        assert "Mail [EMAIL_1]" == event.delta
+
+
+class TestCompletionsRestoration:
+    """`/v1/completions` replies carry their text on the choice, with no message or delta."""
+
+    VAULT = {"[EMAIL_1]": "a@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_completions_reply_is_restored(self):
+        guardrail, _ = _shielded(self.VAULT)
+        reply = TextCompletionResponse(choices=[TextChoices(index=0, text="Mail [EMAIL_1]", finish_reason="stop")])
+
+        restored = await guardrail.async_post_call_success_hook(
+            data={"prompt": "x"}, user_api_key_dict=None, response=reply
+        )
+
+        assert restored.choices[0].text == "Mail a@example.com"
+
+    @pytest.mark.asyncio
+    async def test_completions_stream_is_restored_across_chunks(self):
+        guardrail, _ = _shielded(self.VAULT)
+        chunks = [
+            TextCompletionResponse(choices=[TextChoices(index=0, text="Mail [EMAI")]),
+            TextCompletionResponse(choices=[TextChoices(index=0, text="L_1] now", finish_reason="stop")]),
+        ]
+
+        out = await _restore_stream(guardrail, chunks)
+
+        assert "".join(chunk.choices[0].text for chunk in out) == "Mail a@example.com now"
+
+    @pytest.mark.asyncio
+    async def test_completions_stream_without_finish_reason_is_flushed(self):
+        guardrail, _ = _shielded(self.VAULT)
+        chunks = [TextCompletionResponse(choices=[TextChoices(index=0, text="Mail [EMAIL_1")])]
+
+        out = await _restore_stream(guardrail, chunks)
+
+        assert "".join(chunk.choices[0].text or "" for chunk in out) == "Mail [EMAIL_1"
+
+
+class TestProxyWiring:
+    def test_dashboard_config_model_is_exposed(self):
+        """The guardrail garden reads the provider's fields from `get_config_model`."""
+        model = LLMShieldProxyGuardrail.get_config_model()
+
+        assert model is not None
+        assert {"api_key", "api_base"} <= set(model.model_fields)
+
+    @pytest.mark.asyncio
+    async def test_the_deployment_hook_leaves_the_reply_for_the_cache_untouched(self):
+        """LiteLLM caches what the deployment hook returns, so restoring there caches plaintext.
+
+        The proxy's post-call hook, which runs after the cache write, restores model-level
+        guardrails instead.
+        """
+        guardrail, shield = _shielded({"[EMAIL_1]": "a@example.com"})
+        reply = ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content="[EMAIL_1]"))])
+
+        result = await guardrail.async_post_call_success_deployment_hook(
+            request_data={"messages": [], "guardrails": [GUARDRAIL_NAME]}, response=reply, call_type=None
+        )
+
+        assert result is None
+        assert reply.choices[0].message.content == "[EMAIL_1]"
         assert shield.urls == []
