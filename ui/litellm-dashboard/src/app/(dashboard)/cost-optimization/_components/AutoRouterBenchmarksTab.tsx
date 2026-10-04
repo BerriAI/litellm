@@ -76,10 +76,8 @@ const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
   const cheaper = stats.saved_pct != null && stats.saved_pct >= 0;
-  const completeCoverage = stats.savings_estimated_turns === stats.turns;
-  const coveredClassifierCost =
-    stats.savings_estimated_classifier_cost ?? (completeCoverage ? stats.classifier_cost : null);
-  const classifierCost = stats.baseline_spend == null ? null : coveredClassifierCost;
+  const classifierCost = stats.baseline_spend == null ? null : stats.savings_estimated_classifier_cost ?? null;
+  const comparedAll = stats.savings_estimated_turns === stats.turns;
   return (
     <Card className="overflow-hidden py-0">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -101,15 +99,16 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
               </Badge>
             )}
           </div>
-          {stats.baseline_spend != null && !completeCoverage && (
+          {stats.baseline_spend != null && !comparedAll && (
             <p className="text-center text-xs text-muted-foreground">
-              Savings based on {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()}{" "}
-              requests
+              Compared on {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()} requests;
+              adaptive and quality routers are excluded
             </p>
           )}
-          {stats.saved_spend != null && stats.baseline_spend == null && (
+          {stats.unattributed_saved_spend != null && (
             <p className="text-center text-xs text-muted-foreground">
-              Historical savings are included. Matching cost details are unavailable.
+              Per-router records differ from recorded savings by {usd(Math.abs(stats.unattributed_saved_spend))}, for
+              example history from before per-router tracking, so the baseline comparison is unavailable
             </p>
           )}
         </div>
@@ -118,7 +117,7 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
           <SpendRow
             label="Actual auto-router spend"
             value={stats.baseline_spend == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend)}
-            tooltip="Savings, actual spend, and baseline include historical and newer requests with recorded savings estimates. Requests without estimates are excluded. Actual spend includes classification costs."
+            tooltip="Auto-routed spend in the range, including classification costs, for complexity routers. Adaptive and quality routers are excluded. Baseline is this spend plus recorded savings."
           />
           <div className="mb-3 border-l-2 pl-4">
             <SpendRow
@@ -304,24 +303,34 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
       <TierTurnsChart view={view} autoRouters={autoRouters} />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric
-          label="Avg saved per session"
-          value={stats.saved_per_session == null ? "Unavailable" : usd(stats.saved_per_session)}
-          hint={`· ${stats.sessions.toLocaleString()} sessions`}
-        />
-        <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
-        <Metric label="Avg session length" value={durationLabel(stats.avg_session_seconds)} />
-        <Metric label="Avg tokens per session" value={formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)} />
-      </div>
+      <p className="text-xs text-muted-foreground">
+        Savings and spend count requests on the selected UTC days. Actual spend covers every request on complexity
+        routers, including LLM classification cost. Baseline is actual spend plus recorded savings, so savings can be
+        zero or negative.
+      </p>
 
       <p className="text-xs text-muted-foreground">
-        Savings, actual spend, and baseline compare the same historical and newer requests with recorded estimates,
-        including zero or negative savings. Requests without estimates are excluded. Savings are net of recorded LLM
-        classification cost. If historical cost details are unavailable, recorded savings remain visible without a
-        baseline or percentage. The range counts whole sessions that overlap it, so totals can differ from savings views
-        that group usage by UTC day.
+        Session metrics cover every session that overlaps the range, including its turns outside the range.
       </p>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Metric
+          label="Avg turns per session"
+          value={stats.avg_turns_per_session == null ? "Unavailable" : stats.avg_turns_per_session.toFixed(1)}
+          hint={`· ${stats.sessions.toLocaleString()} sessions`}
+        />
+        <Metric
+          label="Avg session length"
+          value={stats.avg_session_seconds == null ? "Unavailable" : durationLabel(stats.avg_session_seconds)}
+        />
+        <Metric
+          label="Avg tokens per session"
+          value={
+            stats.avg_tokens_per_session == null
+              ? "Unavailable"
+              : formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)
+          }
+        />
+      </div>
 
       <div className="space-y-4">
         <div className="flex flex-wrap items-baseline gap-2">

@@ -1,0 +1,44 @@
+services:
+  litellm:
+    image: ${LITELLM_IMAGE:?Set the native-enabled gateway image}
+    environment:
+      LITELLM_ADMIN_AGENT_URL: http://liteadmin:10000
+      ADMIN_AGENT_SERVICE_TOKEN: ${ADMIN_AGENT_SERVICE_TOKEN:?Set a shared worker token}
+      PROXY_BASE_URL: ${LITELLM_PUBLIC_URL:?Set the existing HTTPS gateway URL}
+
+  liteadmin:
+    image: ${LITELLM_IMAGE:?Set the same native-enabled image used by the gateway}
+    command: ["--admin-agent"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 75s
+    environment:
+      CONNECTION_AUTH_MODE: native
+      LITELLM_BASE_URL: ${LITELLM_PUBLIC_URL:?Set the existing HTTPS gateway URL}
+      LITELLM_MODEL: ${LITELLM_ADMIN_MODEL:?Set a gateway model with tool support}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:?Install the Slack app}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:?Enable Socket Mode}
+      SLACK_WORKSPACE_ID: ${SLACK_WORKSPACE_ID:?Set the Slack workspace ID}
+      ADMIN_AGENT_SERVICE_TOKEN: ${ADMIN_AGENT_SERVICE_TOKEN:?Set a shared worker token}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?Set a persistent Fernet key}
+      STATE_DB: /var/data/events.sqlite3
+      ADMIN_READ_ONLY: ${ADMIN_READ_ONLY:-false}
+      OPENAI_AGENTS_DISABLE_TRACING: "1"
+    volumes:
+      - liteadmin_state:/var/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    healthcheck:
+      test: ["CMD", "/opt/liteadmin/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:10000/readyz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+volumes:
+  liteadmin_state:

@@ -357,11 +357,7 @@ class GuardrailRequestSnapshot:
         if fingerprint is None:
             return None
         return GuardrailRequestSnapshot(
-            body=MappingProxyType(
-                _CHAT_REQUEST_ADAPTER.validate_python(
-                    independent_snapshot(dict(body))  # mutable-ok: snapshot helper requires a plain dictionary
-                )
-            ),
+            body=MappingProxyType(_CHAT_REQUEST_ADAPTER.validate_python(independent_snapshot(dict(body)))),
             fingerprint=fingerprint,
         )
 
@@ -813,7 +809,7 @@ def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowE
     except ValidationError as e:
         verbose_logger.debug("shadow_eval: skipping unsamplable job row: %s", e)
         return None
-    return job.model_copy(update={"attempts": attempts, "spend": spend})  # mutable-ok: pydantic update payload
+    return job.model_copy(update={"attempts": attempts, "spend": spend})
 
 
 _jobs_cache: Final = InMemoryCache(max_size_in_memory=4, default_ttl=_JOBS_CACHE_TTL_SECONDS)
@@ -864,9 +860,9 @@ class ShadowEvalLogger(CustomLogger):
             return _EMPTY_JOBS
         try:
             records: Final = await prisma.db.litellm_shadowevaljob.find_many(
-                where={  # mutable-ok: Prisma filter
+                where={
                     "stopped_at": None,
-                    "ends_at": {"gt": datetime.now(timezone.utc)},  # mutable-ok: Prisma filter
+                    "ends_at": {"gt": datetime.now(timezone.utc)},
                 },
             )
             grouped: Final = (
@@ -874,12 +870,12 @@ class ShadowEvalLogger(CustomLogger):
                     by=["job_id"],
                     count=True,
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},
-                    where={"job_id": {"in": [str(record.id) for record in records]}},  # mutable-ok: Prisma filter
+                    where={"job_id": {"in": [str(record.id) for record in records]}},
                 )
                 if records
                 else ()
             )
-            attempt_stats: Final = {  # mutable-ok: frozen snapshot of the grouped read
+            attempt_stats: Final = {
                 str(row["job_id"]): (
                     int(row["_count"]["_all"]),
                     _leg_eval_spend(row["_sum"] or _EMPTY_METADATA),
@@ -952,13 +948,13 @@ class ShadowEvalLogger(CustomLogger):
             payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")  # pyright: ignore[reportAssignmentType]  # untyped callback kwargs
             if payload is None:
                 return
-            raw_meta: Final = get_litellm_metadata_from_kwargs(dict(kwargs))  # mutable-ok: helper needs dict
+            raw_meta: Final = get_litellm_metadata_from_kwargs(dict(kwargs))
             request_metadata: Final = raw_meta if isinstance(raw_meta, Mapping) else _EMPTY_METADATA
             if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
                 return  # internal sub-call (our own shadow/judge, a classifier), not user traffic
             # redaction rewrites logged content before callbacks run, so this hook
             # only ever sees placeholders for a redacted request
-            if should_redact_message_logging(dict(kwargs)):  # mutable-ok: predicate takes a plain dict
+            if should_redact_message_logging(dict(kwargs)):
                 return
             metadata: Final = payload.get("metadata") or _EMPTY_METADATA
             # Each identity the request resolved to is a candidate target; JWT-auth
@@ -999,7 +995,7 @@ class ShadowEvalLogger(CustomLogger):
             sample: Final = _judgeable_sample(
                 ops,
                 sample_kwargs,
-                MappingProxyType(dict(payload.get("model_parameters") or {})),  # mutable-ok: frozen snapshot
+                MappingProxyType(dict(payload.get("model_parameters") or {})),
                 response_obj,
             )
             if sample is None:
@@ -1246,7 +1242,7 @@ class ShadowEvalLogger(CustomLogger):
             return
         try:
             await prisma.db.litellm_shadowevalattempt.create(
-                data={  # mutable-ok: Prisma payload
+                data={
                     "job_id": job.id,
                     "request_id": request_id,
                     "router_name": router_name,
@@ -1287,12 +1283,10 @@ class ShadowEvalLogger(CustomLogger):
         try:
             response: Final = await router.acompletion(
                 model=target_model,
-                messages=[  # mutable-ok: provider transforms rewrite messages in place, so the router gets its own copy
-                    dict(m) for m in messages
-                ],  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
+                messages=[dict(m) for m in messages],  # pyright: ignore[reportArgumentType]  # snapshot of the SDK's own message dicts
                 metadata=shadow_metadata,
                 num_retries=0,
-                fallbacks=[],  # mutable-ok: SDK kwarg; a failed shadow is a recorded error, never a spend multiplier
+                fallbacks=[],
                 **shadow_params,
             )
         except Exception as e:  # noqa: BLE001  # provider errors become error rows, not crashes
@@ -1341,8 +1335,8 @@ class ShadowEvalLogger(CustomLogger):
             if m.get("content") is not None
         )
         judge_metadata: Final = sanitized_forwardable_call_metadata(parent_metadata, SHADOW_EVAL_JUDGE_CALL_ORIGIN)
-        judge_messages: Final = [  # mutable-ok: SDK takes a list
-            {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},  # mutable-ok: SDK message
+        judge_messages: Final = [
+            {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": _judge_user_prompt(conversation, response_a, response_b, _tool_definitions_text(tools)),

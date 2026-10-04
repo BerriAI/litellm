@@ -12,10 +12,13 @@ export type ModelMetric = {
   failed_requests: number;
 };
 export type DailyMetric = ModelMetric & { date: string };
+type Usage = Pick<ModelMetric, "spend" | "prompt_tokens" | "completion_tokens" | "requests">;
+export type DailyTotal = Usage & { date: string };
 export type ModelInsightsResponse = {
   start_date: string;
   end_date: string;
   daily: DailyMetric[];
+  daily_totals: DailyTotal[];
   top_models: ModelMetric[];
 };
 export type TaskSummary = {
@@ -30,10 +33,13 @@ export type TaskSummary = {
 export type ModelInsightTasksResponse = { start_date: string; end_date: string; tasks: TaskSummary[] };
 
 export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
-const DAY_MS = 86_400_000;
-const WEEK_DAYS = 7;
+export type Granularity = "day" | "week";
 
-export const metricValue = (row: ModelMetric, metric: Metric) => {
+const DAY_MS = 86_400_000;
+const BUCKET_DAYS: Record<Granularity, number> = { day: 1, week: 7 };
+const MIN_VISIBLE_BUCKETS: Record<Granularity, number> = { day: 30, week: 12 };
+
+export const metricValue = (row: Usage, metric: Metric) => {
   if (metric === "requests") return row.requests;
   if (metric === "spend") return row.spend;
   return row.prompt_tokens + row.completion_tokens;
@@ -66,19 +72,37 @@ export const modelOrder = (rows: DailyMetric[], metric: Metric) => {
   return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([model]) => model);
 };
 
-export const buildWeeklySeries = (rows: DailyMetric[], models: string[], metric: Metric, range: DateRange) => {
-  const weekMs = WEEK_DAYS * DAY_MS;
-  const origin = toDay(range.start);
-  const weekCount = Math.floor((toDay(range.end) - origin) / weekMs) + 1;
-  const buckets = Array.from({ length: weekCount }, (_, week) => ({
-    date: isoDay(origin + week * weekMs),
+export type SeriesWindow = DateRange & { granularity: Granularity };
+
+export const buildSeries = (rows: DailyMetric[], models: string[], metric: Metric, window: SeriesWindow) => {
+  const bucketMs = BUCKET_DAYS[window.granularity] * DAY_MS;
+  const origin = toDay(window.start);
+  const bucketCount = Math.floor((toDay(window.end) - origin) / bucketMs) + 1;
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+    date: isoDay(origin + index * bucketMs),
     ...Object.fromEntries(models.map((model) => [model, 0])),
   })) as Record<string, number | string>[];
   for (const row of rows) {
-    const bucket = buckets[Math.floor((toDay(row.date) - origin) / weekMs)];
+    const bucket = buckets[Math.floor((toDay(row.date) - origin) / bucketMs)];
     if (bucket) bucket[row.model_group] = Number(bucket[row.model_group] ?? 0) + metricValue(row, metric);
   }
-  return buckets;
+  const firstActive = buckets.findIndex((bucket) => models.some((model) => Number(bucket[model]) > 0));
+  const visibleFrom = Math.min(
+    firstActive === -1 ? buckets.length : firstActive,
+    buckets.length - MIN_VISIBLE_BUCKETS[window.granularity],
+  );
+  return buckets.slice(Math.max(0, visibleFrom));
+};
+
+export const buildBucketTotals = (totals: DailyTotal[], metric: Metric, window: SeriesWindow) => {
+  const bucketMs = BUCKET_DAYS[window.granularity] * DAY_MS;
+  const origin = toDay(window.start);
+  const byBucket = new Map<string, number>();
+  for (const row of totals) {
+    const bucket = isoDay(origin + Math.floor((toDay(row.date) - origin) / bucketMs) * bucketMs);
+    byBucket.set(bucket, (byBucket.get(bucket) ?? 0) + metricValue(row, metric));
+  }
+  return byBucket;
 };
 
 const shareByModel = (rows: { model_group: string; provider: string }[], values: number[]) => {

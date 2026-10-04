@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import inspect
 import json
 import logging
 import threading
@@ -21,7 +22,9 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
 )
+from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.files.transformation import BaseFilesConfig
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
 from litellm.llms.brave.search.transformation import BraveSearchConfig
@@ -40,6 +43,11 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
+from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
+from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.llms.mistral.files.transformation import MistralFilesConfig
+from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
+from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
@@ -593,7 +601,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
 
     # Mock the config
     mock_config = Mock()
-    mock_config.validate_anthropic_messages_environment = Mock(
+    mock_config.avalidate_anthropic_messages_environment = AsyncMock(
         return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
     )
     mock_config.transform_anthropic_messages_request = Mock(
@@ -640,7 +648,7 @@ async def test_async_anthropic_messages_handler_extra_headers():
             captured_headers.update(kwargs.get("headers", {}))
             return ({"x-api-key": "test-key"}, "https://api.anthropic.com")
 
-        mock_config.validate_anthropic_messages_environment = capture_validate
+        mock_config.avalidate_anthropic_messages_environment = AsyncMock(side_effect=capture_validate)
 
         try:
             await handler.async_anthropic_messages_handler(
@@ -955,7 +963,7 @@ async def test_async_anthropic_messages_handler_passes_litellm_metadata():
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
-    mock_config.validate_anthropic_messages_environment = Mock(
+    mock_config.avalidate_anthropic_messages_environment = AsyncMock(
         return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
     )
     mock_config.transform_anthropic_messages_request = Mock(
@@ -1034,7 +1042,7 @@ async def test_async_anthropic_messages_handler_forwards_router_model_info():
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
-    mock_config.validate_anthropic_messages_environment = Mock(
+    mock_config.avalidate_anthropic_messages_environment = AsyncMock(
         return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
     )
     mock_config.transform_anthropic_messages_request = Mock(
@@ -1126,7 +1134,7 @@ async def test_async_anthropic_messages_handler_header_priority():
             captured_headers.update(kwargs.get("headers", {}))
             return ({"x-api-key": "test-key"}, "https://api.anthropic.com")
 
-        mock_config.validate_anthropic_messages_environment = capture_validate
+        mock_config.avalidate_anthropic_messages_environment = AsyncMock(side_effect=capture_validate)
         mock_config.transform_anthropic_messages_request = Mock(
             return_value={"model": "claude-3-opus-20240229", "messages": []}
         )
@@ -1165,7 +1173,7 @@ async def test_async_anthropic_messages_handler_drops_top_level_and_nested_param
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
-    mock_config.validate_anthropic_messages_environment = Mock(
+    mock_config.avalidate_anthropic_messages_environment = AsyncMock(
         return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
     )
 
@@ -1378,9 +1386,7 @@ def test_sync_delete_responses_sets_json_content_type():
         ({}, True, None, None),
     ],
 )
-def test_resolve_anthropic_messages_timeout(
-    monkeypatch, litellm_params_kwargs, stream, global_timeout, expected
-):
+def test_resolve_anthropic_messages_timeout(monkeypatch, litellm_params_kwargs, stream, global_timeout, expected):
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
     if global_timeout is None:
@@ -1396,9 +1402,7 @@ def test_resolve_anthropic_messages_timeout(
         )
     else:
         monkeypatch.setattr("litellm.request_timeout", global_timeout, raising=False)
-        monkeypatch.setattr(
-            "litellm.request_timeout_explicitly_set", True, raising=False
-        )
+        monkeypatch.setattr("litellm.request_timeout_explicitly_set", True, raising=False)
 
     resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
         litellm_params=GenericLiteLLMParams(**litellm_params_kwargs),
@@ -1419,13 +1423,11 @@ async def test_async_anthropic_messages_handler_forwards_request_timeout(monkeyp
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
-    mock_config.validate_anthropic_messages_environment = Mock(
+    mock_config.avalidate_anthropic_messages_environment = AsyncMock(
         return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
     )
     mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
-    mock_config.transform_anthropic_messages_request = Mock(
-        return_value={"model": "claude", "messages": []}
-    )
+    mock_config.transform_anthropic_messages_request = Mock(return_value={"model": "claude", "messages": []})
     mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
     mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
     mock_config.max_retry_on_anthropic_messages_http_error = 1
@@ -1467,13 +1469,11 @@ async def test_async_anthropic_messages_handler_forwards_stream_timeout(monkeypa
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
-    mock_config.validate_anthropic_messages_environment = Mock(
+    mock_config.avalidate_anthropic_messages_environment = AsyncMock(
         return_value=({"x-api-key": "k"}, "https://api.anthropic.com")
     )
     mock_config.should_filter_anthropic_beta_headers = Mock(return_value=False)
-    mock_config.transform_anthropic_messages_request = Mock(
-        return_value={"model": "claude", "messages": []}
-    )
+    mock_config.transform_anthropic_messages_request = Mock(return_value={"model": "claude", "messages": []})
     mock_config.get_complete_url = Mock(return_value="https://api.anthropic.com/v1/messages")
     mock_config.sign_request = Mock(return_value=({"x-api-key": "k"}, None))
     mock_config.max_retry_on_anthropic_messages_http_error = 1
@@ -1875,7 +1875,7 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
     handler = BaseLLMHTTPHandler()
 
     mock_config = Mock()
-    mock_config.validate_anthropic_messages_environment = Mock(
+    mock_config.avalidate_anthropic_messages_environment = AsyncMock(
         return_value=({"x-api-key": "sk-test"}, "https://api.anthropic.com")
     )
     mock_config.transform_anthropic_messages_request = Mock(
@@ -1883,7 +1883,13 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
     )
     mock_config.sign_request = Mock(return_value=({}, None))
 
-    fake_raw_response = {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "stop_reason": "end_turn"}
+    fake_raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "stop_reason": "end_turn",
+    }
     mock_config.transform_anthropic_messages_response = Mock(return_value=fake_raw_response)
 
     mock_logging_obj = Mock()
@@ -1903,10 +1909,17 @@ async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks(
     mock_httpx_response.status_code = 200
 
     with (
-        patch.object(handler, "_async_post_anthropic_messages_with_http_error_retry", new=AsyncMock(return_value=mock_httpx_response)),
+        patch.object(
+            handler,
+            "_async_post_anthropic_messages_with_http_error_retry",
+            new=AsyncMock(return_value=mock_httpx_response),
+        ),
         patch.object(handler, "_call_agentic_completion_hooks", side_effect=fake_agentic_hooks),
         patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"),
-        patch("litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers", return_value=None),
+        patch(  # test-quality-ok: the proxy wiring under test is what this patches
+            "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers",
+            return_value=None,
+        ),
     ):
         result = await handler.async_anthropic_messages_handler(
             model="claude-haiku",
@@ -2239,7 +2252,9 @@ def test_audio_transcriptions_sends_dict_data_as_json_body():
     form-encodes it and silently ignores json=; JSON-body providers (e.g.
     Google Speech-to-Text) need an application/json body."""
     captured = {}
-    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured))))
+    client = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_json_transcription_request(captured)))
+    )
 
     response = BaseLLMHTTPHandler().audio_transcriptions(
         client=client,
@@ -2398,6 +2413,105 @@ def test_sync_retrieve_file_content_raises_on_http_error():
     assert exc_info.value.status_code == 404
 
 
+_FILE_CONTENT_WIF_ENV = {
+    "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_llm_http_handler_seam",
+    "ANTHROPIC_ORGANIZATION_ID": "org-llm-http-handler-seam",
+    "ANTHROPIC_IDENTITY_TOKEN": "llm-http-handler-seam-inline-jwt",
+}
+
+
+class _BlockingWifPoster:
+    """A token-endpoint poster that blocks until released, so the test can prove
+    the exchange ran off the event loop's own thread instead of freezing it."""
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.thread_ids = []
+
+    def post(self, url, *, content, headers, timeout):
+        self.thread_ids.append(threading.get_ident())
+        self.release.wait(timeout=5)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "sk-ant-oat01-llm-http-handler-seam",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_retrieve_file_content_wif_exchange_does_not_block_event_loop(monkeypatch):
+    """Regression (Greptile P1): async_retrieve_file_content called the synchronous
+    validate_environment directly, so a cold WIF mint on this call site froze the
+    event loop until the exchange finished. It must resolve credentials through the
+    async facade instead."""
+    from litellm.llms.anthropic import common_utils as anthropic_common_utils
+    from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
+    from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
+    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in _FILE_CONTENT_WIF_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    poster = _BlockingWifPoster()
+    engine = JwtBearerTokenExchangeEngine(poster=poster)
+    sync_calls = []
+
+    def sync_shim(litellm_params, api_base, model):
+        sync_calls.append(model)
+        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    async def async_shim(litellm_params, api_base, model):
+        return await aget_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", sync_shim)
+    monkeypatch.setattr(anthropic_common_utils, "aget_anthropic_wif_token", async_shim)
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=httpx.Response(status_code=200, content=b"file bytes"))
+
+    ticks = []
+
+    async def ticker():
+        for i in range(20):
+            await asyncio.sleep(0.005)
+            ticks.append(i)
+
+    ticker_task = asyncio.create_task(ticker())
+    await asyncio.sleep(0.02)
+
+    retrieve_task = asyncio.create_task(
+        handler.async_retrieve_file_content(
+            file_content_request={"file_id": "file-abc"},
+            provider_config=AnthropicFilesConfig(),
+            litellm_params={},
+            headers={},
+            logging_obj=Mock(),
+            client=client,
+        )
+    )
+    await asyncio.sleep(0.05)
+    # The ticker kept advancing while the token exchange was still blocked on
+    # poster.release, proving the exchange did not run inline on the event loop.
+    assert len(ticks) > 0
+    assert not retrieve_task.done()
+
+    poster.release.set()
+    await retrieve_task
+    await ticker_task
+
+    assert sync_calls == []
+    assert poster.thread_ids
+    assert poster.thread_ids[0] != threading.get_ident()
+    sent_headers = client.get.call_args.kwargs["headers"]
+    assert sent_headers["authorization"] == "Bearer sk-ant-oat01-llm-http-handler-seam"
+
+
 _UPSTREAM_NOT_FOUND_BODY = {
     "error": {
         "message": "Response with id 'resp_abc' not found.",
@@ -2545,9 +2659,7 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     ok_response = httpx.Response(200, json={"id": "msg_1"}, request=httpx.Request("POST", request_url))
 
     class FakeAsyncClient:
-        async def post(
-            self, url, headers, data, stream=False, logging_obj=None, timeout=None
-        ):
+        async def post(self, url, headers, data, stream=False, logging_obj=None, timeout=None):
             posts.append({"headers": dict(headers), "data": data})
             return invalid_signature_response if len(posts) == 1 else ok_response
 
@@ -2926,7 +3038,7 @@ async def test_async_anthropic_messages_handler_carries_deployment_vertex_locati
             custom_llm_provider="vertex_ai",
         )
         mock_config = Mock()
-        mock_config.validate_anthropic_messages_environment = Mock(
+        mock_config.avalidate_anthropic_messages_environment = AsyncMock(
             return_value=({"authorization": "Bearer t"}, "https://us-east5-aiplatform.googleapis.com")
         )
         mock_config.transform_anthropic_messages_request = Mock(
@@ -3440,6 +3552,123 @@ async def test_a_provider_that_keeps_rejecting_is_not_retried_forever_on_the_asy
             )
 
     assert len(recorder.bodies) == 2
+
+
+def _async_client_returning(response: Mock) -> AsyncMock:
+    client = AsyncMock(spec=AsyncHTTPHandler)
+    client.post.return_value = response
+    return client
+
+
+@pytest.mark.asyncio
+async def test_create_file_async_awaits_the_provider_credential_hook_instead_of_blocking():
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.validate_environment.side_effect = AssertionError("sync validate_environment ran on the event loop")
+    provider_config.avalidate_environment = AsyncMock(return_value={"x-api-key": "federated"})
+    provider_config.get_complete_file_url.return_value = "https://files.example/v1/files"
+    provider_config.transform_create_file_request.return_value = {"file": ("batch.jsonl", b"{}", "application/jsonl")}
+    file_object = object()
+    provider_config.transform_create_file_response.return_value = file_object
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    result = await BaseLLMHTTPHandler().create_file(
+        create_file_data={"file": b"{}", "purpose": "batch"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        _is_async=True,
+        client=client,
+    )
+
+    assert result is file_object
+    provider_config.validate_environment.assert_not_called()
+    provider_config.avalidate_environment.assert_awaited_once()
+    assert client.post.call_args.kwargs["headers"] == {"x-api-key": "federated"}
+    assert client.post.call_args.kwargs["url"] == "https://files.example/v1/files"
+
+
+@pytest.mark.asyncio
+async def test_create_batch_async_validates_credentials_off_the_event_loop():
+    provider_config = Mock(spec=BaseBatchesConfig)
+    provider_config.validate_environment.side_effect = lambda **_: {"x-validated-on": str(threading.get_ident())}
+    provider_config.get_complete_batch_url.return_value = "https://batches.example/v1/messages/batches"
+    provider_config.transform_create_batch_request.return_value = {"requests": []}
+    batch = object()
+    provider_config.transform_create_batch_response.return_value = batch
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    result = await BaseLLMHTTPHandler().create_batch(
+        create_batch_data={"input_file_id": "file_1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        litellm_params={},
+        provider_config=provider_config,
+        headers={},
+        api_base=None,
+        api_key=None,
+        logging_obj=Mock(),
+        _is_async=True,
+        client=client,
+        model="claude-sonnet-4-5",
+    )
+
+    assert result is batch
+    validated_on = client.post.call_args.kwargs["headers"]["x-validated-on"]
+    assert validated_on != str(threading.get_ident())
+    assert client.post.call_args.kwargs["url"] == "https://batches.example/v1/messages/batches"
+
+
+@pytest.mark.asyncio
+async def test_create_file_says_which_setting_is_missing_when_the_provider_resolves_no_url():
+    """A provider that cannot work out where its files endpoint lives returns no URL, which used to
+    be posted as-is: the caller saw an httpx error about an invalid URL and no mention of api_base."""
+    provider_config = Mock(spec=BaseFilesConfig)
+    provider_config.avalidate_environment = AsyncMock(return_value={})
+    provider_config.get_complete_file_url.return_value = None
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    with pytest.raises(ValueError, match="api_base is required for create_file"):
+        await BaseLLMHTTPHandler().create_file(
+            create_file_data={"file": b"{}", "purpose": "batch"},
+            litellm_params={},
+            provider_config=provider_config,
+            headers={},
+            api_base=None,
+            api_key=None,
+            logging_obj=Mock(),
+            _is_async=True,
+            client=client,
+        )
+
+    client.post.assert_not_called()
+    provider_config.transform_create_file_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_batch_says_which_setting_is_missing_when_the_provider_resolves_no_url():
+    """Same on the batches path, which resolves its URL the same way."""
+    provider_config = Mock(spec=BaseBatchesConfig)
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_batch_url.return_value = None
+    client = _async_client_returning(Mock(spec=httpx.Response))
+
+    with pytest.raises(ValueError, match="api_base is required for create_batch"):
+        await BaseLLMHTTPHandler().create_batch(
+            create_batch_data={"input_file_id": "file_1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+            litellm_params={},
+            provider_config=provider_config,
+            headers={},
+            api_base=None,
+            api_key=None,
+            logging_obj=Mock(),
+            _is_async=True,
+            client=client,
+            model="claude-sonnet-4-5",
+        )
+
+    client.post.assert_not_called()
+    provider_config.transform_create_batch_request.assert_not_called()
 
 
 CONTAINER_NOT_FOUND_BODY = {
@@ -4302,3 +4531,231 @@ async def test_async_text_to_speech_handler_records_upstream_response_headers():
 
     assert response.content == b"audio-bytes"
     _assert_upstream_headers_recorded(response)
+
+
+async def _get_by_id_with_upstream(handler_name: str, upstream_response: httpx.Response) -> object:
+    async_client: Final = AsyncHTTPHandler()
+    await async_client.close()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: upstream_response))
+    handler: Final = BaseLLMHTTPHandler()
+    if handler_name == "get_eval":
+        return await handler.async_get_eval_handler(
+            url="https://api.example.test/v1/evals/eval_missing",
+            evals_api_provider_config=OpenAIEvalsConfig(),
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=Mock(),
+            client=async_client,
+        )
+    return await handler.async_get_skill_handler(
+        url="https://api.example.test/v1/skills/skill_missing",
+        skills_api_provider_config=AnthropicSkillsConfig(),
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=async_client,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handler_name", ("get_eval", "get_skill"))
+@pytest.mark.parametrize("status_code", (400, 401, 404, 429, 503))
+async def test_get_by_id_handlers_raise_the_provider_error_status(handler_name: str, status_code: int) -> None:
+    upstream_response: Final = httpx.Response(status_code, json={"error": {"message": "No such object"}})
+
+    with pytest.raises(BaseLLMException) as error:
+        await _get_by_id_with_upstream(handler_name, upstream_response)
+
+    assert error.value.status_code == status_code
+    assert "No such object" in error.value.message
+
+
+def _clients_answering_with(upstream_response: httpx.Response) -> tuple[HTTPHandler, AsyncHTTPHandler]:
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda _: upstream_response)))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: upstream_response))
+    return sync_client, async_client
+
+
+def _call_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncHTTPHandler) -> object:
+    handler: Final = BaseLLMHTTPHandler()
+    vector_store_params: Final = GenericLiteLLMParams(api_base="https://api.example.test/v1", api_key="sk-test")
+    files_params: Final = {"api_base": "https://api.example.test", "api_key": "sk-test"}
+    match name:
+        case "vector_store_retrieve":
+            return handler.vector_store_retrieve_handler(
+                vector_store_id="vs_missing",
+                vector_store_provider_config=OpenAIVectorStoreConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "vector_store_list":
+            return handler.vector_store_list_handler(
+                after=None,
+                before=None,
+                limit=None,
+                order=None,
+                vector_store_provider_config=OpenAIVectorStoreConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "vector_store_file_list":
+            return handler.vector_store_file_list_handler(
+                vector_store_id="vs_missing",
+                query_params={},
+                vector_store_files_provider_config=OpenAIVectorStoreFilesConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "vector_store_file_retrieve":
+            return handler.vector_store_file_retrieve_handler(
+                vector_store_id="vs_missing",
+                file_id="file_missing",
+                vector_store_files_provider_config=OpenAIVectorStoreFilesConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "file_retrieve":
+            return handler.retrieve_file(
+                file_id="file_missing",
+                provider_config=MistralFilesConfig(),
+                litellm_params=files_params,
+                headers={},
+                logging_obj=Mock(),
+                _is_async=is_async,
+                client=client,
+            )
+        case "vector_store_file_content":
+            return handler.vector_store_file_content_handler(
+                vector_store_id="vs_missing",
+                file_id="file_missing",
+                vector_store_files_provider_config=OpenAIVectorStoreFilesConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_list":
+            return handler.list_evals_handler(
+                url="https://api.example.test/v1/evals",
+                query_params={},
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_get":
+            return handler.get_eval_handler(
+                url="https://api.example.test/v1/evals/eval_missing",
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_run_list":
+            return handler.list_runs_handler(
+                url="https://api.example.test/v1/evals/eval_missing/runs",
+                query_params={},
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_run_get":
+            return handler.get_run_handler(
+                url="https://api.example.test/v1/evals/eval_missing/runs/run_missing",
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "skill_list":
+            return handler.list_skills_handler(
+                url="https://api.example.test/v1/skills",
+                query_params={},
+                skills_api_provider_config=AnthropicSkillsConfig(),
+                custom_llm_provider="anthropic",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "skill_get":
+            return handler.get_skill_handler(
+                url="https://api.example.test/v1/skills/skill_missing",
+                skills_api_provider_config=AnthropicSkillsConfig(),
+                custom_llm_provider="anthropic",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case _:
+            return handler.list_files(
+                purpose=None,
+                provider_config=MistralFilesConfig(),
+                litellm_params=files_params,
+                headers={},
+                logging_obj=Mock(),
+                _is_async=is_async,
+                client=client,
+            )
+
+
+async def _run_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncHTTPHandler) -> object:
+    result: Final = _call_lookup_handler(name, is_async, client)
+    return await result if inspect.isawaitable(result) else result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name",
+    (
+        "vector_store_retrieve",
+        "vector_store_list",
+        "vector_store_file_list",
+        "vector_store_file_retrieve",
+        "vector_store_file_content",
+        "file_retrieve",
+        "file_list",
+        "eval_list",
+        "eval_get",
+        "eval_run_list",
+        "eval_run_get",
+        "skill_list",
+        "skill_get",
+    ),
+)
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("status_code", (404, 503))
+async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_async: bool, status_code: int) -> None:
+    sync_client, async_client = _clients_answering_with(
+        httpx.Response(status_code, json={"error": {"message": "No such object"}})
+    )
+
+    with pytest.raises(BaseLLMException) as error:
+        await _run_lookup_handler(name, is_async, async_client if is_async else sync_client)
+
+    assert error.value.status_code == status_code
+    assert "No such object" in error.value.message
