@@ -2961,11 +2961,18 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        # A frame that repeats the connection's public alias (model_group) must
-        # reuse the router-resolved self.model; passing the alias raw to
-        # litellm.aresponses fails in get_llm_provider. A genuinely different
-        # provider-prefixed per-frame model is still honored.
         requested_model: Final[str | None] = _optional_str(call_kwargs.pop("model", None))
+        authorized_models: Final = (self.model, self.model_group, f"{self.custom_llm_provider}/{self.model}")
+        if (
+            self.user_api_key_dict is not None
+            and requested_model is not None
+            and requested_model not in authorized_models
+        ):
+            await self._send_error(
+                "Changing models requires a new authorized WebSocket connection",
+                error_type="invalid_request_error",
+            )
+            return
         model: Final[str] = (
             self.model if requested_model is None or requested_model == self.model_group else requested_model
         )

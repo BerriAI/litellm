@@ -7808,7 +7808,10 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
-    litellm.ClinePassConfig.validate_moderation(model=model, custom_llm_provider=kwargs.get("custom_llm_provider"))
+    custom_llm_provider: Final[object] = kwargs.get("custom_llm_provider")
+    litellm.ClinePassConfig.validate_moderation(
+        model=model, custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    )
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 

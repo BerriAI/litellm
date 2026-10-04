@@ -23,6 +23,7 @@ from litellm.llms.clinepass.chat.transformation import (
     _unwrap_response_envelope,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.responses.main import _aresponses_websocket
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -127,9 +128,10 @@ async def test_async_chat_sends_only_clinepass_credentials(monkeypatch, unrelate
 
 @pytest.mark.parametrize("credential_source", ["missing", "environment", "explicit"])
 @pytest.mark.parametrize("connection_provider", ["clinepass", "mistral"])
+@pytest.mark.parametrize("changed_model", [None, "openai/gpt-4o", "clinepass/unauthorized-model"])
 @pytest.mark.asyncio
 async def test_managed_responses_websocket_sends_only_clinepass_credentials(
-    monkeypatch, unrelated_credentials, credential_source, connection_provider
+    monkeypatch, unrelated_credentials, credential_source, connection_provider, changed_model
 ):
     if credential_source == "missing":
         monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
@@ -142,7 +144,29 @@ async def test_managed_responses_websocket_sends_only_clinepass_credentials(
     )
     sent = []
     received = []
-    lifecycle = iter(({"type": "websocket.connect"}, {"type": "websocket.disconnect", "code": 1000}))
+    foreign_requests = []
+    lifecycle = iter(
+        (
+            {"type": "websocket.connect"},
+            *(
+                (
+                    {
+                        "type": "websocket.receive",
+                        "text": json.dumps({"type": "response.create", "model": changed_model, "input": "hi"}),
+                    },
+                )
+                if changed_model is not None
+                else ()
+            ),
+            {"type": "websocket.disconnect", "code": 1000},
+        )
+    )
+
+    async def block_foreign_request(self, request, *args, **kwargs):
+        foreign_requests.append(str(request.url))
+        raise AssertionError("Unexpected provider HTTP request")
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", block_foreign_request)
 
     async def receive():
         return next(lifecycle)
@@ -179,6 +203,11 @@ async def test_managed_responses_websocket_sends_only_clinepass_credentials(
             model=f"{connection_provider}/deepseek-v4-flash",
             websocket=websocket,
             api_key=connection_key,
+            user_api_key_dict=(
+                UserAPIKeyAuth(models=[f"{connection_provider}/deepseek-v4-flash"])
+                if changed_model is not None
+                else None
+            ),
             first_message=json.dumps(
                 {"type": "response.create", "model": "clinepass/deepseek-v4-flash", "input": "ping"}
             ),
@@ -200,12 +229,26 @@ async def test_managed_responses_websocket_sends_only_clinepass_credentials(
         if credential_source != "missing"
         else None
     )
-    assert sent == [
-        ("https://api.cline.bot/api/v1/chat/completions", f"Bearer {expected_key}" if expected_key else None)
-    ]
+    assert sent == (
+        []
+        if changed_model is not None and connection_provider == "mistral"
+        else [("https://api.cline.bot/api/v1/chat/completions", f"Bearer {expected_key}" if expected_key else None)]
+    )
     assert result is None
-    assert "response.completed" in [event["type"] for event in received]
-    assert "error" not in [event["type"] for event in received]
+    errors: Final = [event["error"] for event in received if event["type"] == "error"]
+    assert errors == (
+        [
+            {
+                "type": "invalid_request_error",
+                "message": "Changing models requires a new authorized WebSocket connection",
+            }
+        ]
+        * (2 if connection_provider == "mistral" else 1)
+        if changed_model is not None
+        else []
+    )
+    assert foreign_requests == []
+    assert ("response.completed" in [event["type"] for event in received]) == bool(sent)
 
 
 # --------------------------------------------------------------------------
