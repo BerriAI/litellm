@@ -73,6 +73,19 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     assert [(finding.subject, finding.detail) for finding in findings] == [
         (test_path, "integration contract is also selected by GitHub Actions")
     ]
+    github_path: Final = "tests/integration/management/test_github_contract.py"
+    (tmp_path / github_path).write_text("def test_contract(): pass\n")
+    runner: Final = tmp_path / "tests/integration/run.py"
+    runner.write_text(runner.read_text() + f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n")
+    workflow.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    github_owned, github_findings = coverage._integration_ownership(tmp_path)
+    assert github_owned == frozenset({test_path, github_path})
+    assert github_findings == ()
+    workflow.write_text(yaml.safe_dump({"jobs": {}}))
+    _, missing_invocation = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in missing_invocation] == [
+        (github_path, "GitHub-owned integration contract has no invoking workflow")
+    ]
 
 
 def test_an_ancestor_directory_covers_a_file_but_does_not_name_it():

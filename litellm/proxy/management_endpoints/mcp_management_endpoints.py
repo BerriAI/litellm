@@ -1021,6 +1021,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
+            record_listing=True,
         )
         tools: Final = listing.tools
         dumped_tools: Final = [tool.model_dump(by_alias=True) for tool in tools]

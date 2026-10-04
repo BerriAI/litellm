@@ -2,9 +2,10 @@
 
 import { ArrowRight, ArrowUpRight, Check, Copy, KeyRound, Loader2, Send } from "lucide-react";
 import { useState } from "react";
+import { useTimeout } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
-import { LensPreviewButton } from "@/components/lens/LensPreviewButton";
+import { LensPreviewButton } from "./LensPreviewButton";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { copyToClipboard } from "@/utils/dataUtils";
@@ -99,12 +100,8 @@ function CodeBlock({
   wrap?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    if (await copyToClipboard(code)) {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
-    }
-  };
+  useTimeout(() => setCopied(false), copied ? COPIED_RESET_MS : null);
+  const copy = async () => setCopied(await copyToClipboard(code));
   return (
     <div className="overflow-hidden rounded-md border border-border bg-muted/30">
       <div className="flex h-9 items-center border-b border-border px-3">
@@ -131,7 +128,7 @@ function CodeBlock({
 }
 
 function FileLabel({ children }: { children: React.ReactNode }) {
-  return <span className="text-[12.5px] text-foreground">{children}</span>;
+  return <span className="text-xs text-foreground">{children}</span>;
 }
 
 function LineTabs<T extends string>({
@@ -155,7 +152,7 @@ function LineTabs<T extends string>({
           aria-selected={value === option}
           onClick={() => onChange(option)}
           className={cn(
-            "-mb-px inline-flex h-9 items-center gap-1.5 border-b-2 text-[12.5px]",
+            "-mb-px inline-flex h-9 items-center gap-1.5 border-b-2 text-xs",
             value === option
               ? "border-foreground text-foreground"
               : "border-transparent text-muted-foreground hover:text-foreground",
@@ -351,18 +348,14 @@ function TracingKey({
 
 function EndpointValue({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    if (await copyToClipboard(value)) {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
-    }
-  };
+  useTimeout(() => setCopied(false), copied ? COPIED_RESET_MS : null);
+  const copy = async () => setCopied(await copyToClipboard(value));
   return (
     <button
       type="button"
       onClick={() => void copy()}
       aria-label={`Copy ${value}`}
-      className="group inline-flex min-w-0 items-center gap-2 text-left font-mono text-[12.5px] text-foreground"
+      className="group inline-flex min-w-0 items-center gap-2 text-left font-mono text-xs text-foreground"
     >
       <span className="break-all">{value}</span>
       {copied ? (
@@ -387,9 +380,9 @@ function Endpoints({ proxyUrl, children }: { proxyUrl: string; children?: React.
       <dl className="mt-3 grid gap-x-6 gap-y-3 rounded-md border bg-muted/30 p-4 md:grid-cols-2">
         {otlpEndpoints(proxyUrl).map(([label, value, copyable]) => (
           <div key={label} className={cn("min-w-0", label === "Traces endpoint" && "md:col-span-2")}>
-            <dt className="text-[12px] text-muted-foreground">{label}</dt>
+            <dt className="text-xs text-muted-foreground">{label}</dt>
             <dd className="mt-0.5">
-              {copyable ? <EndpointValue value={value} /> : <span className="text-[12.5px]">{value}</span>}
+              {copyable ? <EndpointValue value={value} /> : <span className="text-xs">{value}</span>}
             </dd>
           </div>
         ))}
@@ -456,11 +449,9 @@ function CodingAgentSetup({ proxyUrl, guide, model }: { proxyUrl: string; guide:
   const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
   const [copied, setCopied] = useState<string | null>(null);
   const command = codingAgentCommand(codingAgent, codingAgentPrompt(proxyUrl, guide, model));
+  useTimeout(() => setCopied(null), copied === null ? null : COPIED_RESET_MS);
   const copy = async () => {
-    if (await copyToClipboard(command)) {
-      setCopied(command);
-      window.setTimeout(() => setCopied(null), COPIED_RESET_MS);
-    }
+    if (await copyToClipboard(command)) setCopied(command);
   };
   return (
     <section className="mt-6" aria-labelledby="connect-project">
@@ -645,17 +636,7 @@ function ConnectAgent({
   );
 }
 
-export function TracingSetupCard({
-  detail,
-  accessToken,
-  onOpenTrace,
-  connected = false,
-  onCheck,
-  checking = false,
-  readOnly = false,
-  canMintTracingKey = false,
-  onDemo,
-}: {
+type TracingSetupProps = {
   detail: string | null;
   accessToken: string;
   onOpenTrace: (trace: TraceSummary) => void;
@@ -664,20 +645,47 @@ export function TracingSetupCard({
   checking?: boolean;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
-  onDemo?: () => void;
-}) {
+};
+
+export function TracingSetupFields({
+  detail,
+  accessToken,
+  onOpenTrace,
+  connected = false,
+  onCheck,
+  checking = false,
+  readOnly = false,
+  canMintTracingKey = false,
+}: TracingSetupProps) {
   const [checked, setChecked] = useState(false);
-  const enabled = detail === null;
   const check = () => {
     setChecked(true);
     onCheck?.();
   };
+  return detail === null ? (
+    <ConnectAgent
+      accessToken={accessToken}
+      onOpenTrace={onOpenTrace}
+      connected={connected}
+      checked={checked}
+      checking={checking}
+      onCheck={check}
+      readOnly={readOnly}
+      canMintTracingKey={canMintTracingKey}
+    />
+  ) : (
+    <EnableTracing checked={checked} checking={checking} onCheck={check} />
+  );
+}
+
+export function TracingSetupCard(props: TracingSetupProps) {
+  const enabled = props.detail === null;
 
   return (
     <div className="w-full max-w-3xl pb-8" data-testid="tracing-setup-card">
-      {onDemo && <LensPreviewButton onClick={onDemo} />}
+      {!props.connected && <LensPreviewButton />}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, connected)}</h2>
+        <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, props.connected ?? false)}</h2>
         <span role="status" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           {enabled ? (
             <ActiveDot />
@@ -700,20 +708,7 @@ export function TracingSetupCard({
           ? "Send your agent’s runs to LiteLLM to see its inputs, outputs, and tool calls."
           : "Tracing needs ClickHouse and a small update to your LiteLLM proxy configuration."}
       </p>
-      {enabled ? (
-        <ConnectAgent
-          accessToken={accessToken}
-          onOpenTrace={onOpenTrace}
-          connected={connected}
-          checked={checked}
-          checking={checking}
-          onCheck={check}
-          readOnly={readOnly}
-          canMintTracingKey={canMintTracingKey}
-        />
-      ) : (
-        <EnableTracing checked={checked} checking={checking} onCheck={check} />
-      )}
+      <TracingSetupFields {...props} />
     </div>
   );
 }

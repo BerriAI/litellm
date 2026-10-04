@@ -24,6 +24,8 @@ const coverage: Job["coverage"] = {
 
 const job: Job = {
   assessments: [],
+  steps: [],
+  trigger: "schedule",
   coverage,
   attempts: 0,
   error: "",

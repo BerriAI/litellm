@@ -927,6 +927,12 @@ class MCPClient:
 
         async def _call_tool_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending tool call to session")
+            if self.protocol_version == "2026-07-28":
+                tools: Final = await list_tools_with_pagination(
+                    session, listing_deadline=max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
+                )
+                if not any(tool.name == call_tool_request_params.name for tool in tools):
+                    raise MCPError(code=-32603, message="Tool schema is unavailable from the bounded upstream catalog")
             return await session.call_tool(
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
