@@ -6,6 +6,7 @@ import pytest
 from httpx import Request, Response
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.llm_shield_proxy.llm_shield_proxy import (
     GUARDRAIL_NAME,
@@ -1762,7 +1763,7 @@ class TestResponseCacheIsolation:
 
     @pytest.mark.asyncio
     async def test_a_cache_hit_is_restored_against_the_new_callers_vault(self):
-        cache = litellm.caching.caching.InMemoryCache()
+        cache = InMemoryCache()
         provider_reply = {"type": "message", "content": [{"type": "text", "text": "Repeat [EMAIL_1]"}]}
         cache.set_cache("redacted-request", provider_reply)
 
