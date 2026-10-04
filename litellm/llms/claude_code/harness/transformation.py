@@ -132,7 +132,7 @@ class ClaudeCodeStreamState:
     result_text: str | None = None
     is_error: bool = False
     errors: Sequence[str] = ()
-    structured_output: object | None = None
+    structured_output: object = None
 
     @property
     def final_text(self) -> str:

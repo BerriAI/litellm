@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, Protocol, cast  # noqa: TID251 - PrismaWrapper dynamically delegates database methods
+from typing import Final, Literal, Protocol, cast  # noqa: TID251 - PrismaWrapper dynamically delegates database methods
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.proxy.utils import PrismaClient
 from litellm.types.roi_calculator import ROIReport, ROISyncStatus
+from litellm.types.roi_observed import ObservedData
 
 _SYNC_KEY: Final = "roi_calculator_sync"
 _REPORT_KEY: Final = "roi_calculator_report"
@@ -30,8 +31,14 @@ class _SyncDatabase(Protocol):
 
 
 class SyncStore:
-    def __init__(self, prisma: PrismaClient) -> None:
+    def __init__(
+        self,
+        prisma: PrismaClient,
+        namespace: Literal["roi_calculator", "roi_observed", "roi_oauth_refresh"] = "roi_calculator",
+    ) -> None:
         self._db: Final = cast(_SyncDatabase, prisma.writer_db)  # cast-ok: PrismaWrapper delegates methods dynamically
+        self._sync_key: Final = namespace + "_sync"
+        self._report_key: Final = namespace + "_report"
 
     async def acquire(self, owner: str, status: ROISyncStatus, scheduled_interval: float = 0) -> bool:
         rows: Final = await self._db.query_raw(
@@ -43,7 +50,7 @@ class SyncStore:
                   OR "LiteLLM_Config".param_value->'status'->>'running' = 'false')
                  AND ($3::text::double precision = 0 OR "LiteLLM_Config".last_run_at <= NOW() - $3::text::double precision * INTERVAL '1 minute')
                RETURNING param_name""",
-            _SYNC_KEY,
+            self._sync_key,
             _SyncState(owner=owner, status=status).model_dump_json(),
             str(scheduled_interval),
         )
@@ -58,14 +65,20 @@ class SyncStore:
                  AND param_value->'status'->>'running' = 'true'
                  AND last_run_at >= NOW() - INTERVAL '60 seconds'
                RETURNING param_name""",
-            _SYNC_KEY,
+            self._sync_key,
             owner,
             status.model_dump_json(),
         )
         return bool(rows)
 
-    async def finish(self, owner: str, status: ROISyncStatus, report: ROIReport | None = None) -> bool:
-        report_json: Final = TypeAdapter(ROIReport).dump_json(report).decode() if report is not None else None
+    async def finish(self, owner: str, status: ROISyncStatus, report: ROIReport | ObservedData | None = None) -> bool:
+        report_json: Final = (
+            report.model_dump_json()
+            if isinstance(report, ObservedData)
+            else TypeAdapter(ROIReport).dump_json(report).decode()
+            if report is not None
+            else None
+        )
         rows: Final = await self._db.query_raw(
             """WITH owned AS (
                    SELECT param_name FROM "LiteLLM_Config"
@@ -92,11 +105,11 @@ class SyncStore:
                UPDATE "LiteLLM_Config" SET param_value = jsonb_set(param_value, '{status}', $3::jsonb),
                    last_run_at = NOW()
                WHERE param_name IN (SELECT param_name FROM owned) RETURNING param_name""",
-            _SYNC_KEY,
+            self._sync_key,
             owner,
             status.model_dump_json(),
             report_json,
-            _REPORT_KEY,
+            self._report_key,
         )
         return bool(rows)
 
@@ -105,7 +118,7 @@ class SyncStore:
             await self._db.query_raw(
                 """SELECT param_value, last_run_at, last_run_at < NOW() - INTERVAL '60 seconds' AS expired
                FROM "LiteLLM_Config" WHERE param_name = $1""",
-                _SYNC_KEY,
+                self._sync_key,
             )
         )
         if not rows:
@@ -119,7 +132,7 @@ class SyncStore:
                         "phase": "error",
                         "finished_at": rows[0].last_run_at.replace(tzinfo=timezone.utc).isoformat(),
                         "stage": "Sync interrupted",
-                        "error": "The worker stopped responding. Run analysis again to resume saved estimates.",
+                        "error": "The worker stopped responding. Sync again to refresh the report.",
                     }
                 )
             )
@@ -136,8 +149,8 @@ class SyncStore:
                    )
                ), last_run_at = NOW()
                WHERE param_name = $1 AND param_value->'status'->>'running' = 'true' """,
-            _SYNC_KEY,
+            self._sync_key,
         )
 
     async def clear_report(self) -> None:
-        await self._db.execute_raw('DELETE FROM "LiteLLM_Config" WHERE param_name = $1', _REPORT_KEY)
+        await self._db.execute_raw('DELETE FROM "LiteLLM_Config" WHERE param_name = $1', self._report_key)

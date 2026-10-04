@@ -1,12 +1,12 @@
 "use client";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import moment from "moment";
 import { useMemo, useState } from "react";
 
 import { AgentTracesSection } from "./AgentTracesSection";
+import { useTracesLive } from "./tracesApi";
+import { useRangeHoursRouting } from "./traceRouting";
 
-const DEFAULT_RANGE_HOURS = 24;
 const TIME_FORMAT = "YYYY-MM-DDTHH:mm";
 
 export default function AgentTracesPage({
@@ -14,16 +14,14 @@ export default function AgentTracesPage({
   isActive = true,
   readOnly = false,
   canMintTracingKey = false,
-  onDemo,
 }: {
   accessToken: string;
   isActive?: boolean;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
-  onDemo?: () => void;
 }) {
-  const demo = useLensDemo();
-  const [rangeHours, setRangeHours] = useState(DEFAULT_RANGE_HOURS);
+  const sourceLive = useTracesLive();
+  const [rangeHours, setRangeHours] = useRangeHoursRouting();
   const [live, setLive] = useState(true);
   const [anchor, setAnchor] = useState(() => moment());
   const { startTime, endTime } = useMemo(
@@ -47,10 +45,9 @@ export default function AgentTracesPage({
         startTime={startTime}
         endTime={endTime}
         isCustomDate={false}
-        isLiveTail={live && !demo}
+        isLiveTail={live && sourceLive}
         readOnly={readOnly}
         canMintTracingKey={canMintTracingKey}
-        onDemo={onDemo}
         timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: setLive }}
       />
     </div>

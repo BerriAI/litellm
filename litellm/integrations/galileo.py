@@ -497,9 +497,9 @@ class GalileoObserve(CustomLogger):
     @staticmethod
     def _get_chat_content_for_galileo(response_obj: litellm.ModelResponse) -> object:
         if response_obj.choices and len(response_obj.choices) > 0:
-            message: Final = _UNTYPED_VALUE.validate_python(response_obj["choices"][0]["message"])
+            message: Final = response_obj.choices[0].message
             if hasattr(message, "json"):
-                message_json: Final = _ZERO_ARGUMENT_CALLABLE.validate_python(getattr(message, "json", None))()
+                message_json: Final[object] = message.json()
                 if isinstance(message_json, str):
                     return _UNTYPED_VALUE.validate_python(json.loads(message_json))
                 return message_json

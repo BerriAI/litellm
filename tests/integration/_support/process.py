@@ -1,3 +1,4 @@
+import errno
 import os
 import signal
 import socket
@@ -50,12 +51,16 @@ def signal_group(group: int, action: int) -> None:
         pass
 
 
+def graceful_stop_seconds() -> float:
+    return max(30.0, float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70")))
+
+
 def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     if process.poll() is not None:
         return True
     process.terminate()
     try:
-        process.wait(timeout=30)
+        process.wait(timeout=graceful_stop_seconds())
     except subprocess.TimeoutExpired:
         return False
     return True
@@ -108,6 +113,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
 
 
 _PORT_ATTEMPTS: Final = 3
+_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE)
 
 
 def _free_port() -> int:
@@ -138,8 +144,8 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
     return _Launch(process, port, log_path)
 
 
-def _lost_port_race(launch: _Launch) -> bool:
-    return launch.process.poll() is not None and "address already in use" in launch.log.read_text()
+def _lost_port_race(exit_code: int | None, log: Path) -> bool:
+    return exit_code is not None and _BIND_COLLISION in log.read_text()
 
 
 def _wait_until_ready(launch: _Launch) -> None:
@@ -161,13 +167,14 @@ def _launch_until_bound(
     launch: Final = _launch(command, root, environment, output)
     try:
         _wait_until_ready(launch)
-        assert launch.process.poll() is None or (attempts > 1 and _lost_port_race(launch)), (
+        exit_code: Final = launch.process.poll()
+        assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
             "Owned proxy exited before readiness"
         )
     except BaseException:
         _stop(launch.process)
         raise
-    if launch.process.poll() is None:
+    if exit_code is None:
         return launch
     _stop(launch.process)
     return _launch_until_bound(command, root, environment, output, attempts - 1)
@@ -183,6 +190,7 @@ def owned_proxy_process(
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
     database_setup: tuple[str, ...] = DB_PUSH,
+    extra_arguments: tuple[str, ...] = (),
 ) -> Iterator[OwnedProxy]:
     root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
     environment: Final = {
@@ -209,6 +217,7 @@ def owned_proxy_process(
         "--num_workers",
         str(workers),
         *database_setup,
+        *extra_arguments,
     )
     launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
     process: Final = launch.process

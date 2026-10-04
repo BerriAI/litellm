@@ -1975,10 +1975,15 @@ export const agentTraceListCall = async ({
 export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
   apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
 
-export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+export const agentTraceCall = async (
+  accessToken: string,
+  traceId: string,
+  traceRef?: string,
+  cursor?: string | null,
+): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
+    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 },
   });
 
 export const agentTraceSpanCall = async (
@@ -2160,7 +2165,7 @@ export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
   model_info: Record<string, any>,
-  mode: string,
+  mode?: string,
 ) => {
   try {
     // Construct the URL based on environment

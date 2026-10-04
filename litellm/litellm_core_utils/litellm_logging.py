@@ -118,6 +118,7 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
@@ -1815,6 +1816,7 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
             "SearchResponse",
+            DecisionsResponse,
             dict,
             list,
         ],
@@ -2600,6 +2602,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIModerationResponse)
             or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, SearchResponse)  # Search API
+            or isinstance(logging_result, DecisionsResponse)
             or (
                 isinstance(logging_result, InteractionsAPIResponse)
                 and logging_result.usage is not None
@@ -5198,13 +5201,18 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     Returns ``None`` when V2 is off OR when there's no preset registered for
     ``callback_name`` — callers should then fall through to the legacy path.
 
-    A preset that needs operator credentials it cannot find is allowed to build
-    only when this request has a key/team destination for that backend and another
-    V2 logger is already registered to carry the fan-out. The resulting logger keeps
-    only its credential-gated exporter, while the registered logger owns operator
-    delivery. Without that carrier, a preset that raises or that ends up with nothing
-    but its gated exporter and the default console placeholder returns ``None``, so the
-    caller falls through to the legacy path exactly as before V2 landed.
+    A logger built while another V2 logger is already registered keeps only the
+    exporters its own preset contributed, whether or not the operator holds
+    credentials for that backend and whether or not a destination is anchored: the
+    registered logger owns operator delivery, so a copy of the operator's base OTLP
+    exporters here would emit every LLM call a second time into the operator's sink.
+    A preset that contributes no exporter of its own (a mapper over the operator's
+    collector) keeps the base exporters, since it has nothing else to deliver through.
+    A preset that needs operator credentials it cannot find is allowed to build only
+    when it serves a key/team destination in that situation. Otherwise a preset that
+    raises or that ends up with nothing but its gated exporter and the default
+    console placeholder returns ``None``, so the caller falls through to the legacy
+    path exactly as before V2 landed.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
@@ -5236,7 +5244,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     gated: Final = _is_credential_gated(built)
     if gated and not carried and not _has_operator_exporter(built):
         return None
-    config: Final = _only_the_gated_exporter(built) if gated and carried else built
+    config: Final = _only_the_presets_own_exporters(built, callback_name) if has_v2_logger else built
     if _exports_nowhere(config):
         verbose_logger.warning(
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
@@ -5264,8 +5272,10 @@ def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
     return any(not _is_gated(spec) and not is_unconfigured_placeholder(spec) for spec in config.exporters)
 
 
-def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
-    return config.model_copy(update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]})
+def _only_the_presets_own_exporters(config: "OpenTelemetryV2Config", callback_name: str) -> "OpenTelemetryV2Config":
+    """A preset with no exporter of its own (Langtrace: a mapper over the operator's collector) keeps the base."""
+    own: Final = [spec for spec in config.exporters if spec.owner == callback_name]
+    return config.model_copy(update={"exporters": own}) if own else config
 
 
 def _is_gated(spec: "ExporterSpec") -> bool:

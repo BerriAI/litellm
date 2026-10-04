@@ -1,11 +1,15 @@
-import { screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { focusManager, onlineManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import researchTrace from "./__fixtures__/research_trace.json";
 import swarmTrace from "./__fixtures__/swarm_trace.json";
-import { agentHandoffText, initialRunSelection, RunView } from "./TraceDrawer";
+import type { ComponentProps } from "react";
+import { initialRunSelection, RunView } from "./TraceDrawer";
+import { useOpenTraceRouting } from "./traceRouting";
+import { agentHandoffText } from "./tracesApi";
 import type { Span } from "./traceTypes";
 import type { Trace } from "./traceTypes";
 import { traceDisplayName } from "./traceUtils";
@@ -36,9 +40,14 @@ import { agentTraceCall } from "../../networking";
 const swarm = swarmTrace as Trace;
 const research = researchTrace as Trace;
 
+function RoutedRunView(props: Omit<ComponentProps<typeof RunView>, "selection">) {
+  const { selection } = useOpenTraceRouting();
+  return <RunView {...props} selection={selection} />;
+}
+
 const renderRun = (trace: Trace) => {
   vi.mocked(agentTraceCall).mockResolvedValue(trace);
-  return renderWithProviders(<RunView traceId={trace.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+  return renderWithProviders(<RoutedRunView traceId={trace.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
 };
 
 const rootSpanId = (trace: Trace): string => trace.spans.find((s) => s.parent_span_id === null)?.span_id ?? "";
@@ -46,6 +55,7 @@ const rootSpanId = (trace: Trace): string => trace.spans.find((s) => s.parent_sp
 describe("RunView", () => {
   beforeEach(() => {
     testQueryClient.clear();
+    testQueryClient.setQueryDefaults(["agentTrace"], {});
     vi.mocked(copyToClipboard).mockClear();
   });
 
@@ -111,7 +121,7 @@ describe("RunView", () => {
     const user = userEvent.setup();
     vi.mocked(agentTraceCall).mockResolvedValue(research);
     renderWithProviders(
-      <RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} embedded />,
+      <RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} embedded />,
     );
 
     const root = rootSpanId(research);
@@ -155,13 +165,108 @@ describe("RunView", () => {
     expect(screen.queryByRole("button", { name: "Show details" })).not.toBeInTheDocument();
   });
 
+  it("keeps loaded steps and totals after a page fails, then retries the same cursor", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 2 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "next-page" };
+    const second: Trace = {
+      ...research,
+      summary,
+      spans: [
+        { ...research.spans[1], type: "tool", name: "later-page-tool", parent_span_id: research.spans[0].span_id },
+      ],
+      next_cursor: null,
+    };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(second);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+
+    expect(await screen.findByText("Showing 1 of 2 steps")).toBeVisible();
+    const before = screen.getByRole("banner").textContent;
+    await user.click(screen.getByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("Could not load more steps. Your loaded steps are still available.")).toBeVisible();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("later-page-tool")).toBeVisible();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    expect(screen.getAllByRole("treeitem")).toHaveLength(2);
+    expect(screen.getByRole("banner")).toHaveTextContent(before ?? "");
+    expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page", "next-page"]);
+  });
+
+  it("refreshes a failed later page from one new snapshot", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 3 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "old-second" };
+    const second: Trace = {
+      ...research,
+      summary,
+      spans: [
+        { ...research.spans[1], type: "tool", name: "old-snapshot-tool", parent_span_id: research.spans[0].span_id },
+      ],
+      next_cursor: "old-third",
+    };
+    const fresh: Trace = {
+      ...first,
+      summary: { ...summary, span_count: 2 },
+      spans: [{ ...research.spans[0], name: "fresh-root" }],
+      next_cursor: "fresh-second",
+    };
+    const freshSecond: Trace = { ...fresh, spans: [{ ...second.spans[0], name: "fresh-tool" }], next_cursor: null };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second)
+      .mockRejectedValueOnce(new Error("Trace changed while paging; refresh the trace"))
+      .mockResolvedValueOnce(fresh)
+      .mockResolvedValueOnce(freshSecond);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("old-snapshot-tool")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Load more steps" }));
+    await user.click(await screen.findByRole("button", { name: "Refresh trace" }));
+    expect(await screen.findByText("Showing 1 of 2 steps")).toBeVisible();
+    expect(screen.queryByText("old-snapshot-tool")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("fresh-tool")).toBeVisible();
+    expect(screen.getAllByRole("treeitem")).toHaveLength(2);
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([
+      null,
+      "old-second",
+      "old-third",
+      null,
+      "fresh-second",
+    ]);
+  });
+
+  it("keeps a loaded snapshot on focus and reconnect", async () => {
+    testQueryClient.setQueryDefaults(["agentTrace"], { refetchOnWindowFocus: true, refetchOnReconnect: true });
+    vi.mocked(agentTraceCall).mockReset();
+    renderRun(research);
+    await screen.findByTestId("detail-pane");
+    await testQueryClient.invalidateQueries({ queryKey: ["agentTrace"], refetchType: "none" });
+    await act(async () => {
+      focusManager.setFocused(false);
+      onlineManager.setOnline(false);
+      focusManager.setFocused(true);
+      onlineManager.setOnline(true);
+    });
+    await waitFor(() => expect(testQueryClient.isFetching()).toBe(0));
+    expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+  });
+
   it("keeps a way back to the runs table when a run fails to load", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
-    vi.mocked(agentTraceCall).mockRejectedValue(new Error("trace exceeds the 1000 span read limit"));
-    renderWithProviders(<RunView traceId="big" accessToken="sk-test" onBack={onBack} />);
+    vi.mocked(agentTraceCall).mockRejectedValue(new Error("Traces are temporarily unavailable"));
+    renderWithProviders(<RoutedRunView traceId="big" accessToken="sk-test" onBack={onBack} />);
 
-    expect(await screen.findByText("trace exceeds the 1000 span read limit")).toBeInTheDocument();
+    expect(await screen.findByText("Traces are temporarily unavailable")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /back to traces/i }));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
@@ -184,7 +289,7 @@ describe("RunView", () => {
     );
     renderRun({ ...research, spans: [root, ...children] });
     const search = await screen.findByRole("textbox", { name: "Search steps" });
-    await user.type(search, "case 43");
+    fireEvent.change(search, { target: { value: "case 43" } });
     expect(screen.getAllByRole("treeitem")).toHaveLength(1);
     await user.click(screen.getByRole("treeitem"));
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", "case-43");
@@ -193,9 +298,20 @@ describe("RunView", () => {
     await user.click(screen.getByRole("button", { name: /^Errors/ }));
     expect(screen.getAllByRole("treeitem")).toHaveLength(1);
     expect(screen.getByRole("treeitem")).toHaveAttribute("data-row-id", "case-44");
-    await user.type(search, "not present");
+    fireEvent.change(search, { target: { value: "not present" } });
     expect(screen.getByText("No matching steps")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
+  });
+
+  it("restores the step search and errors filter from a shared link", async () => {
+    vi.mocked(agentTraceCall).mockResolvedValue(research);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />, {
+      searchParams: "?steps_q=no+such+step&errors=true",
+    });
+    expect(await screen.findByRole("textbox", { name: "Search steps" })).toHaveValue("no such step");
+    expect(screen.getByText("No matching steps")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
   });
 

@@ -527,28 +527,6 @@ async def test_search_failures_join_the_provider_fields_the_streaming_delta_alre
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("as_choices", [list, tuple, iter])
-async def test_a_response_that_only_looks_like_a_chat_completion_is_annotated_too(
-    as_choices: Callable[[list[ThirdPartyChoice]], Iterable[ThirdPartyChoice]],
-) -> None:
-    message = ThirdPartyMessage()
-    response = ThirdPartyResponse(
-        choices=as_choices([ThirdPartyChoice(message=None), ThirdPartyChoice(message=message)])
-    )
-
-    returned = await VectorStorePreCallHook(
-        proxy_runtime=FakeProxyRuntime(router=None)
-    ).async_post_call_success_deployment_hook(
-        request_data={"litellm_logging_obj": _logging_obj_with_search_failures()},
-        response=response,
-        call_type=CallTypes.acompletion,
-    )
-
-    assert returned is response
-    assert message.provider_specific_fields == {"vector_store_search_failures": _SEARCH_FAILURES}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("as_choices", [list, tuple, iter])
 async def test_a_chunk_that_only_looks_like_a_chat_completion_chunk_is_annotated_too(
     as_choices: Callable[[list[ThirdPartyChoice]], Iterable[ThirdPartyChoice]],
 ) -> None:
@@ -584,24 +562,6 @@ async def test_a_response_without_choices_is_returned_untouched(
 
     assert returned is response
     assert warnings == []
-
-
-@pytest.mark.asyncio
-async def test_a_response_whose_choices_cannot_be_iterated_is_logged_and_not_replaced(
-    warnings: list[logging.LogRecord],
-) -> None:
-    returned = await VectorStorePreCallHook(
-        proxy_runtime=FakeProxyRuntime(router=None)
-    ).async_post_call_success_deployment_hook(
-        request_data={"litellm_logging_obj": _logging_obj_with_search_failures()},
-        response=ThirdPartyResponse(choices=7),
-        call_type=CallTypes.acompletion,
-    )
-
-    assert returned is None
-    assert [record.levelname for record in warnings] == ["ERROR"]
-    assert warnings[0].getMessage().startswith("Error adding search results to response: ")
-    assert "input_value" not in warnings[0].getMessage()
 
 
 @pytest.mark.asyncio

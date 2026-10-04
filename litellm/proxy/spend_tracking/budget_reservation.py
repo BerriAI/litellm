@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
@@ -28,6 +29,7 @@ from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
     end_user_cache_key,
     model_access_group_cache_key,
@@ -736,6 +738,7 @@ def _dedupe_tags(tags: list[str]) -> list[str]:
     return deduped_tags
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_team_member_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
@@ -786,6 +789,7 @@ async def _get_team_member_budget_counter(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_org_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
@@ -824,6 +828,7 @@ async def _get_org_budget_counter(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_project_budget_counter(
     valid_token: UserAPIKeyAuth,
     user_api_key_cache: UserApiKeyCache,

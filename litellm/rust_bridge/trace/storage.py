@@ -67,7 +67,9 @@ class NativeStore(Protocol):
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
     ) -> Awaitable[JsonValue]: ...
 
-    def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
+    def get_trace(
+        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
+    ) -> Awaitable[JsonValue]: ...
 
     def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
 
@@ -189,8 +191,15 @@ class ClickHouseStorage:
         result: Final = await self._native.list_traces(scope, start_ms, end_ms, cursor, limit)
         return _validate_query_response(_TRACE_PAGE, result)
 
-    async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
-        result: Final = await self._native.get_trace(trace_id, scope, trace_ref)
+    async def get_trace(
+        self,
+        trace_id: str,
+        scope: TraceScope,
+        trace_ref: str = "",
+        cursor: str | None = None,
+        page_size: int | None = None,
+    ) -> Trace | None:
+        result: Final = await self._native.get_trace(trace_id, scope, trace_ref, cursor, page_size)
         return _validate_query_response(_TRACE, result)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:

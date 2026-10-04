@@ -12,13 +12,30 @@ const SCOPES: [&str; 7] = [
 ];
 
 pub(super) fn matches(context: &SpanContext<'_>) -> bool {
-    SCOPES.contains(&context.scope)
+    SCOPES.contains(&context.scope) || matches_gateway_attempt(context)
 }
 
-pub(super) fn adjust(facts: SpanFacts) -> SpanFacts {
+fn matches_gateway_attempt(context: &SpanContext<'_>) -> bool {
+    context.scope == "litellm.gateway.client"
+        && context.name == "gateway.request"
+        && context
+            .attributes
+            .get("litellm.gateway.attempt")
+            .is_some_and(|value| value == "true")
+        && context
+            .attributes
+            .get("http.request.method")
+            .is_some_and(|value| value == "POST")
+}
+
+pub(super) fn adjust(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
     SpanFacts {
         role: Some(RoleEvidence::Declared(ObservationType::Framework)),
-        calls: CallEvidence::complete(CallKey::Transport),
+        calls: CallEvidence::complete(if matches_gateway_attempt(context) {
+            CallKey::GatewayAttempt
+        } else {
+            CallKey::Transport
+        }),
         ..facts
     }
 }
@@ -32,7 +49,11 @@ impl Rule for HttpClient {
     fn integration(&self, _: &SpanContext<'_>) -> Option<Integration> {
         None
     }
-    fn adjust(&self, _: &SpanContext<'_>, extraction: super::Extraction) -> super::Extraction {
-        extraction.map_facts(adjust)
+    fn adjust(
+        &self,
+        context: &SpanContext<'_>,
+        extraction: super::Extraction,
+    ) -> super::Extraction {
+        extraction.map_facts(|facts| adjust(context, facts))
     }
 }

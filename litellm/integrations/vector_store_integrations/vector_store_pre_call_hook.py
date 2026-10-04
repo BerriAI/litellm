@@ -27,7 +27,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import CallTypes, LLMResponseTypes, StandardCallbackDynamicParams
+from litellm.types.utils import CallTypes, LLMResponseTypes, ModelResponse, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     VectorStoreSearchFailure,
@@ -47,8 +47,8 @@ SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
 _PROVIDER_FIELDS_ATTRIBUTE: Final = "provider_specific_fields"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
 _FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
-_STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_ADAPTER: Final = TypeAdapter(object)
+_STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
 _ITERABLE_ADAPTER: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _GUARDRAIL_KEYS_THE_PROXY_MERGES_INTO_METADATA: Final = frozenset(
     {"guardrails", "guardrail_config", "policies", "include_guardrail_response"}
@@ -456,17 +456,15 @@ class VectorStorePreCallHook(CustomLogger):
                 return response
 
             # Add search results to response object
-            choices: Final[object] = getattr(response, "choices", None)
-            if choices:
-                for choice in _ITERABLE_ADAPTER.validate_python(choices):
-                    message: object = getattr(choice, "message", None)
-                    if message:
-                        provider_fields = getattr(message, _PROVIDER_FIELDS_ATTRIBUTE, None) or {}
+            if isinstance(response, ModelResponse) and response.choices:
+                for choice in response.choices:
+                    if hasattr(choice, "message") and choice.message:
+                        provider_fields = getattr(choice.message, "provider_specific_fields", None) or {}
                         if search_results:
                             provider_fields["search_results"] = search_results
                         if search_failures:
                             provider_fields[SEARCH_FAILURES_FIELD] = search_failures
-                        setattr(message, _PROVIDER_FIELDS_ATTRIBUTE, provider_fields)
+                        setattr(choice.message, "provider_specific_fields", provider_fields)
 
             # Return modified response
             return response

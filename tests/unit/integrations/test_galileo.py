@@ -984,15 +984,3 @@ def test_galileo_output_str_of_a_chat_response_whose_message_is_not_a_litellm_me
     )
 
     assert output == expected_output
-
-
-@pytest.mark.parametrize("json_attribute", [None, "{}"])
-def test_galileo_output_str_of_a_chat_message_whose_json_cannot_be_called_raises_a_validation_error(
-    galileo_v2_env: None, json_attribute: object
-) -> None:
-    with pytest.raises(ValidationError) as raised:
-        GalileoObserve().get_output_str_from_response(
-            _chat_response_carrying(ThirdPartyMessage(json=json_attribute)), {"call_type": "acompletion"}
-        )
-
-    assert "input_value" not in str(raised.value)

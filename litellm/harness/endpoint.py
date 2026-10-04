@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 import openai
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -47,6 +47,9 @@ if TYPE_CHECKING:
     from uvicorn import Server
 
 verbose_logger: Final = logging.getLogger("LiteLLM")
+_JSON_VALUE_ADAPTER: Final = TypeAdapter(object, config=ConfigDict(strict=True))
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_PORT_ADAPTER: Final = TypeAdapter(int, config=ConfigDict(strict=True))
 
 MISSING_DEPS_MESSAGE = "litellm.harness needs starlette and uvicorn: pip install starlette uvicorn"
 
@@ -85,8 +88,6 @@ DROPPED_REQUEST_HEADERS = HOP_BY_HOP_HEADERS | frozenset(
 DROPPED_RESPONSE_HEADERS = HOP_BY_HOP_HEADERS | frozenset(("content-encoding",))
 COST_HEADER = "x-litellm-response-cost"
 SSE_MEDIA_TYPE = "text/event-stream"
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_PORT: Final = TypeAdapter(int)
 
 
 class _ApplicationsModule(Protocol):
@@ -210,10 +211,11 @@ class SSEUsageParser:
         if not payload or payload == b"[DONE]":
             return
         try:
-            event: Final = _JSON_OBJECT.validate_python(json.loads(payload))
+            event: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(payload))
         except ValueError:
             return
-        self.absorb(event)
+        if isinstance(event, Mapping):
+            self.absorb(_JSON_OBJECT_ADAPTER.validate_python(event))
 
     def absorb(self, event: Mapping[str, object]) -> None:
         event_type = event.get("type")
@@ -436,7 +438,7 @@ class ModelEndpoint:
         except BaseException:
             await self.stop()
             raise
-        self.port = _PORT.validate_python(self._server.servers[0].sockets[0].getsockname()[1])
+        self.port = _PORT_ADAPTER.validate_python(self._server.servers[0].sockets[0].getsockname()[1])
 
     async def stop(self) -> None:
         if self._server is not None:
@@ -542,11 +544,12 @@ class ModelEndpoint:
         if not self._authorized(request):
             return self._unauthorized()
         try:
-            body: Final = _JSON_OBJECT.validate_python(json.loads(await request.body()))
-        except ValidationError:
-            return self._error(ValueError("request body must be a JSON object"), 400)
+            parsed_body: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(await request.body()))
         except ValueError as e:
             return self._error(e, 400)
+        if not isinstance(parsed_body, dict):
+            return self._error(ValueError("request body must be a JSON object"), 400)
+        body: Final = _JSON_OBJECT_ADAPTER.validate_python(parsed_body)
         route = route_of(request.url.path)
         if self.gateway is not None:
             return await self._forward(request, route, body)
@@ -617,7 +620,8 @@ class ModelEndpoint:
             tokens = (parser.input_tokens, parser.output_tokens)
         else:
             try:
-                tokens = usage_from_body(_JSON_OBJECT.validate_python(json.loads(collected)))
+                body: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(collected))
+                tokens = usage_from_body(body)
             except ValueError:
                 tokens = (0, 0)
         self._record(model, tokens[0], tokens[1], header_cost(upstream.headers))

@@ -55,6 +55,7 @@ import litellm.litellm_core_utils.json_validation_rule
 from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_default_encoding,
+    _get_messages_reach_token_count,
     _get_modified_max_tokens,
     _get_token_counter_new,
 )
@@ -1217,6 +1218,9 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
+        elif call_type in (CallTypes.decisions.value, CallTypes.adecisions.value):
+            decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state", "")
+            messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
             messages = args[1] if len(args) > 1 else kwargs.get("prompt")
         elif call_type in (CallTypes.ocr.value, CallTypes.aocr.value):
@@ -4893,7 +4897,7 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock_mantle":
-        optional_params = litellm.BedrockMantleChatConfig().map_openai_params(
+        optional_params = ProviderConfigManager._get_bedrock_mantle_config(model).map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -5665,7 +5669,7 @@ def _get_model_cost_key(potential_key: str) -> str | None:
     return None
 
 
-def _get_model_info_from_model_cost(key: str) -> dict:
+def _get_model_info_from_model_cost(key: str) -> dict[str, Any]:
     return litellm.model_cost[key]
 
 
@@ -5720,10 +5724,24 @@ from typing_extensions import ReadOnly, TypedDict
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     split_model: str
     combined_model_name: str
+    region_free_combined_model_name: ReadOnly[str]
     stripped_model_name: str
     combined_stripped_model_name: str
     provider_prefixed_model_name: ReadOnly[str]
     custom_llm_provider: str
+
+
+def _first_registered_match(
+    candidates: Sequence[str], custom_llm_provider: str | None
+) -> tuple[str | None, dict[str, Any] | None]:
+    registered_keys: Final = (key for key in map(_get_model_cost_key, candidates) if key is not None)
+    entries: Final = ((key, _get_model_info_from_model_cost(key=key)) for key in registered_keys)
+    matches: Final = (
+        (key, info)
+        for key, info in entries
+        if _check_provider_match(model_info=info, custom_llm_provider=custom_llm_provider)
+    )
+    return next(matches, (None, None))
 
 
 def _get_model_info_from_generalization(
@@ -5747,6 +5765,7 @@ def _get_model_info_from_generalization(
     candidates: Final = (
         potential_model_names["combined_model_name"],
         model,
+        potential_model_names["region_free_combined_model_name"],
         potential_model_names["split_model"],
         potential_model_names["combined_stripped_model_name"],
         potential_model_names["stripped_model_name"],
@@ -5824,6 +5843,11 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
     return PotentialModelNamesAndCustomLLMProvider(
         split_model=region_free_split_model,
         combined_model_name=combined_model_name,
+        region_free_combined_model_name=(
+            f"bedrock_mantle/{region_free_split_model}"
+            if custom_llm_provider == "bedrock_mantle"
+            else combined_model_name
+        ),
         stripped_model_name=stripped_model_name,
         combined_stripped_model_name=region_free_combined_stripped_model_name,
         provider_prefixed_model_name=provider_cost_key or provider_prefixed_model_name,
@@ -6003,78 +6027,29 @@ def _get_model_info_helper(
             Check if: (in order of specificity)
             1. 'custom_llm_provider/model' in litellm.model_cost. Checks "groq/llama3-8b-8192" if model="llama3-8b-8192" and custom_llm_provider="groq"
             2. 'model' in litellm.model_cost. Checks "gemini-1.5-pro-002" in  litellm.model_cost if model="gemini-1.5-pro-002" and custom_llm_provider=None
-            3. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-opus-4-8" in litellm.model_cost if model="bedrock/au.anthropic.claude-opus-4-8"
-            4. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
-            5. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
-            6. 'provider_prefixed_model_name' in litellm.model_cost, for providers whose own model ids repeat the
+            3. 'region_free_combined_model_name' in litellm.model_cost. Checks "bedrock_mantle/anthropic.claude-opus-5-5" if
+               model="bedrock_mantle/us-east-1/anthropic.claude-opus-5-5", before 4 reaches the bare Bedrock row. Same as 1 for every other provider.
+            4. 'split_model' in litellm.model_cost. Checks "au.anthropic.claude-opus-4-8" in litellm.model_cost if model="bedrock/au.anthropic.claude-opus-4-8"
+            5. 'combined_stripped_model_name' in litellm.model_cost. Checks if 'gemini/gemini-1.5-flash' in model map, if 'gemini/gemini-1.5-flash-001' given.
+            6. 'stripped_model_name' in litellm.model_cost. Checks if 'ft:gpt-3.5-turbo' in model map, if 'ft:gpt-3.5-turbo:my-org:custom_suffix:id' given.
+            7. 'provider_prefixed_model_name' in litellm.model_cost, for providers whose own model ids repeat the
                litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
-               custom_llm_provider="perplexity", where 1-5 all read the leading "perplexity/" as the litellm prefix
-               and strip it. Tried last so no model that already resolves through 1-5 can change.
+               custom_llm_provider="perplexity", where 1-6 all read the leading "perplexity/" as the litellm prefix
+               and strip it. Tried last so no model that already resolves through 1-6 can change.
             """
 
-            _model_info: dict[str, Any] | None = None
-            key: str | None = None
-
-            # Use case-insensitive lookup for all model name checks
-            _matched_key = _get_model_cost_key(combined_model_name)
-            if _matched_key is not None:
-                key = _matched_key
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info,
-                    custom_llm_provider=model_cost_custom_llm_provider,
-                ):
-                    _model_info = None
-            if _model_info is None:
-                _matched_key = _get_model_cost_key(model)
-                if _matched_key is not None:
-                    key = _matched_key
-                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                    if not _check_provider_match(
-                        model_info=_model_info,
-                        custom_llm_provider=model_cost_custom_llm_provider,
-                    ):
-                        _model_info = None
-            if _model_info is None:
-                _matched_key = _get_model_cost_key(split_model)
-                if _matched_key is not None:
-                    key = _matched_key
-                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                    if not _check_provider_match(
-                        model_info=_model_info,
-                        custom_llm_provider=model_cost_custom_llm_provider,
-                    ):
-                        _model_info = None
-            if _model_info is None:
-                _matched_key = _get_model_cost_key(combined_stripped_model_name)
-                if _matched_key is not None:
-                    key = _matched_key
-                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                    if not _check_provider_match(
-                        model_info=_model_info,
-                        custom_llm_provider=model_cost_custom_llm_provider,
-                    ):
-                        _model_info = None
-            if _model_info is None:
-                _matched_key = _get_model_cost_key(stripped_model_name)
-                if _matched_key is not None:
-                    key = _matched_key
-                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                    if not _check_provider_match(
-                        model_info=_model_info,
-                        custom_llm_provider=model_cost_custom_llm_provider,
-                    ):
-                        _model_info = None
-            if _model_info is None:
-                _matched_key = _get_model_cost_key(provider_prefixed_model_name)
-                if _matched_key is not None:
-                    key = _matched_key
-                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                    if not _check_provider_match(
-                        model_info=_model_info,
-                        custom_llm_provider=model_cost_custom_llm_provider,
-                    ):
-                        _model_info = None
+            lookup_order: Final = (
+                combined_model_name,
+                model,
+                potential_model_names["region_free_combined_model_name"],
+                split_model,
+                combined_stripped_model_name,
+                stripped_model_name,
+                provider_prefixed_model_name,
+            )
+            lookup: Final = _first_registered_match(lookup_order, model_cost_custom_llm_provider)
+            key: str | None = lookup[0]
+            _model_info: dict[str, Any] | None = lookup[1]
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
                 fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))
@@ -7808,9 +7783,8 @@ def _get_valid_models_from_provider_api(
 
         if cached_result is not None:
             return cached_result
-        models: Final = provider_config.get_models(
-            api_key=litellm_params.api_key if litellm_params is not None else None,
-            api_base=litellm_params.api_base if litellm_params is not None else None,
+        models: Final = provider_config.discover_models(
+            litellm_params=litellm_params.model_dump(exclude_none=True) if litellm_params is not None else None
         )
 
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)
@@ -8474,10 +8448,7 @@ class ProviderConfigManager:
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
             LlmProviders.TENCENT: (lambda: litellm.TencentChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
-            LlmProviders.BEDROCK_MANTLE: (
-                lambda: litellm.BedrockMantleChatConfig(),
-                False,
-            ),
+            LlmProviders.BEDROCK_MANTLE: (ProviderConfigManager._get_bedrock_mantle_config, True),
             LlmProviders.A2A: (lambda: litellm.A2AConfig(), False),
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
@@ -8664,6 +8635,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_bedrock_mantle_config(model: str) -> BaseConfig:
+        from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
+
+        return bedrock_mantle_chat_config(model)
 
     @staticmethod
     def _get_cohere_config(model: str) -> BaseConfig:
@@ -9908,7 +9885,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_harness_config(harness: Harness) -> BaseHarnessConfig | None:
         """
-        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents).
+        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents, Tool Loop).
         """
         from litellm.harness.types import Harness as _Harness
 
@@ -9934,6 +9911,10 @@ class ProviderConfigManager:
             )
 
             return DeepAgentsHarnessConfig()
+        if harness == _Harness.TOOL_LOOP:
+            from litellm.llms.tool_loop.harness.transformation import ToolLoopHarnessConfig
+
+            return ToolLoopHarnessConfig()
         return None
 
     @staticmethod
@@ -10119,19 +10100,19 @@ def is_prompt_caching_valid_prompt(
     OpenAI's minimum is a flat 1024 across models, which the default already covers.
     """
     try:
-        if messages is None and tools is None:
+        if messages is None:
             return False
         if custom_llm_provider is not None and not model.startswith(custom_llm_provider):
             model = custom_llm_provider + "/" + model
-        token_count: Final = token_counter(
-            messages=messages,
-            tools=tools,
-            model=model,
-            use_default_image_token_count=True,
-        )
         if min_token_count is None:
             min_token_count = get_prompt_cache_min_tokens(model=model)
-        return token_count >= min_token_count
+        return _get_messages_reach_token_count()(
+            model=model,
+            messages=messages,
+            threshold=min_token_count,
+            tools=tools,
+            use_default_image_token_count=True,
+        )
     except Exception as e:
         verbose_logger.error("Error in is_prompt_caching_valid_prompt: %s", e)
         return False

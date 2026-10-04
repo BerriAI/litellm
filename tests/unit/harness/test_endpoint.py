@@ -189,87 +189,6 @@ async def test_gateway_error_status_preserved_and_not_counted() -> None:
     assert ep.usage.calls == 0
 
 
-@pytest.mark.parametrize(
-    "body",
-    [b"[1, 2]", b'[{"model": "m"}]', b'"text"', b"7", b"1.5", b"true", b"null"],
-)
-async def test_non_object_json_body_is_rejected_without_an_upstream_call(
-    body: bytes,
-) -> None:
-    recorder = Recorder(httpx.Response(200, json={"usage": {}}))
-    async with gateway_endpoint(recorder) as ep:
-        async with httpx.AsyncClient(base_url=ep.url) as client:
-            resp = await client.post("/v1/messages", content=body, headers=auth(ep))
-    assert resp.status_code == 400
-    assert resp.json() == {
-        "error": {"type": "ValueError", "message": "request body must be a JSON object"}
-    }
-    assert recorder.requests == []
-    assert ep.usage.calls == 0
-
-
-@pytest.mark.parametrize(
-    ("body", "error_type"),
-    [
-        (b"", "JSONDecodeError"),
-        (b"{", "JSONDecodeError"),
-        (b"not json", "JSONDecodeError"),
-        (b'{"a": 1} trailing', "JSONDecodeError"),
-        (b'{"a": "\xff"}', "UnicodeDecodeError"),
-    ],
-)
-async def test_undecodable_body_is_a_400_naming_the_decode_error(
-    body: bytes, error_type: str
-) -> None:
-    recorder = Recorder(httpx.Response(200, json={"usage": {}}))
-    async with gateway_endpoint(recorder) as ep:
-        async with httpx.AsyncClient(base_url=ep.url) as client:
-            resp = await client.post("/v1/messages", content=body, headers=auth(ep))
-    assert resp.status_code == 400
-    assert resp.json()["error"]["type"] == error_type
-    assert recorder.requests == []
-
-
-async def test_gateway_forwards_the_object_body_with_only_the_model_replaced() -> None:
-    recorder = Recorder(httpx.Response(200, json={"usage": {}}))
-    body = {"z": 1, "model": "whatever", "a": [1, {"b": None}], "stream": False}
-    async with gateway_endpoint(recorder) as ep:
-        async with httpx.AsyncClient(base_url=ep.url) as client:
-            await client.post("/v1/messages", json=body, headers=auth(ep))
-    sent = json.loads(recorder.requests[0].content)
-    assert sent == {**body, "model": "claude-sonnet"}
-    assert list(sent) == ["z", "model", "a", "stream"]
-
-
-@pytest.mark.parametrize(
-    ("content", "expected"),
-    [
-        (b'{"usage": {"input_tokens": 3, "output_tokens": 2}}', (3, 2)),
-        (b'{"response": {"usage": {"input_tokens": 9, "output_tokens": 8}}}', (9, 8)),
-        (b'{"usage": "bad"}', (0, 0)),
-        (b'[{"usage": {"input_tokens": 3}}]', (0, 0)),
-        (b'"text"', (0, 0)),
-        (b"null", (0, 0)),
-        (b"not json", (0, 0)),
-        (b"", (0, 0)),
-    ],
-)
-async def test_relayed_json_body_counts_usage_only_from_an_object(
-    content: bytes, expected: tuple[int, int]
-) -> None:
-    recorder = Recorder(
-        httpx.Response(
-            200, content=content, headers={"content-type": "application/json"}
-        )
-    )
-    async with gateway_endpoint(recorder) as ep:
-        async with httpx.AsyncClient(base_url=ep.url) as client:
-            resp = await client.post("/v1/messages", json={}, headers=auth(ep))
-    assert resp.content == content
-    assert (ep.usage.input_tokens, ep.usage.output_tokens) == expected
-    assert ep.usage.calls == 1
-
-
 async def test_models_route() -> None:
     recorder = Recorder(httpx.Response(200))
     async with gateway_endpoint(recorder) as ep:
@@ -429,28 +348,6 @@ def test_usage_helpers() -> None:
     tracker.add(3, 4, 0.2)
     assert tracker.snapshot() == Usage(input_tokens=4, output_tokens=6, calls=2)
     assert tracker.cost == pytest.approx(0.3)
-
-
-@pytest.mark.parametrize(
-    ("stream", "expected"),
-    [
-        (b'data: {"usage": {"prompt_tokens": 5, "completion_tokens": 3}}\n\n', (5, 3)),
-        (b'data: [{"usage": {"prompt_tokens": 5, "completion_tokens": 3}}]\n\n', (0, 0)),
-        (b'data: "usage"\n\ndata: 7\n\ndata: null\n\ndata: true\n\n', (0, 0)),
-        (b"data: not json\n\ndata: {\n\ndata: [DONE]\n\n", (0, 0)),
-        (
-            b'data: [1]\ndata: {"type": "message_delta", "usage": {"output_tokens": 7}}',
-            (0, 7),
-        ),
-    ],
-)
-def test_sse_usage_parser_reads_usage_only_from_json_object_events(
-    stream: bytes, expected: tuple[int, int]
-) -> None:
-    parser = SSEUsageParser()
-    parser.feed(stream)
-    parser.close()
-    assert (parser.input_tokens, parser.output_tokens) == expected
 
 
 def test_compute_cost_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,20 +5,33 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import typing
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+if typing.TYPE_CHECKING:
+    from litellm.harness.context import SessionContext
 
 # A decoded JSON document: what json.loads / model_json_schema() produce.
 JSONValue: TypeAlias = "dict[str, JSONValue] | list[JSONValue] | str | int | float | bool | None"
 
 SKILL_MANIFEST: Final = "SKILL.md"
 _JSON_DECODER: Final = json.JSONDecoder()
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RAW_DECODE_ADAPTER: Final = TypeAdapter(tuple[object, int])
+
+
+def gateway_headers(ctx: SessionContext) -> dict[str, str]:  # mutable-ok: acompletion(extra_headers=) requires dict
+    metadata_json: Final = json.dumps(dict(ctx.metadata), default=str) if ctx.metadata else None
+    return {
+        "x-litellm-tags": f"harness,{ctx.harness.value}",
+        **({"x-litellm-spend-logs-metadata": metadata_json} if metadata_json is not None else {}),
+    }
 
 
 def normalize_tool_name(native_name: str, mapping: Mapping[str, str]) -> str:
@@ -38,10 +51,11 @@ def last_json_object(text: str) -> str | None:
     index = text.find("{")
     while index != -1:
         try:
-            obj, end = _JSON_DECODER.raw_decode(text, index)
+            raw_decoded: object = _JSON_DECODER.raw_decode(text, index)
         except json.JSONDecodeError:
             index = text.find("{", index + 1)
             continue
+        obj, end = _RAW_DECODE_ADAPTER.validate_python(raw_decoded)
         if isinstance(obj, dict):
             last = json.dumps(obj)
         index = text.find("{", end)
@@ -91,8 +105,8 @@ def decode_json_line(line: bytes | str) -> Mapping[str, object] | None:
     if not text:
         return None
     try:
-        return _JSON_OBJECT.validate_python(json.loads(text))
-    except (json.JSONDecodeError, ValidationError):
+        return _JSON_OBJECT_ADAPTER.validate_json(text)
+    except ValidationError:
         return None
 
 

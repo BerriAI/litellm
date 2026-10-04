@@ -1,9 +1,11 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type ComponentProps, useState } from "react";
 
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import { DetailPane } from "./DetailPane";
+import type { SpanTab } from "./traceRouting";
 import { absoluteTime, SpanHoverCard, spanFacts } from "./SpanHoverCard";
 import type { GroupRowData, SpanRowData } from "./traceTree";
 import type { Span, SpanDetail, SpanErrorPage, Trace } from "./traceTypes";
@@ -152,8 +154,13 @@ const spanRow = (s: Span): SpanRowData => ({
   collapsed: false,
 });
 
+function LocalDetailPane(props: Omit<ComponentProps<typeof DetailPane>, "spanTab" | "onSpanTabChange">) {
+  const [spanTab, setSpanTab] = useState<SpanTab>("content");
+  return <DetailPane {...props} spanTab={spanTab} onSpanTabChange={setSpanTab} />;
+}
+
 const renderPane = (row: SpanRowData | GroupRowData) =>
-  renderWithProviders(<DetailPane trace={trace} row={row} accessToken="sk-test" onClose={vi.fn()} />);
+  renderWithProviders(<LocalDetailPane trace={trace} row={row} accessToken="sk-test" onClose={vi.fn()} />);
 
 describe("DetailPane", () => {
   beforeEach(() => {

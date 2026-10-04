@@ -117,6 +117,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
@@ -6794,13 +6795,14 @@ async def get_team_spend_by_user(
 
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
-    rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
-        _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
-        start_date,
-        end_date,
-        *scoped_team_ids,
-        *user_param,
-    )
+    async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
+        rows: Final[Sequence[_TeamUserSpendDbRow]] = await prisma_client.db.query_raw(
+            _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+            start_date,
+            end_date,
+            *scoped_team_ids,
+            *user_param,
+        )
     results: Final = tuple(
         TeamUserSpendRow(
             team_id=row["team_id"],

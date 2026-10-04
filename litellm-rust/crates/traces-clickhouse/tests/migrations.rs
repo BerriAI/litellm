@@ -1683,7 +1683,15 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         let values: serde_json::Value = serde_json::from_str(&body)?;
         assert_eq!(
             values["data"].as_array().ok_or("missing data")?.is_empty(),
-            !populated || example["name"] == "LLM spans without a direct spend match",
+            !populated
+                || matches!(
+                    example["name"].as_str(),
+                    Some(
+                        "LLM spans without a direct spend match"
+                            | "Recent failed spans"
+                            | "Filter calls by nested metadata"
+                    )
+                ),
             "{sql}"
         );
         if populated && example["name"] == "Traces correlated with LLM call metadata" {
@@ -2124,7 +2132,7 @@ async fn nullable_spend_upgrade_preserves_existing_costs_and_unknown_new_costs(
     let writer = Connection::writer(&database.url)?;
     let timestamp = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
     let statements = schema_statements("trace_test", 7)?;
-    for statement in &statements[..statements.len() - 1] {
+    for statement in &statements[..14] {
         execute_write(&database, statement).await?;
     }
     let legacy = serde_json::from_value(serde_json::json!({
@@ -2163,6 +2171,43 @@ async fn nullable_spend_upgrade_preserves_existing_costs_and_unknown_new_costs(
             ("legacy", Some(0.25)),
             ("unknown", None)
         ]
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn gateway_id_upgrade_preserves_legacy_rows_and_accepts_new_ids(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    let timestamp = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
+    let statements = schema_statements("trace_test", 7)?;
+    for statement in &statements[..15] {
+        execute_write(&database, statement).await?;
+    }
+    let legacy = serde_json::from_value(serde_json::json!({
+        "request_id": "legacy", "response_id": "response", "spend": 0.25,
+        "start_time": timestamp, "end_time": timestamp + 100
+    }))?;
+    insert_rows(&database, "spend_logs", vec![legacy]).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let current = serde_json::from_value(serde_json::json!({
+        "request_id": "current", "response_id": "response", "litellm_call_id": "gateway",
+        "spend": null, "start_time": timestamp, "end_time": timestamp + 100
+    }))?;
+    insert_rows(&database, "spend_logs", vec![current]).await?;
+    let result = read_json(&database,
+        "SELECT request_id, litellm_call_id, spend FROM trace_test.spend_logs FINAL ORDER BY request_id"
+    ).await?;
+    assert_eq!(
+        result["data"],
+        serde_json::json!([
+            {"request_id": "current", "litellm_call_id": "gateway", "spend": null},
+            {"request_id": "legacy", "litellm_call_id": "", "spend": 0.25},
+        ])
     );
     Ok(())
 }
