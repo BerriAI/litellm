@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
     _generic_cost_per_character,
@@ -98,6 +99,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -351,19 +353,27 @@ def _per_second_pricing_cost(
         return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
         return None
+    cost_per_second: Final = model_info.get("cost_per_second")
     input_cost_per_second: Final = model_info.get("input_cost_per_second")
     output_cost_per_second: Final = model_info.get("output_cost_per_second")
-    if input_cost_per_second is None and output_cost_per_second is None:
+    resolved_cost_per_second: Final = (
+        cost_per_second
+        if cost_per_second is not None
+        else input_cost_per_second
+        if input_cost_per_second is not None
+        else output_cost_per_second
+    )
+    if resolved_cost_per_second is None:
         return None
+
     seconds: Final = (response_time_ms or 0.0) / 1000
     verbose_logger.debug(
-        "For model=%s - input_cost_per_second: %s; output_cost_per_second: %s; response time: %s",
+        "For model=%s - cost_per_second: %s; response time: %s",
         model,
-        input_cost_per_second,
-        output_cost_per_second,
+        resolved_cost_per_second,
         response_time_ms,
     )
-    return (input_cost_per_second or 0.0) * seconds, (output_cost_per_second or 0.0) * seconds
+    return resolved_cost_per_second * seconds, 0.0
 
 
 def cost_per_token(
@@ -696,7 +706,7 @@ def cost_per_token(
             data_residency=data_residency,
         )
     elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block)
+        return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "fireworks_ai":
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
@@ -790,6 +800,18 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
     return value if isinstance(value, str) and value else None
 
 
+_NON_TOKEN_RATE_FIELDS: Final = frozenset(
+    {"cost_per_second", "input_cost_per_second", "output_cost_per_second", "input_cost_per_query", "tiered_pricing"}
+)
+
+
+def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
+    return any(
+        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
+        for field, value in entry.items()
+    )
+
+
 def _select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -828,12 +850,7 @@ def _select_model_name_for_cost_calc(
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
             entry: Final = litellm.model_cost[router_model_id]
-            if (
-                entry.get("input_cost_per_token") is not None
-                or entry.get("input_cost_per_second") is not None
-                or entry.get("input_cost_per_query") is not None
-                or entry.get("tiered_pricing") is not None
-            ):
+            if _cost_map_entry_prices_anything(entry):
                 return_model = router_model_id
             else:
                 return_model = model
@@ -954,6 +971,37 @@ def _normalize_service_tier(service_tier: object) -> str | None:
     return service_tier
 
 
+_BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "standard"})
+
+
+def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
+    """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
+    served_lower: Final = served.lower() if isinstance(served, str) else None
+    if served_lower is not None and served_lower in _SERVICE_TIER_TO_COST_KEY_SUFFIX:
+        return served_lower
+    if served_lower in _BASE_PRICING_SERVICE_TIERS:
+        return None
+    return _normalize_service_tier(requested)
+
+
+def _served_service_tier(completion_response: object, usage_object: Usage | None) -> str | None:
+    """Find the tier the provider actually served: response, then usage, then Gemini trafficType."""
+    response_tier: Final = _extract_service_tier(completion_response)
+    if isinstance(response_tier, str):
+        return response_tier
+    usage_tier: Final = _extract_service_tier(usage_object)
+    if isinstance(usage_tier, str):
+        return usage_tier
+    hidden_params: Final = getattr(completion_response, "_hidden_params", None)
+    if hidden_params is None:
+        return None
+    provider_specific: Final = hidden_params.get("provider_specific_fields") or {}
+    raw_traffic_type: Final = provider_specific.get("traffic_type")
+    if not raw_traffic_type:
+        return None
+    return _map_traffic_type_to_service_tier(raw_traffic_type) or "default"
+
+
 def _extract_service_tier(source: object) -> str | None:
     """Read a raw ``service_tier`` off a response body or usage object, dict or pydantic model alike."""
     if isinstance(source, BaseModel):
@@ -1011,6 +1059,7 @@ def _is_known_usage_objects(usage_obj):
     return (
         isinstance(usage_obj, litellm.Usage)
         or isinstance(usage_obj, ResponseAPIUsage)
+        or isinstance(usage_obj, DecisionsUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1373,23 +1422,14 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
-        # Extract service_tier from optional_params if not provided directly
-        if service_tier is None and optional_params is not None:
-            service_tier = optional_params.get("service_tier")
-
-        service_tier = _normalize_service_tier(service_tier)
-
-        # Extract service_tier from completion_response if not provided
-        if service_tier is None and completion_response is not None:
-            service_tier = _extract_service_tier(completion_response)
-
-        service_tier = _normalize_service_tier(service_tier)
-
-        # Extract service_tier from usage object if not provided
-        if service_tier is None and cost_per_token_usage_object is not None:
-            service_tier = _extract_service_tier(cost_per_token_usage_object)
-
-        service_tier = _normalize_service_tier(service_tier)
+        explicit_tier: Final = _normalize_service_tier(service_tier)
+        if explicit_tier is not None:
+            service_tier = explicit_tier
+        else:
+            service_tier = _resolve_billable_service_tier(  # rebind-ok: resolved from request then response
+                requested=optional_params.get("service_tier") if optional_params is not None else None,
+                served=_served_service_tier(completion_response, cost_per_token_usage_object),
+            )
 
         explicit_pricing: Final = custom_pricing is True or base_model is not None
         selected_model: Final = _select_model_name_for_cost_calc(
@@ -1428,7 +1468,12 @@ def completion_cost(
                             "usage",
                             litellm.Usage(**_usage_for_dump.model_dump()),
                         )
-                    if usage_obj is None:
+                    if isinstance(usage_obj, DecisionsUsage):
+                        _usage = {
+                            "prompt_tokens": usage_obj.input_tokens,
+                            "completion_tokens": usage_obj.output_tokens,
+                        }
+                    elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
                         _usage = cast(BaseModel, usage_obj).model_dump()
@@ -1479,15 +1524,6 @@ def completion_cost(
                         custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
                         region_name = hidden_params.get("region_name", region_name)
 
-                        # For Gemini/Vertex AI responses, trafficType is stored in
-                        # provider_specific_fields.  Map it to the service_tier used
-                        # by the cost key lookup (_priority / _flex suffixes) so that
-                        # ON_DEMAND_PRIORITY requests are billed at priority prices.
-                        if service_tier is None:
-                            provider_specific = hidden_params.get("provider_specific_fields") or {}
-                            raw_traffic_type = provider_specific.get("traffic_type")
-                            if raw_traffic_type:
-                                service_tier = _map_traffic_type_to_service_tier(raw_traffic_type)
                 else:
                     if model is None:
                         raise ValueError(
@@ -1699,6 +1735,8 @@ def completion_cost(
                         litellm_model_name=model,
                         data_residency=data_residency,
                         litellm_logging_obj=litellm_logging_obj,
+                        custom_pricing_model=selected_model if custom_pricing else None,
+                        base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -1926,7 +1964,8 @@ def response_cost_calculator(
     | LiteLLMRealtimeStreamLoggingObject
     | OpenAIModerationResponse
     | Response
-    | SearchResponse,
+    | SearchResponse
+    | DecisionsResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -1948,6 +1987,8 @@ def response_cost_calculator(
         "arerank",
         "search",
         "asearch",
+        "decisions",
+        "adecisions",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,
@@ -1977,7 +2018,6 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 if hasattr(response_object, "_hidden_params"):
-                    response_object._hidden_params["optional_params"] = optional_params
                     provider_response_cost: Final = get_response_cost_from_hidden_params(response_object._hidden_params)
                     if provider_response_cost is not None:
                         return provider_response_cost
@@ -2017,8 +2057,8 @@ def _deployment_model_info(
         return cast(ModelInfo, registered_deployment_info)  # cast-ok: router registers deployment prices under its id
     if litellm_logging_obj is None:
         return None
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
-    if litellm_params is None:
+    litellm_params: Final = litellm_logging_obj.litellm_params
+    if not litellm_params:
         return None
     return next(
         (
@@ -2036,7 +2076,9 @@ def _ocr_model_info(
     router_model_id: str | None,
 ) -> OCRPricing | None:
     deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
-    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
+    litellm_params: Final = (
+        litellm_logging_obj.litellm_params if custom_pricing and litellm_logging_obj is not None else None
+    )
     if litellm_params is None:
         return deployment_info
     return _layered_ocr_pricing(litellm_params, deployment_info)
@@ -2375,6 +2417,11 @@ def default_image_cost_calculator(
         model_name_without_custom_llm_provider = model.replace(f"{custom_llm_provider}/", "")
         base_model_name = f"{custom_llm_provider}/{size_str}/{model_name_without_custom_llm_provider}"
     model_name_with_quality: Final = f"{quality}/{base_model_name}" if quality else base_model_name
+    provider_first_model_name_with_quality: Final = (
+        f"{custom_llm_provider}/{quality}/{size_str}/{model_name_without_custom_llm_provider or model}"
+        if quality and custom_llm_provider
+        else None
+    )
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality: Final = f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
@@ -2386,6 +2433,7 @@ def default_image_cost_calculator(
 
     models_to_check: Final = (
         model_name_with_quality,
+        provider_first_model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
         model_with_quality_without_provider,
@@ -2836,9 +2884,7 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
         collected_usage_objects: Final = ResponsesWebSocketTokenUsageProcessor.collect_usage_from_responses_ws_results(
             results
         )
-        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(
-            list(collected_usage_objects)  # mutable-ok: combine_usage_objects requires a list parameter
-        )
+        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(list(collected_usage_objects))
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
@@ -2862,14 +2908,20 @@ def _candidate_realtime_token_costs(
 
 
 def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) -> bool:
+    """Whether the entry behind ``model_name`` sets any rate of its own, even a zero one.
+
+    The name is resolved the way ``get_model_info`` resolves it before the raw entry is read,
+    because a deployment-scoped name arrives here already carrying its provider prefix. Two raw
+    lookups cannot strip that prefix, so a zero-rated override read as declaring nothing, and a
+    session that should bill nothing fell through to the public rates instead.
+    """
+    resolved: Final = _get_model_info_or_none(model_name, custom_llm_provider)
     entries: Final = (
+        litellm.model_cost.get(resolved.get("key")) if resolved is not None else None,
         litellm.model_cost.get(model_name),
         litellm.model_cost.get(f"{custom_llm_provider}/{model_name}"),
     )
-    return any(
-        entry is not None and any("cost_per" in field and value is not None for field, value in entry.items())
-        for entry in entries
-    )
+    return any(entry is not None and _cost_map_entry_prices_anything(entry) for entry in entries)
 
 
 def _first_priced_realtime_token_costs(
@@ -2909,6 +2961,8 @@ def handle_realtime_stream_cost_calculation(
     litellm_model_name: str,
     data_residency: str | None = None,
     litellm_logging_obj: LitellmLoggingObject | None = None,
+    custom_pricing_model: str | None = None,
+    base_pricing_model: str | None = None,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -2917,9 +2971,13 @@ def handle_realtime_stream_cost_calculation(
 
     Args:
         results: A list of OpenAIRealtimeStreamBaseObject objects
+        custom_pricing_model: deployment-scoped pricing key from the deployment's
+            custom rates, tried ahead of the session-reported model
+        base_pricing_model: the deployment's resolved base_model, tried ahead of the
+            session-reported model but after custom rates
     """
     received_model = None
-    potential_model_names: Final = []
+    potential_model_names: Final = [custom_pricing_model, base_pricing_model]
     for result in results:
         if result["type"] == "session.created":
             received_model = cast(OpenAIRealtimeStreamSessionEvents, result)["session"].get("model", None)
@@ -2937,6 +2995,7 @@ def handle_realtime_stream_cost_calculation(
             results=results,
             custom_llm_provider=custom_llm_provider,
             litellm_model_name=litellm_model_name,
+            custom_pricing_model=custom_pricing_model,
         )
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
@@ -2960,6 +3019,7 @@ def handle_realtime_transcription_cost_calculation(
     results: OpenAIRealtimeStreamList,
     custom_llm_provider: str,
     litellm_model_name: str,
+    custom_pricing_model: str | None = None,
 ) -> float:
     """
     Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
@@ -2977,15 +3037,15 @@ def handle_realtime_transcription_cost_calculation(
         return 0.0
 
     model_name: Final = _get_transcription_model_name_from_results(results) or litellm_model_name
-    try:
-        model_info = litellm.get_model_info(model=model_name, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        model_info = None
+    model_info: Final = _get_model_info_or_none(model_name, custom_llm_provider)
+    override_info: Final = (
+        _get_model_info_or_none(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
+    )
 
     total_cost = 0.0
     for event in completed_events:
         usage = event.get("usage") or {}
-        total_cost += _transcription_usage_cost(usage, model_info)
+        total_cost += _transcription_usage_cost(usage, model_info, override_info)
     return total_cost
 
 
@@ -3010,23 +3070,57 @@ def _get_transcription_model_name_from_results(
     return None
 
 
-def _transcription_usage_cost(usage: dict, model_info: ModelInfo | None) -> float:
-    if model_info is None:
+def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo | None:
+    try:
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+
+
+def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) -> float | None:
+    """First of ``keys`` this entry prices, read off the raw ``litellm.model_cost`` entry
+    because ``get_model_info`` synthesizes zero token rates for entries that omit them."""
+    if info is None:
+        return None
+    declared: Final = litellm.model_cost.get(info.get("key"))
+    if declared is None:
+        return None
+    return next(
+        (float(value) for key in keys if declared.get(key) is not None and (value := info.get(key)) is not None),
+        None,
+    )
+
+
+def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base: ModelInfo | None) -> float:
+    rates: Final = (_declared_transcription_rate(info, keys) for info in (override, base))
+    return next((rate for rate in rates if rate is not None), 0.0)
+
+
+def _transcription_usage_cost(
+    usage: dict,
+    model_info: ModelInfo | None,
+    override_info: ModelInfo | None = None,
+) -> float:
+    if model_info is None and override_info is None:
         return 0.0
+
     usage_type: Final = usage.get("type")
     if usage_type == "duration":
         seconds: Final = usage.get("seconds") or 0.0
-        per_second: Final = model_info.get("input_cost_per_second") or 0.0
-        return float(seconds) * float(per_second)
+        return float(seconds) * _transcription_rate(("input_cost_per_second",), override_info, model_info)
     if usage_type == "tokens":
         input_token_details: Final = usage.get("input_token_details") or {}
         audio_tokens: Final = input_token_details.get("audio_tokens") or 0
         text_tokens: Final = input_token_details.get("text_tokens") or 0
         output_tokens: Final = usage.get("output_tokens") or 0
-        audio_cost: Final = float(audio_tokens) * float(
-            model_info.get("input_cost_per_audio_token") or model_info.get("input_cost_per_token") or 0.0
+        audio_cost: Final = float(audio_tokens) * _transcription_rate(
+            ("input_cost_per_audio_token", "input_cost_per_token"), override_info, model_info
         )
-        text_cost: Final = float(text_tokens) * float(model_info.get("input_cost_per_token") or 0.0)
-        output_cost: Final = float(output_tokens) * float(model_info.get("output_cost_per_token") or 0.0)
+        text_cost: Final = float(text_tokens) * _transcription_rate(
+            ("input_cost_per_token",), override_info, model_info
+        )
+        output_cost: Final = float(output_tokens) * _transcription_rate(
+            ("output_cost_per_token",), override_info, model_info
+        )
         return audio_cost + text_cost + output_cost
     return 0.0

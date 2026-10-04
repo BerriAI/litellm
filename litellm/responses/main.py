@@ -286,6 +286,7 @@ async def aresponses_api_with_mcp(
             call_params=call_params,
             previous_response_id=previous_response_id,
             tool_server_map=tool_server_map,
+            served_tools=original_mcp_tools,
             **kwargs,
         )
         await mcp_streaming_response._create_initial_response_iterator()
@@ -339,6 +340,7 @@ async def aresponses_api_with_mcp(
 
             tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=tool_server_map,
+                served_tools=original_mcp_tools,
                 tool_calls=tool_calls,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -395,6 +397,7 @@ async def aresponses_api_with_mcp(
 
                     final_response = MCPEnhancedStreamingIterator(
                         tool_server_map=tool_server_map,
+                        served_tools=original_mcp_tools,
                         base_iterator=final_response,
                         mcp_events=tool_execution_events,
                         user_api_key_auth=user_api_key_auth,
@@ -549,7 +552,7 @@ def _will_bridge_to_chat_completions(
 
 @contextmanager
 def _prompt_management_sees_a_provisional_message_list(
-    kwargs: dict[str, Any],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
+    kwargs: dict[str, object],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
     bridged: bool,
 ) -> Generator[None, None]:
     """Tell the cache-control hook that this layer's messages are not the ones sent upstream.
@@ -981,7 +984,7 @@ def _responses_try_dispatch_mcp_gateway(
     background: bool | None,
     stream: bool | None,
     temperature: float | None,
-    text: Any,
+    text: Optional["ResponseText"],
     tool_choice: ToolChoice | None,
     top_p: float | None,
     truncation: Literal["auto", "disabled"] | None,
@@ -994,7 +997,12 @@ def _responses_try_dispatch_mcp_gateway(
     kwargs: dict[str, object],
     _is_async: bool,
     skip_mcp_handler: bool,
-) -> Any | None:
+) -> (
+    ResponsesAPIResponse
+    | BaseResponsesAPIStreamingIterator
+    | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+    | None
+):
     """Return a response when MCP gateway handles the call; otherwise None."""
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
@@ -1054,7 +1062,7 @@ def _responses_try_dispatch_emulated_file_search(
     background: bool | None,
     stream: bool | None,
     temperature: float | None,
-    text: Any,
+    text: Optional["ResponseText"],
     tool_choice: ToolChoice | None,
     top_p: float | None,
     truncation: Literal["auto", "disabled"] | None,
@@ -1313,15 +1321,19 @@ def responses(
             _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
 
         local_vars.update(kwargs)
-        # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
-        if reasoning is None and "reasoning_effort" in local_vars:
-            _mapped = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(local_vars.pop("reasoning_effort"))
-            if _mapped is not None:
-                reasoning = _mapped
-                local_vars["reasoning"] = _mapped
-        # Get ResponsesAPIOptionalRequestParams with only valid parameters
+        current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
+            Reasoning | None, local_vars.get("reasoning")
+        )
+        reasoning_effort: Final = local_vars.get("reasoning_effort")
+        request_reasoning: Final = (
+            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+            if current_reasoning is None and reasoning_effort is not None
+            else current_reasoning
+        )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
-            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
+            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+                {k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"}
+            )
         )
 
         _file_search_dispatch: Final = _responses_try_dispatch_emulated_file_search(
@@ -1337,7 +1349,7 @@ def responses(
             metadata=metadata,
             parallel_tool_calls=parallel_tool_calls,
             previous_response_id=previous_response_id,
-            reasoning=reasoning,
+            reasoning=request_reasoning,
             store=store,
             background=background,
             stream=stream,
@@ -2295,9 +2307,11 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
     if kwargs.get("reasoning") is not None:
         return None
     reasoning_effort: Final = kwargs.get("reasoning_effort")
-    if isinstance(reasoning_effort, str):
-        return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
-    return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort) if isinstance(reasoning_effort, Mapping) else None
+    if reasoning_effort is None:
+        return None
+    if isinstance(reasoning_effort, Mapping):
+        return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort)
+    return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
 
 
 _RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})

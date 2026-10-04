@@ -8,12 +8,13 @@ Bearer returns 401 "Missing API key" on both surfaces.
 """
 
 from collections.abc import Mapping
+from itertools import product
 from types import MappingProxyType
 from typing import Any, Final  # noqa: TID251  # Anthropic Messages wire format uses Any in param/return shapes
 
 import httpx
 
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -66,7 +67,7 @@ OPENCODE_MESSAGES_MODELS: Final = MappingProxyType(
                 "minimax-m2.7",
                 "minimax-m3",
                 "qwen3.8-flash",
-                *(f"qwen3.{n}-{tier}" for n in range(5, 9) for tier in ("plus", "max")),
+                *(f"qwen3.{n}-{tier}" for n, tier in product(range(5, 9), ("plus", "max"))),
             }
         ),
     }
@@ -209,7 +210,7 @@ class OpenCodeMessagesConfig(AnthropicMessagesConfig):
             else None
         )
         params: Final = (
-            {  # mutable-ok: base config requires a mutable dict
+            {
                 **anthropic_messages_optional_request_params,
                 "max_tokens": default_max_tokens,
             }

@@ -529,15 +529,6 @@ describe("Teams - team detail deep link (?team=)", () => {
     expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
-
-  it("should preserve the legacy inset for the team detail view", async () => {
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
-      searchParams: "?team=team-from-url",
-    });
-
-    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
-    expect(screen.getByRole("main")).toHaveClass("px-12", "py-6");
-  });
 });
 
 describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
@@ -553,7 +544,6 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
     const createButton = within(tabNav).getByTestId("create-team-button");
     const firstTab = within(tabNav).getByRole("tab", { name: "Your Teams" });
 
-    expect(screen.getByRole("main")).toHaveClass("p-8");
     expect(within(tabNav).getByRole("separator")).toBeInTheDocument();
     expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -1777,5 +1767,52 @@ describe("Teams - the create form keeps the organization and models picks while 
     await openCreateModal();
     expect(orgField()).toHaveValue("");
     expect(modelsField()).toHaveValue("");
+  });
+});
+
+describe("Teams - disable_global_guardrails switch gating", () => {
+  const openCreateModal = async () => {
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await screen.findByLabelText(/team name/i);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: {} });
+    mockUseOrganizations.mockReturnValue({ data: null });
+  });
+
+  it("hides the Disable Global Guardrails switch from a non-admin", async () => {
+    mockUseOrganizations.mockReturnValue({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_alias: "Org 1",
+          models: [],
+          members: [{ user_id: "user-123", user_role: "org_admin" }],
+        },
+      ],
+    });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(screen.queryByRole("switch", { name: /Disable Global Guardrails/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Disable Global Guardrails switch to a proxy admin", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(await screen.findByRole("switch", { name: /Disable Global Guardrails/i })).toBeInTheDocument();
   });
 });

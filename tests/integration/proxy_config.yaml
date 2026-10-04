@@ -1,10 +1,21 @@
-model_list: []
+model_list:
+  - model_name: anthropic/claude-opus-5-5
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
   store_model_in_db: true
   disable_spend_logs: false
   proxy_batch_write_at: 1
+  proxy_batch_polling_interval: 1
 litellm_settings:
   enable_redis_auth_cache: true
   cache: true
@@ -14,3 +25,13 @@ litellm_settings:
     port: os.environ/REDIS_PORT
 router_settings:
   disable_cooldowns: true
+vector_store_registry:
+  - vector_store_name: integration-config-store
+    litellm_params:
+      vector_store_id: vs_integration_config_store
+      custom_llm_provider: openai
+      api_base: os.environ/INTEGRATION_UPSTREAM_URL
+      api_key: integration-provider-key
+      vector_store_description: declared in tests/integration/proxy_config.yaml
+environment_variables:
+  PERPLEXITYAI_API_KEY: synthetic-decisions-env-key

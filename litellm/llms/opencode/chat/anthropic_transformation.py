@@ -70,7 +70,7 @@ class OpenCodeAnthropicConfig(AnthropicConfig):
         cost_map_max_tokens: Final = cost_map_max_output_tokens(surface=self.surface, model=model)
         if cost_map_max_tokens is None:
             return mapped
-        return {  # mutable-ok: request params stay mutable for the base handler
+        return {
             **mapped,
             "max_tokens": cost_map_max_tokens,
         }

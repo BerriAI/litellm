@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     LiteLLMLoggingObj: Final = _LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj: Final = Any  # mutable-ok: fallback placeholder for runtime
+    LiteLLMLoggingObj: Final = Any
 
 
 class OpenCodeZenResponsesAPIConfig(OpenAIResponsesAPIConfig):

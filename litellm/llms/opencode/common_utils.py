@@ -141,7 +141,7 @@ def ensure_opencode_pricing(custom_llm_provider: str, model: str) -> None:
     entry: Final = _bundled_opencode_pricing().get(key)
     if entry is not None:
         litellm.register_model(
-            {key: entry},  # mutable-ok: register_model's contract takes a mutable dict
+            {key: entry},
             persist_across_reloads=False,
         )
 
@@ -250,6 +250,6 @@ def with_opencode_session_header(
     it avoids the rejection but earns no caching.
     """
     if surface != "go" or any(name.lower() == OPENCODE_SESSION_HEADER for name in headers):
-        return {**headers}  # mutable-ok: request handlers keep mutating the headers they are given
+        return {**headers}
     session_id: Final = _conversation_session_id(litellm_params) or str(uuid.uuid4())
-    return {**headers, OPENCODE_SESSION_HEADER: session_id}  # mutable-ok: request handlers keep mutating the headers
+    return {**headers, OPENCODE_SESSION_HEADER: session_id}

@@ -65,7 +65,7 @@ def complete_opencode(
     resolved_base: Final = resolve_opencode_api_base(surface, api_base)
     session_headers: Final = with_opencode_session_header(
         surface,
-        headers or litellm.headers or {},  # mutable-ok: empty dict fallback for headers
+        headers or litellm.headers or {},
         litellm_params,
     )
     no_params: Final = MappingProxyType({})
@@ -125,7 +125,7 @@ def complete_opencode(
         custom_llm_provider=provider,
         timeout=timeout,  # pyright: ignore[reportArgumentType]  # the dispatch context widens timeout to str|None for every provider; narrowing it is a repo-wide gap, not opencode-specific
         headers=(
-            {**session_headers, "Authorization": f"Bearer {resolved_key}"}  # mutable-ok: handler mutates headers
+            {**session_headers, "Authorization": f"Bearer {resolved_key}"}
             if resolved_key is not None
             else session_headers
         ),

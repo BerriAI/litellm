@@ -8,11 +8,10 @@ repository.workspace = true
 [dependencies]
 litellm-core-utils.workspace = true
 litellm-secrets-types.workspace = true
-moka.workspace = true
 rustify.workspace = true
 rustify_derive.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 tokio.workspace = true
 vaultrs.workspace = true
@@ -22,4 +21,4 @@ veil.workspace = true
 rstest.workspace = true
 tempfile = "3"
 tokio.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true
