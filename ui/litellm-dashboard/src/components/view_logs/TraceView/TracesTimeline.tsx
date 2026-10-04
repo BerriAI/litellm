@@ -1,5 +1,6 @@
 "use client";
 
+import { X } from "lucide-react";
 import moment from "moment";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useMediaQuery, useResizeObserver } from "usehooks-ts";
@@ -442,6 +443,16 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
         <TickAxis range={range} />
       </div>
       {hover !== null && !drag && <BucketTooltip bucket={buckets[hover]} index={hover} />}
+      {selection && (
+        <button
+          type="button"
+          onClick={() => onSelect(null)}
+          aria-label="Clear time zoom"
+          className="absolute top-1 right-3 inline-flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      )}
     </div>
   );
 }

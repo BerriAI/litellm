@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowDown, ChevronRight } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useState } from "react";
 import { useInView } from "react-intersection-observer";
 
@@ -36,10 +37,13 @@ export const formatCost = (cost: number): string => {
 };
 
 const firstLine = (text: string): string => text.split("\n")[0] ?? text;
+const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const TH = "px-3 font-medium";
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
 const PLACEHOLDER_ROWS = [0, 1, 2];
+const ROW_HEIGHT = 36;
+const OVERSCAN_ROWS = 12;
 const TH_NUM = "px-3 text-right font-medium";
 const TD_NUM = "px-3 text-right font-mono tabular-nums text-muted-foreground";
 
@@ -94,6 +98,85 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
   );
 }
 
+function RunRow({
+  run,
+  selected,
+  onOpen,
+}: {
+  run: TraceSummary;
+  selected: boolean;
+  onOpen: (run: TraceSummary) => void;
+}) {
+  return (
+    <tr
+      data-testid="agent-trace-row"
+      {...PANEL_TRIGGER}
+      onClick={() => onOpen(run)}
+      aria-selected={selected}
+      className={cn(
+        "h-9 cursor-pointer border-b border-border/60 text-xs transition-colors duration-150 motion-reduce:transition-none",
+        selected ? "bg-trace-row-selected shadow-[inset_2px_0_0_var(--trace-brand)]" : "hover:bg-trace-row-hover",
+      )}
+    >
+      <td
+        className="px-3 font-mono text-xs whitespace-nowrap tabular-nums text-muted-foreground"
+        title={formatActivityTimestamp(run.start_time)}
+      >
+        {formatRunTimestamp(run.start_time)}
+      </td>
+      <AgentCell run={run} />
+      <td className="px-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
+          <span className="truncate text-foreground">
+            {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
+          </span>
+          {run.resolution_limited && (
+            <span
+              className="shrink-0 text-xs text-muted-foreground"
+              title="This run is too large to calculate all totals in this view"
+            >
+              Partial totals
+            </span>
+          )}
+          <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline">{run.trace_id}</span>
+        </div>
+      </td>
+      <td className={TD_NUM}>{run.agent_count.toLocaleString()}</td>
+      <td className={TD_NUM}>{run.span_count.toLocaleString()}</td>
+      <td className="px-3 text-right font-mono tabular-nums text-foreground">{fmtMs(run.duration_ms)}</td>
+      <td className="px-3 text-right font-mono tabular-nums text-foreground">
+        {run.spend == null ? "—" : formatCost(run.spend)}
+      </td>
+      <td className="px-3 text-right">
+        {run.error_count > 0 ? (
+          <StatusMark status="error" count={run.error_count} />
+        ) : (
+          <span className="font-mono text-xs text-muted-foreground/60">0</span>
+        )}
+      </td>
+      <td>
+        <ChevronRight className="size-3 text-muted-foreground/60" />
+      </td>
+    </tr>
+  );
+}
+
+function useVirtualRows(traces: TraceSummary[], scroller: HTMLDivElement | null) {
+  const options = {
+    count: traces.length,
+    getScrollElement: () => scroller,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: OVERSCAN_ROWS,
+    getItemKey: (index: number) => runKey(traces[index]),
+  };
+  const virtualizer = useVirtualizer(options);
+  const rows = virtualizer.getVirtualItems();
+  const padTop = rows[0]?.start ?? 0;
+  const padBottom = virtualizer.getTotalSize() - (rows.at(-1)?.end ?? 0);
+  return { rows, padTop, padBottom };
+}
+
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
@@ -117,6 +200,7 @@ export function AgentTracesTable({
   useEffect(() => {
     if (nearTail && autoContinue && !isFetching) onLoadMore();
   }, [nearTail, autoContinue, isFetching, onLoadMore]);
+  const { rows, padTop, padBottom } = useVirtualRows(traces, scroller);
   return (
     <div ref={setScroller} className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
       <table
@@ -145,64 +229,11 @@ export function AgentTracesTable({
           </tr>
         </thead>
         <tbody>
-          {traces.map((run) => (
-            <tr
-              key={run.trace_ref || run.trace_id}
-              data-testid="agent-trace-row"
-              {...PANEL_TRIGGER}
-              onClick={() => onOpenTrace(run)}
-              aria-selected={selectedKey === (run.trace_ref || run.trace_id)}
-              className={cn(
-                "h-9 cursor-pointer border-b border-border/60 text-xs transition-colors duration-150 motion-reduce:transition-none",
-                selectedKey === (run.trace_ref || run.trace_id)
-                  ? "bg-trace-row-selected shadow-[inset_2px_0_0_var(--trace-brand)]"
-                  : "hover:bg-trace-row-hover",
-              )}
-            >
-              <td
-                className="px-3 font-mono text-xs whitespace-nowrap tabular-nums text-muted-foreground"
-                title={formatActivityTimestamp(run.start_time)}
-              >
-                {formatRunTimestamp(run.start_time)}
-              </td>
-              <AgentCell run={run} />
-              <td className="px-3">
-                <div className="flex min-w-0 items-center gap-2">
-                  <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
-                  <span className="truncate text-foreground">
-                    {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
-                  </span>
-                  {run.resolution_limited && (
-                    <span
-                      className="shrink-0 text-xs text-muted-foreground"
-                      title="This run is too large to calculate all totals in this view"
-                    >
-                      Partial totals
-                    </span>
-                  )}
-                  <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline">
-                    {run.trace_id}
-                  </span>
-                </div>
-              </td>
-              <td className={TD_NUM}>{run.agent_count.toLocaleString()}</td>
-              <td className={TD_NUM}>{run.span_count.toLocaleString()}</td>
-              <td className="px-3 text-right font-mono tabular-nums text-foreground">{fmtMs(run.duration_ms)}</td>
-              <td className="px-3 text-right font-mono tabular-nums text-foreground">
-                {run.spend == null ? "—" : formatCost(run.spend)}
-              </td>
-              <td className="px-3 text-right">
-                {run.error_count > 0 ? (
-                  <StatusMark status="error" count={run.error_count} />
-                ) : (
-                  <span className="font-mono text-xs text-muted-foreground/60">0</span>
-                )}
-              </td>
-              <td>
-                <ChevronRight className="size-3 text-muted-foreground/60" />
-              </td>
-            </tr>
+          {padTop > 0 && <tr aria-hidden style={{ height: padTop }} />}
+          {rows.map(({ index, key }) => (
+            <RunRow key={key} run={traces[index]} selected={selectedKey === key} onOpen={onOpenTrace} />
           ))}
+          {padBottom > 0 && <tr aria-hidden style={{ height: padBottom }} />}
           {autoContinue &&
             PLACEHOLDER_ROWS.map((row) => <PlaceholderRow key={row} rowRef={row === 0 ? tailRef : undefined} />)}
         </tbody>

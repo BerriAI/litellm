@@ -170,7 +170,6 @@ describe("AgentTracesSection", () => {
     expect(screen.getByText(`Could not load runs: ${message}`)).toBeVisible();
     expect(screen.queryByText(/Private token details/)).not.toBeInTheDocument();
     expect(agentTraceListCall).toHaveBeenCalledOnce();
-    expect(screen.getByTestId("runs-footer")).toHaveTextContent("Update failed");
   });
 
   it("renders the setup snippet when the proxy answers 501", async () => {
@@ -269,7 +268,7 @@ describe("AgentTracesSection", () => {
     await act(async () => {
       void testQueryClient.invalidateQueries({ queryKey: ["agentTraces"] });
     });
-    expect(await screen.findByText("Updating…")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("table", { name: "Agent runs" })).toHaveAttribute("aria-busy", "true"));
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
     expect(screen.getByRole("complementary", { name: "Trace details" })).toBe(drawer);
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
@@ -310,7 +309,6 @@ describe("AgentTracesSection", () => {
     expect(lead).toBeDefined();
     const failed = rows.find((row) => row.textContent?.includes("acme-404")) as HTMLElement;
     expect(within(failed).getByLabelText("2 errors")).toBeInTheDocument();
-    expect(screen.getByText(`${runs.length} runs`)).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Cost" })).toBeInTheDocument();
     expect(within(failed).getByText("—")).toBeInTheDocument();
   });

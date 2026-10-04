@@ -245,6 +245,15 @@ if (typeof Range !== "undefined" && !("getClientRects" in Range.prototype)) {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
   });
 }
+// The virtualized runs list renders no rows in a zero-height viewport, and jsdom reports 0 for every offsetHeight.
+if (typeof HTMLElement !== "undefined") {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset.testid === "runs-table" ? 720 : 0;
+    },
+  });
+}
 if (typeof document !== "undefined" && !("elementFromPoint" in document)) {
   Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null });
 }

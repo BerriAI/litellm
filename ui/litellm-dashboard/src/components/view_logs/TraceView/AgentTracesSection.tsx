@@ -76,7 +76,7 @@ function TraceHistoryError({ history }: { history: ReturnType<typeof useTraceAva
   );
 }
 
-/** The Runs view: filters, the runs table and footer — or one run, in place, once a row is clicked. */
+/** The Runs view: filters and the runs table — or one run, in place, once a row is clicked. */
 export function AgentTracesSection({
   accessToken,
   isActive,
@@ -203,13 +203,6 @@ export function AgentTracesSection({
         rangeEmpty={traces.traces.length === 0}
         onSetUpTracing={() => setShowSetup(true)}
       />
-      <RunsFooter
-        count={runs.length}
-        zoom={zoom}
-        isFetching={traces.isFetching}
-        failed={!!traces.error}
-        onResetZoom={() => setZoom(null)}
-      />
     </div>
   );
 }
@@ -220,41 +213,5 @@ function TracesReceived({ received }: { received: boolean }) {
     <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
       Traces received. Select a run to inspect it.
     </p>
-  );
-}
-
-function RunsFooter({
-  count,
-  zoom,
-  isFetching,
-  failed,
-  onResetZoom,
-}: {
-  count: number;
-  zoom: TimeWindow | null;
-  isFetching: boolean;
-  failed: boolean;
-  onResetZoom: () => void;
-}) {
-  const settled = failed ? "Update failed" : "Updated just now";
-  const status = isFetching ? "Updating…" : settled;
-  return (
-    <footer
-      data-testid="runs-footer"
-      className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-xs text-muted-foreground"
-    >
-      {count} {count === 1 ? "run" : "runs"}
-      {zoom && (
-        <button
-          type="button"
-          onClick={() => onResetZoom()}
-          aria-label="Clear time zoom"
-          className="ml-3 rounded border border-info/40 bg-info/10 px-1.5 text-info hover:bg-info/20"
-        >
-          {moment(zoom.startMs).format("MMM DD, HH:mm")} to {moment(zoom.endMs).format("MMM DD, HH:mm")} ×
-        </button>
-      )}
-      <span className="ml-auto">{status}</span>
-    </footer>
   );
 }
