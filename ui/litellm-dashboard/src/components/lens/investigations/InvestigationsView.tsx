@@ -46,7 +46,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const saveLens = useSaveLens(accessToken);
   const { dialog, target: dialogTarget, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const workerSetup = dialog === "workers";
+  const workerSetup = dialog === "settings";
   const now = useNow(2000);
   const query = useQuery(lensQueries.list(api, workerSetup));
   const models = useQuery(lensQueries.models(api));
@@ -89,7 +89,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
     resetResults();
   };
   const setEditing = (mode: "new" | "edit" | "duplicate") => openDialog(mode);
-  const setWorkerSetup = (open: boolean) => (open ? openDialog("workers") : closeDialog());
+  const setWorkerSetup = (open: boolean) => (open ? openDialog("settings") : closeDialog());
   const setMonitoring = (open: boolean) => (open ? openDialog("monitoring") : closeDialog());
   const connected = query.data?.workers?.some((w) => workerConnected(w, now)) ?? false;
   const activeWorkers = query.data?.workers.filter((worker) => !worker.revoked) ?? [];

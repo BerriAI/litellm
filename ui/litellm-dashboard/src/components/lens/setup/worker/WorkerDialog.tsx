@@ -9,7 +9,7 @@ import { WorkerForm } from "./WorkerForm";
 import { useNow } from "@/hooks/useNow";
 
 import { FormProvider } from "react-hook-form";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -55,6 +55,7 @@ export function WorkerDialog({
     mode: "onChange",
   });
   const { formState, reset, setValue } = form;
+  const workerHeadingId = useId();
   const [editingWorker, setEditingWorker] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [created, setCreated] = useState<WorkerCreated | null>(null);
@@ -67,7 +68,7 @@ export function WorkerDialog({
   const screen = created ? "install" : uninstalledScreen;
   const createdTitle = connected ? "Worker connected" : "Run the worker";
   const formTitle = editingWorker ? "Analysis access" : "Connect a worker";
-  const baseTitle = formVisible ? formTitle : "Analysis worker";
+  const baseTitle = formVisible ? formTitle : "Settings";
   const dialogTitle = created ? createdTitle : baseTitle;
   const actionLabel = editingWorker ? "Save analysis access" : "Get install command";
   const cancelForm = () => {
@@ -131,7 +132,7 @@ export function WorkerDialog({
     created && !connected && "sm:max-w-lg",
     !created && "sm:max-w-xl",
   );
-  const description = describeSetup ? setupDescription : "Worker status and model access";
+  const description = describeSetup ? setupDescription : "Lens configuration for this proxy";
   return (
     <FormProvider {...form}>
       <Dialog
@@ -176,13 +177,21 @@ export function WorkerDialog({
             </DialogFooter>
           )}
           {screen === "list" && (
-            <WorkerList
-              workers={workers}
-              now={now}
-              accessToken={accessToken}
-              editBilling={editBilling}
-              revoke={revoke}
-            />
+            <section aria-labelledby={workerHeadingId} className="space-y-4">
+              <div className="space-y-1">
+                <h3 id={workerHeadingId} className="text-sm font-semibold">
+                  Analysis worker
+                </h3>
+                <p className="text-xs text-muted-foreground">Worker status and model access</p>
+              </div>
+              <WorkerList
+                workers={workers}
+                now={now}
+                accessToken={accessToken}
+                editBilling={editBilling}
+                revoke={revoke}
+              />
+            </section>
           )}
           {error && (
             <p role="alert" className="text-sm text-destructive">

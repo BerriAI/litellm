@@ -11,7 +11,7 @@ const lensTabs = Object.keys(LENS_TABS) as LensTab[];
 export const RESULT_TABS = ["findings", "checks", "runs", "activity"] as const;
 export type ResultTab = (typeof RESULT_TABS)[number];
 export const FINDING_KINDS = ["issue", "pattern"] as const;
-export const LENS_DIALOGS = ["new", "edit", "duplicate", "run_now", "workers", "monitoring"] as const;
+export const LENS_DIALOGS = ["new", "edit", "duplicate", "run_now", "settings", "monitoring"] as const;
 export type LensDialog = (typeof LENS_DIALOGS)[number];
 
 const LENS_PARSERS = {

@@ -3,7 +3,7 @@
 import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
-import { Activity, Aperture, ArrowUpRight, ScanSearch } from "lucide-react";
+import { Activity, Aperture, ArrowUpRight, ScanSearch, Settings } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -105,19 +105,20 @@ function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) 
 
 type WorkerStatus = { connected: boolean; open: () => void } | null;
 
-/** Secondary notch entry: quieter than the mode tabs, it reads worker health at a glance and opens the worker dialog. */
-function WorkerNotch({ connected, open }: NonNullable<WorkerStatus>) {
+/** Secondary notch entry: quieter than the mode tabs, it opens Lens settings and carries worker health as a corner dot. */
+function SettingsNotch({ connected, open }: NonNullable<WorkerStatus>) {
   return (
     <>
       <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />
       <button
         type="button"
         onClick={open}
-        title={connected ? "Worker connected" : "Connect worker"}
-        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground outline-none transition-colors duration-200 hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+        aria-label="Lens settings"
+        title={connected ? "Settings · Worker connected" : "Settings · Connect worker"}
+        className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors duration-200 hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        <StatusDot state={connected ? "ok" : "warn"} className="size-1.5" />
-        {connected ? "Worker" : "Connect worker"}
+        <Settings aria-hidden="true" className="size-4" strokeWidth={1.75} />
+        <StatusDot state={connected ? "ok" : "warn"} className="absolute top-1 right-1 size-1.5 ring-2 ring-card" />
       </button>
     </>
   );
@@ -135,8 +136,7 @@ function LensModeSwitch({
   return (
     <div
       className={cn(
-        "relative z-raised flex items-center rounded-t-2xl bg-card pt-1.5 pb-[7px] pl-1.5",
-        worker ? "pr-2" : "pr-1.5",
+        "relative z-raised flex items-center rounded-t-2xl bg-card px-1.5 pt-1.5 pb-[7px]",
         frameOf(demo).tab,
       )}
     >
@@ -165,7 +165,7 @@ function LensModeSwitch({
           );
         })}
       </TabsPrimitive.List>
-      {worker && <WorkerNotch {...worker} />}
+      {worker && <SettingsNotch {...worker} />}
     </div>
   );
 }
@@ -195,7 +195,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
           connected: workers.some((candidate) => workerConnected(candidate)),
           open: () => {
             setTab("investigations");
-            openDialog("workers");
+            openDialog("settings");
           },
         }
       : null;

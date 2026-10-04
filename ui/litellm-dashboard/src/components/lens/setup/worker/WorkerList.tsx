@@ -48,7 +48,7 @@ export function WorkerList({
               )}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>
-                  Settings
+                  Edit access
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => revoke(worker.id)}>
                   Revoke access
