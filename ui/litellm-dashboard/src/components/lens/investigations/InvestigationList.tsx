@@ -66,6 +66,7 @@ export function InvestigationList({
   onEdit,
   onRunNow,
   onOpenFinding,
+  actions,
 }: {
   lenses: Lens[];
   connected: boolean;
@@ -74,6 +75,7 @@ export function InvestigationList({
   onEdit: (id: string) => void;
   onRunNow: (id: string) => void;
   onOpenFinding: (lens: Lens, finding: Finding) => void;
+  actions?: ReactNode;
 }) {
   const [search, setSearch] = useListSearchRoute();
   const now = useNow(15000);
@@ -90,7 +92,7 @@ export function InvestigationList({
   return (
     <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2">
-        <div className="relative w-full max-w-[380px]">
+        <div className="relative min-w-40 flex-1 basis-60 max-w-[380px]">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             aria-label="Search investigations"
@@ -100,6 +102,7 @@ export function InvestigationList({
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        {actions && <div className="ml-auto flex items-center gap-3">{actions}</div>}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <table aria-label="Investigations" className="w-full min-w-[720px] table-fixed border-collapse text-left">

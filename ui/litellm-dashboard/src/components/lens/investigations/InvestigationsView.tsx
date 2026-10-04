@@ -29,7 +29,8 @@ import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
 import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
-import { HeaderActions } from "../HeaderActions";
+import { Button } from "@/components/ui/button";
+import { Plus } from "lucide-react";
 import { RunNowDialog } from "./detail/RunNowDialog";
 import { findFinding, findingAgents, findingKey, sampledExecutions } from "../model/inbox";
 import { WatchAllBanner } from "./WatchAllBanner";
@@ -38,15 +39,7 @@ import { InvestigationsWelcome } from "./InvestigationsWelcome";
 import { workerConnected, readiness } from "../model/status";
 import { type Finding, type Lens, type Settings } from "../model/types";
 
-export function InvestigationsView({
-  active = true,
-  accessToken,
-  readOnly = false,
-}: {
-  active?: boolean;
-  accessToken: string;
-  readOnly?: boolean;
-}) {
+export function InvestigationsView({ accessToken, readOnly = false }: { accessToken: string; readOnly?: boolean }) {
   const api = useLensApi(accessToken);
   const client = useQueryClient();
   const updateLens = useLensUpdate(accessToken);
@@ -170,14 +163,10 @@ export function InvestigationsView({
     <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
       {showDetailNav && (
         <InvestigationNavigation
-          lens={lens}
           showActions={showActions}
-          activityReady={activityReady}
-          connected={connected}
           ready={ready}
-          selectLens={selectLens}
-          setWorkerSetup={setWorkerSetup}
-          setEditing={setEditing}
+          onBack={() => selectLens(null)}
+          onCreate={() => setEditing("new")}
         />
       )}
       {query.error && !query.data ? (
@@ -205,9 +194,16 @@ export function InvestigationsView({
       )}
       {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
       {showTables && (
-        <div className="flex min-h-0 flex-1 flex-col gap-2">
-          {active && (
-            <HeaderActions>
+        <InvestigationList
+          lenses={lenses}
+          connected={connected}
+          readOnly={readOnly}
+          onOpen={selectLens}
+          onEdit={(id) => openDialog("edit", id)}
+          onRunNow={(id) => openDialog("run_now", id)}
+          onOpenFinding={openFinding}
+          actions={
+            <>
               {!readOnly && (
                 <WatchAllBanner
                   lenses={lenses}
@@ -221,28 +217,14 @@ export function InvestigationsView({
                   }
                 />
               )}
-              <InvestigationNavigation
-                lens={undefined}
-                showActions={showActions}
-                activityReady={activityReady}
-                connected={connected}
-                ready={ready}
-                selectLens={selectLens}
-                setWorkerSetup={setWorkerSetup}
-                setEditing={setEditing}
-              />
-            </HeaderActions>
-          )}
-          <InvestigationList
-            lenses={lenses}
-            connected={connected}
-            readOnly={readOnly}
-            onOpen={selectLens}
-            onEdit={(id) => openDialog("edit", id)}
-            onRunNow={(id) => openDialog("run_now", id)}
-            onOpenFinding={openFinding}
-          />
-        </div>
+              {showActions && (
+                <Button size="sm" className="h-7" disabled={!ready} onClick={() => setEditing("new")}>
+                  <Plus className="size-4" /> New investigation
+                </Button>
+              )}
+            </>
+          }
+        />
       )}
       {showMissing && <InvestigationMissing selectLens={selectLens} />}
       {lens && (

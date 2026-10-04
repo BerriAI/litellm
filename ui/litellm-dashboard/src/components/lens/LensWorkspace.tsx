@@ -7,6 +7,7 @@ import { Activity, Aperture, ArrowUpRight, ScanSearch } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { StatusDot } from "@/components/shared/StatusDot";
 import { LensServicesProvider } from "./LensServicesProvider";
 import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
@@ -14,9 +15,9 @@ import { InvestigationsView } from "./investigations/InvestigationsView";
 import { createLensDemo } from "./demo/createLensDemo";
 import { lensQueries } from "./api/queries";
 import { useLensApi } from "./services";
-import { investigationActivity, type InvestigationActivity } from "./model/status";
+import { investigationActivity, workerConnected, type InvestigationActivity } from "./model/status";
 import { cn } from "@/lib/cva.config";
-import { LENS_TABS, useLensRoute, type LensTab } from "./route";
+import { LENS_TABS, useDialogRoute, useLensRoute, type LensTab } from "./route";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
@@ -102,9 +103,43 @@ function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) 
   );
 }
 
-function LensModeSwitch({ activity, demo }: { activity: InvestigationActivity; demo: boolean }) {
+type WorkerStatus = { connected: boolean; open: () => void } | null;
+
+/** Secondary notch entry: quieter than the mode tabs, it reads worker health at a glance and opens the worker dialog. */
+function WorkerNotch({ connected, open }: NonNullable<WorkerStatus>) {
   return (
-    <div className={cn("relative z-raised rounded-t-2xl bg-card px-1.5 pt-1.5 pb-[7px]", frameOf(demo).tab)}>
+    <>
+      <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />
+      <button
+        type="button"
+        onClick={open}
+        title={connected ? "Worker connected" : "Connect worker"}
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs text-muted-foreground outline-none transition-colors duration-200 hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <StatusDot state={connected ? "ok" : "warn"} className="size-1.5" />
+        {connected ? "Worker" : "Connect worker"}
+      </button>
+    </>
+  );
+}
+
+function LensModeSwitch({
+  activity,
+  demo,
+  worker,
+}: {
+  activity: InvestigationActivity;
+  demo: boolean;
+  worker: WorkerStatus;
+}) {
+  return (
+    <div
+      className={cn(
+        "relative z-raised flex items-center rounded-t-2xl bg-card pt-1.5 pb-[7px] pl-1.5",
+        worker ? "pr-2" : "pr-1.5",
+        frameOf(demo).tab,
+      )}
+    >
       <NotchCorner side="left" demo={demo} />
       <NotchCorner side="right" demo={demo} />
       <TabsPrimitive.List
@@ -130,14 +165,18 @@ function LensModeSwitch({ activity, demo }: { activity: InvestigationActivity; d
           );
         })}
       </TabsPrimitive.List>
+      {worker && <WorkerNotch {...worker} />}
     </div>
   );
 }
 
-function useInvestigationActivity(accessToken: string, enabled: boolean): InvestigationActivity {
+function useLensOverview(accessToken: string, enabled: boolean) {
   const api = useLensApi(accessToken);
   const { data } = useQuery({ ...lensQueries.list(api, false), enabled });
-  return investigationActivity(data?.lenses ?? []);
+  return {
+    activity: investigationActivity(data?.lenses ?? []),
+    workers: data?.workers,
+  };
 }
 
 const PANEL =
@@ -145,10 +184,21 @@ const PANEL =
 
 function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   const { tab, lensId, demo, setTab, setDemo } = useLensRoute();
+  const { openDialog } = useDialogRoute();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
   const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canInvestigate = isProxyAdminTierRole(userRole);
-  const activity = useInvestigationActivity(accessToken, canInvestigate);
+  const { activity, workers } = useLensOverview(accessToken, canInvestigate);
+  const worker: WorkerStatus =
+    workers && !readOnly
+      ? {
+          connected: workers.some((candidate) => workerConnected(candidate)),
+          open: () => {
+            setTab("investigations");
+            openDialog("workers");
+          },
+        }
+      : null;
   const preview = (view: LensTab) => ({
     target: previewTarget,
     open: !demo && activeTab === view ? () => setDemo(true) : undefined,
@@ -175,7 +225,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               </a>
             </p>
           </div>
-          <LensModeSwitch activity={activity} demo={demo} />
+          <LensModeSwitch activity={activity} demo={demo} worker={worker} />
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
             <div ref={setPreviewTarget} />
             <DemoToggle demo={demo} onChange={setDemo} />
@@ -195,11 +245,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
           <TabsContent value="investigations" className={cn(PANEL, "p-4")}>
             <LensPreviewContext.Provider value={preview("investigations")}>
               {canInvestigate ? (
-                <InvestigationsView
-                  active={activeTab === "investigations"}
-                  accessToken={accessToken}
-                  readOnly={readOnly || !isProxyAdminRole(userRole)}
-                />
+                <InvestigationsView accessToken={accessToken} readOnly={readOnly || !isProxyAdminRole(userRole)} />
               ) : (
                 <p className="py-6 text-sm text-muted-foreground">
                   Investigations require proxy administrator access. You can still view your traces.

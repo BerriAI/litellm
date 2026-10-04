@@ -222,4 +222,49 @@ describe("Lens interactive demo", () => {
     await testQueryClient.refetchQueries({ queryKey: ["lens", "list"] });
     await waitFor(() => expect(tab).toHaveAccessibleDescription(""));
   });
+
+  it("shows worker health beside the mode tabs and opens the worker dialog from Traces", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    const saved = createLensDemoData().lenses[0];
+    const worker = {
+      id: "worker",
+      name: "Worker",
+      revoked: false,
+      analysis_key_id: "a".repeat(64),
+      scope: saved.scope,
+      last_seen: new Date().toISOString(),
+    };
+    const workers = vi.fn(() => [worker]);
+    network.mockImplementation(async (input) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/lens") return Response.json({ lenses: [saved], workers: workers(), tracing_enabled: true });
+      if (path.endsWith("/runs")) return Response.json(saved.jobs);
+      if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+      return Response.json({ data: [], traces: true, requests: false });
+    });
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, { onUrlUpdate });
+    const status = await screen.findByRole("button", { name: "Worker" });
+    expect(status).toHaveAttribute("title", "Worker connected");
+    expect(screen.getByRole("tab", { name: "Traces" })).toHaveAttribute("aria-selected", "true");
+    await user.click(status);
+    expect(await screen.findByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Investigations", hidden: true })).toHaveAttribute("aria-selected", "true");
+    await expectUrl(onUrlUpdate, (url) => {
+      expect(url.get("tab")).toBe("investigations");
+      expect(url.get("dialog")).toBe("workers");
+    });
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    workers.mockReturnValue([{ ...worker, revoked: true }]);
+    await testQueryClient.refetchQueries({ queryKey: ["lens", "list"] });
+    expect(await screen.findByRole("button", { name: "Connect worker" })).toHaveAttribute("title", "Connect worker");
+  });
+
+  it("hides the worker entry for read-only and non-admin sessions", async () => {
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly />);
+    expect(await screen.findByRole("tablist", { name: "Lens" })).toBeVisible();
+    await waitFor(() => expect(network).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /worker/i })).not.toBeInTheDocument();
+  });
 });
