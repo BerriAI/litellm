@@ -372,7 +372,6 @@ def _parse_json_logs_env(value: str | None) -> bool:
 
 
 json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
-# LITELLM_ECS_LOGS takes precedence over JSON_LOGS since ECS is a superset of structured JSON.
 ecs_logs: Final = _parse_json_logs_env(os.getenv("LITELLM_ECS_LOGS"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
@@ -534,15 +533,6 @@ _ECS_RESERVED_KEYS: Final = frozenset({"@timestamp", "log", "message", "service"
 
 
 class ECSFormatter(Formatter):
-    """Formats log records according to Elastic Common Schema (ECS) v8.x.
-
-    Enables structured log ingestion into the Elastic Stack and other ECS-aware
-    platforms. Activate via the LITELLM_ECS_LOGS=true environment variable or
-    call _turn_on_ecs() at application startup.
-
-    Reference: https://www.elastic.co/guide/en/ecs/current/index.html
-    """
-
     ECS_VERSION = "8.11.0"
 
     def __init__(self, service_name: str | None = None) -> None:
@@ -639,8 +629,7 @@ def _setup_json_exception_handlers(formatter):
         pass
 
 
-# Create a formatter and set it for the handler.
-# LITELLM_ECS_LOGS takes precedence over JSON_LOGS since ECS is a superset of structured JSON.
+# Create a formatter and set it for the handler
 if ecs_logs:
     handler.setFormatter(ECSFormatter())
     _setup_json_exception_handlers(ECSFormatter())
@@ -780,11 +769,10 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
 
 def _get_uvicorn_json_log_config():
     """
-    Generate a uvicorn log_config dictionary that applies structured formatting to all loggers.
+    Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 
-    Uses ECSFormatter when LITELLM_ECS_LOGS=true so uvicorn access/error logs
-    are consistent with application logs for downstream ECS consumers.
-    Falls back to JsonFormatter when only JSON_LOGS=true.
+    This ensures that uvicorn's access logs, error logs, and all application logs
+    are formatted as JSON when json_logs is enabled.
     """
     formatter_class: Final = "litellm._logging.ECSFormatter" if ecs_logs else "litellm._logging.JsonFormatter"
 
@@ -849,14 +837,11 @@ def _turn_on_json():
     handler.setLevel(numeric_level)
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
+    # Set up exception handlers
     _setup_json_exception_handlers(JsonFormatter())
 
 
 def _turn_on_ecs():
-    """Switch all litellm loggers to ECS-formatted JSON output.
-
-    Idempotent; safe to call multiple times or from sitecustomize.py.
-    """
     handler: Final = LevelRoutingStreamHandler()
     handler.setLevel(numeric_level)
     handler.setFormatter(ECSFormatter())
