@@ -5,26 +5,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
 
-import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
-import researchTrace from "../__fixtures__/research_trace.json";
-import swarmTrace from "../__fixtures__/swarm_trace.json";
+import { renderWithProviders, testQueryClient } from "../../../../../../tests/test-utils";
+import researchTrace from "../../__fixtures__/research_trace.json";
+import swarmTrace from "../../__fixtures__/swarm_trace.json";
 import type { ComponentProps } from "react";
 import { ShortcutHints } from "@/components/shared/ShortcutHints";
-import { initialRunSelection, RunView } from "./TraceDrawer";
-import { useOpenTraceRouting } from "../routing";
-import { agentHandoffText } from "../api";
-import type { Span } from "../types";
-import type { Trace } from "../types";
-import { traceDisplayName } from "../utils";
+import { RunView } from "./RunView";
+import { initialRunSelection } from "./useRunTree";
+import { tickLabel, timeTicks } from "../tree/timeline";
+import { useOpenTraceRouting } from "../../routing";
+import { agentHandoffText } from "../../api";
+import type { Span } from "../../types";
+import type { Trace } from "../../types";
+import { traceDisplayName } from "../../utils";
 
-vi.mock("../../../networking", () => ({
+vi.mock("../../../../networking", () => ({
   agentTraceCall: vi.fn(),
   agentTraceSpanCall: vi.fn(),
   getProxyBaseUrl: () => "http://proxy.test/",
 }));
 
 // DetailPane is built separately; render a stub that exposes which row is selected.
-vi.mock("./DetailPane", () => ({
+vi.mock("../span/DetailPane", () => ({
   DetailPane: ({ row, onClose }: { row?: { id: string }; onClose: () => void }) => (
     <div data-testid="detail-pane" data-row-id={row?.id}>
       <button type="button" onClick={onClose}>
@@ -38,7 +40,7 @@ vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn().mockResolvedValue
 
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import { agentTraceCall } from "../../../networking";
+import { agentTraceCall } from "../../../../networking";
 
 const swarm = swarmTrace as Trace;
 const research = researchTrace as Trace;
@@ -439,6 +441,30 @@ describe("RunView", () => {
     expect(header).toHaveTextContent("Completed");
     expect(header).toHaveTextContent("Step errors 2");
     expect(header).not.toHaveTextContent("Failed");
+  });
+
+  it("switches the step list to a waterfall with a time axis and back", async () => {
+    const user = userEvent.setup();
+    renderRun(research);
+    const tree = await screen.findByRole("tree", { name: "Spans in time order" });
+    expect(within(tree).queryAllByTestId("span-waterfall")).toHaveLength(0);
+    await user.click(screen.getByRole("radio", { name: "Waterfall" }));
+    expect(screen.getByRole("radio", { name: "Waterfall" })).toBeChecked();
+    expect(within(tree).getAllByTestId("span-waterfall")).toHaveLength(within(tree).getAllByRole("treeitem").length);
+    const lastTick = timeTicks(research.summary.duration_ms, 4).at(-1) ?? 0;
+    expect(lastTick).toBeGreaterThan(0);
+    expect(screen.getByText(tickLabel(lastTick))).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Tree" }));
+    expect(within(tree).queryAllByTestId("span-waterfall")).toHaveLength(0);
+  });
+
+  it("separates the steps and details with a resize handle that goes away with the details", async () => {
+    const user = userEvent.setup();
+    renderRun(research);
+    await screen.findByTestId("detail-pane");
+    expect(screen.getByRole("separator")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "close detail" }));
+    expect(screen.queryByRole("separator")).not.toBeInTheDocument();
   });
 
   it("copies a curl one-liner for Claude / Codex", async () => {

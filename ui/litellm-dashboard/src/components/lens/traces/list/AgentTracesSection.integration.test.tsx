@@ -22,7 +22,7 @@ vi.mock("../../../networking", () => ({
   getProxyBaseUrl: () => "http://localhost:4000",
 }));
 
-vi.mock("../detail/TraceDrawer", () => ({
+vi.mock("../detail/run/RunView", () => ({
   RunView: ({ traceId, onBack }: { traceId: string; onBack: () => void }) => (
     <div data-testid="run-view">
       run {traceId}
