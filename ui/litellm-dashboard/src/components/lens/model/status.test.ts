@@ -1,4 +1,11 @@
-import { investigationActivity, listPollInterval, nextCheckStatus, workerConnected } from "./status";
+import {
+  activeJob,
+  activityCheck,
+  investigationActivity,
+  listPollInterval,
+  nextCheckStatus,
+  workerConnected,
+} from "./status";
 import { describe, expect, it } from "vitest";
 
 import type { Job, Lens, LensList } from "./types";
@@ -146,5 +153,26 @@ describe("List polling cadence", () => {
     expect(listPollInterval(list([connectedWorker], [lens, queued]), false, now)).toBe(2000);
     expect(listPollInterval(list([connectedWorker], [running]), false, now)).toBe(2000);
     expect(listPollInterval(list([connectedWorker], [lens]), false, now)).toBe(10000);
+  });
+});
+
+describe("activityCheck", () => {
+  it("reads the activity probe as one state", () => {
+    expect(activityCheck({ isLoading: true, isSuccess: false, error: null })).toEqual({ kind: "checking" });
+    expect(activityCheck({ isLoading: false, isSuccess: false, error: new Error("storage down") })).toEqual({
+      kind: "failed",
+      message: "storage down",
+    });
+    expect(activityCheck({ isLoading: false, isSuccess: true, error: null })).toEqual({ kind: "checked" });
+    expect(activityCheck({ isLoading: false, isSuccess: false, error: null })).toEqual({ kind: "idle" });
+  });
+});
+
+describe("activeJob", () => {
+  it("picks the queued or running job and ignores finished ones", () => {
+    const done = { ...job, id: "done", status: "completed" as const };
+    expect(activeJob([done, job])).toBe(job);
+    expect(activeJob([done, { ...job, status: "queued" }])?.status).toBe("queued");
+    expect(activeJob([done])).toBeUndefined();
   });
 });

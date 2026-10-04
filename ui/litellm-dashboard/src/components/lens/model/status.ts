@@ -5,8 +5,12 @@ export function workerConnected(worker: LensList["workers"][number], now = Date.
   return !worker.revoked && !!worker.analysis_key_id && now - Date.parse(worker.last_seen) < 120000;
 }
 
+export function activeJob(jobs: readonly Job[]): Job | undefined {
+  return jobs.find((job) => job.status === "queued" || job.status === "running");
+}
+
 export function hasActiveJob(jobs: readonly Job[]): boolean {
-  return jobs.some((job) => job.status === "queued" || job.status === "running");
+  return activeJob(jobs) !== undefined;
 }
 
 /** One observer polls `/lens`: fast while work is in flight or a worker is being connected, slow otherwise. */
@@ -42,17 +46,41 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   return `Next check ${time} · ${relative}`;
 }
 
+export interface Readiness {
+  readonly tracesReady: boolean;
+  readonly requestsReady: boolean;
+  readonly activityReady: boolean;
+  readonly connected: boolean;
+  readonly ready: boolean;
+}
+
 export function readiness(
   activity: { traces: boolean; requests: boolean } | undefined,
   activityError: unknown,
   connected: boolean,
   listError: unknown,
-) {
+): Readiness {
   const tracesReady = activity?.traces === true && !activityError;
   const requestsReady = activity?.requests === true && !activityError;
   const activityReady = tracesReady || requestsReady;
   const ready = activityReady && connected && !listError;
-  return { tracesReady, requestsReady, activityReady, ready };
+  return { tracesReady, requestsReady, activityReady, connected, ready };
+}
+
+export type ActivityCheck =
+  | { readonly kind: "idle" }
+  | { readonly kind: "checking" }
+  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "checked" };
+
+export function activityCheck(query: {
+  readonly isLoading: boolean;
+  readonly isSuccess: boolean;
+  readonly error: Error | null;
+}): ActivityCheck {
+  if (query.isLoading) return { kind: "checking" };
+  if (query.error) return { kind: "failed", message: query.error.message };
+  return query.isSuccess ? { kind: "checked" } : { kind: "idle" };
 }
 
 export type InvestigationActivity = "running" | "queued" | "idle";
