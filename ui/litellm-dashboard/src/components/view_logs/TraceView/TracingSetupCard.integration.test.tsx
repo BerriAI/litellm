@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { LensPreviewContext } from "@/components/lens/LensPreviewButton";
+import { LensPreviewContext } from "./LensPreviewButton";
 import { agentTraceCall, apiClient, sendOtlpTraceCall } from "../../networking";
 import {
   codingAgentCommand,

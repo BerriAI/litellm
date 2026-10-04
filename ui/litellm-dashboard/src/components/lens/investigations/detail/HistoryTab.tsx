@@ -1,47 +1,46 @@
 "use client";
 import { ListRow } from "@/components/shared/ListRow";
 
+import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 import { TabsContent } from "@/components/ui/tabs";
-import { ScanDuration } from "../InvestigationProgress";
-import type { Lens, Job } from "../../model/types";
+import { HistoryTimeline } from "./HistoryTimeline";
+import { ScanDuration } from "./JobMeta";
+import { useRunHistory } from "./useRunHistory";
+import type { Lens } from "../../model/types";
+import { useRunRoute } from "../../route";
 
 import { money, when } from "../../model/format";
 
-export function HistoryTab({
-  history,
-  historyError,
-  refetchHistory,
-  lens,
-  openBatch,
-  historyOffset,
-  setHistoryOffset,
-}: {
-  history: Job[] | undefined;
-  historyError: Error | null | undefined;
-  refetchHistory: () => void;
-  lens: Lens;
-  openBatch: (id: string) => void;
-  historyOffset: number;
-  setHistoryOffset: (offset: number) => void;
-}) {
+const PAGE = 50;
+
+export interface HistoryTabProps {
+  readonly lens: Lens;
+}
+
+export function HistoryTab({ lens }: HistoryTabProps) {
+  const [offset, setOffset] = useState(0);
+  const history = useRunHistory(lens, offset);
+  const { openRun } = useRunRoute();
+  const rows = history.data ?? lens.jobs;
   return (
     <TabsContent value="activity" className="pt-4 space-y-4">
-      {historyError && (
+      {history.error && (
         <p role="alert" className="text-sm text-destructive">
           Could not load run history.{" "}
-          <Button variant="link" size="sm" onClick={() => void refetchHistory()}>
+          <Button variant="link" size="sm" onClick={() => void history.refetch()}>
             Retry
           </Button>
         </p>
       )}
+      {rows.length > 0 && <HistoryTimeline jobs={rows} slots={PAGE} onOpen={openRun} />}
       <div className="divide-y border-y">
-        {(history ?? lens.jobs)?.map((j) => (
+        {rows.map((j) => (
           <ListRow
             key={j.id}
-            onClick={() => openBatch(j.id)}
+            onClick={() => openRun(j.id)}
             className="flex w-full items-center gap-4 py-4 text-left hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-ring"
           >
             <div className="min-w-0 flex-1">
@@ -66,21 +65,16 @@ export function HistoryTab({
           </ListRow>
         ))}
       </div>
-      {(historyOffset > 0 || (history?.length ?? 0) >= 50) && (
+      {(offset > 0 || (history.data?.length ?? 0) >= PAGE) && (
         <div className="flex justify-between">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!historyOffset}
-            onClick={() => setHistoryOffset(Math.max(0, historyOffset - 50))}
-          >
+          <Button variant="ghost" size="sm" disabled={!offset} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
             Newer runs
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            disabled={(history?.length ?? 0) < 50}
-            onClick={() => setHistoryOffset(historyOffset + 50)}
+            disabled={(history.data?.length ?? 0) < PAGE}
+            onClick={() => setOffset(offset + PAGE)}
           >
             Older runs
           </Button>

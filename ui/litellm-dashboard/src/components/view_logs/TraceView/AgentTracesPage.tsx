@@ -7,7 +7,7 @@ import { AgentTracesSection } from "./AgentTracesSection";
 import { useTracesLive } from "./tracesApi";
 import { useRangeHoursRouting } from "./traceRouting";
 
-const TIME_FORMAT = "YYYY-MM-DDTHH:mm";
+const TIME_FORMAT = "YYYY-MM-DDTHH:mm:ss";
 
 export default function AgentTracesPage({
   accessToken,
@@ -32,8 +32,15 @@ export default function AgentTracesPage({
     [anchor, rangeHours],
   );
 
+  const isLiveTail = live && sourceLive;
+
   const changeRange = (hours: number) => {
     setRangeHours(hours);
+    setAnchor(moment());
+  };
+
+  const changeLive = (next: boolean) => {
+    setLive(next);
     setAnchor(moment());
   };
 
@@ -44,11 +51,11 @@ export default function AgentTracesPage({
         isActive={isActive}
         startTime={startTime}
         endTime={endTime}
-        isCustomDate={false}
-        isLiveTail={live && sourceLive}
+        isCustomDate={!isLiveTail}
+        isLiveTail={isLiveTail}
         readOnly={readOnly}
         canMintTracingKey={canMintTracingKey}
-        timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: setLive }}
+        timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: changeLive }}
       />
     </div>
   );

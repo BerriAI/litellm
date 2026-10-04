@@ -20,25 +20,25 @@ describe("bucketRuns", () => {
     expect(buckets).toHaveLength(10);
     expect(buckets[0].startMs).toBe(range.startMs);
     expect(buckets.at(-1)?.endMs).toBe(range.endMs);
-    const fourthBucket = { startMs: START + 3 * HOUR, endMs: START + 4 * HOUR, runs: 0, failed: 0 };
+    const fourthBucket = { startMs: START + 3 * HOUR, endMs: START + 4 * HOUR, total: 0, failed: 0 };
     expect(buckets[3]).toMatchObject(fourthBucket);
   });
 
   it("puts each run in the bucket covering its start time", () => {
     const buckets = bucketRuns([run(0), run(30 * 60 * 1000), run(2.5 * HOUR), run(10 * HOUR - 1)], range, 10);
-    expect(buckets.map((b) => b.runs)).toEqual([2, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
+    expect(buckets.map((b) => b.total)).toEqual([2, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
   });
 
   it("drops runs that start before or at/after the window", () => {
     const buckets = bucketRuns([run(-1), run(10 * HOUR), run(20 * HOUR), run(HOUR)], range, 10);
-    expect(buckets.reduce((sum, b) => sum + b.runs, 0)).toBe(1);
-    expect(buckets[1].runs).toBe(1);
+    expect(buckets.reduce((sum, b) => sum + b.total, 0)).toBe(1);
+    expect(buckets[1].total).toBe(1);
   });
 
   it("counts runs with any errors as failed", () => {
     const buckets = bucketRuns([run(HOUR, 3), run(HOUR + 1), run(HOUR + 2, 1), run(5 * HOUR)], range, 10);
-    expect(buckets[1]).toMatchObject({ runs: 3, failed: 2 });
-    expect(buckets[5]).toMatchObject({ runs: 1, failed: 0 });
+    expect(buckets[1]).toMatchObject({ total: 3, failed: 2 });
+    expect(buckets[5]).toMatchObject({ total: 1, failed: 0 });
   });
 });
 

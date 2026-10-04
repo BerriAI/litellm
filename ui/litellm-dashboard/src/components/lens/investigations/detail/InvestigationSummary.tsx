@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { NextCheck } from "../InvestigationProgress";
+import { NextCheck } from "./JobMeta";
 import { lensStatus } from "../../model/status";
 import { runTime } from "../../model/format";
 import { type Lens } from "../../model/types";

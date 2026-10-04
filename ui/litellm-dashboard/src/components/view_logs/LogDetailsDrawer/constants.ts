@@ -13,13 +13,6 @@ export const METADATA_MAX_HEIGHT = 300;
 export const TAB_REQUEST = "request" as const;
 export const TAB_RESPONSE = "response" as const;
 
-// Keyboard shortcuts
-export const KEY_ESCAPE = "Escape";
-export const KEY_J_LOWER = "j";
-export const KEY_J_UPPER = "J";
-export const KEY_K_LOWER = "k";
-export const KEY_K_UPPER = "K";
-
 // Typography
 export const FONT_FAMILY_MONO = "monospace";
 export const FONT_SIZE_SMALL = 12;

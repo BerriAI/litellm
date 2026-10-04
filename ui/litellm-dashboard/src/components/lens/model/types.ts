@@ -32,3 +32,17 @@ export type ActivitySelection = Pick<Settings, "source"> &
   >;
 
 export type Worker = LensList["workers"][number];
+
+export interface RunWindow {
+  agent_name?: string;
+  start?: string;
+  end?: string;
+  lookback_hours?: number;
+}
+
+export interface AnalysisModelInfo {
+  model_group: string;
+  providers: string[];
+  mode?: string | null;
+  supported_openai_params?: string[] | null;
+}

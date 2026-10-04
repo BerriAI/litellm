@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { durationLabel, durationText, money, scopeLabel, when } from "./format";
+import { agoLabel, durationLabel, durationText, money, scopeLabel, when } from "./format";
 
 describe("Lens labels", () => {
   it("formats an empty scope and joins recorded scope constraints in their original order", () => {
@@ -28,5 +28,21 @@ describe("Lens labels", () => {
     expect(money(0)).toBe("$0.00");
     expect(when()).toBe("Not yet");
     expect(when(null)).toBe("Not yet");
+  });
+});
+
+describe("agoLabel", () => {
+  const now = Date.UTC(2026, 9, 3, 12, 0, 0);
+
+  it("rounds down to the largest whole unit", () => {
+    expect(agoLabel(now - 2_000, now)).toBe("just now");
+    expect(agoLabel(now - 45_000, now)).toBe("45s ago");
+    expect(agoLabel(now - 12 * 60_000 - 59_000, now)).toBe("12m ago");
+    expect(agoLabel(now - 3 * 3_600_000, now)).toBe("3h ago");
+    expect(agoLabel(now - 2 * 86_400_000, now)).toBe("2d ago");
+  });
+
+  it("treats a timestamp slightly in the future as just now instead of negative", () => {
+    expect(agoLabel(now + 10_000, now)).toBe("just now");
   });
 });

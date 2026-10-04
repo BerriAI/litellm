@@ -2,23 +2,39 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../tests/test-utils";
+import { Inspector } from "@/components/shared/Inspector";
 import traceList from "./__fixtures__/trace_list.json";
 import { AgentTracesTable } from "./AgentTracesTable";
+import { traceKey } from "./traceRouting";
 import type { TracePage, TraceSummary } from "./traceTypes";
+
+const inList = (table: React.ReactElement) => (
+  <Inspector.Root
+    items={[]}
+    itemKey={traceKey}
+    selected={null}
+    onSelectedChange={vi.fn()}
+    noun="trace"
+    storageKey="test"
+  >
+    {table}
+  </Inspector.Root>
+);
 
 const renderEmpty = (rangeEmpty: boolean) => {
   const onSetUpTracing = vi.fn();
   render(
-    <AgentTracesTable
-      traces={[]}
-      isLoading={false}
-      error={null}
-      hasMore={false}
-      onLoadMore={vi.fn()}
-      onOpenTrace={vi.fn()}
-      rangeEmpty={rangeEmpty}
-      onSetUpTracing={onSetUpTracing}
-    />,
+    inList(
+      <AgentTracesTable
+        traces={[]}
+        isLoading={false}
+        error={null}
+        hasMore={false}
+        onLoadMore={vi.fn()}
+        rangeEmpty={rangeEmpty}
+        onSetUpTracing={onSetUpTracing}
+      />,
+    ),
   );
   return onSetUpTracing;
 };
@@ -45,15 +61,16 @@ describe("AgentTracesTable virtualization", () => {
 
   it("renders only the rows near the viewport as the list scrolls", () => {
     renderWithProviders(
-      <AgentTracesTable
-        traces={manyRuns}
-        isLoading={false}
-        error={null}
-        hasMore={false}
-        onLoadMore={vi.fn()}
-        onOpenTrace={vi.fn()}
-        onSetUpTracing={vi.fn()}
-      />,
+      inList(
+        <AgentTracesTable
+          traces={manyRuns}
+          isLoading={false}
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
     );
     expect(screen.getAllByTestId("agent-trace-row").length).toBeLessThan(50);
     expect(screen.getByText("question 0")).toBeInTheDocument();

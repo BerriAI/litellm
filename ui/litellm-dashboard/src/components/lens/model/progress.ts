@@ -82,7 +82,7 @@ export interface ProgressSample {
   fraction: number;
 }
 
-export const stageWeights = [0.6, 0.2, 0.2];
+const stageWeights = [0.6, 0.2, 0.2];
 
 export function analysisFraction({
   step,

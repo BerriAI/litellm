@@ -11,12 +11,12 @@ describe("useKeyboardNavigation", () => {
     const props = { isOpen: true, currentLog: logs[0], allLogs: logs, onClose: vi.fn(), onSelectLog };
     renderHook(() => useKeyboardNavigation(props));
 
-    fireEvent.keyDown(window, { key: "j", metaKey: true });
-    fireEvent.keyDown(window, { key: "j", ctrlKey: true });
-    fireEvent.keyDown(window, { key: "j", altKey: true });
+    fireEvent.keyDown(document.body, { key: "j", metaKey: true });
+    fireEvent.keyDown(document.body, { key: "j", ctrlKey: true });
+    fireEvent.keyDown(document.body, { key: "j", altKey: true });
     expect(onSelectLog).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "j" });
     expect(onSelectLog).toHaveBeenCalledExactlyOnceWith(logs[1]);
   });
 });

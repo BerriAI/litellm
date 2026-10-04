@@ -1,22 +1,15 @@
 "use client";
 
+import { useId } from "react";
 import { Plus, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-
-import { Input } from "@/components/ui/input";
-import type { Sample } from "../../model/types";
-
 import { useFieldArray, useFormContext, useWatch } from "react-hook-form";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import type { InvestigationInput } from "../investigationSchema";
-export function MetadataFilters({
-  attributes,
-  keys,
-  id,
-}: {
-  attributes: NonNullable<Sample["executions"][number]["metadata"]>;
-  keys: string[];
-  id: string;
-}) {
+import type { ScopeOptions } from "../useMatchingActivity";
+
+export function MetadataFilters({ attributes, keys }: Pick<ScopeOptions, "attributes" | "keys">) {
+  const id = useId();
   const {
     control,
     register,

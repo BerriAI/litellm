@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,60 +14,30 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
-import type { Lens } from "../../model/types";
-
-export interface RunWindow {
-  agent_name?: string;
-  start?: string;
-  end?: string;
-  lookback_hours?: number;
-}
-
-const PRESETS = [
-  { label: "Since last run", hours: null },
-  { label: "Last hour", hours: 1 },
-  { label: "Last 24h", hours: 24 },
-  { label: "Last 7d", hours: 168 },
-  { label: "Custom", hours: -1 },
-] as const;
+import { lensQueries } from "../../data/queries";
+import { useLensApi } from "../../data/LensServices";
+import type { Lens, RunWindow } from "../../model/types";
+import { RUN_PRESETS, runRequest, type RunChoice, type RunPreset } from "../../model/runRequest";
 
 const localInput = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 
-export interface RunChoice {
-  preset: (typeof PRESETS)[number]["hours"];
-  agent: string;
-  saved: string;
-  start: string;
-  end: string;
-}
-
-export function runRequest({ preset, agent, saved, start, end }: RunChoice): RunWindow | string {
-  const agentPart = agent.trim() && agent.trim() !== saved ? { agent_name: agent.trim() } : {};
-  if (preset === null) return agentPart;
-  if (preset > 0) return { ...agentPart, lookback_hours: preset };
-  const startMs = Date.parse(start);
-  const endMs = Date.parse(end);
-  if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "Choose a start and end time";
-  if (startMs >= endMs) return "Start time must be before end time";
-  return { ...agentPart, start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() };
-}
-
 export function RunNowDialog({
   lens,
-  agents,
   busy,
   onClose,
   onRun,
 }: {
   lens: Lens;
-  agents: readonly string[];
   busy: boolean;
   onClose: () => void;
   onRun: (request: RunWindow) => Promise<void>;
 }) {
+  const api = useLensApi();
+  const agentsQuery = useQuery(lensQueries.agents(api, "traces"));
+  const agents = Array.isArray(agentsQuery.data) ? agentsQuery.data : [];
   const now = new Date();
-  const [preset, setPreset] = useState<(typeof PRESETS)[number]["hours"]>(null);
+  const [preset, setPreset] = useState<RunPreset>(null);
   const [agent, setAgent] = useState(lens.settings.agent_name ?? "");
   const [start, setStart] = useState(localInput(new Date(now.getTime() - 3_600_000)));
   const [end, setEnd] = useState(localInput(now));
@@ -109,7 +80,7 @@ export function RunNowDialog({
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">Traces to review</legend>
             <div className="flex flex-wrap gap-1.5">
-              {PRESETS.map((p) => (
+              {RUN_PRESETS.map((p) => (
                 <button
                   key={p.label}
                   type="button"

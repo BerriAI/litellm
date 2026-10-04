@@ -22,7 +22,7 @@ const ensureTestLocalStorage = () => {
     return store;
   };
 
-  Object.defineProperties(storagePrototype, {
+  const storageMethods: PropertyDescriptorMap = {
     getItem: {
       configurable: true,
       writable: true,
@@ -64,7 +64,8 @@ const ensureTestLocalStorage = () => {
         return Array.from(store.keys())[index] ?? null;
       },
     },
-  });
+  };
+  Object.defineProperties(storagePrototype, storageMethods);
 
   const localStorage = Object.create(storagePrototype);
   storageStores.set(localStorage, new Map<string, string>());
@@ -245,12 +246,12 @@ if (typeof Range !== "undefined" && !("getClientRects" in Range.prototype)) {
     getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
   });
 }
-// The virtualized runs list renders no rows in a zero-height viewport, and jsdom reports 0 for every offsetHeight.
+// Virtualized InspectorTables render no rows in a zero-height viewport, and jsdom reports 0 for every offsetHeight.
 if (typeof HTMLElement !== "undefined") {
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
     configurable: true,
     get(this: HTMLElement) {
-      return this.dataset.testid === "runs-table" ? 720 : 0;
+      return this.dataset.slot === "inspector-table" ? 720 : 0;
     },
   });
 }

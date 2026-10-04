@@ -8,7 +8,14 @@ export function sortedFindings(findings: Finding[]): Finding[] {
   );
 }
 
-export function evidenceTarget(id: string): { source: string; team: string; id: string; traceRef?: string } | null {
+export interface EvidenceTarget {
+  readonly source: string;
+  readonly team: string;
+  readonly id: string;
+  readonly traceRef?: string;
+}
+
+export function evidenceTarget(id: string): EvidenceTarget | null {
   try {
     const parsed: unknown = JSON.parse(atob(id.replace(/-/g, "+").replace(/_/g, "/")));
     if (!Array.isArray(parsed) || ![3, 4].includes(parsed.length) || !parsed.every((item) => typeof item === "string"))

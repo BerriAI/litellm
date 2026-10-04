@@ -1,7 +1,6 @@
-import { useEffect } from "react";
+import { useShortcut } from "@/components/shared/useShortcut";
+
 import { LogEntry } from "../columns";
-import { ignoresLetterShortcut } from "../letterShortcut";
-import { KEY_ESCAPE, KEY_J_LOWER, KEY_J_UPPER, KEY_K_LOWER, KEY_K_UPPER } from "./constants";
 
 interface UseKeyboardNavigationProps {
   isOpen: boolean;
@@ -11,15 +10,7 @@ interface UseKeyboardNavigationProps {
   onSelectLog?: (log: LogEntry) => void;
 }
 
-/**
- * Custom hook for keyboard navigation in the log details drawer.
- * Handles J/K for next/previous and Escape for close.
- *
- * Keyboard shortcuts:
- * - J: Navigate to next log (down)
- * - K: Navigate to previous log (up)
- * - Escape: Close drawer
- */
+/** J and K step through the open log's neighbours and Escape closes the drawer. */
 export function useKeyboardNavigation({
   isOpen,
   currentLog,
@@ -27,51 +18,18 @@ export function useKeyboardNavigation({
   onClose,
   onSelectLog,
 }: UseKeyboardNavigationProps) {
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (ignoresLetterShortcut(e)) return;
-
-      if (!isOpen) return;
-
-      switch (e.key) {
-        case KEY_ESCAPE:
-          onClose();
-          break;
-        case KEY_J_LOWER:
-        case KEY_J_UPPER:
-          selectNextLog();
-          break;
-        case KEY_K_LOWER:
-        case KEY_K_UPPER:
-          selectPreviousLog();
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, currentLog, allLogs]);
-
-  const selectNextLog = () => {
-    if (!currentLog || !allLogs.length || !onSelectLog) return;
-
-    const currentIndex = allLogs.findIndex((l) => l.request_id === currentLog.request_id);
-    if (currentIndex < allLogs.length - 1) {
-      onSelectLog(allLogs[currentIndex + 1]);
-    }
+  const index = currentLog ? allLogs.findIndex((log) => log.request_id === currentLog.request_id) : -1;
+  const selectAt = (next: number) => {
+    const log = allLogs[next];
+    if (currentLog && log) onSelectLog?.(log);
   };
-
+  const selectNextLog = () => selectAt(index + 1);
   const selectPreviousLog = () => {
-    if (!currentLog || !allLogs.length || !onSelectLog) return;
-
-    const currentIndex = allLogs.findIndex((l) => l.request_id === currentLog.request_id);
-    if (currentIndex > 0) {
-      onSelectLog(allLogs[currentIndex - 1]);
-    }
+    if (index > 0) selectAt(index - 1);
   };
-
-  return {
-    selectNextLog,
-    selectPreviousLog,
-  };
+  const modal = { layer: "modal", enabled: isOpen } as const;
+  useShortcut("escape", onClose, { ...modal, description: "close" });
+  useShortcut("j", selectNextLog, { ...modal, description: "log" });
+  useShortcut("k", selectPreviousLog, { ...modal, description: "log" });
+  return { selectNextLog, selectPreviousLog };
 }
