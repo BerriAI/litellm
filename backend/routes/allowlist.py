@@ -60,6 +60,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Tools / agents (registry & policy admin)
     "/v1/tool/",
     "/v1/agents",
+    "/agent/daily/activity/",
     # Guardrails admin
     "/v2/guardrails/",
     # MCP server admin + BYOK OAuth flow (UI-initiated) + dynamic per-server endpoints
@@ -81,6 +82,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Spend / analytics
     "/spend/",
     "/analytics/",
+    "/lens/",
+    "/v1/traces",
     "/global/",
     "/user_agent",
     "/usage/",
@@ -144,6 +147,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
     {
         "/",
         "/routes",
+        "/lens",
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",

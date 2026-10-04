@@ -7,6 +7,7 @@ environment so the same tests run against localhost or a deployed proxy.
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass
 import time
 import uuid
@@ -16,6 +17,7 @@ from typing import Final
 from dotenv import load_dotenv
 from fixture_mode import deterministic_marker, parse_fixture_mode, registration_owner
 from provider_edge import provider_edge_api_base
+from pydantic import TypeAdapter
 
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
 # Compose injects them into the proxy container, but pytest on the host does not
@@ -106,6 +108,7 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+S3_PARTITION_GRANULARITY = os.environ.get("E2E_S3_PARTITION_GRANULARITY", "day")
 
 LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
 LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
@@ -205,6 +208,7 @@ REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
 CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
 MCP_OAUTH_LIVE_OPT_IN_ENV: Final = "E2E_MCP_OAUTH_LIVE"
 PROVIDER_EDGE_HOST_OPT_IN_ENV: Final = "E2E_PROVIDER_EDGE_HOST_REACHABLE"
+OWNED_GATEWAY_OPT_IN_ENV: Final = "E2E_OWNED_GATEWAY"
 OTEL_V2_OPT_IN_ENV: Final = "E2E_OTEL_V2"
 OTEL_TLS_OPT_IN_ENV: Final = "E2E_OTEL_EXPORTER_ENDPOINT"
 SECRET_MANAGER_OPT_IN_ENV: Final = "E2E_SECRET_MANAGER"
@@ -293,6 +297,15 @@ def unique_marker() -> str:
     if parse_fixture_mode(FIXTURE_MODE_RAW) in ("record", "replay"):
         return deterministic_marker()
     return uuid.uuid4().hex[:12]
+
+
+INHERITED_ENV_PREFIXES: Final = ("REDIS_", "MICROSOFT_", "GOOGLE_", "GENERIC_", "PROXY_")
+
+
+def available_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return TypeAdapter(tuple[str, int]).validate_python(listener.getsockname())[1]
 
 
 def settle_propagation(written_at: float) -> None:

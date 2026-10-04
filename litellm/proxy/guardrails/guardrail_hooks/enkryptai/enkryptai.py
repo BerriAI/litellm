@@ -123,6 +123,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
                 url=self.api_url,
                 json=payload,
                 headers=headers,
+                timeout=self.timeout,
             )
             response.raise_for_status()
             response_json: Final = response.json()

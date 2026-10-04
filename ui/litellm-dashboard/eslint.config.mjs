@@ -58,6 +58,10 @@ const eslintConfig = [
               message:
                 "@tremor/react is being phased out; build new UI with shadcn/ui primitives instead of adding tremor imports.",
             },
+            {
+              group: ["zod/*"],
+              message: 'Import Zod from "zod"; the dashboard uses Zod 4 only.',
+            },
           ],
         },
       ],
