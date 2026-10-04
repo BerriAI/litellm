@@ -259,7 +259,7 @@ export type SearchBoxSuggestionsProps = ComponentProps<"div">;
 
 /**
  * The autocomplete listbox under the input: fields, then values, with operator help and key hints.
- * `children` render in the footer beside the key hints, e.g. an `ApiHint`.
+ * `children` render in the footer beside the key hints, e.g. a `CopyCommand`.
  */
 function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProps) {
   const { listId, menu, activeId, icon } = useSearchBox();
@@ -322,20 +322,11 @@ function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProp
   );
 }
 
-export interface ApiEquivalent {
-  /** The part worth reading at a glance, like the SQL predicates the filters became. */
-  readonly preview: string;
-  /** The complete, runnable call that gets copied. */
-  readonly command: string;
-}
-
-export type SearchBoxApiHintProps<F extends string> = {
-  /** The API's dialect, shown as a chip: "SQL". */
-  dialect: string;
-  /** Explains what the API offers beyond the box; shown on hover. */
+export type SearchBoxCopyCommandProps<F extends string> = {
+  /** Explains what gets copied; shown on hover. */
   title: string;
-  /** How the current query reads as a call to the API behind this list. */
-  translate: (query: SearchQuery<F>) => ApiEquivalent;
+  /** The runnable command for the current query. */
+  command: (query: SearchQuery<F>) => string;
 };
 
 type CopyOutcome = { readonly command: string; readonly outcome: "copied" | "failed" } | null;
@@ -345,39 +336,31 @@ const copyLabel = (last: CopyOutcome, command: string): string => {
   return last.outcome === "copied" ? "Copied" : "Copy failed";
 };
 
-/** Mirrors the query as the equivalent API call in the suggestions footer, one click from the clipboard. */
-function ApiHint<F extends string>({ dialect, title, translate }: SearchBoxApiHintProps<F>) {
+/** Puts the current query on the clipboard as an API call, from the suggestions footer. */
+function CopyCommand<F extends string>({ title, command }: SearchBoxCopyCommandProps<F>) {
   const { clauses } = useSearchBox();
   const [last, setLast] = useState<CopyOutcome>(null);
-  const equivalent = useMemo(
-    () => translate(toSearchQuery(clauses as readonly QueryClause<F>[])),
-    [translate, clauses],
-  );
-  const { command } = equivalent;
+  const current = useMemo(() => command(toSearchQuery(clauses as readonly QueryClause<F>[])), [command, clauses]);
   const copy = () =>
-    navigator.clipboard.writeText(command).then(
-      () => setLast({ command, outcome: "copied" }),
-      () => setLast({ command, outcome: "failed" }),
+    navigator.clipboard.writeText(current).then(
+      () => setLast({ command: current, outcome: "copied" }),
+      () => setLast({ command: current, outcome: "failed" }),
     );
-  const label = copyLabel(last, command);
+  const label = copyLabel(last, current);
   return (
-    <div data-slot="search-box-api-hint" title={title} className="ml-auto flex min-w-0 items-center gap-2">
-      <span className="shrink-0 rounded border border-border px-1 font-mono text-xs leading-4">{dialect}</span>
-      <code aria-label={`${dialect} equivalent`} className="truncate font-mono">
-        {equivalent.preview}
-      </code>
-      <Button
-        type="button"
-        variant="ghost"
-        size="xs"
-        className="shrink-0"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={() => void copy()}
-      >
-        {label === "Copied" ? <Check /> : <Copy />}
-        {label}
-      </Button>
-    </div>
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      title={title}
+      data-slot="search-box-copy-command"
+      className="ml-auto shrink-0"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => void copy()}
+    >
+      {label === "Copied" ? <Check /> : <Copy />}
+      {label}
+    </Button>
   );
 }
 
@@ -403,4 +386,4 @@ function Kbd({ children }: { children: ReactNode }) {
   );
 }
 
-export const SearchBox = { Root, Input, Suggestions, ApiHint } as const;
+export const SearchBox = { Root, Input, Suggestions, CopyCommand } as const;

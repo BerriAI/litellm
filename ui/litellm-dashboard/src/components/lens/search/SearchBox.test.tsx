@@ -4,14 +4,14 @@ import { useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
-import { type ApiEquivalent, SearchBox } from "./SearchBox";
+import { SearchBox } from "./SearchBox";
 import type { SearchQuery } from "./searchQuery";
 import { itemValues, type ValueSource } from "./valueSource";
 
 /** A toy API: each filter becomes a flag, so the test can read the translation off the footer. */
-function notesCli(query: SearchQuery<string>): ApiEquivalent {
+function notesCli(query: SearchQuery<string>): string {
   const flags = [...query.text, ...query.filters.map((f) => `--${f.field}${f.op === "neq" ? "!" : ""}=${f.value}`)];
-  return { preview: flags.join(" ") || "(all notes)", command: `notes ${flags.join(" ")}`.trim() };
+  return `notes ${flags.join(" ")}`.trim();
 }
 
 function NoteSearchWithHint({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -25,7 +25,7 @@ function NoteSearchWithHint({ value, onChange }: { value: string; onChange: (val
     >
       <SearchBox.Input placeholder="Search notes" />
       <SearchBox.Suggestions>
-        <SearchBox.ApiHint dialect="CLI" title="The notes CLI takes the same flags" translate={notesCli} />
+        <SearchBox.CopyCommand title="The notes CLI takes the same flags" command={notesCli} />
       </SearchBox.Suggestions>
     </SearchBox.Root>
   );
@@ -230,25 +230,21 @@ describe("SearchBox", () => {
     expect(asked).toEqual(["tag:", "tag:r", "tag:re"]);
   });
 
-  it("shows the API equivalent of the query in the footer and copies the command", async () => {
+  it("copies the command for the current query from the footer and keeps the box open", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<NoteSearchWithHint value="" onChange={onChange} />);
-    const equivalent = () => screen.getByLabelText("CLI equivalent");
-    expect(screen.queryByLabelText("CLI equivalent")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy as curl" })).not.toBeInTheDocument();
     await user.click(box());
-    expect(equivalent()).toHaveTextContent("(all notes)");
     expect(screen.getByTitle("The notes CLI takes the same flags")).toBeVisible();
-    await user.keyboard("-tag:");
-    expect(equivalent()).toHaveTextContent("(all notes)");
-    await user.keyboard("cr");
-    expect(equivalent()).toHaveTextContent("--tag!=cr");
+    await user.keyboard("-tag:cr");
     await user.click(screen.getByRole("button", { name: "Copy as curl" }));
     expect(await navigator.clipboard.readText()).toBe("notes --tag!=cr");
     expect(screen.getByRole("button", { name: "Copied" })).toBeVisible();
     expect(box()).toHaveAttribute("aria-expanded", "true");
     await user.keyboard("o");
-    expect(equivalent()).toHaveTextContent("--tag!=cro");
     expect(screen.getByRole("button", { name: "Copy as curl" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Copy as curl" }));
+    expect(await navigator.clipboard.readText()).toBe("notes --tag!=cro");
   });
 });

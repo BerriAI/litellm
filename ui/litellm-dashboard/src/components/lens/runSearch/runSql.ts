@@ -2,7 +2,6 @@ import { getProxyBaseUrl } from "@/components/networking";
 import type { TimeWindow } from "@/components/view_logs/TraceView/TracesTimeline";
 
 import { valueMatcher } from "../search/language";
-import type { ApiEquivalent } from "../search/SearchBox";
 import type { SearchFilter, SearchQuery } from "../search/searchQuery";
 import type { RunField } from "./runQuery";
 
@@ -76,12 +75,7 @@ export const traceQueryCommand = (sql: string): string =>
     "EOF",
   ].join("\n");
 
-export const runApiEquivalent =
+export const runQueryCommand =
   (range?: TimeWindow) =>
-  (query: SearchQuery<RunField>): ApiEquivalent => {
-    const predicates = runPredicates(query);
-    return {
-      preview: predicates.length ? predicates.join(" AND ") : timeBound(range),
-      command: traceQueryCommand(runQuerySql(query, range)),
-    };
-  };
+  (query: SearchQuery<RunField>): string =>
+    traceQueryCommand(runQuerySql(query, range));

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseQuery } from "../search/language";
 import { toSearchQuery } from "../search/searchQuery";
 import { RUN_QUERY } from "./runQuery";
-import { runApiEquivalent, runPredicates, runQuerySql, traceQueryCommand } from "./runSql";
+import { runPredicates, runQueryCommand, runQuerySql, traceQueryCommand } from "./runSql";
 
 const query = (text: string) => toSearchQuery(parseQuery(RUN_QUERY, text));
 const predicates = (text: string) => runPredicates(query(text));
@@ -82,15 +82,11 @@ describe("traceQueryCommand", () => {
   });
 });
 
-describe("runApiEquivalent", () => {
-  it("previews the predicates and copies the full query", () => {
-    const equivalent = runApiEquivalent(RANGE)(query("agent:researcher status:error"));
-    expect(equivalent.preview).toBe("arrayExists(x -> x ILIKE 'researcher', agents) AND errors > 0");
-    expect(equivalent.command).toContain("AND errors > 0");
-    expect(equivalent.command).toContain(`fromUnixTimestamp64Milli(${RANGE.startMs})`);
-  });
-
-  it("previews the time bound when nothing is filtered", () => {
-    expect(runApiEquivalent()(query("")).preview).toBe("min(StartTs) >= now() - INTERVAL 1 DAY");
+describe("runQueryCommand", () => {
+  it("wraps the bounded, filtered query in the trace query call", () => {
+    const command = runQueryCommand(RANGE)(query("agent:researcher status:error"));
+    expect(command).toBe(traceQueryCommand(runQuerySql(query("agent:researcher status:error"), RANGE)));
+    expect(command).toContain("arrayExists(x -> x ILIKE 'researcher', agents)");
+    expect(command).toContain("errors > 0");
   });
 });
