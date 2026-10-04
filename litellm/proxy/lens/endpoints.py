@@ -20,6 +20,7 @@ from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
 from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
+    ActivitySelection,
     Claim,
     Execution,
     ExecutionContent,
@@ -129,7 +130,7 @@ def required(lens: Lens | None) -> Lens:
     return lens
 
 
-def validate_selection(settings: LensSettings) -> None:
+def validate_selection(settings: ActivitySelection) -> None:
     for identity in settings.execution_ids:
         try:
             source, _, _, _ = parse_execution(identity)
@@ -391,13 +392,13 @@ async def update_finding(lens_id: str, finding_id: str, body: FindingUpdate, aut
 class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
-    settings: LensSettings
+    selection: ActivitySelection
     lookback_hours: LookbackHours = 24
 
 
 @router.post("/preview/sample", response_model=Sample)
 async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Sample:
-    validate_selection(body.settings)
+    validate_selection(body.selection)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
     try:
         start: Final = int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000)
@@ -406,7 +407,7 @@ async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Samp
         raise HTTPException(422, "Preview window exceeds the supported calendar range") from error
     return await source_reader(storage).sample(
         user_scope(auth),
-        body.settings,
+        body.selection,
         start,
         end,
         offset=body.offset,

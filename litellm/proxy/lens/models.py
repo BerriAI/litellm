@@ -45,23 +45,26 @@ class Check(Record):
     enabled: bool = True
 
 
-class LensSettings(Record):
-    name: str = Field(min_length=1)
-    context: str = Field(default="")
+class ActivitySelection(Record):
     source: Literal["traces", "requests", "both"] = "traces"
-    lookback_hours: LookbackHours = 24
     service: str = Field(default="")
     agent_name: str = Field(default="")
     filters: tuple[MetadataFilter, ...] = Field(default=())
+    sample_size: int | None = Field(default=None, ge=1)
+    sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
+    team_id: str = ""
+    execution_ids: tuple[str, ...] = ()
+
+
+class LensSettings(ActivitySelection):
+    name: str = Field(min_length=1)
+    context: str = Field(default="")
+    lookback_hours: LookbackHours = 24
     checks: tuple[Check, ...] = ()
     model: str = Field(min_length=1)
     enabled: bool = True
     interval_minutes: IntervalMinutes = 15
-    sample_size: int | None = Field(default=None, ge=1)
-    sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
     concurrency: int = Field(default=8, ge=1)
-    team_id: str = ""
-    execution_ids: tuple[str, ...] = ()
     monthly_budget: float = Field(default=100, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
