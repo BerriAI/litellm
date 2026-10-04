@@ -3407,7 +3407,8 @@ jobs:
           name: Run MCP integration tests
           command: |
             mkdir -p test-results
-            timeout --signal=TERM 20m uv run --no-sync pytest \
+            env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
+              timeout --signal=TERM 20m uv run --no-sync pytest \
               tests/mcp_tests tests/unit/experimental_mcp_client tests/unit/proxy/_experimental/mcp_server \
               tests/unit/responses/mcp --tb=short -vv --maxfail=10 -n 2 --dist=loadscope --reruns 0 \
               --reruns-delay 1 --timeout=120 --rerun-except "from pytest-timeout" --durations=20 \
