@@ -686,8 +686,8 @@ describe("KeyActivityPanel", () => {
     const searchInput = await screen.findByRole("textbox", { name: "Search keys" });
     const summaryHeading = await screen.findByRole("heading", { name: "Overall Usage" });
 
-    expect(
-      searchInput.compareDocumentPosition(summaryHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(searchInput.compareDocumentPosition(summaryHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 });

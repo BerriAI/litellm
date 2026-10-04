@@ -1286,7 +1286,9 @@ describe("UsagePage", () => {
 
       fireEvent.change(searchInput, { target: { value: "missing model" } });
 
-      expect(within(modelActivityTab).getByText('No models match "missing model" in this date range')).toBeInTheDocument();
+      expect(
+        within(modelActivityTab).getByText('No models match "missing model" in this date range'),
+      ).toBeInTheDocument();
     });
   });
 
