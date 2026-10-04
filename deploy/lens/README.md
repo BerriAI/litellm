@@ -2,9 +2,9 @@
 
 Lens reviews recorded activity and saves evidence-linked findings in the LiteLLM dashboard under Observability, Lens (`/ui/lens/`)
 
-## Install during the preview
+## Install
 
-Coordinated Lens worker releases on GHCR and Docker Hub are not published yet. Use a source build with the same commit and release identity for LiteLLM and the worker. The versioned `stack.yaml` and published Helm instructions apply after the first coordinated release is available; do not substitute an older worker image
+Build LiteLLM and its worker from the same source commit with the same release identity. The worker runs separately and connects to your gateway using a limited worker token
 
 ### New local installation
 
@@ -21,7 +21,15 @@ docker build --build-arg LITELLM_RELEASE_TAG="$LITELLM_RELEASE_TAG" \
 docker compose -f docker/docker-compose.tracing.yml up -d --build
 ```
 
-Open `http://localhost:4002/ui/` and sign in as `admin` with password `sk-1234`. Go to **Lens > Investigations > Connect worker**, choose a model and monthly budget, then **Get install command**. Run that command on the same Docker host where you built the worker. The dashboard shows **Worker connected**
+Open `http://localhost:4002/ui/` and sign in as `admin` with password `sk-1234`. Go to **Lens > Investigations > Connect worker**, choose a model and monthly budget, then **Get install command**. Expand **Using Docker Compose or Helm?** and copy the worker token. In the same terminal, run:
+
+```bash
+export LITELLM_URL=http://litellm:4000
+export LENS_WORKER_TOKEN='<paste-your-worker-token>'
+docker compose -f docker/docker-compose.tracing.yml -f deploy/lens/compose.yaml up -d
+```
+
+The worker joins the gateway's Docker network, and the dashboard shows **Worker connected**. Save the token privately for restarts and upgrades
 
 This stack is for local evaluation: it binds to localhost and uses development database credentials. For a hosted deployment, keep your normal database, keys, networking, and deployment process. Build both images from one source revision with the same `LITELLM_RELEASE_TAG`, publish the worker to your registry, and set `LENS_WORKER_IMAGE` on LiteLLM to that image
 
@@ -29,7 +37,7 @@ This stack is for local evaluation: it binds to localhost and uses development d
 
 Keep your deployment and PostgreSQL database. A working gateway/worker pair can stay as it is until you upgrade both. For a gateway built from source, use its exact commit and `LITELLM_RELEASE_TAG`; a release version or the latest commit on `main` is not a substitute for that source identity
 
-The public development package is `ghcr.io/berriai/litellm-lens-worker-dev:sha-<full-commit>`. It currently publishes amd64 images on Lens-related changes, so an arbitrary source commit may have no image. Check the exact image exists before using it. If it is unavailable, your gateway uses a different release identity, or you need native arm64, build the worker from the gateway's checkout:
+The public development package is `ghcr.io/berriai/litellm-lens-worker-dev:sha-<full-commit>`. It publishes amd64 images on Lens-related changes, so an arbitrary source commit may have no image. Check the exact image exists before using it. If it is unavailable, your gateway uses a different release identity, or you need native arm64, build the worker from the gateway's checkout:
 
 ```bash
 export LITELLM_RELEASE_TAG='<gateway-release-identity>'
@@ -40,9 +48,24 @@ docker build --build-arg LITELLM_RELEASE_TAG="$LITELLM_RELEASE_TAG" \
 
 For a remote worker host, publish that image to a registry the host can pull from. Set the gateway's `LENS_WORKER_IMAGE` to the resulting image reference, restart the gateway using its normal deployment process, then copy its install command. Prefer the published image digest for hosted installations. Do not change the gateway's release identity just to accept another worker
 
-The published `v1.105.0-rc.1` predates coordinated Lens support. These source instructions require the gateway and worker compatibility support in this checkout; they do not make the existing RC a coordinated Lens release
+For Kubernetes or Render, run the standalone worker using `LITELLM_URL` and `LENS_WORKER_TOKEN` from setup. Keep existing databases and secrets. The worker needs no inbound port.
 
-For Kubernetes or Render, run the standalone worker using `LITELLM_URL` and `LENS_WORKER_TOKEN` from setup. Keep existing databases and secrets. The worker needs no inbound port. Published Helm releases will include the optional worker after coordinated publishing starts
+## Helm
+
+The componentized source chart at `helm/litellm` includes an optional Lens worker. Use the chart from the same checkout as your gateway and keep your component image overrides in your values. Configure PostgreSQL and ClickHouse as usual, install the chart, then obtain a limited worker token from Lens setup. Store it in a Kubernetes Secret and enable the worker in your values:
+
+```yaml
+lensWorker:
+  enabled: true
+  image:
+    repository: <your-worker-image-repository>
+    digest: sha256:<matching-worker-image-digest>
+  tokenSecret:
+    name: litellm-lens-worker
+    key: token
+```
+
+Set the worker repository and digest explicitly to an image built from the gateway's source commit and release identity. The chart connects the worker to the backend service. Keep these values and the Secret when upgrading the chart and update the gateway and worker image overrides together. `lensWorker.replicaCount` controls simultaneous investigations. To use a private registry or external proxy, set `lensWorker.image.repository`, `lensWorker.image.digest` (or `tag` for a source build), and `lensWorker.url`. A digest takes precedence over the tag. The dashboard uses the chart's worker image for standalone install commands too
 
 ## Standalone worker
 
@@ -65,11 +88,11 @@ In **Lens > Investigations**, click **Connect worker**, choose an analysis model
 
 The command already contains the compatible worker image and one worker token. The selected virtual key stays on the proxy; its secret is never sent to the worker. Once the matching image is available on the worker host, no second LiteLLM deployment is needed. Keep the command private because it includes the token. The LiteLLM release provides the dashboard and APIs; the container only runs background analysis
 
-The dashboard uses the gateway's `LENS_WORKER_IMAGE` override when set. Public `:sha-<commit>` development images must match both the gateway commit and release identity. Coordinated release images will support Linux amd64 and arm64
+The dashboard uses the gateway's `LENS_WORKER_IMAGE` override when set. Public `:sha-<commit>` development images must match both the gateway commit and release identity. Build from source for the worker host's native architecture
 
 After upgrading the gateway, update the worker image and redeploy it while keeping its proxy URL and token. Existing containers do not update automatically. If an investigation reports a worker compatibility error, update the image before retrying
 
-For deployments managed with Compose, download `compose.yaml` and provide `LITELLM_URL`, `LENS_WORKER_TOKEN`, and an explicit `LENS_WORKER_IMAGE` in a private environment file. The `LITELLM_VERSION` shortcut requires a coordinated worker release and is not available during the preview:
+For deployments managed with Compose, download `compose.yaml` and provide `LITELLM_URL`, `LENS_WORKER_TOKEN`, and an explicit `LENS_WORKER_IMAGE` in a private environment file:
 
 ```bash
 docker compose --env-file /path/to/lens.env -f compose.yaml up -d
@@ -208,9 +231,9 @@ Upgrades using `--use_prisma_db_push` stop before schema changes if any legacy L
 
 ## Release compatibility
 
-Source builds carry `LITELLM_RELEASE_TAG`; coordinated release builds will carry their matching release version. A worker announces its release and protocol before claiming an investigation. A mismatch returns HTTP 409 with the required image, leaving queued investigations untouched. During a rolling upgrade, workers wait for a gateway from their release
+Gateway and worker builds carry the same `LITELLM_RELEASE_TAG`. A worker announces its release and protocol before claiming an investigation. A mismatch returns HTTP 409 with the required image, leaving queued investigations untouched. During a rolling upgrade, workers wait for a gateway from their release
 
-The dashboard reads its image from the running gateway. `LENS_WORKER_IMAGE` overrides the registry/image for private deployments. Worker-only Compose accepts `LITELLM_VERSION` (without `v`) or an explicit `LENS_WORKER_IMAGE`. After coordinated publishing starts, release workers will be available as `ghcr.io/berriai/litellm-lens-worker:vX.Y.Z` and `docker.io/litellm/litellm-lens-worker:vX.Y.Z`, including matching RC/dev suffixes, on amd64 and arm64
+The dashboard reads its image from the running gateway. `LENS_WORKER_IMAGE` overrides the registry/image for private deployments. Set an explicit `LENS_WORKER_IMAGE` for worker-only Compose. Verify that the image exists and matches the gateway before deploying it
 
 For source development, use `make lens-dev`, which gives the proxy and source worker the same commit identity. For custom containers, build both from the same checkout with `--build-arg LITELLM_RELEASE_TAG=sha-$(git rev-parse HEAD)` and set the proxy's `LENS_WORKER_IMAGE` to the worker image you built. An unlabelled custom build refuses worker setup and claims instead of guessing from the Python package version. Normal package-index installations use their installed release version
 
