@@ -1,7 +1,7 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { createLensDemoData } from "./demo/createLensDemo";
 
@@ -33,29 +33,27 @@ describe("Lens interactive demo", () => {
     expect(await screen.findByText("Enable tracing")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Preview sample" }));
     expect(await screen.findByText("Where is order #1042?")).toBeVisible();
-    expect(screen.getByText("You’re viewing demo data")).toBeVisible();
     expect(screen.getByRole("switch", { name: "Demo data" })).toBeChecked();
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
     expect(screen.queryByRole("button", { name: "Set up tracing" })).not.toBeInTheDocument();
     network.mockClear();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(screen.getByText("Where is order #1042?")).toBeVisible();
-    fireEvent.change(screen.getByPlaceholderText("Search input or trace ID"), { target: { value: "headphones" } });
+    const search = screen.getByRole("combobox", { name: "Search runs" });
+    await user.type(search, "headphones");
+    await waitFor(() => expect(screen.queryByText("Where is order #1042?")).not.toBeInTheDocument());
     expect(screen.getByText("Can I return my headphones?")).toBeVisible();
-    expect(screen.queryByText("Where is order #1042?")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "Search runs" }), { target: { value: "" } });
-    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by agent" }), "support_agent");
-    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by status" }), "Failed");
-    expect(within(screen.getByRole("table", { name: "Agent runs" })).getAllByRole("row")).toHaveLength(4);
-    await expectUrl(onUrlUpdate, (url) => expect(url.get("agent")).toBe("support_agent"));
-    await expectUrl(onUrlUpdate, (url) => expect(url.get("status")).toBe("error"));
+    await user.clear(search);
+    await user.type(search, "agent:support_agent status:error");
+    const table = screen.getByRole("table", { name: "Agent runs" });
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(4));
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("q")).toBe("agent:support_agent status:error"));
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
     expect(await screen.findByRole("row", { name: /Support quality/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "New investigation" })).not.toBeInTheDocument();
     expect(network).not.toHaveBeenCalled();
     await user.click(screen.getByRole("switch", { name: "Demo data" }));
     expect(await screen.findByText(/Investigations require proxy administrator access/)).toBeVisible();
-    expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(screen.queryByText("Can I return my headphones?")).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Demo data" })).not.toBeChecked();
     await expectUrl(onUrlUpdate, (url) => expect([...url.entries()]).toEqual([["tab", "investigations"]]));
@@ -68,7 +66,7 @@ describe("Lens interactive demo", () => {
       searchParams: "?demo=true",
       onUrlUpdate,
     });
-    expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
+    expect(await screen.findByRole("switch", { name: "Demo data" })).toBeChecked();
     await user.click(await screen.findByText("Where is order #1042?"));
     const drawer = await screen.findByRole("complementary", { name: "Trace details" });
     await expectUrl(onUrlUpdate, (url) => expect(url.get("trace")).toBeTruthy());
@@ -179,9 +177,7 @@ describe("Lens interactive demo", () => {
     await user.click(within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Traces" }));
     expect(await screen.findByText("Where is order #1042?")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Set up tracing" }));
-    expect(await screen.findByRole("heading", { name: "Connect another agent" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set up tracing" })).not.toBeInTheDocument();
   });
 
   it("shows the header preview only for the active tab that still needs setup", async () => {
@@ -204,5 +200,26 @@ describe("Lens interactive demo", () => {
     await user.click(await screen.findByRole("button", { name: "Preview sample" }));
     expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
+  });
+
+  it("marks the Investigations tab while a scan runs and clears it once the scan finishes", async () => {
+    const saved = createLensDemoData().lenses[0];
+    const withJob = (status: (typeof saved.jobs)[number]["status"]) => ({
+      ...saved,
+      jobs: [{ ...saved.jobs[0], status }, ...saved.jobs.slice(1)],
+    });
+    const lenses = vi.fn(() => [withJob("running")]);
+    network.mockImplementation(async (input) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/lens") return Response.json({ lenses: lenses(), workers: [], tracing_enabled: false });
+      if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+      return Response.json({ data: [], traces: false, requests: false });
+    });
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
+    const tab = within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" });
+    await waitFor(() => expect(tab).toHaveAccessibleDescription("An investigation is running"));
+    lenses.mockReturnValue([withJob("completed")]);
+    await testQueryClient.refetchQueries({ queryKey: ["lens", "list"] });
+    await waitFor(() => expect(tab).toHaveAccessibleDescription(""));
   });
 });

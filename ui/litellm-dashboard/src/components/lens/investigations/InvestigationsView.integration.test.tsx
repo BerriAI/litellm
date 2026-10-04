@@ -482,6 +482,24 @@ it("allows retrying a failed trace readiness check without treating it as an emp
   expect(await screen.findByRole("link", { name: "Set up traces" })).toBeVisible();
 });
 
+it("shows a centered failure with a retry when investigations cannot load, then recovers", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const list = vi
+    .fn()
+    .mockRejectedValueOnce(new ApiError("Proxy timed out", 504, {}))
+    .mockResolvedValue({ lenses: [], workers: [], tracing_enabled: true });
+  vi.mocked(apiClient.get).mockImplementation(async (path) => (path === "/lens" ? list() : { data: [] }));
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Couldn't load investigations");
+  expect(alert).toHaveTextContent("Proxy timed out");
+  await user.click(within(alert).getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("heading", { name: "Find what needs attention" })).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("keeps saved investigations accessible when tracing is disabled", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
@@ -585,6 +603,8 @@ it("lists investigations without edit or run controls for read-only viewers", as
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/lens/runs") return [];
+    if (path === "/lens/agents") return [];
     return { data: [] };
   });
   const user = userEvent.setup();
@@ -592,6 +612,67 @@ it("lists investigations without edit or run controls for read-only viewers", as
   const row = await screen.findByRole("row", { name: lens.settings.name });
   expect(within(row).queryByRole("button", { name: /now/ })).not.toBeInTheDocument();
   await user.click(row);
+  expect(await screen.findByRole("heading", { level: 2, name: lens.settings.name })).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("opens investigations from the keyboard without treating nested edit keys as row activation", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/lens/runs") return [];
+    if (path === "/lens/agents") return [];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  const row = await screen.findByRole("row", { name: lens.settings.name });
+  row.focus();
+  expect(row).toHaveFocus();
+  await user.keyboard("{Enter}");
+  expect(await screen.findByRole("heading", { level: 2, name: lens.settings.name })).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  const editButton = await screen.findByRole("button", { name: `Edit ${lens.settings.name}` });
+  editButton.focus();
+  expect(editButton).toHaveFocus();
+  await user.keyboard("{Enter}");
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
+  expect(screen.queryByRole("heading", { level: 2, name: lens.settings.name })).not.toBeInTheDocument();
+});
+
+it("opens a failed investigation's details from its row and edits only from the pencil", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const job = {
+    ...lens.jobs[0],
+    id: "failed-run",
+    status: "failed" as const,
+    stage: "Failed",
+    error: "boom",
+    findings: [],
+  };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/lens/runs") return [job];
+    if (path === "/lens/lens/runs/failed-run") return job;
+    if (path === "/lens/agents") return [];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  await user.click(await screen.findByRole("button", { name: `Edit ${lens.settings.name}` }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await user.click(screen.getByRole("row", { name: lens.settings.name }));
+  expect(within(await screen.findByRole("alert")).getByLabelText("Investigation error")).toHaveTextContent("boom");
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
