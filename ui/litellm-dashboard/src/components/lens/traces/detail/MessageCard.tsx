@@ -8,7 +8,7 @@ import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/cva.config";
 
 import { FoldChevron } from "../ui/Collapse";
-import { CopyButton } from "../ui/CopyButton";
+import CopyButton from "@/components/shared/CopyButton";
 import { displayValue, type KeyValue, KeyValueRows, objectEntries } from "./KeyValueRows";
 import type { TraceMessage, TraceToolCall } from "../types";
 
@@ -94,7 +94,13 @@ export function ToolCallBlock({ call }: { call: TraceToolCall }) {
       <div className="flex items-center gap-2 py-1">
         <RoleTile role="tool" />
         <span className="min-w-0 truncate text-sm font-medium">{call.name}</span>
-        <CopyButton value={call.name} label={`Copy ${call.name} name`} iconOnly className={INLINE_COPY} />
+        <CopyButton
+          variant="action"
+          value={call.name}
+          label={`Copy ${call.name} name`}
+          iconOnly
+          className={INLINE_COPY}
+        />
       </div>
       <KeyValueRows entries={entries} />
     </div>
@@ -114,7 +120,7 @@ export function MessageCard({ message }: { message: TraceMessage; model: string 
       <div className={cn(HEADER, "sticky top-10 z-sticky", expanded ? "rounded-t-sm border-b-0" : "rounded-sm")}>
         <FoldTile label={label} open={open} onToggle={() => setOpen((v) => !v)} />
         <span className={LABEL}>{label}</span>
-        <CopyButton value={copyValue} label={`Copy ${label}`} iconOnly className={CARD_COPY} />
+        <CopyButton variant="action" value={copyValue} label={`Copy ${label}`} iconOnly className={CARD_COPY} />
       </div>
       {expanded && (
         <div
@@ -146,7 +152,7 @@ export function ToolResultCard({ name, result, failed = false }: { name: string;
         <RoleTile role="tool" failed={failed} />
         <span className="flex min-w-0 max-w-[50%] shrink-0 items-center gap-1.5">
           <span className={cn(LABEL, failed && "text-destructive")}>{name}</span>
-          <CopyButton value={name} label={`Copy ${name} name`} iconOnly className={INLINE_COPY} />
+          <CopyButton variant="action" value={name} label={`Copy ${name} name`} iconOnly className={INLINE_COPY} />
         </span>
         {expandable ? (
           <button
@@ -162,7 +168,7 @@ export function ToolResultCard({ name, result, failed = false }: { name: string;
         ) : (
           <span className={cn("min-w-0 break-words text-sm leading-5", tone)}>{result || "No output"}</span>
         )}
-        <CopyButton value={result} label={`Copy ${name} result`} iconOnly className={CARD_COPY} />
+        <CopyButton variant="action" value={result} label={`Copy ${name} result`} iconOnly className={CARD_COPY} />
       </div>
       {open && (
         <pre
