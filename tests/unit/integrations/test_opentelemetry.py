@@ -1754,6 +1754,25 @@ class TestOpenTelemetry(unittest.TestCase):
 
         mock_tracer.start_span.assert_not_called()
 
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
+    @patch("litellm.turn_off_message_logging", False)
+    def test_maybe_log_raw_request_skips_when_request_header_enables_redaction(self):
+        otel = OpenTelemetry()
+        otel.message_logging = True
+        mock_tracer = MagicMock()
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+
+        for header in (
+            "x-litellm-enable-message-redaction",
+            "litellm-enable-message-redaction",
+        ):
+            kwargs = {"litellm_params": {"metadata": {"headers": {header: "true"}}}}
+            otel._maybe_log_raw_request(
+                kwargs, {}, datetime.now(), datetime.now(), MagicMock()
+            )
+
+        mock_tracer.start_span.assert_not_called()
+
 
 class TestOpenTelemetryToNs(unittest.TestCase):
     """``_to_ns`` converts a span boundary to epoch nanoseconds. Service spans now
