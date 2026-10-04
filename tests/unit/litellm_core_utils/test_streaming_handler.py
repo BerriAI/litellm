@@ -1,3 +1,4 @@
+import datetime
 import json
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -2378,7 +2379,7 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
             messages=messages,
             stream=True,
             call_type="completion",
-            start_time=time.time(),
+            start_time=datetime.datetime(2025, 3, 3, 21, 38, 10),
             litellm_call_id="no-usage-call",
             function_id="no-usage-fn",
         ),
@@ -2396,6 +2397,10 @@ async def test_stream_without_provider_usage_falls_back_to_the_token_estimate(
     assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens) == expected
     hidden_usage: Final = collected[-1]._hidden_params["usage"]
     assert (hidden_usage.prompt_tokens, hidden_usage.completion_tokens) == expected
+
+    rates: Final = litellm.model_cost[model]
+    spend: Final = expected[0] * rates["input_cost_per_token"] + expected[1] * rates["output_cost_per_token"]
+    assert litellm.completion_cost(completion_response=assembled) == pytest.approx(spend)
 
 
 @pytest.mark.asyncio
