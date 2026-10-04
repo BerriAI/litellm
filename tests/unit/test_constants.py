@@ -68,3 +68,36 @@ def _build_constant_env_var_map() -> dict[str, str]:
             env_var_map[constant_name] = env_var_name
 
     return env_var_map
+
+
+@pytest.mark.parametrize(
+    ("cli_value", "litellm_cli_value", "expected"),
+    [
+        ("48", None, 48),
+        (None, "48", 48),
+        (None, None, 24),
+        ("48", "72", 48),
+    ],
+    ids=("canonical-only", "alias-only", "default", "canonical-wins"),
+)
+def test_cli_jwt_expiration_hours_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    cli_value: str | None,
+    litellm_cli_value: str | None,
+    expected: int,
+) -> None:
+    monkeypatch.delenv("CLI_JWT_EXPIRATION_HOURS", raising=False)
+    monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
+
+    try:
+        if cli_value is not None:
+            monkeypatch.setenv("CLI_JWT_EXPIRATION_HOURS", cli_value)
+        if litellm_cli_value is not None:
+            monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", litellm_cli_value)
+
+        importlib.reload(litellm.constants)
+        assert litellm.constants.CLI_JWT_EXPIRATION_HOURS == expected
+    finally:
+        monkeypatch.delenv("CLI_JWT_EXPIRATION_HOURS", raising=False)
+        monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
+        importlib.reload(litellm.constants)
