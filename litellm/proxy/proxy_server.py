@@ -911,7 +911,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         try:
             await litellm.cache.disconnect()
         except Exception as e:  # noqa: BLE001  # cache teardown must not abort remaining shutdown steps
-            verbose_proxy_logger.debug("Error disconnecting litellm.cache: %s", e)
+            verbose_proxy_logger.warning("Error disconnecting litellm.cache: %s", e)
 
     await jwt_handler.close()
 
