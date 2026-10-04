@@ -315,7 +315,7 @@ def test_parse_openapi_spec_rejects_non_object_document() -> None:
 def test_parse_openapi_spec_rejects_yaml_merge_aliases() -> None:
     import yaml
 
-    with pytest.raises(yaml.YAMLError, match="YAML merge keys are not supported"):
+    with pytest.raises(yaml.YAMLError, match="YAML aliases are not supported"):
         gen._parse_openapi_spec(
             """
 base: &base
@@ -326,6 +326,23 @@ base: &base
   paths: {}
 merged:
   <<: *base
+"""
+        )
+
+
+def test_parse_openapi_spec_rejects_yaml_aliases() -> None:
+    import yaml
+
+    with pytest.raises(yaml.YAMLError, match="YAML aliases are not supported"):
+        gen._parse_openapi_spec(
+            """
+shared: &shared
+  type: string
+components:
+  schemas:
+    Request:
+      properties:
+        first: *shared
 """
         )
 
