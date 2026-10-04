@@ -157,7 +157,7 @@ describe("RunDrawer", () => {
         onFullScreenChange={vi.fn()}
       />,
     );
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
   });
 
@@ -187,7 +187,7 @@ describe("RunDrawer", () => {
       for (const key of ["j", "k", "Escape"]) fireEvent.keyDown(target, { key });
     }
     expect(onSelect).not.toHaveBeenCalled();
-    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "j" });
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(traceRefOf(runs[2]));
   });
 

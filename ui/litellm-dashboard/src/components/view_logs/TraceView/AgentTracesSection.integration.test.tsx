@@ -423,7 +423,7 @@ describe("AgentTracesSection", () => {
     expect(rows[0]).toHaveAttribute("aria-selected", "false");
 
     fireEvent.click(rows[1]);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(rows[1]).toHaveAttribute("aria-selected", "false");
   });
 
@@ -433,9 +433,9 @@ describe("AgentTracesSection", () => {
     const rows = await screen.findAllByTestId("agent-trace-row");
 
     fireEvent.click(rows[0]);
-    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "j" });
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
-    fireEvent.keyDown(window, { key: "k" });
+    fireEvent.keyDown(document.body, { key: "k" });
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[0].trace_id}`);
     expect(screen.getByRole("button", { name: "Previous trace (K)" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
@@ -490,7 +490,7 @@ describe("AgentTracesSection", () => {
     expect(lastUrl(onUrlUpdate).get("trace_ref")).toBe(runs[1].trace_ref ?? null);
     expect(onUrlUpdate.mock.lastCall?.[0].options.history).toBe("push");
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
     expect(rows[1]).toHaveAttribute("aria-selected", "false");
   });

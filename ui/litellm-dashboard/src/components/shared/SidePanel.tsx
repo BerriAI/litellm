@@ -2,10 +2,10 @@
 
 import { ArrowLeft, ChevronDown, ChevronsRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useEventListener, useLocalStorage, useMediaQuery, useOnClickOutside, useWindowSize } from "usehooks-ts";
+import { useLocalStorage, useMediaQuery, useOnClickOutside, useWindowSize } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
-import { ignoresLetterShortcut } from "@/components/view_logs/letterShortcut";
+import { useShortcut } from "@/components/shared/useShortcut";
 
 const WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 const MIN_WIDTH = 700;
@@ -22,11 +22,6 @@ export const PANEL_TRIGGER = { "data-side-panel-trigger": "" } as const;
 
 const KEEPS_PANEL_OPEN =
   "[data-side-panel-trigger], [role='dialog'], [role='menu'], [role='listbox'], [data-radix-popper-content-wrapper]";
-
-const OWNS_ITS_KEYS = "[role='dialog'], [role='menu'], [role='listbox']";
-
-const insideKeyOwner = (event: KeyboardEvent): boolean =>
-  event.target instanceof Element && event.target.closest(OWNS_ITS_KEYS) !== null;
 
 function useDrawerWidth() {
   const { width: viewport } = useWindowSize();
@@ -156,19 +151,10 @@ export function SidePanel<T>({
   const panelRef = useRef<HTMLElement>(null);
   const { shown, closing, onExited } = useExitPresence(item, itemKey);
 
-  useEventListener("keydown", (event) => {
-    if (item === null || ignoresLetterShortcut(event) || insideKeyOwner(event)) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    } else if (event.key === "j") {
-      event.preventDefault();
-      onStep(1);
-    } else if (event.key === "k") {
-      event.preventDefault();
-      onStep(-1);
-    }
-  });
+  const open = item !== null;
+  useShortcut("escape", onClose, { enabled: open, description: "close" });
+  useShortcut("j", () => onStep(1), { enabled: open, description: noun });
+  useShortcut("k", () => onStep(-1), { enabled: open, description: noun });
 
   useOnClickOutside(panelRef as RefObject<HTMLElement>, (event) => {
     if (item === null || (event instanceof MouseEvent && event.button !== 0)) return;

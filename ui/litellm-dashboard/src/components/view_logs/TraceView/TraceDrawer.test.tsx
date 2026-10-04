@@ -131,6 +131,7 @@ describe("RunView", () => {
     await user.keyboard("{ArrowDown}");
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     expect(screen.queryByRole("button", { name: "Back to runs" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldEsc close");
   });
 
   it("keeps the current run on screen, inert, while an unvisited run loads in the drawer", async () => {
@@ -176,8 +177,10 @@ describe("RunView", () => {
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     await user.keyboard("k");
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+    expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldJ/K moveEsc close");
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldJ/K move");
   });
 
   it.each(["button", "Escape"])("reopens the selected step after closing details with %s", async (method) => {

@@ -4,6 +4,7 @@ import "./globals.css";
 
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { ThemeProvider } from "next-themes";
+import { HotkeysProvider } from "react-hotkeys-hook";
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
@@ -30,7 +31,9 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
           <NuqsAdapter>
             <ReactQueryProvider>
-              <AuthProvider>{children}</AuthProvider>
+              <HotkeysProvider>
+                <AuthProvider>{children}</AuthProvider>
+              </HotkeysProvider>
               <Toaster />
             </ReactQueryProvider>
           </NuqsAdapter>
