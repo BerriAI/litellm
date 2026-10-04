@@ -3934,34 +3934,18 @@ class TestEnsureOutputItemContentPartAdded:
 
     def _make_iterator(self):
         """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
+        from unittest.mock import MagicMock
+
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
 
-        iterator = LiteLLMCompletionStreamingIterator.__new__(
-            LiteLLMCompletionStreamingIterator
+        return LiteLLMCompletionStreamingIterator(
+            model="test-model",
+            litellm_custom_stream_wrapper=MagicMock(),
+            request_input="test",
+            responses_api_request={},
         )
-        iterator.sent_output_item_added_event = False
-        iterator.sent_content_part_added_event = False
-        iterator._sequence_number = 0
-        iterator._cached_item_id = None
-        iterator._cached_reasoning_item_id = None
-        iterator._reasoning_active = False
-        iterator._pending_response_events = []
-        iterator._pending_tool_events = []
-        iterator._tool_output_index_by_call_id = {}
-        iterator._tool_args_by_call_id = {}
-        iterator._tool_item_id_by_call_id = {}
-        iterator._tool_call_id_by_index = {}
-        iterator._ambiguous_tool_call_indexes = set()
-        iterator._next_tool_output_index = 1
-        iterator._final_tool_events_queued = False
-        iterator._custom_tool_names = set()
-        iterator.responses_api_request = {}
-        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
-        iterator._web_search_calls = {}
-        iterator._queued_web_search_call_ids = set()
-        return iterator
 
     def _make_text_chunk(self):
         """Create a mock ModelResponseStream with a text delta."""

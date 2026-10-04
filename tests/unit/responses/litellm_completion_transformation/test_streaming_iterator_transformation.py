@@ -11,10 +11,12 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai.types.responses import ResponseReasoningItem
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -1275,3 +1277,253 @@ def test_reasoning_done_without_a_response_snapshot_preserves_summary() -> None:
         "type": "reasoning",
         "summary": [{"type": "summary_text", "text": "The response snapshot is not available yet."}],
     }
+
+
+def _reasoning_block_chunk(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    reasoning_content=block.get("thinking", ""),
+                    thinking_blocks=[block],
+                ),
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("separator", ["text", "tool", "web_search", "web_search_error"])
+@pytest.mark.parametrize("reasoning_kind", ["visible", "signature-only", "redacted"])
+@pytest.mark.parametrize("finish_with_text", [True, False], ids=["text-ending", "upstream-exhausted"])
+@pytest.mark.asyncio
+async def test_resumed_reasoning_items_keep_complete_replay_payloads(
+    separator: str, reasoning_kind: str, finish_with_text: bool
+) -> None:
+    call_id: Final = "srvtoolu_resume"
+    blocks: Final = tuple(
+        ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data=f"{phase}-redacted")
+        if reasoning_kind == "redacted"
+        else ChatCompletionThinkingBlock(
+            type="thinking", thinking=phase if reasoning_kind == "visible" else "", signature=f"{phase}-signature"
+        )
+        for phase in ("first", "second")
+    )
+    middle: Final = (
+        (_chunk("interim"),)
+        if separator == "text"
+        else (_tool_call_chunk(),)
+        if separator == "tool"
+        else tuple(
+            ModelResponseStream(
+                id=CHAT_COMPLETION_ID,
+                model="test-model",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            tool_calls=[
+                                {
+                                    "id": call_id,
+                                    "index": 0,
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query":"example"}'},
+                                }
+                            ]
+                            if status == "in_progress"
+                            else None,
+                            provider_specific_fields={
+                                "web_search_calls": [
+                                    build_web_search_call(call_id, {"query": "example"}, {"content": []}, status=status)
+                                ]
+                            },
+                        ),
+                    )
+                ],
+            )
+            for status in ("in_progress", "failed" if separator == "web_search_error" else "completed")
+        )
+    )
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_block_chunk(blocks[0]),
+            *middle,
+            _reasoning_block_chunk(blocks[1]),
+            *([_chunk("answer", finish_reason="stop")] if finish_with_text else []),
+        ]
+    )
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    added: Final = [event for event in events if event["type"] == "response.output_item.added"]
+    done: Final = [
+        event
+        for event in events
+        if event["type"] == "response.output_item.done" and event["item"]["type"] == "reasoning"
+    ]
+    completed: Final = events[-1]["response"]
+    assert len(done) == 2
+    assert len({event["item"]["id"] for event in done}) == 2
+    assert [event["output_index"] for event in added] == list(range(len(added)))
+    assert [item["id"] for item in completed["output"]] == [event["item"]["id"] for event in added]
+
+    for event, block in zip(done, blocks):
+        item: Final = event["item"]
+        expected: Final = [block]
+        text: Final = block.get("thinking", "")
+        assert json.loads(item["encrypted_content"]) == expected
+        assert item["summary"] == [{"type": "summary_text", "text": text}]
+        assert completed["output"][event["output_index"]]["encrypted_content"] == item["encrypted_content"]
+        assert completed["output"][event["output_index"]]["content"] == (
+            [{"type": "output_text", "text": text, "annotations": []}] if text else []
+        )
+        parsed: Final = ResponseReasoningItem.model_validate_json(json.dumps(item))
+        assert parsed.encrypted_content == item["encrypted_content"]
+        replay: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item=item, replay_reasoning=True
+        )
+        assert replay[0]["thinking_blocks"] == expected
+
+    announced: Final = {event["item"]["id"]: event["output_index"] for event in added}
+    for event in events:
+        if event["type"].startswith("response.reasoning_summary"):
+            assert event["output_index"] == announced[event["item_id"]]
+
+
+@pytest.mark.parametrize("combine_result_and_reasoning", [True, False])
+@pytest.mark.parametrize("visible", [True, False], ids=["visible", "signature-only"])
+@pytest.mark.asyncio
+async def test_reasoning_after_initial_server_tool_keeps_item_indexes(
+    combine_result_and_reasoning: bool, visible: bool
+) -> None:
+    call_id: Final = "srvtoolu_first"
+    block: Final = ChatCompletionThinkingBlock(
+        type="thinking", thinking="after search" if visible else "", signature="after-search-signature"
+    )
+    start: Final = Delta(
+        tool_calls=[
+            {
+                "id": call_id,
+                "index": 0,
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query":"example"}'},
+            }
+        ],
+        provider_specific_fields={
+            "web_search_calls": [
+                build_web_search_call(call_id, {"query": "example"}, {"content": []}, status="in_progress")
+            ]
+        },
+    )
+    result_fields: Final = {"web_search_calls": [build_web_search_call(call_id, {"query": "example"}, {"content": []})]}
+    deltas: Final = (
+        start,
+        *(() if combine_result_and_reasoning else (Delta(provider_specific_fields=result_fields),)),
+        Delta(
+            reasoning_content=block["thinking"],
+            thinking_blocks=[block],
+            provider_specific_fields=result_fields if combine_result_and_reasoning else None,
+        ),
+        Delta(content="answer"),
+    )
+    iterator: Final = _build_iterator(
+        [
+            ModelResponseStream(
+                id=CHAT_COMPLETION_ID,
+                model="test-model",
+                choices=[
+                    StreamingChoices(index=0, delta=delta, finish_reason="stop" if index == len(deltas) - 1 else None)
+                ],
+            )
+            for index, delta in enumerate(deltas)
+        ]
+    )
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    added: Final = [event for event in events if event["type"] == "response.output_item.added"]
+    assert [event["output_index"] for event in added] == [0, 1, 2]
+    assert [event["item"]["type"] for event in added] == ["web_search_call", "reasoning", "message"]
+    assert next(
+        index for index, event in enumerate(events) if event["type"] == "response.web_search_call.completed"
+    ) < next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "response.output_item.added" and event["item"]["type"] == "reasoning"
+    )
+    completed: Final = events[-1]["response"]["output"]
+    assert [item["id"] for item in completed] == [event["item"]["id"] for event in added]
+    done: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.done" and event["item"]["type"] == "reasoning"
+    )
+    assert done["output_index"] == 1
+    assert json.loads(done["item"]["encrypted_content"]) == [block]
+    assert done["item"]["encrypted_content"] == completed[1]["encrypted_content"]
+
+
+@pytest.mark.asyncio
+async def test_resumed_thinking_blocks_without_reasoning_content_preserve_text() -> None:
+    expected: Final = [
+        {"type": "thinking", "thinking": "first", "signature": "first-signature"},
+        {"type": "thinking", "thinking": "second", "signature": "second-signature"},
+    ]
+    groups: Final = tuple(
+        (
+            ModelResponseStream(
+                id=CHAT_COMPLETION_ID,
+                model="test-model",
+                choices=[
+                    StreamingChoices(
+                        index=0, delta=Delta(thinking_blocks=[{"type": "thinking", "thinking": block["thinking"]}])
+                    )
+                ],
+            ),
+            _signature_only_thinking_chunk(block["signature"]),
+            _chunk("interim"),
+        )
+        for block in expected
+    )
+    chunks: Final = (*chain.from_iterable(groups), _chunk("answer", finish_reason="stop"))
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in _build_iterator(chunks)]
+    done: Final = [
+        event["item"]
+        for event in events
+        if event["type"] == "response.output_item.done" and event["item"]["type"] == "reasoning"
+    ]
+    completed: Final = [item for item in events[-1]["response"]["output"] if item["type"] == "reasoning"]
+    assert len(done) == 2
+    assert [json.loads(item["encrypted_content"]) for item in done] == [[block] for block in expected]
+    assert [item["encrypted_content"] for item in done] == [item["encrypted_content"] for item in completed]
+
+
+@pytest.mark.parametrize("resume_reasoning", [False, True])
+@pytest.mark.asyncio
+async def test_signed_tool_response_has_no_unannounced_empty_message(resume_reasoning: bool) -> None:
+    chunks: Final = (
+        _reasoning_block_chunk(
+            ChatCompletionThinkingBlock(type="thinking", thinking="first", signature="first-signature")
+        ),
+        _tool_call_chunk(),
+        *(
+            (
+                _reasoning_block_chunk(
+                    ChatCompletionThinkingBlock(type="thinking", thinking="second", signature="second-signature")
+                ),
+            )
+            if resume_reasoning
+            else ()
+        ),
+        _chunk("", finish_reason="tool_calls"),
+    )
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in _build_iterator(chunks)]
+    added: Final = [event for event in events if event["type"] == "response.output_item.added"]
+    completed: Final = events[-1]["response"]["output"]
+    assert [item["type"] for item in completed] == ["reasoning", "function_call"] + (
+        ["reasoning"] if resume_reasoning else []
+    )
+    assert [item["id"] for item in completed] == [event["item"]["id"] for event in added]
+    for event in events:
+        if event["type"] == "response.output_item.done":
+            assert completed[event["output_index"]]["id"] == event["item"]["id"]
