@@ -119,7 +119,7 @@ vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => 
 }));
 vi.mock("@/components/pass_through_settings", () => ({ default: stub("pass-through-settings") }));
 vi.mock("@/components/budgets/budget_panel", () => ({ default: stub("budget-panel") }));
-vi.mock("@/components/view_logs", () => ({ default: stub("spend-logs") }));
+vi.mock("@/components/logs", () => ({ default: stub("spend-logs") }));
 vi.mock("@/components/model_hub_table", () => ({ default: stub("model-hub-table") }));
 vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));

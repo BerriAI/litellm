@@ -2266,12 +2266,12 @@
       "count": 1
     }
   },
-  "src/components/view_logs/EvalViewer/EvalViewer.tsx": {
+  "src/components/logs/detail/sections/EvalViewer/EvalViewer.tsx": {
     "no-nested-ternary": {
       "count": 1
     }
   },
-  "src/components/view_logs/GuardrailViewer/CompliancePanel.tsx": {
+  "src/components/logs/detail/sections/GuardrailViewer/CompliancePanel.tsx": {
     "no-nested-ternary": {
       "count": 2
     },
@@ -2279,17 +2279,17 @@
       "count": 1
     }
   },
-  "src/components/view_logs/GuardrailViewer/ContentFilterDetails.tsx": {
+  "src/components/logs/detail/sections/GuardrailViewer/ContentFilterDetails.tsx": {
     "no-nested-ternary": {
       "count": 1
     }
   },
-  "src/components/view_logs/GuardrailViewer/GuardrailViewer.tsx": {
+  "src/components/logs/detail/sections/GuardrailViewer/GuardrailViewer.tsx": {
     "no-nested-ternary": {
       "count": 3
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/LogDetailsDrawer.tsx": {
+  "src/components/logs/detail/LogDetailsDrawer.tsx": {
     "no-nested-ternary": {
       "count": 2
     },
@@ -2297,22 +2297,22 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/useKeyboardNavigation.ts": {
+  "src/components/logs/detail/useKeyboardNavigation.ts": {
     "react-hooks/immutability": {
       "count": 2
     }
   },
-  "src/components/view_logs/columns.tsx": {
+  "src/components/logs/types.ts": {
     "local/filename-pascal-case": {
       "count": 1
     }
   },
-  "src/components/view_logs/log_filter_logic.tsx": {
+  "src/components/logs/request/useLogFilterLogic.ts": {
     "local/filename-pascal-case": {
       "count": 1
     }
   },
-  "src/components/view_logs/logs_utils.tsx": {
+  "src/components/logs/request/timeRange.ts": {
     "local/filename-pascal-case": {
       "count": 1
     }

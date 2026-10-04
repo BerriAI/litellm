@@ -5,8 +5,8 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import DeletedKeysPage from "@/components/DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "@/components/DeletedTeamsPage/DeletedTeamsPage";
-import AuditLogsPanel from "@/components/view_logs/AuditLogsPanel";
-import RequestLogsPanel from "@/components/view_logs/RequestLogsPanel";
+import AuditLogsPanel from "@/components/logs/audit/AuditLogsPanel";
+import RequestLogsPanel from "@/components/logs/request/RequestLogsPanel";
 import { Page, PageTabs, PageTabsList, PageTabsTrigger, PageTabsContent } from "@/components/shared/Page";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 

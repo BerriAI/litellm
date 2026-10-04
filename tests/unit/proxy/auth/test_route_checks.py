@@ -2218,9 +2218,9 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
 # layer, even though the underlying handlers already gate on PROXY_ADMIN_VIEW_ONLY.
 #
 # Each route below corresponds to a network call made by the Logs page
-# (ui/litellm-dashboard/src/components/view_logs/) — see the comment on each.
+# (ui/litellm-dashboard/src/components/logs/) — see the comment on each.
 ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
-    # Main paginated log list — uiSpendLogsCall in log_filter_logic.tsx & index.tsx
+    # Main paginated log list — uiSpendLogsCall in request/useLogFilterLogic.ts & index.tsx
     "/spend/logs/ui",
     # Single-log detail drawer — fetched on row click in LogDetailsDrawer
     "/spend/logs/ui/abc-request-id",

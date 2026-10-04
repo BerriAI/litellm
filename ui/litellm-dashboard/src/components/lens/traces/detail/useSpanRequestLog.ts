@@ -4,7 +4,7 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 
 import { uiSpendLogsCall } from "../../../networking";
-import type { LogEntry } from "../../../view_logs/columns";
+import type { LogEntry } from "../../../logs/types";
 
 /** Spend-log timestamps are written when the call finishes, so pad the span start on both sides. */
 const LOOKUP_PAD_MINUTES = 30;
