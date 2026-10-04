@@ -312,6 +312,24 @@ def test_parse_openapi_spec_rejects_non_object_document() -> None:
         gen._parse_openapi_spec("- not an OpenAPI object\n")
 
 
+def test_parse_openapi_spec_rejects_yaml_merge_aliases() -> None:
+    import yaml
+
+    with pytest.raises(yaml.YAMLError, match="YAML merge keys are not supported"):
+        gen._parse_openapi_spec(
+            """
+base: &base
+  openapi: 3.0.0
+  info:
+    title: Base
+    version: '1.0.0'
+  paths: {}
+merged:
+  <<: *base
+"""
+        )
+
+
 def _create_mock_client(method: str, response_text: str, status_code: int = 200) -> AsyncMock:
     """Utility to create a mocked async httpx client for the given method.
 

@@ -182,7 +182,13 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
     except json.JSONDecodeError:
         import yaml
 
-        parsed = yaml.safe_load(text)
+        class _NoMergeSafeLoader(yaml.SafeLoader):
+            def flatten_mapping(self, node: Any) -> None:
+                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node.value):
+                    raise yaml.YAMLError("YAML merge keys are not supported")
+                super().flatten_mapping(node)
+
+        parsed = yaml.load(text, Loader=_NoMergeSafeLoader)
 
     if not isinstance(parsed, dict):
         raise TypeError("OpenAPI spec must be a JSON or YAML object")
