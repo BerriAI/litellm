@@ -1747,3 +1747,41 @@ async def test_converted_code_tool_keeps_its_streamed_output_index() -> None:
     assert [item["type"] for item in output] == ["reasoning", "code_interpreter_call", "reasoning", "message"]
     assert output[tool_added["output_index"]]["id"] == call_id
     assert output[tool_added["output_index"]]["code"] == "print(1)"
+
+
+@pytest.mark.asyncio
+async def test_positionless_citations_stay_with_their_original_message() -> None:
+    citation: Final = {"type": "url_citation", "url_citation": {"title": "source", "url": "https://example.com"}}
+    intro: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content="intro", annotations=[citation]))],
+    )
+    answer: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content="answer"), finish_reason="stop")],
+    )
+    iterator: Final = _build_iterator(
+        [
+            intro,
+            _reasoning_block_chunk(ChatCompletionThinkingBlock(type="thinking", thinking="analysis", signature="sig")),
+            answer,
+        ]
+    )
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    messages: Final = [item for item in events[-1]["response"]["output"] if item["type"] == "message"]
+    assert [item["content"][0]["text"] for item in messages] == ["intro", "answer"]
+    assert messages[0]["content"][0]["annotations"] == [
+        {"type": "url_citation", "title": "source", "url": "https://example.com"}
+    ]
+    assert messages[1]["content"][0]["annotations"] == []
+    done_messages: Final = [
+        event["item"]
+        for event in events
+        if event["type"] == "response.output_item.done" and event["item"]["type"] == "message"
+    ]
+    assert [item["content"] for item in done_messages] == [item["content"] for item in messages]
+    annotations: Final = [event for event in events if event["type"] == "response.output_text.annotation.added"]
+    assert len(annotations) == 1
+    assert annotations[0]["item_id"] == messages[0]["id"]

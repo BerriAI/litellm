@@ -922,11 +922,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _messages_with_final_annotations(
         self, response: ModelResponse
     ) -> tuple[tuple[int, GenericResponseOutputItem], ...]:
-        annotations: Final = (
-            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+        annotations: Final = [
+            annotation
+            for annotation in LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=getattr(response.choices[0].message, "annotations", None)
             )
-        )
+            if annotation.start_index is not None
+        ]
         offsets: Final = tuple(
             accumulate((len(item.content[0].text or "") for _, item in self._completed_message_items), initial=0)
         )
@@ -945,6 +947,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                         if position + 1 < len(self._completed_message_items)
                                         else None,
                                     )
+                                    + self._unpositioned_message_annotations(position)
                                 }
                             )
                         ]
@@ -953,6 +956,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             for position, (index, item) in enumerate(self._completed_message_items)
         )
+
+    def _unpositioned_message_annotations(self, position: int) -> list[GenericResponseOutputItemContentAnnotation]:
+        return [
+            annotation
+            for annotation in self._completed_message_items[position][1].content[0].annotations or ()
+            if annotation.start_index is None
+        ]
 
     def _queue_final_message_done_events(self, response: ModelResponse) -> None:
         if self._final_message_events_queued:
@@ -969,7 +979,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         output_index=index,
                         content_index=0,
                         annotation_index=annotation_index,
-                        annotation=annotation.model_dump(),
+                        annotation=annotation.model_dump(exclude_none=True),
                     ).model_copy(update={"sequence_number": self._sequence_number})
                 )
             self._sequence_number += 3
@@ -994,7 +1004,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     OutputItemDoneEvent(
                         type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                         output_index=index,
-                        item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+                        item=BaseLiteLLMOpenAIResponseObject(**item.model_dump(exclude_none=True)),
                         sequence_number=self._sequence_number,
                     ),
                 )
