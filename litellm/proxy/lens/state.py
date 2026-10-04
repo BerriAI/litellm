@@ -12,6 +12,7 @@ from litellm.proxy.lens.models import (
     Lens,
     LensSettings,
     Review,
+    ReviewPage,
     Sample,
     Scope,
     Step,
@@ -215,5 +216,6 @@ def summarized(lens: Lens) -> Lens:
     return lens.model_copy(update=MappingProxyType({"jobs": tuple(summarized_job(job) for job in lens.jobs)}))
 
 
-def reviews_after(job: Job, after: datetime | None) -> tuple[Review, ...]:
-    return job.reviews if after is None else tuple(r for r in job.reviews if r.at > after)
+def reviews_after(job: Job, after: int) -> ReviewPage:
+    first_kept: Final = job.reviewed - len(job.reviews)
+    return ReviewPage(reviews=job.reviews[max(0, after - first_kept) :], reviewed=job.reviewed)
