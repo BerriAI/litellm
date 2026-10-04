@@ -61,7 +61,7 @@ export function TimeRangeControls({
           <span className="tabular-nums">{fixedRange ? fixedRangeLabel(fixedRange) : presetLabel(rangeHours)}</span>
           <ChevronDown className="size-3.5 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={0} className="min-w-0 rounded-t-none">
+        <DropdownMenuContent align="end" sideOffset={1} className="min-w-0 rounded-t-none">
           <DropdownMenuRadioGroup
             value={String(rangeHours)}
             onValueChange={(value: string) => onRangeHoursChange(Number(value))}
