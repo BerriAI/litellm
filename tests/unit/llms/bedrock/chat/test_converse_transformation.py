@@ -5984,11 +5984,11 @@ def test_transform_response_json_mode_truncated_tool_call_keeps_length_finish_re
     }
 
     class MockResponse:
-        def json(self):
+        def json(self) -> dict[str, object]:
             return response_json
 
         @property
-        def text(self):
+        def text(self) -> str:
             return json.dumps(response_json)
 
     config = AmazonConverseConfig()

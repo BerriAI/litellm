@@ -4407,7 +4407,7 @@ class TestEnsureOutputItemContentPartAdded:
             custom_llm_provider="anthropic",
         )
 
-        def _response(finish_reason):
+        def _response(finish_reason: str) -> ModelResponse:
             return ModelResponse(
                 id="chatcmpl-test",
                 created=1234567890,
