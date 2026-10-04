@@ -2,11 +2,9 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -24,25 +22,6 @@ DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _APIKeyResponse(TypedDict):
-    """The Copilot API key response fields this authenticator reads."""
-
-    token: NotRequired[ReadOnly[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _AccessTokenResponse(TypedDict):
-    """The GitHub device flow access token response fields this authenticator reads."""
-
-    access_token: NotRequired[ReadOnly[str]]
-    error: NotRequired[ReadOnly[object]]
-
-
-_API_KEY_RESPONSE: Final = TypeAdapter(_APIKeyResponse)
-_ACCESS_TOKEN_RESPONSE: Final = TypeAdapter(_AccessTokenResponse)
 
 
 class Authenticator:
@@ -166,7 +145,7 @@ class Authenticator:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
             return None
 
-    def _refresh_api_key(self) -> _APIKeyResponse:
+    def _refresh_api_key(self) -> dict[str, Any]:
         """
         Refresh the API key using the access token.
 
@@ -187,7 +166,7 @@ class Authenticator:
                 response = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
-                response_json = _API_KEY_RESPONSE.validate_python(response.json())
+                response_json = response.json()
 
                 if "token" in response_json:
                     return response_json
@@ -315,7 +294,7 @@ class Authenticator:
                     },
                 )
                 resp.raise_for_status()
-                resp_json = _ACCESS_TOKEN_RESPONSE.validate_python(resp.json())
+                resp_json = resp.json()
 
                 if "access_token" in resp_json:
                     verbose_logger.info("Authentication successful!")

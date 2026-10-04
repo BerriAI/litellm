@@ -45,7 +45,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
+from pydantic import BaseModel
 
 import litellm
 import litellm.litellm_core_utils
@@ -5454,7 +5454,7 @@ def get_max_tokens(model: str) -> int | None:
             response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
             # Parse the JSON response
-            config_json: Final = _HUGGINGFACE_MODEL_CONFIG_ADAPTER.validate_python(response.json())
+            config_json: Final[Mapping[str, int]] = response.json()
             # Extract and return the max_position_embeddings
             max_position_embeddings: Final = config_json.get("max_position_embeddings")
             if max_position_embeddings is not None:
@@ -5721,14 +5721,6 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
 from typing_extensions import ReadOnly, TypedDict
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
-class _HuggingFaceModelConfig(TypedDict, total=False):
-    max_position_embeddings: ReadOnly[int]
-
-
-_HUGGINGFACE_MODEL_CONFIG_ADAPTER: Final = TypeAdapter(_HuggingFaceModelConfig)
-
-
 class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     split_model: str
     combined_model_name: str
@@ -5873,7 +5865,7 @@ def _get_max_position_embeddings(model_name: str) -> int | None:
         response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
         # Parse the JSON response
-        config_json: Final = _HUGGINGFACE_MODEL_CONFIG_ADAPTER.validate_python(response.json())
+        config_json: Final[Mapping[str, int]] = response.json()
 
         # Extract and return the max_position_embeddings
         max_position_embeddings: Final = config_json.get("max_position_embeddings")
