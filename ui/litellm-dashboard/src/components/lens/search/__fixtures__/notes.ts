@@ -1,5 +1,6 @@
 import { Braces, Hash, Tag, Type } from "lucide-react";
 
+import type { ClientIndex } from "../evaluate";
 import type { FieldSpec, QueryLanguage } from "../language";
 
 export interface Note {
@@ -10,16 +11,23 @@ export interface Note {
 }
 
 const NOTE_FIELDS = {
-  title: { group: "Note", icon: Type, read: (note) => [note.title], suggestValues: true },
-  tag: { group: "Note", icon: Tag, read: (note) => note.tags, suggestValues: true },
-  body: { group: "Content", icon: Braces, read: (note) => [note.body], suggestValues: false },
-  id: { group: "Identity", icon: Hash, read: (note) => [note.id], suggestValues: false },
-} as const satisfies Record<string, FieldSpec<Note>>;
+  title: { group: "Note", icon: Type, suggestValues: true },
+  tag: { group: "Note", icon: Tag, suggestValues: true },
+  body: { group: "Content", icon: Braces, suggestValues: false },
+  id: { group: "Identity", icon: Hash, suggestValues: false },
+} as const satisfies Record<string, FieldSpec>;
 
 export type NoteField = keyof typeof NOTE_FIELDS;
 
-export const NOTE_QUERY: QueryLanguage<Note, NoteField> = {
-  fields: NOTE_FIELDS,
+export const NOTE_QUERY: QueryLanguage<NoteField> = { fields: NOTE_FIELDS };
+
+export const NOTE_INDEX: ClientIndex<Note, NoteField> = {
+  read: {
+    title: (note) => [note.title],
+    tag: (note) => note.tags,
+    body: (note) => [note.body],
+    id: (note) => [note.id],
+  },
   freeText: (note) => [note.id, note.body, note.title],
 };
 

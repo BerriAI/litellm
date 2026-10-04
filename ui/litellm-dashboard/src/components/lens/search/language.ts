@@ -1,17 +1,15 @@
 import type { LucideIcon } from "lucide-react";
 
-export interface FieldSpec<T> {
+export interface FieldSpec {
   readonly group: string;
   readonly icon: LucideIcon;
-  readonly read: (item: T) => readonly string[];
-  /** Offer the values seen in the loaded items once the key has its colon. */
+  /** The field has an enumerable value set worth offering once the key has its colon. */
   readonly suggestValues: boolean;
 }
 
-/** The `key:value` vocabulary of one search box, and what a bare word searches. */
-export interface QueryLanguage<T, F extends string> {
-  readonly fields: Readonly<Record<F, FieldSpec<T>>>;
-  readonly freeText: (item: T) => readonly string[];
+/** The `key:value` vocabulary of one search box. Where the data lives is the evaluator's concern, not the language's. */
+export interface QueryLanguage<F extends string> {
+  readonly fields: Readonly<Record<F, FieldSpec>>;
 }
 
 interface Span {
@@ -31,7 +29,7 @@ export type QueryClause<F extends string> =
 
 export type FieldClause<F extends string> = Extract<QueryClause<F>, { kind: "field" }>;
 
-export const languageFields = <F extends string>(language: QueryLanguage<never, F>): F[] =>
+export const languageFields = <F extends string>(language: QueryLanguage<F>): F[] =>
   Object.keys(language.fields) as F[];
 
 const unquote = (raw: string): string => raw.replace(/^"([^"]*)"?$/, "$1");
@@ -45,8 +43,8 @@ function tokenize(text: string): (Span & { raw: string })[] {
   }));
 }
 
-function parseToken<T, F extends string>(
-  language: QueryLanguage<T, F>,
+function parseToken<F extends string>(
+  language: QueryLanguage<F>,
   { raw, from, to }: Span & { raw: string },
 ): QueryClause<F> {
   const match = /^(-?)([A-Za-z_]+):(.*)$/.exec(raw);
@@ -63,11 +61,11 @@ function parseToken<T, F extends string>(
   };
 }
 
-export const parseQuery = <T, F extends string>(language: QueryLanguage<T, F>, text: string): QueryClause<F>[] =>
+export const parseQuery = <F extends string>(language: QueryLanguage<F>, text: string): QueryClause<F>[] =>
   tokenize(text).map((token) => parseToken(language, token));
 
 /** `bar` matches the whole value, `*bar*` is a glob; both ignore case. */
-function valueMatcher(pattern: string): (value: string) => boolean {
+export function valueMatcher(pattern: string): (value: string) => boolean {
   const needle = pattern.toLowerCase();
   if (!needle.includes("*")) return (value) => value.toLowerCase() === needle;
   const segments = needle.split("*");
@@ -88,32 +86,4 @@ function valueMatcher(pattern: string): (value: string) => boolean {
     }
     return true;
   };
-}
-
-function matchesClause<T, F extends string>(language: QueryLanguage<T, F>, item: T, clause: QueryClause<F>): boolean {
-  if (clause.kind === "text") {
-    const needle = clause.value.toLowerCase();
-    return language.freeText(item).some((text) => text.toLowerCase().includes(needle));
-  }
-  // A key typed without a value yet narrows nothing, so the list does not blank out mid-typing.
-  if (!clause.value) return true;
-  const matches = language.fields[clause.field].read(item).some(valueMatcher(clause.value));
-  return clause.negated ? !matches : matches;
-}
-
-/** Every clause must hold: free text searches `freeText`; `key:value` clauses target one field. */
-export function filterItems<T, F extends string>(language: QueryLanguage<T, F>, items: T[], query: string): T[] {
-  const clauses = parseQuery(language, query);
-  if (clauses.length === 0) return items;
-  return items.filter((item) => clauses.every((clause) => matchesClause(language, item, clause)));
-}
-
-export function fieldValues<T, F extends string>(
-  language: QueryLanguage<T, F>,
-  items: readonly T[],
-  field: F,
-): string[] {
-  return Array.from(new Set(items.flatMap((item) => language.fields[field].read(item))))
-    .filter(Boolean)
-    .sort();
 }

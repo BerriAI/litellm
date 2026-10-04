@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { note, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
-import { suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
+import { type Note, note, NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
+import { fieldValues } from "./evaluate";
+import { completingField, completingPrefix, suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
+import type { FieldValues } from "./valueSource";
 
-const atEnd = (text: string, source = notes) => suggest(NOTE_QUERY, text, text.length, source);
+const lookupIn =
+  (source: readonly Note[]) =>
+  (field: NoteField): FieldValues => ({ values: fieldValues(NOTE_INDEX, source, field), loading: false });
+const at = (text: string, cursor: number, source = notes) => suggest(NOTE_QUERY, text, cursor, lookupIn(source));
+const atEnd = (text: string, source = notes) => at(text, text.length, source);
 const items = (menu: SuggestionMenu<NoteField> | null): Suggestion<NoteField>[] =>
   menu?.groups.flatMap((g) => g.items) ?? [];
 const labels = (menu: SuggestionMenu<NoteField> | null) => items(menu).map((item) => item.label);
@@ -34,7 +40,7 @@ describe("suggest", () => {
     expect(atEnd("foo:bar")).toBeNull();
   });
 
-  it("offers the loaded values and the operator help once a key has its colon", () => {
+  it("offers the source's values and the operator help once a key has its colon", () => {
     const menu = atEnd("tag:");
     expect(menu?.groups.map((g) => g.heading)).toEqual(["tag"]);
     expect(labels(menu)).toEqual(["billing", "cron", "researcher", "triage"]);
@@ -49,12 +55,18 @@ describe("suggest", () => {
     expect(atEnd("tag:zzz")).toBeNull();
   });
 
+  it("keeps the menu open while values load, and closes it once an empty answer arrives", () => {
+    const loading = suggest(NOTE_QUERY, "tag:zzz", 7, () => ({ values: [], loading: true }));
+    expect(loading).toEqual({ groups: [], showOperators: false, loading: true });
+    expect(suggest(NOTE_QUERY, "tag:zzz", 7, () => ({ values: [], loading: false }))).toBeNull();
+  });
+
   it("replaces only the value, adds a separating space at the end, and finishes the clause", () => {
     const item = items(atEnd("-tag:bil"))[0];
     expect(apply("-tag:bil", item)).toBe("-tag:billing ");
     expect(item.completesClause).toBe(true);
     const text = "tag:tri refund";
-    expect(apply(text, items(suggest(NOTE_QUERY, text, 7, notes))[0])).toBe("tag:triage refund");
+    expect(apply(text, items(at(text, 7))[0])).toBe("tag:triage refund");
   });
 
   it("quotes a value that contains spaces", () => {
@@ -62,8 +74,13 @@ describe("suggest", () => {
     expect(apply("title:", items(atEnd("title:", spaced))[0])).toBe('title:"Order lookup" ');
   });
 
-  it("does not list values for free-form fields but still explains the operators", () => {
-    const menu = atEnd("body:");
+  it("never asks the source for a free-form field, but still explains the operators", () => {
+    const asked: NoteField[] = [];
+    const menu = suggest(NOTE_QUERY, "body:", 5, (field) => {
+      asked.push(field);
+      return { values: ["leak"], loading: false };
+    });
+    expect(asked).toEqual([]);
     expect(menu?.groups).toEqual([]);
     expect(menu?.showOperators).toBe(true);
     expect(atEnd("body:x")).toBeNull();
@@ -71,8 +88,19 @@ describe("suggest", () => {
 
   it("offers fields in the gap between tokens, but nothing mid-token", () => {
     const text = "refund  tag:cron";
-    expect(apply(text, items(suggest(NOTE_QUERY, text, 7, notes))[1])).toBe("refund tag: tag:cron");
-    expect(suggest(NOTE_QUERY, text, 3, notes)).toBeNull();
-    expect(suggest(NOTE_QUERY, "tag:cron", 0, notes)).toBeNull();
+    expect(apply(text, items(at(text, 7))[1])).toBe("refund tag: tag:cron");
+    expect(at(text, 3)).toBeNull();
+    expect(at("tag:cron", 0)).toBeNull();
+  });
+});
+
+describe("completingField", () => {
+  it("names the enumerable field whose value sits at the cursor, with the typed prefix", () => {
+    expect(completingField(NOTE_QUERY, "refund -tag:*bi", 15)).toBe("tag");
+    expect(completingPrefix(NOTE_QUERY, "refund -tag:*bi", 15)).toBe("bi");
+    expect(completingField(NOTE_QUERY, "tag:cron refund", 15)).toBeNull();
+    expect(completingField(NOTE_QUERY, "tag:cron", 2)).toBeNull();
+    expect(completingField(NOTE_QUERY, "body:x", 6)).toBeNull();
+    expect(completingPrefix(NOTE_QUERY, "ta", 2)).toBe("");
   });
 });

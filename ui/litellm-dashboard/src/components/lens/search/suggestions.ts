@@ -1,4 +1,5 @@
-import { type FieldClause, fieldValues, languageFields, parseQuery, type QueryLanguage } from "./language";
+import { type FieldClause, languageFields, parseQuery, type QueryLanguage } from "./language";
+import type { FieldValues } from "./valueSource";
 
 export interface Suggestion<F extends string> {
   readonly id: string;
@@ -20,17 +21,53 @@ export interface SuggestionGroup<F extends string> {
 export interface SuggestionMenu<F extends string> {
   readonly groups: readonly SuggestionGroup<F>[];
   readonly showOperators: boolean;
+  /** Values are still on their way from the source. */
+  readonly loading: boolean;
 }
+
+type Target<F extends string> =
+  | {
+      readonly kind: "field";
+      readonly prefix: string;
+      readonly negated: boolean;
+      readonly from: number;
+      readonly to: number;
+    }
+  | { readonly kind: "value"; readonly clause: FieldClause<F> };
 
 const MAX_VALUES = 50;
 const isSpace = (char: string | undefined) => char === undefined || /\s/.test(char);
 const quoteIfNeeded = (value: string) => (/[\s"]/.test(value) ? `"${value.replaceAll('"', "")}"` : value);
 
-function fieldMenu<T, F extends string>(
-  language: QueryLanguage<T, F>,
-  prefix: string,
-  negated: boolean,
-  { from, to }: { from: number; to: number },
+function target<F extends string>(language: QueryLanguage<F>, text: string, cursor: number): Target<F> | null {
+  const clause = parseQuery(language, text).find((c) => c.from < cursor && c.to === cursor);
+  if (!clause) {
+    const betweenTokens = isSpace(text[cursor - 1]) && isSpace(text[cursor]);
+    return betweenTokens ? { kind: "field", prefix: "", negated: false, from: cursor, to: cursor } : null;
+  }
+  if (clause.kind === "field") return { kind: "value", clause };
+  const raw = text.slice(clause.from, clause.to);
+  const negated = raw.startsWith("-");
+  const prefix = negated ? raw.slice(1) : raw;
+  if (/[:"]/.test(prefix)) return null;
+  return { kind: "field", prefix, negated, from: clause.from, to: clause.to };
+}
+
+/** The field whose value is being typed at the cursor, so a source can be asked for its values. */
+export function completingField<F extends string>(language: QueryLanguage<F>, text: string, cursor: number): F | null {
+  const found = target(language, text, cursor);
+  return found?.kind === "value" && language.fields[found.clause.field].suggestValues ? found.clause.field : null;
+}
+
+/** The substring typed so far for the value at the cursor, wildcards stripped. */
+export function completingPrefix<F extends string>(language: QueryLanguage<F>, text: string, cursor: number): string {
+  const found = target(language, text, cursor);
+  return found?.kind === "value" ? found.clause.value.replaceAll("*", "") : "";
+}
+
+function fieldMenu<F extends string>(
+  language: QueryLanguage<F>,
+  { prefix, negated, from, to }: Extract<Target<F>, { kind: "field" }>,
 ): SuggestionMenu<F> | null {
   const fields = languageFields(language).filter((field) => field.startsWith(prefix.toLowerCase()));
   if (fields.length === 0) return null;
@@ -48,19 +85,17 @@ function fieldMenu<T, F extends string>(
         completesClause: false,
       })),
   }));
-  return { groups, showOperators: false };
+  return { groups, showOperators: false, loading: false };
 }
 
-function valueMenu<T, F extends string>(
-  language: QueryLanguage<T, F>,
+function valueMenu<F extends string>(
   clause: FieldClause<F>,
   text: string,
-  items: readonly T[],
+  { values, loading }: FieldValues,
 ): SuggestionMenu<F> | null {
   const from = clause.keyTo + 1;
   const needle = clause.value.replaceAll("*", "").toLowerCase();
   const trailing = clause.to === text.length ? " " : "";
-  const values = language.fields[clause.field].suggestValues ? fieldValues(language, items, clause.field) : [];
   const suggestions = values
     .filter((value) => value.toLowerCase().includes(needle))
     .slice(0, MAX_VALUES)
@@ -74,26 +109,24 @@ function valueMenu<T, F extends string>(
       completesClause: true,
     }));
   const showOperators = clause.value === "";
-  if (suggestions.length === 0 && !showOperators) return null;
-  return { groups: suggestions.length ? [{ heading: clause.field, items: suggestions }] : [], showOperators };
+  if (suggestions.length === 0 && !showOperators && !loading) return null;
+  return { groups: suggestions.length ? [{ heading: clause.field, items: suggestions }] : [], showOperators, loading };
 }
 
 /** What to offer at the cursor: fields while a key is being typed, values once it has a colon. */
-export function suggest<T, F extends string>(
-  language: QueryLanguage<T, F>,
+export function suggest<F extends string>(
+  language: QueryLanguage<F>,
   text: string,
   cursor: number,
-  items: readonly T[],
+  lookup: (field: F) => FieldValues,
 ): SuggestionMenu<F> | null {
-  const clause = parseQuery(language, text).find((c) => c.from < cursor && c.to === cursor);
-  if (!clause) {
-    const betweenTokens = isSpace(text[cursor - 1]) && isSpace(text[cursor]);
-    return betweenTokens ? fieldMenu(language, "", false, { from: cursor, to: cursor }) : null;
-  }
-  if (clause.kind === "field") return valueMenu(language, clause, text, items);
-  const raw = text.slice(clause.from, clause.to);
-  const negated = raw.startsWith("-");
-  const prefix = negated ? raw.slice(1) : raw;
-  if (/[:"]/.test(prefix)) return null;
-  return fieldMenu(language, prefix, negated, clause);
+  const found = target(language, text, cursor);
+  if (!found) return null;
+  if (found.kind === "field") return fieldMenu(language, found);
+  const { field } = found.clause;
+  return valueMenu(
+    found.clause,
+    text,
+    language.fields[field].suggestValues ? lookup(field) : { values: [], loading: false },
+  );
 }

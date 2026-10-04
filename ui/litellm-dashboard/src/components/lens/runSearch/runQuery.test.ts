@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { fieldValues } from "../search/language";
+import { fieldValues } from "../search/evaluate";
 import { run, runs } from "./__fixtures__/runs";
-import { filterRuns, RUN_QUERY } from "./runQuery";
+import { filterRuns, RUN_INDEX } from "./runQuery";
 
 const ids = (query: string) => filterRuns(runs, query).map((r) => r.trace_id);
 
@@ -38,10 +38,10 @@ describe("filterRuns", () => {
   });
 });
 
-describe("RUN_QUERY values", () => {
+describe("RUN_INDEX values", () => {
   it("lists the loaded agents and statuses for autocomplete", () => {
-    expect(fieldValues(RUN_QUERY, runs, "agent")).toEqual(["billing-agent", "cron", "researcher", "triage"]);
-    expect(fieldValues(RUN_QUERY, runs, "status")).toEqual(["error", "ok"]);
-    expect(fieldValues(RUN_QUERY, [run({ models: [] })], "model")).toEqual([]);
+    expect(fieldValues(RUN_INDEX, runs, "agent")).toEqual(["billing-agent", "cron", "researcher", "triage"]);
+    expect(fieldValues(RUN_INDEX, runs, "status")).toEqual(["error", "ok"]);
+    expect(fieldValues(RUN_INDEX, [run({ models: [] })], "model")).toEqual([]);
   });
 });

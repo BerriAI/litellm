@@ -3,17 +3,42 @@
 import "prosemirror-view/style/prosemirror.css";
 
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { ProseMirror, ProseMirrorDoc, reactKeys, useEditorEventCallback } from "@handlewithcare/react-prosemirror";
+import {
+  ProseMirror,
+  ProseMirrorDoc,
+  reactKeys,
+  useEditorEventCallback,
+} from "@handlewithcare/react-prosemirror";
 import { CornerDownLeft, type LucideIcon, Search } from "lucide-react";
 import { Schema } from "prosemirror-model";
-import { EditorState, Plugin, TextSelection, type Transaction } from "prosemirror-state";
+import {
+  EditorState,
+  Plugin,
+  TextSelection,
+  type Transaction,
+} from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
-import { type ComponentProps, createContext, type ReactNode, useContext, useId, useMemo, useState } from "react";
+import {
+  type ComponentProps,
+  createContext,
+  type ReactNode,
+  useContext,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 
 import { cn } from "@/lib/cva.config";
 
 import { parseQuery, type QueryLanguage } from "./language";
-import { suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
+import {
+  completingField,
+  completingPrefix,
+  suggest,
+  type Suggestion,
+  type SuggestionMenu,
+} from "./suggestions";
+import { NO_VALUES, type ValueSource } from "./valueSource";
 
 const schema = new Schema({ nodes: { doc: { content: "text*" }, text: {} } });
 
@@ -28,17 +53,22 @@ const OPERATORS = [
 ];
 
 /** Colours each `key:` so the filters stand out from free text. */
-function clauseHighlight<T, F extends string>(language: QueryLanguage<T, F>): Plugin {
+function clauseHighlight<F extends string>(language: QueryLanguage<F>): Plugin {
   return new Plugin({
     props: {
       decorations(state) {
-        const marks = parseQuery(language, state.doc.textContent).flatMap((clause) =>
-          clause.kind === "field"
-            ? [
-                Decoration.inline(clause.from, clause.keyTo, { class: "text-info" }),
-                Decoration.inline(clause.keyTo, clause.keyTo + 1, { class: "text-muted-foreground" }),
-              ]
-            : [],
+        const marks = parseQuery(language, state.doc.textContent).flatMap(
+          (clause) =>
+            clause.kind === "field"
+              ? [
+                  Decoration.inline(clause.from, clause.keyTo, {
+                    class: "text-info",
+                  }),
+                  Decoration.inline(clause.keyTo, clause.keyTo + 1, {
+                    class: "text-muted-foreground",
+                  }),
+                ]
+              : [],
         );
         return DecorationSet.create(state.doc, marks);
       },
@@ -46,7 +76,10 @@ function clauseHighlight<T, F extends string>(language: QueryLanguage<T, F>): Pl
   });
 }
 
-const createState = <T, F extends string>(language: QueryLanguage<T, F>, text: string) =>
+const createState = <F extends string>(
+  language: QueryLanguage<F>,
+  text: string,
+) =>
   EditorState.create({
     schema,
     doc: schema.node("doc", null, text ? schema.text(text) : []),
@@ -73,14 +106,18 @@ const SearchBoxContext = createContext<SearchBoxState | null>(null);
 
 function useSearchBox(): SearchBoxState {
   const state = useContext(SearchBoxContext);
-  if (!state) throw new Error("SearchBox parts must be rendered inside SearchBox.Root");
+  if (!state)
+    throw new Error("SearchBox parts must be rendered inside SearchBox.Root");
   return state;
 }
 
-export type SearchBoxRootProps<T, F extends string> = Omit<ComponentProps<"div">, "onChange"> & {
-  language: QueryLanguage<T, F>;
-  /** Loaded items, the source of value suggestions. */
-  items: readonly T[];
+export type SearchBoxRootProps<F extends string> = Omit<
+  ComponentProps<"div">,
+  "onChange"
+> & {
+  language: QueryLanguage<F>;
+  /** Where value suggestions come from: the loaded items, or a server lookup. */
+  values: ValueSource<F>;
   value: string;
   onValueChange: (value: string) => void;
   /** Accessible name of the combobox. */
@@ -88,16 +125,16 @@ export type SearchBoxRootProps<T, F extends string> = Omit<ComponentProps<"div">
 };
 
 /** A one-line query editor: free text plus `key:value` filters. Owns the text, the menu and the keyboard. */
-function Root<T, F extends string>({
+function Root<F extends string>({
   language,
-  items,
+  values,
   value,
   onValueChange,
   label,
   className,
   children,
   ...props
-}: SearchBoxRootProps<T, F>) {
+}: SearchBoxRootProps<F>) {
   const listId = useId();
   const [state, setState] = useState(() => createState(language, value));
   const [seenValue, setSeenValue] = useState(value);
@@ -119,14 +156,25 @@ function Root<T, F extends string>({
 
   const { selection } = state;
   const text = state.doc.textContent;
-  const menu = useMemo(
-    () => (selection.empty ? suggest(language, text, selection.head, items) : null),
-    [language, text, selection, items],
+  const completing = selection.empty
+    ? completingField(language, text, selection.head)
+    : null;
+  const fetched = values.useValues(
+    completing,
+    completingPrefix(language, text, selection.head),
   );
+  const menu = useMemo(() => {
+    if (!selection.empty) return null;
+    return suggest(language, text, selection.head, (field) =>
+      field === completing ? fetched : NO_VALUES,
+    );
+  }, [language, text, selection, completing, fetched]);
   const options = menu?.groups.flatMap((group) => group.items) ?? [];
   const shownMenu = focused && menuOpen ? menu : null;
   const visible = shownMenu !== null;
-  const activeItem = visible ? options[Math.min(active, options.length - 1)] : undefined;
+  const activeItem = visible
+    ? options[Math.min(active, options.length - 1)]
+    : undefined;
   const context = useMemo<SearchBoxState>(
     () => ({
       listId,
@@ -163,9 +211,15 @@ function Root<T, F extends string>({
       setMenuOpen(true);
       return true;
     }
-    if ((event.key === "ArrowDown" || event.key === "ArrowUp") && options.length > 0) {
+    if (
+      (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+      options.length > 0
+    ) {
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setActive((Math.min(active, options.length - 1) + step + options.length) % options.length);
+      setActive(
+        (Math.min(active, options.length - 1) + step + options.length) %
+          options.length,
+      );
       return true;
     }
     if ((event.key === "Enter" || event.key === "Tab") && activeItem) {
@@ -198,13 +252,20 @@ function Root<T, F extends string>({
         "aria-autocomplete": "list",
         "aria-expanded": String(visible),
         "aria-controls": listId,
-        ...(activeItem && { "aria-activedescendant": `${listId}-${activeItem.id}` }),
+        ...(activeItem && {
+          "aria-activedescendant": `${listId}-${activeItem.id}`,
+        }),
         spellcheck: "false",
-        class: "min-w-0 flex-1 overflow-x-auto py-1.5 font-mono text-xs whitespace-pre outline-none",
+        class:
+          "min-w-0 flex-1 overflow-x-auto py-1.5 font-mono text-xs whitespace-pre outline-none",
       }}
     >
       <SearchBoxContext.Provider value={context}>
-        <div data-slot="search-box" className={cn("relative w-full flex-1", className)} {...props}>
+        <div
+          data-slot="search-box"
+          className={cn("relative w-full flex-1", className)}
+          {...props}
+        >
           {children}
         </div>
       </SearchBoxContext.Provider>
@@ -212,7 +273,9 @@ function Root<T, F extends string>({
   );
 }
 
-export type SearchBoxInputProps = ComponentProps<"div"> & { placeholder: string };
+export type SearchBoxInputProps = ComponentProps<"div"> & {
+  placeholder: string;
+};
 
 /** The bordered field holding the editor; shows `placeholder` while the query is empty. */
 function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
@@ -244,7 +307,9 @@ export type SearchBoxSuggestionsProps = ComponentProps<"div">;
 /** The autocomplete listbox under the input: fields, then values, with operator help and key hints. */
 function Suggestions({ className, ...props }: SearchBoxSuggestionsProps) {
   const { listId, menu, activeId, icon } = useSearchBox();
-  const pick = useEditorEventCallback((view, item: Suggestion<string>) => applySuggestion(view, item));
+  const pick = useEditorEventCallback((view, item: Suggestion<string>) =>
+    applySuggestion(view, item),
+  );
   if (!menu) return null;
   return (
     <div
@@ -255,10 +320,17 @@ function Suggestions({ className, ...props }: SearchBoxSuggestionsProps) {
       )}
       {...props}
     >
-      <div id={listId} role="listbox" aria-label="Search suggestions" className="max-h-80 overflow-y-auto p-1">
+      <div
+        id={listId}
+        role="listbox"
+        aria-label="Search suggestions"
+        className="max-h-80 overflow-y-auto p-1"
+      >
         {menu.groups.map((group) => (
           <div key={group.heading} role="group" aria-label={group.heading}>
-            <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">{group.heading}</div>
+            <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">
+              {group.heading}
+            </div>
             {group.items.map((item) => {
               const Icon = icon(item.field);
               return (
@@ -278,6 +350,14 @@ function Suggestions({ className, ...props }: SearchBoxSuggestionsProps) {
             })}
           </div>
         ))}
+        {menu.loading && (
+          <div
+            role="status"
+            className="px-2 py-1.5 font-mono text-xs text-muted-foreground"
+          >
+            Loading values…
+          </div>
+        )}
         {menu.showOperators && <OperatorHints />}
       </div>
       <div className="flex items-center gap-3 border-t border-border px-3 py-2 text-xs text-muted-foreground">
@@ -300,11 +380,18 @@ function Suggestions({ className, ...props }: SearchBoxSuggestionsProps) {
 function OperatorHints() {
   return (
     <div className="pb-1">
-      <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">Comparison operators</div>
+      <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">
+        Comparison operators
+      </div>
       {OPERATORS.map((op) => (
-        <div key={op.label} className="flex items-center justify-between px-2 py-1 font-mono text-xs">
+        <div
+          key={op.label}
+          className="flex items-center justify-between px-2 py-1 font-mono text-xs"
+        >
           <span className="text-warning">{op.label}</span>
-          <code className="rounded bg-muted px-1.5 text-muted-foreground">{op.example}</code>
+          <code className="rounded bg-muted px-1.5 text-muted-foreground">
+            {op.example}
+          </code>
         </div>
       ))}
     </div>
