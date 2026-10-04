@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from functools import partial
 from http.client import responses
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
@@ -68,8 +68,10 @@ class ReadFailureResponse(BaseModel):
     detail: ReadFailure
 
 
-def _read_failure_responses() -> dict[int | str, dict[str, object]]:
-    return {status: {"model": ReadFailureResponse} for status in (400, 409, 410, 413, 503)}
+_ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
+READ_FAILURE_RESPONSES: Final[_ResponseDocSchemas] = {
+    status: {"model": ReadFailureResponse} for status in (400, 409, 410, 413, 503)
+}
 
 
 def _read_failure(error: TraceReadError) -> HTTPException:
@@ -171,7 +173,7 @@ async def ingest_otlp_traces(
     return Response(content=body, media_type=media_type)
 
 
-@router.get("/v1/traces", response_model=TracePage, responses=_read_failure_responses())
+@router.get("/v1/traces", response_model=TracePage, responses=READ_FAILURE_RESPONSES)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
@@ -262,7 +264,7 @@ async def help_agent_trace_queries(
         raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error
 
 
-@router.get("/v1/traces/{trace_id}", response_model=Trace, responses=_read_failure_responses())
+@router.get("/v1/traces/{trace_id}", response_model=Trace, responses=READ_FAILURE_RESPONSES)
 async def get_agent_trace(
     trace_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
@@ -283,7 +285,7 @@ async def get_agent_trace(
     return trace
 
 
-@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=SpanDetail, responses=_read_failure_responses())
+@router.get("/v1/traces/{trace_id}/spans/{span_id}", response_model=SpanDetail, responses=READ_FAILURE_RESPONSES)
 async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
@@ -304,7 +306,7 @@ async def get_agent_trace_span(
 
 
 @router.get(
-    "/v1/traces/{trace_id}/spans/{span_id}/error", response_model=SpanErrorPage, responses=_read_failure_responses()
+    "/v1/traces/{trace_id}/spans/{span_id}/error", response_model=SpanErrorPage, responses=READ_FAILURE_RESPONSES
 )
 async def get_agent_trace_span_error(
     trace_id: str,
