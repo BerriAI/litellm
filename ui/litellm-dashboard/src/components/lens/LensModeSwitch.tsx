@@ -5,7 +5,7 @@ import { Activity, ScanSearch, Settings } from "lucide-react";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { cn } from "@/lib/cva.config";
 import type { InvestigationActivity } from "./model/status";
-import { useWorkerConnected } from "./useWorkerConnected";
+import { useWorkerConnected } from "./hooks/useWorkerConnected";
 import type { LensList } from "./model/types";
 import { LENS_TABS, type LensTab } from "./route";
 import { frameCorner, frameTab } from "./ui/frame";

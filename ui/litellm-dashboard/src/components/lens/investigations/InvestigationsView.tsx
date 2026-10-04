@@ -5,17 +5,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
-import { useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
+import { LensPreviewButton } from "@/components/view_logs/TraceView/LensPreviewButton";
 
 import { lensKeys, lensQueries } from "../data/queries";
 import { useLensApi } from "../data/LensServices";
 import { findFinding, findingKey, type OwnedFinding } from "../model/inbox";
-import { activityCheck, readiness } from "../model/status";
 import type { Finding, Lens, Settings } from "../model/types";
 import { useDialogRoute, useIssueRoute, useLensRoute } from "../route";
 import { InvestigationSetup } from "../setup/InvestigationSetup";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
-import { useWorkerConnected } from "../useWorkerConnected";
+import { useLensReadiness } from "../hooks/useLensReadiness";
+import { OnboardingSetup } from "../onboarding/OnboardingSetup";
 
 import { InvestigationDetail } from "./detail/InvestigationDetail";
 import { RunNowDialog } from "./detail/RunNowDialog";
@@ -28,7 +28,6 @@ import {
   InvestigationsLoadFailed,
   InvestigationsLoading,
 } from "./InvestigationStates";
-import { InvestigationsWelcome } from "./InvestigationsWelcome";
 import { ReadinessBanner } from "./ReadinessBanner";
 import { useInvestigationActions } from "./useInvestigationActions";
 import { WatchAllBanner } from "./WatchAllBanner";
@@ -65,19 +64,10 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
   const actions = useInvestigationActions();
   const { dialog, target, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const { lensId, demo, setLensId, setTab } = useLensRoute();
+  const { lensId, setLensId } = useLensRoute();
   const list = useQuery(lensQueries.list(api));
-  const loaded = !list.isLoading && !list.error;
-  const connected = useWorkerConnected(list.data?.workers);
-  const activity = useQuery(lensQueries.activity(api, loaded));
-  const traces = useTraceAvailability(accessToken, !demo);
-  const status = readiness({
-    activity: activity.data,
-    activityError: activity.error,
-    tracesSeen: traces.data === true && !traces.error,
-    connected,
-    listError: list.error,
-  });
+  const status = useLensReadiness(accessToken, true);
+  const { connected } = status;
   const screenInput = { list, lensId, dialog, target };
   const screen = investigationScreen(screenInput);
   const lenses = list.data?.lenses ?? [];
@@ -123,18 +113,12 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
       case "missing":
         return <InvestigationMissing selectLens={setLensId} />;
       case "welcome":
+        if (status.loading) return <InvestigationsLoading />;
         return (
-          <InvestigationsWelcome
-            readiness={status}
-            activity={activityCheck(activity)}
-            readOnly={readOnly}
-            onRetry={() => {
-              void activity.refetch();
-              refresh();
-            }}
-            onConnect={() => setTab("settings")}
-            onCreate={() => openDialog("new")}
-          />
+          <>
+            {!status.ready && <LensPreviewButton />}
+            <OnboardingSetup state={status} className="mx-auto w-full max-w-3xl py-6" />
+          </>
         );
       case "list":
         return (

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { useRevokeWorker } from "../../data/mutations";
 import type { LensList, Worker } from "../../model/types";
-import { useWorkerConnected } from "../../useWorkerConnected";
+import { useWorkerConnected } from "../../hooks/useWorkerConnected";
 import { SettingsCard } from "../SettingsSection";
 import { usePrepareWorker } from "./usePrepareWorker";
 import { initialProxyAddress } from "./workerCommand";

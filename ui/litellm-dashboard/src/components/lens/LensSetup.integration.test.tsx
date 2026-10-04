@@ -214,8 +214,8 @@ describe("Lens setup journey", () => {
     expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
     await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
-    expect(await screen.findByRole("heading", { name: "Run your first investigation" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
+    const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
+    expect(guide.getByRole("button", { name: /Connect a worker/ })).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -224,7 +224,7 @@ describe("Lens setup journey", () => {
     serve({ requests: true });
     const user = userEvent.setup();
     const welcome = renderWorkspace({ searchParams: "?tab=investigations" });
-    expect(await screen.findByText("Request logs received")).toBeVisible();
+    expect(await screen.findByRole("region", { name: "Get Lens running" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Connect worker" })).toBeEnabled();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     welcome.unmount();
@@ -265,7 +265,7 @@ describe("Lens setup journey", () => {
     serve({ requests: true, connected: true });
     const user = userEvent.setup();
     renderWorkspace({ searchParams: "?tab=investigations" });
-    expect(await screen.findByText("Request logs received")).toBeVisible();
+    expect(await screen.findByRole("button", { name: "New investigation" })).toBeEnabled();
     const normal = network.getMockImplementation()!;
     network.mockImplementation((input, init) =>
       new URL(String(input), "http://localhost").pathname === "/lens/activity/available"
@@ -273,13 +273,13 @@ describe("Lens setup journey", () => {
         : normal(input, init),
     );
     await act(() => testQueryClient.refetchQueries());
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check recorded activity");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check setup. Activity unavailable");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
     network.mockImplementation(normal);
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("Request logs received")).toBeVisible();
-    expect(screen.getByRole("button", { name: "New investigation" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "New investigation" })).toBeEnabled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps administrator-only setup unavailable to trace viewers", async () => {

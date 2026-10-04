@@ -46,47 +46,6 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   return `Next check ${time} · ${relative}`;
 }
 
-export interface Readiness {
-  readonly tracesReady: boolean;
-  readonly requestsReady: boolean;
-  readonly activityReady: boolean;
-  readonly connected: boolean;
-  readonly ready: boolean;
-}
-
-export interface ReadinessInput {
-  readonly activity: { traces: boolean; requests: boolean } | undefined;
-  readonly activityError: unknown;
-  /** Traces confirmed straight from trace storage count as recorded activity even if the activity check fails. */
-  readonly tracesSeen: boolean;
-  readonly connected: boolean;
-  readonly listError: unknown;
-}
-
-export function readiness({ activity, activityError, tracesSeen, connected, listError }: ReadinessInput): Readiness {
-  const tracesReady = tracesSeen || (activity?.traces === true && !activityError);
-  const requestsReady = activity?.requests === true && !activityError;
-  const activityReady = tracesReady || requestsReady;
-  const ready = activityReady && connected && !listError;
-  return { tracesReady, requestsReady, activityReady, connected, ready };
-}
-
-export type ActivityCheck =
-  | { readonly kind: "idle" }
-  | { readonly kind: "checking" }
-  | { readonly kind: "failed"; readonly message: string }
-  | { readonly kind: "checked" };
-
-export function activityCheck(query: {
-  readonly isLoading: boolean;
-  readonly isSuccess: boolean;
-  readonly error: Error | null;
-}): ActivityCheck {
-  if (query.isLoading) return { kind: "checking" };
-  if (query.error) return { kind: "failed", message: query.error.message };
-  return query.isSuccess ? { kind: "checked" } : { kind: "idle" };
-}
-
 export type InvestigationActivity = "running" | "queued" | "idle";
 
 export function investigationActivity(lenses: readonly Lens[]): InvestigationActivity {

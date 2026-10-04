@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type ComponentProps } from "react";
+import { useId, useState } from "react";
 import { Loader2, XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -8,18 +8,17 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useStoredValue } from "@/lib/storage";
+import { useLensReadiness } from "../hooks/useLensReadiness";
 import { LENS_INTRO_DISMISSED, LENS_INTRO_SEEN } from "../storage";
-
-import { LensGettingStarted } from "./LensGettingStarted";
-
-/** "Don't show this again" outlives the tab; a plain close only rests for the session. */
+import { LensGettingStarted, type LensGettingStartedProps } from "./LensGettingStarted";
+import { useOnboarding } from "./OnboardingContext";
 
 export interface LensIntro {
   readonly open: boolean;
   close(forever: boolean): void;
 }
 
-/** Opens on the first Lens visit of a session, or whenever the URL asks for setup. */
+/** Opens on the first Lens visit of a session, or whenever the URL asks for setup. "Don't show this again" outlives the tab; a plain close only rests for the session. */
 export function useLensIntro({ demo, settingUp }: { demo: boolean; settingUp: boolean }): LensIntro {
   const [dismissed, setDismissed] = useStoredValue(LENS_INTRO_DISMISSED);
   const [seen, setSeen] = useStoredValue(LENS_INTRO_SEEN);
@@ -31,13 +30,12 @@ export function useLensIntro({ demo, settingUp }: { demo: boolean; settingUp: bo
   return { open: settingUp || firstVisit, close };
 }
 
-export type LensIntroDialogProps = ComponentProps<typeof LensGettingStarted> & {
+export type LensIntroDialogProps = Omit<LensGettingStartedProps, "state"> & {
   open: boolean;
-  loading: boolean;
   onClose: (forever: boolean) => void;
 };
 
-export function LensIntroDialog({ open, loading, onClose, ...gettingStarted }: LensIntroDialogProps) {
+export function LensIntroDialog({ open, onClose, ...gettingStarted }: LensIntroDialogProps) {
   const [forever, setForever] = useState(false);
   const checkboxId = useId();
   const close = () => onClose(forever);
@@ -61,16 +59,22 @@ export function LensIntroDialog({ open, loading, onClose, ...gettingStarted }: L
           What Lens does, and the steps to connect tracing, a worker and your first investigation.
         </DialogDescription>
         <div className="px-5 pb-5">
-          {loading ? (
-            <p role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-              Checking Lens setup…
-            </p>
-          ) : (
-            <LensGettingStarted {...gettingStarted} />
-          )}
+          <IntroContent {...gettingStarted} />
         </div>
       </DialogContent>
     </Dialog>
   );
+}
+
+function IntroContent(props: Omit<LensGettingStartedProps, "state">) {
+  const { accessToken, canViewInvestigations } = useOnboarding();
+  const state = useLensReadiness(accessToken, canViewInvestigations);
+  if (state.loading)
+    return (
+      <p role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+        <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+        Checking Lens setup…
+      </p>
+    );
+  return <LensGettingStarted state={state} {...props} />;
 }

@@ -1,8 +1,8 @@
 "use client";
 
 import { createContext, useContext, type ComponentProps } from "react";
-import { Check } from "lucide-react";
 import { cn } from "@/lib/cva.config";
+import { StepIndicator, type StepState } from "../ui/StepIndicator";
 import { SETUP_STEPS, type SetupStep as SetupStepId } from "./investigationSchema";
 
 interface StepsContext {
@@ -22,9 +22,9 @@ export function nextSetupStep(step: SetupStepId): SetupStepId | undefined {
   return SETUP_STEPS[SETUP_STEPS.indexOf(step) + 1];
 }
 
-function stepState(distance: number): "done" | "current" | "upcoming" {
+function stepState(distance: number): StepState {
   if (distance === 0) return "current";
-  return distance < 0 ? "done" : "upcoming";
+  return distance < 0 ? "complete" : "upcoming";
 }
 
 export type SetupStepsProps = ComponentProps<"ol"> & {
@@ -60,27 +60,17 @@ export function SetupStep({ id, heading, description, summary, className, childr
       {...props}
     >
       <span aria-hidden="true" className="absolute top-7 bottom-0 left-3.5 w-px bg-border group-last:hidden" />
-      <span
-        aria-hidden="true"
-        className={cn(
-          "z-raised flex size-7 shrink-0 items-center justify-center rounded-full border bg-card text-xs font-medium",
-          "group-data-[state=done]:border-foreground group-data-[state=done]:text-foreground",
-          "group-data-[state=current]:border-foreground group-data-[state=current]:bg-foreground group-data-[state=current]:text-background",
-          "group-data-[state=upcoming]:border-border group-data-[state=upcoming]:text-muted-foreground",
-        )}
-      >
-        {state === "done" ? <Check className="size-3.5" /> : position + 1}
-      </span>
+      <StepIndicator aria-hidden="true" index={position} state={state} />
       <div className="min-w-0 flex-1 pt-0.5">
         <button
           type="button"
-          disabled={state !== "done"}
+          disabled={state !== "complete"}
           aria-current={state === "current" ? "step" : undefined}
           onClick={() => onOpen(id)}
           className="flex w-full flex-col items-start gap-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
         >
           <span className="text-sm font-semibold group-data-[state=upcoming]:text-muted-foreground">{heading}</span>
-          <span className="text-xs text-muted-foreground">{state === "done" ? summary : description}</span>
+          <span className="text-xs text-muted-foreground">{state === "complete" ? summary : description}</span>
         </button>
         {state === "current" && <div className="mt-4 space-y-5">{children}</div>}
       </div>

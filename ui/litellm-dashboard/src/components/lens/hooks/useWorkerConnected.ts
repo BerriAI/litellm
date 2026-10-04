@@ -1,8 +1,8 @@
 "use client";
 
 import { useNow } from "@/hooks/useNow";
-import { workerConnected } from "./model/status";
-import type { LensList } from "./model/types";
+import { workerConnected } from "../model/status";
+import type { LensList } from "../model/types";
 
 const HEARTBEAT_TICK_MS = 5000;
 

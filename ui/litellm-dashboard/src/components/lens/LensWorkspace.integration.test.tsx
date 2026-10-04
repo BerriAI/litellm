@@ -317,7 +317,7 @@ describe("Lens interactive demo", () => {
       searchParams: "?tab=investigations",
       onUrlUpdate,
     });
-    const guide = within(await screen.findByRole("region", { name: "Run your first investigation" }));
+    const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
     await user.click(await guide.findByRole("button", { name: "Connect worker" }));
     await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
     const panel = within(await screen.findByRole("region", { name: "Settings" }));
