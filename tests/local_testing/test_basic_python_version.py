@@ -3,6 +3,7 @@ import os
 import subprocess
 import time
 import traceback
+from typing import Final
 
 import pytest
 
@@ -253,6 +254,7 @@ def _run_proxy_server_smoke_test(extra_proxy_args=None):
             raise
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        proxy_env: Final = {**os.environ, "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"}
         server_process = subprocess.Popen(
             [
                 "uv",
@@ -266,6 +268,7 @@ def _run_proxy_server_smoke_test(extra_proxy_args=None):
                 *extra_proxy_args,
             ],
             cwd=PROJECT_ROOT,
+            env=proxy_env,
         )
 
         # Allow some time for the server to start (increased for CI environments)
@@ -305,14 +308,14 @@ def _run_proxy_server_smoke_test(extra_proxy_args=None):
 
 
 def test_litellm_proxy_server_config_no_general_settings():
-    """Exercises the default (v1) migration resolver."""
+    """Exercises the default (v2) migration resolver."""
     _run_proxy_server_smoke_test()
 
 
-def test_litellm_proxy_server_config_no_general_settings_v2_resolver():
-    """Exercises the opt-in v2 migration resolver.
+def test_litellm_proxy_server_config_no_general_settings_legacy_resolver():
+    """Exercises the opt-out legacy (v1) migration resolver.
 
-    Runs in a separate CI job against a local Postgres to avoid collisions
-    with the v1 variant when they share a database.
+    Runs after the default variant in the CI job that provides a local
+    Postgres, so both resolvers get real-database proxy-boot coverage.
     """
-    _run_proxy_server_smoke_test(extra_proxy_args=["--use_v2_migration_resolver"])
+    _run_proxy_server_smoke_test(extra_proxy_args=["--use_legacy_migration_resolver"])

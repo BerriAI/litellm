@@ -53,9 +53,7 @@ def _to_event_hook(
         return mode
     if isinstance(mode, str):
         return GuardrailEventHooks(mode)
-    return [  # mutable-ok: CustomGuardrail's own event_hook type requires a real list here
-        item if isinstance(item, GuardrailEventHooks) else GuardrailEventHooks(item) for item in mode
-    ]
+    return [item if isinstance(item, GuardrailEventHooks) else GuardrailEventHooks(item) for item in mode]
 
 
 def _tool_call_name_from_mapping(tool_call: Mapping[str, object]) -> str | None:
@@ -144,7 +142,7 @@ class TealTigerGuardrail(CustomGuardrail):
             self._check_budget(request_data)
 
         checked_texts: Final = tuple(self._check_text_or_raise(text) for text in inputs.get("texts") or ())
-        return {**inputs, "texts": list(checked_texts)}  # mutable-ok: dict interop
+        return {**inputs, "texts": list(checked_texts)}
 
     def _check_tool_calls(self, inputs: GenericGuardrailAPIInputs) -> None:
         for tool_call in inputs.get("tool_calls") or ():

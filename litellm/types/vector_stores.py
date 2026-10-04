@@ -44,6 +44,8 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     team_id: str | None
     user_id: str | None
 
+    is_config: ReadOnly[bool]
+
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     """Response format for listing vector stores"""

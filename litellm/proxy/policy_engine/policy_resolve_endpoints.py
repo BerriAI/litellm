@@ -265,7 +265,9 @@ async def resolve_policies_for_context(
         )
 
         # Get matching policies with reasons
-        match_results: Final = get_attachment_registry().get_attached_policies_with_reasons(context=context)
+        match_results: Final = get_attachment_registry().get_attached_policies_with_reasons(
+            context=context, policy_applies=PolicyMatcher.policy_applies(context)
+        )
 
         if not match_results:
             return PolicyResolveResponse(
