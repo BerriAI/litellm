@@ -93,7 +93,7 @@ function drawDots(canvas: HTMLCanvasElement, { columns, max, band, hover }: DotF
     const dimmed = band !== null && (i < band.lo || i > band.hi);
     dots.forEach((dot, index) => {
       const lit = dot.kind !== "grid" && index < visible;
-      context.globalAlpha = lit && dimmed ? 0.15 : 1;
+      context.globalAlpha = lit ? (dimmed ? 0.15 : 1) * (column.opacity ?? 1) : 1;
       context.fillStyle = dotColor(lit, dot, grid);
       context.beginPath();
       context.arc(

@@ -6,6 +6,7 @@ import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 import { TabsContent } from "@/components/ui/tabs";
+import { HistoryTimeline } from "./HistoryTimeline";
 import { ScanDuration } from "./JobMeta";
 import { useRunHistory } from "./useRunHistory";
 import type { Lens } from "../../model/types";
@@ -34,6 +35,7 @@ export function HistoryTab({ lens }: HistoryTabProps) {
           </Button>
         </p>
       )}
+      {rows.length > 0 && <HistoryTimeline jobs={rows} slots={PAGE} onOpen={openRun} />}
       <div className="divide-y border-y">
         {rows.map((j) => (
           <ListRow

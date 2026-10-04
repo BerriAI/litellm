@@ -13,6 +13,7 @@ export interface DotColumn {
   total: number;
   failed: number;
   series: readonly string[];
+  opacity?: number;
 }
 
 /** Column-index band [lo, hi], inclusive. Columns outside it are dimmed. */
