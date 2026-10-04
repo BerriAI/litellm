@@ -9,7 +9,12 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from litellm.constants import LENS_MODEL_RETRIES, LENS_MODEL_RETRY_MAX_SECONDS
+from litellm.constants import (
+    LENS_MODEL_RETRIES,
+    LENS_MODEL_RETRY_MAX_SECONDS,
+    LENS_WORKER_POLL_SECONDS,
+    LENS_WORKER_SLOTS,
+)
 
 from .analysis import AnalysisResponseError, analyze_sample, validation_details
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Review, Sample
@@ -133,6 +138,18 @@ class LensWorker:
             await self.sleep(retry_delay(exc, attempt))
             return await self.model_request(path, body, attempt + 1)
 
+    async def serve(self, slots: int, poll_seconds: float) -> None:
+        await asyncio.gather(*(self.slot(poll_seconds) for _ in range(slots)))
+
+    async def slot(self, poll_seconds: float) -> None:
+        while True:
+            try:
+                if await self.run_once():
+                    continue
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning("Worker could not reach Lens (%s)", type(exc).__name__)
+            await self.sleep(poll_seconds)
+
     async def run_once(self) -> bool:
         response: Final = await self.client.post("/lens/worker/claim", params=MappingProxyType({"protocol_version": 3}))
         response.raise_for_status()
@@ -227,13 +244,7 @@ async def main() -> None:
     async with httpx.AsyncClient(
         base_url=url, headers=MappingProxyType({"Authorization": f"Bearer {token}"}), timeout=180
     ) as client:
-        worker: Final = LensWorker(client)
-        while True:
-            try:
-                await worker.run_once()
-            except (httpx.HTTPError, ValueError) as exc:
-                logger.warning("Worker could not reach Lens (%s)", type(exc).__name__)
-            await asyncio.sleep(10)
+        await LensWorker(client).serve(LENS_WORKER_SLOTS, LENS_WORKER_POLL_SECONDS)
 
 
 if __name__ == "__main__":

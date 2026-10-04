@@ -495,3 +495,29 @@ async def test_worker_sends_each_runs_review_with_its_progress() -> None:
         assert await LensWorker(client).run_once()
     reviews: Final = tuple(p.review for p in (sent.get_nowait() for _ in range(sent.qsize())) if p.review)
     assert tuple((r.execution_id, r.reasoning) for r in reviews) == (("run", "Finished the task."),)
+
+
+@pytest.mark.asyncio
+async def test_worker_runs_investigations_in_parallel_and_polls_quickly_when_idle() -> None:
+    claims: Final = SimpleQueue[str]()
+    running: Final = asyncio.Event()
+    waits: Final = SimpleQueue[float]()
+
+    class Worker(LensWorker):
+        async def run_once(self) -> bool:
+            claims.put("claim")
+            if claims.qsize() <= 2:
+                if claims.qsize() == 2:
+                    running.set()
+                await running.wait()
+                return True
+            raise asyncio.CancelledError
+
+    async def sleep(delay: float) -> None:
+        waits.put(delay)
+
+    async with httpx.AsyncClient(base_url="https://proxy.test") as client:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(Worker(client, sleep=sleep).serve(slots=2, poll_seconds=2), timeout=1)
+    assert running.is_set()
+    assert waits.empty()
