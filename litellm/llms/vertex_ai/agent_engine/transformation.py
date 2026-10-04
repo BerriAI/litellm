@@ -24,6 +24,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.prompt_templates.common_utils import extract_search_results_text
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,
@@ -153,10 +154,11 @@ def _content_block_to_part(block: _AgentEngineContentBlock) -> PartType | _Agent
 
 def _message_to_agent_input(message: Mapping[str, object]) -> str | ContentType | _AgentEngineInputError:
     content: Final = message.get("content")
+    search_text: Final = extract_search_results_text(message.get("search_results"))
     if content is None:
-        return ""
+        return search_text
     if isinstance(content, str):
-        return content
+        return content + search_text
     try:
         blocks: Final = _CONTENT_ADAPTER.validate_python(content)
     except ValidationError:
@@ -167,23 +169,16 @@ def _message_to_agent_input(message: Mapping[str, object]) -> str | ContentType 
         return error
     parts: Final = [part for part in converted if not isinstance(part, _AgentEngineInputError)]
     if all(block["type"] == "text" for block in blocks):
-        return "".join(part.get("text", "") for part in parts)
+        return "".join(part.get("text", "") for part in parts) + search_text
     if message["role"] != "user":
         return _AgentEngineInputError("Agent Engine media must be in the final user message")
-    return {"role": "user", "parts": parts}
+    search_parts: Final[list[PartType]] = [{"text": search_text}] if search_text else []
+    return {"role": "user", "parts": parts + search_parts}
 
 
 def _messages_to_agent_input(messages: list[AllMessageValues]) -> str | ContentType | _AgentEngineInputError:
     if not messages:
         return _AgentEngineInputError("Agent Engine requires at least one message")
-    previous: Final = tuple(_message_to_agent_input(message) for message in messages[:-1])
-    error: Final = next((part for part in previous if isinstance(part, _AgentEngineInputError)), None)
-    if error is not None:
-        return error
-    if any(not isinstance(part, str) for part in previous):
-        return _AgentEngineInputError(
-            "Agent Engine media must be in the final user message; earlier attachments are not forwarded"
-        )
     return _message_to_agent_input(messages[-1])
 
 

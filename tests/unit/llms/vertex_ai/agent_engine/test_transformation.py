@@ -5,9 +5,10 @@ Tests the request transformation and streaming chunk parsing without making real
 """
 
 from copy import deepcopy
-from typing import Final, Literal
+from typing import Final
 
 import pytest
+from typing_extensions import ReadOnly
 
 from litellm import BadRequestError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
@@ -15,7 +16,14 @@ from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,
 )
 from litellm.llms.vertex_ai.agent_engine.transformation import VertexAgentEngineConfig, VertexAgentEngineError
-from litellm.types.llms.openai import AllMessageValues, OpenAIMessageContent, OpenAIMessageContentListBlock
+from litellm.types.llms.bedrock import SearchResultBlock
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionUserMessage,
+    OpenAIChatCompletionAssistantMessage,
+    OpenAIMessageContent,
+    OpenAIMessageContentListBlock,
+)
 from litellm.types.llms.vertex_ai import ContentType
 
 
@@ -268,16 +276,11 @@ def test_unsupported_or_invalid_parts_raise_instead_of_disappearing(part: OpenAI
     assert "Agent Engine" in error.value.message
 
 
-@pytest.mark.parametrize("role, following", [("assistant", False), ("user", True)])
-def test_media_is_rejected_when_it_cannot_be_forwarded(role: Literal["assistant", "user"], following: bool) -> None:
+def test_media_in_final_assistant_message_is_rejected() -> None:
     config: Final = VertexAgentEngineConfig()
-    media: Final[AllMessageValues] = {
-        "role": role,
-        "content": [
-            {"type": "image_url", "image_url": {"url": "gs://bucket/image.png"}},
-        ],
-    }
-    messages: Final[list[AllMessageValues]] = [media, {"role": "user", "content": "next"}] if following else [media]
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "assistant", "content": [{"type": "image_url", "image_url": {"url": "gs://bucket/image.png"}}]},
+    ]
     with pytest.raises(VertexAgentEngineError) as error:
         config.transform_request(
             model="agent_engine/123",
@@ -287,6 +290,7 @@ def test_media_is_rejected_when_it_cannot_be_forwarded(role: Literal["assistant"
             headers={},
         )
     assert error.value.status_code == 400
+    assert error.value.message == "Agent Engine media must be in the final user message"
 
 
 def test_invalid_media_maps_to_public_bad_request_error() -> None:
@@ -341,30 +345,96 @@ def test_assistant_without_content_preserves_empty_string_path() -> None:
     assert result == {"class_method": "stream_query", "input": {"message": "", "user_id": "user"}}
 
 
-@pytest.mark.parametrize(
-    "messages, expected_error",
-    [
-        ([], "Agent Engine requires at least one message"),
-        (
-            [
-                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "gs://bucket"}}]},
-                {"role": "user", "content": "next"},
-            ],
-            "Agent Engine requires a valid gs:// or https:// media URI",
-        ),
-    ],
-)
-def test_invalid_messages_fail_before_forwarding_the_last_text(
-    messages: list[AllMessageValues], expected_error: str
-) -> None:
+def test_empty_message_list_returns_a_clear_error() -> None:
     config: Final = VertexAgentEngineConfig()
     with pytest.raises(VertexAgentEngineError) as error:
         config.transform_request(
-            model="agent_engine/123",
-            messages=messages,
-            optional_params={"user_id": "user"},
-            litellm_params={},
-            headers={},
+            model="agent_engine/123", messages=[], optional_params={"user_id": "user"}, litellm_params={}, headers={}
         )
     assert error.value.status_code == 400
-    assert error.value.message == expected_error
+    assert error.value.message == "Agent Engine requires at least one message"
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"type": "image_url", "image_url": {"url": "gs://bucket/image.png"}},
+        {"type": "image_url", "image_url": {"url": "gs://bucket"}},
+        {"type": "input_audio", "input_audio": {"data": "AA==", "format": "wav"}},
+    ],
+)
+def test_earlier_media_keeps_existing_final_message_behavior(part: OpenAIMessageContentListBlock) -> None:
+    config: Final = VertexAgentEngineConfig()
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [part]},
+        {"role": "user", "content": "next"},
+    ]
+    result: Final = config.transform_request(
+        model="agent_engine/123", messages=messages, optional_params={"user_id": "user"}, litellm_params={}, headers={}
+    )
+    assert result == {"class_method": "stream_query", "input": {"message": "next", "user_id": "user"}}
+
+
+class _UserMessageWithSearchResults(ChatCompletionUserMessage):
+    search_results: ReadOnly[list[SearchResultBlock]]
+
+
+class _AssistantMessageWithSearchResults(OpenAIChatCompletionAssistantMessage):
+    search_results: ReadOnly[list[SearchResultBlock]]
+
+
+_SEARCH_RESULTS: Final[list[SearchResultBlock]] = [
+    {
+        "source": "https://example.com/result",
+        "title": "Finding",
+        "content": [{"type": "text", "text": "Search context"}],
+        "citations": {"enabled": False},
+    }
+]
+_SEARCH_TEXT: Final = 'https://example.com/resultFindingSearch context{"enabled":false}'
+
+
+@pytest.mark.parametrize(
+    "content, expected",
+    [
+        ([], _SEARCH_TEXT),
+        ("question", "question" + _SEARCH_TEXT),
+        ([{"type": "text", "text": "question"}], "question" + _SEARCH_TEXT),
+        (
+            [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}],
+            {
+                "role": "user",
+                "parts": [
+                    {"inline_data": {"data": "AA==", "mime_type": "image/png"}},
+                    {"text": _SEARCH_TEXT},
+                ],
+            },
+        ),
+    ],
+)
+def test_search_result_context_is_preserved_with_text_and_media(
+    content: OpenAIMessageContent, expected: str | ContentType
+) -> None:
+    config: Final = VertexAgentEngineConfig()
+    message: Final[_UserMessageWithSearchResults] = {
+        "role": "user",
+        "content": content,
+        "search_results": _SEARCH_RESULTS,
+    }
+    result: Final = config.transform_request(
+        model="agent_engine/123", messages=[message], optional_params={"user_id": "user"}, litellm_params={}, headers={}
+    )
+    assert result == {"class_method": "stream_query", "input": {"message": expected, "user_id": "user"}}
+
+
+def test_search_results_are_preserved_without_message_content() -> None:
+    config: Final = VertexAgentEngineConfig()
+    message: Final[_AssistantMessageWithSearchResults] = {
+        "role": "assistant",
+        "content": None,
+        "search_results": _SEARCH_RESULTS,
+    }
+    result: Final = config.transform_request(
+        model="agent_engine/123", messages=[message], optional_params={"user_id": "user"}, litellm_params={}, headers={}
+    )
+    assert result == {"class_method": "stream_query", "input": {"message": _SEARCH_TEXT, "user_id": "user"}}
