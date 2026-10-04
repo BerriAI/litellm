@@ -34,36 +34,50 @@ export function InvestigationsWelcome({
   const canConnect = activityReady && !readOnly;
   const traceStatus = activityStatus(tracesReady, requestsReady, checking);
   const waitingForWorker = activityReady && !connected;
-  const firstStepTitle = requestsReady && !tracesReady ? "Recorded activity" : "Set up traces";
+  const stepOffset = Number(!activityReady);
+  const introduction = activityReady
+    ? {
+        title: "Run your first investigation",
+        description: "Your recorded activity is ready. Connect a worker and choose what Lens should look for.",
+      }
+    : {
+        title: "Find what needs attention",
+        description: "Check how your agents behave. Get findings you can trace back to what happened.",
+      };
   const traceButtonClass = buttonVariants({
-    variant: activityReady ? "ghost" : "default",
+    variant: "default",
     className: "col-start-2 w-fit sm:col-start-auto",
   });
   return (
     <section aria-labelledby="lens-welcome" className="m-auto w-full max-w-2xl py-10">
       {showPreview && <LensPreviewButton />}
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
-        Find what needs attention
+        {introduction.title}
       </h2>
-      <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
-        Check how your agents behave. Get findings you can trace back to what happened.
-      </p>
+      <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{introduction.description}</p>
+      {activityReady && (
+        <p role="status" className="mt-3 text-sm text-success">
+          {traceStatus}
+        </p>
+      )}
       <ol className="mt-8 divide-y border-y">
-        <li className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto]">
-          <Step number={1} complete={activityReady} checking={checking} active={!activityReady} />
-          <div>
-            <h3 className="text-sm font-medium">{firstStepTitle}</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{traceStatus}</p>
-          </div>
-          <Link href={uiHref("lens/?tab=traces")} className={traceButtonClass}>
-            {tracesReady ? "View traces" : "Set up traces"}
-          </Link>
-        </li>
+        {!activityReady && (
+          <li className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 sm:grid-cols-[28px_minmax(0,1fr)_auto]">
+            <Step number={1} complete={activityReady} checking={checking} active={!activityReady} />
+            <div>
+              <h3 className="text-sm font-medium">Set up traces</h3>
+              <p className="mt-1 text-sm text-muted-foreground">{traceStatus}</p>
+            </div>
+            <Link href={uiHref("lens/?tab=traces")} className={traceButtonClass}>
+              Set up traces
+            </Link>
+          </li>
+        )}
         <li
           data-state={activityReady ? "active" : "inactive"}
           className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 text-muted-foreground data-[state=active]:text-foreground sm:grid-cols-[28px_minmax(0,1fr)_auto]"
         >
-          <Step number={2} complete={workerReady} active={waitingForWorker} />
+          <Step number={stepOffset + 1} complete={workerReady} active={waitingForWorker} />
           <div>
             <h3 className="text-sm font-medium">Connect a worker</h3>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -83,7 +97,7 @@ export function InvestigationsWelcome({
           data-state={workerReady ? "active" : "inactive"}
           className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-4 gap-y-3 py-5 text-muted-foreground data-[state=active]:text-foreground sm:grid-cols-[28px_minmax(0,1fr)_auto]"
         >
-          <Step number={3} complete={false} active={workerReady} />
+          <Step number={stepOffset + 2} complete={false} active={workerReady} />
           <div>
             <h3 className="text-sm font-medium">Run an investigation</h3>
           </div>
