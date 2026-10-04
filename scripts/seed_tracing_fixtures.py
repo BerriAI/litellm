@@ -35,10 +35,7 @@ if TYPE_CHECKING:
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 TRACE_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces/tests/fixtures"
-SPEND_FIXTURE: Final = (
-    REPO_ROOT / "litellm-rust/crates/traces-clickhouse/tests/fixtures/deeplite_swarm_spend_logs.jsonl"
-)
-SPEND_FIXTURES: Final = SPEND_FIXTURE.parent
+SPEND_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces-clickhouse/tests/fixtures"
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 SPEND_ROWS: Final = TypeAdapter(tuple[SpendLogRecord, ...])
@@ -299,7 +296,7 @@ async def seed_batch(
     )
     rebased_spends: Final = tuple(chain.from_iterable(rows for _, rows in paired))
     resolved_tenant: Final = await ingest_replays(
-        client, storage, replays, next(row["trace_id"] for row in rebased_spends if row["trace_id"]), tenant
+        client, storage, replays, fixture_capture(*next((name, rows[0]) for name, rows in paired)).trace_id, tenant
     )
     stamped_spends: Final[tuple[SpendLogRecord, ...]] = tuple(
         {**row, "team_id": resolved_tenant.team_id, "api_key": resolved_tenant.api_key, "user": resolved_tenant.user}

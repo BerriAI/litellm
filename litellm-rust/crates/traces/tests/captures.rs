@@ -331,7 +331,6 @@ fn append_response_id(document: &mut Value, trace_id: &str, span_id: &str, respo
 #[rstest]
 fn captured_trace_cost_matches_spend_logs(
     #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
-    #[exclude("deeplite_swarm")]
     spend_logs: PathBuf,
 ) {
     let name = capture_name(&spend_logs);
@@ -348,7 +347,6 @@ fn captured_trace_cost_matches_spend_logs(
 #[rstest]
 fn unrelated_sibling_transport_leaves_cost_unchanged(
     #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
-    #[exclude("deeplite_swarm")]
     spend_logs: PathBuf,
 ) {
     let name = capture_name(&spend_logs);
@@ -389,7 +387,6 @@ fn unrelated_sibling_transport_leaves_cost_unchanged(
 #[rstest]
 fn redundant_genai_response_id_keeps_call_evidence(
     #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
-    #[exclude("deeplite_swarm")]
     spend_logs: PathBuf,
 ) {
     let (data, capture, _, _) = fixture(&spend_logs);

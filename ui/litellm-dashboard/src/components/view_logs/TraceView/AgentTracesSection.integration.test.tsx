@@ -346,6 +346,7 @@ describe("AgentTracesSection", () => {
     );
     expect(agentCell(cliRun)).toHaveTextContent(/^Claude Code$/);
     expect(within(plainRun).queryByRole("img", { hidden: true })).not.toBeInTheDocument();
+    expect(within(plainRun).getByTestId("span-icon")).toBeInTheDocument();
     expect(agentCell(plainRun)).toHaveTextContent((runs[2].agent_names ?? [runs[2].service]).join(", "));
   });
 

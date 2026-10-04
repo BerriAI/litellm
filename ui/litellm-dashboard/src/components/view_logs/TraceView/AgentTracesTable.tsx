@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 
+import { SpanIcon } from "./SpanIcon";
 import { StatusMark } from "./StatusMark";
 import { FrameworkLogo, traceFramework } from "./TraceFramework";
 import type { TraceSummary } from "./traceTypes";
@@ -42,7 +43,7 @@ function AgentCell({ run }: { run: TraceSummary }) {
   return (
     <td className="px-3 text-muted-foreground" title={title}>
       <div className="flex min-w-0 items-center gap-1.5">
-        {framework && <FrameworkLogo framework={framework} />}
+        {framework ? <FrameworkLogo framework={framework} /> : <SpanIcon type="agent" size="sm" />}
         <span className="truncate">{agents || framework?.label || "—"}</span>
       </div>
     </td>
@@ -65,7 +66,7 @@ export function AgentTracesTable({
   return (
     <div className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
       <table aria-label="Agent runs" className="w-full min-w-[900px] table-fixed border-collapse text-left">
-        <thead className="sticky top-0 z-sticky bg-muted/40 backdrop-blur">
+        <thead className="sticky top-0 z-sticky bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))]">
           <tr className="h-8 border-b border-border text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
             <th className={`w-[170px] ${TH}`}>
               <span className="inline-flex items-center gap-1 whitespace-nowrap">

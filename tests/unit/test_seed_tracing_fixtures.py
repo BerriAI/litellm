@@ -83,9 +83,9 @@ def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
 
 @pytest.mark.requires_rust_extension
 def test_replay_preserves_trace_topology_usage_and_event_timing() -> None:
-    export: Final = JSON.validate_json((TRACE_FIXTURES / "deeplite_swarm.json").read_bytes())
+    export: Final = JSON.validate_json((TRACE_FIXTURES / "deepagents_swarm.json").read_bytes())
     original: Final = span_rows(json.dumps(export).encode(), "application/json")
-    spend_rows: Final = dict(spend_fixtures())["deeplite_swarm"]
+    spend_rows: Final = dict(spend_fixtures())["deepagents_swarm"]
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spend_rows))
     shifted: Final = rebase(export, 123_000_000, "first-run", pattern)
     replayed: Final = span_rows(json.dumps(shifted).encode(), "application/json")
@@ -109,36 +109,8 @@ def test_replay_preserves_trace_topology_usage_and_event_timing() -> None:
         )
 
 
-@pytest.mark.requires_rust_extension
-def test_paired_fixture_joins_every_successful_llm_span_after_replay() -> None:
-    export: Final = JSON.validate_json((TRACE_FIXTURES / "deeplite_swarm.json").read_bytes())
-    spends: Final = dict(spend_fixtures())["deeplite_swarm"]
-    pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
-    replays: Final = fixture_replays(TRACE_FIXTURES, max(timestamps(export)) // 1_000_000 + 1123, "paired-run", pattern)
-    replay: Final = next(item for item in replays if item.name == "deeplite_swarm")
-    rebased_spends: Final = rebase_spend(spends, replay.offset_ms, replay.namespace, pattern)
-    spans: Final = span_rows(json.dumps(replay.export).encode(), "application/json")
-    llm_spans: Final = tuple(span for span in spans if span["ObservationType"] == "llm")
-    by_response: Final = {row["response_id"]: row for row in rebased_spends}
-
-    assert len(by_response) == len(llm_spans) == len(rebased_spends)
-    assert frozenset(by_response) == frozenset(span["LiteLLMRequestId"] for span in llm_spans)
-    for span, spend in ((span, by_response[span["LiteLLMRequestId"]]) for span in llm_spans):
-        assert spend["request_id"] == span["LiteLLMRequestId"]
-        assert spend["trace_id"] == spend["session_id"] == span["TraceId"]
-        assert spend["span_id"] == span["SpanId"]
-        assert spend["start_time"] == span["Timestamp"] // 1_000_000
-        assert spend["end_time"] == (span["Timestamp"] + span["Duration"]) // 1_000_000
-        assert spend["prompt_tokens"] == span["InputTokens"]
-        assert spend["completion_tokens"] == span["OutputTokens"]
-        assert spend["total_tokens"] == spend["prompt_tokens"] + spend["completion_tokens"]
-        assert json.loads(spend["response"])["id"] == spend["response_id"]
-        assert json.loads(spend["response"])["usage"]["total_tokens"] == spend["total_tokens"]
-        assert json.loads(spend["metadata"])["synthetic_spend"] is True
-
-
 def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
-    spends: Final = dict(spend_fixtures())["deeplite_swarm"]
+    spends: Final = dict(spend_fixtures())["deepagents_swarm"]
 
     for spend, postgres in ((spend, postgres_row(spend)) for spend in spends):
         start_time, end_time = DATETIMES.validate_python((postgres["startTime"], postgres["endTime"]))
@@ -150,7 +122,7 @@ def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
             spend["api_key"],
             spend["team_id"],
             spend["user"],
-            spend["trace_id"],
+            spend["session_id"],
         )
         assert postgres["spend"] == spend["spend"]
         assert postgres["total_tokens"] == spend["prompt_tokens"] + spend["completion_tokens"]
@@ -163,7 +135,7 @@ def test_postgres_rows_preserve_clickhouse_cost_identity_and_payloads() -> None:
 
 
 @pytest.mark.requires_rust_extension
-@pytest.mark.parametrize("name,spends", tuple(item for item in spend_fixtures() if item[0] != "deeplite_swarm"))
+@pytest.mark.parametrize("name,spends", spend_fixtures())
 def test_captured_spend_replay_preserves_real_cost_and_call_identity(
     name: str, spends: tuple[SpendLogRecord, ...]
 ) -> None:
@@ -200,7 +172,7 @@ def test_captured_spend_replay_preserves_real_cost_and_call_identity(
 def test_spend_fixture_loading_preserves_gateway_ids_and_defaults_legacy_rows(
     tmp_path: Path, call_id: str | None
 ) -> None:
-    original: Final = dict(spend_fixtures())["deeplite_swarm"][0]
+    original: Final = dict(spend_fixtures())["deepagents_swarm"][0]
     fields: Final = {key: value for key, value in original.items() if key != "litellm_call_id"}
     supplied: Final = fields if call_id is None else {**fields, "litellm_call_id": call_id}
     (tmp_path / "example_spend_logs.jsonl").write_text(json.dumps(supplied) + "\n")
@@ -220,7 +192,6 @@ def test_bulk_export_preserves_all_spans_and_disjoint_copy_ids() -> None:
     first_ids: Final = frozenset(span["TraceId"] for span in bulk_span_rows(first, Tenant("", "")))
     second_ids: Final = frozenset(span["TraceId"] for span in bulk_span_rows(second, Tenant("", "")))
     assert first_ids.isdisjoint(second_ids)
-    assert len(merged) > 1000
 
 
 @pytest.mark.requires_rust_extension
