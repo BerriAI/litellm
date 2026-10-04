@@ -3808,6 +3808,28 @@ export interface paths {
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
     };
+    "/credentials/{credential_name}/jwks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Credential Internal Issuer Jwks
+         * @description Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
+         *     register it on the Anthropic federation issuer from the UI. Never touches the private signing
+         *     key: only its derived public JWKS leaves this process. 404s for any other credential shape.
+         */
+        get: operations["get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor/chat/completions": {
         parameters: {
             query?: never;
@@ -9259,6 +9281,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/liteadmin/slack/connect/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connect Page */
+        get: operations["connect_page_liteadmin_slack_connect__token__get"];
+        put?: never;
+        /** Connect Account */
+        post: operations["connect_account_liteadmin_slack_connect__token__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/litellm/.well-known/litellm-ui-config": {
         parameters: {
             query?: never;
@@ -14326,6 +14366,129 @@ export interface paths {
         put: operations["update_roi_calculator_identity_map_roi_calculator_identity_map_put"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Observed Apps */
+        get: operations["observed_apps_roi_calculator_observed_apps_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Identities */
+        get: operations["get_observed_identities_roi_calculator_observed_identities_get"];
+        /** Save Observed Identities */
+        put: operations["save_observed_identities_roi_calculator_observed_identities_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/oauth/{provider}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Observed Authorization */
+        post: operations["start_observed_authorization_roi_calculator_observed_oauth__provider__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Report */
+        get: operations["get_observed_report_roi_calculator_observed_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Observed Repositories */
+        get: operations["observed_repositories_roi_calculator_observed_repositories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Settings */
+        get: operations["get_observed_settings_roi_calculator_observed_settings_get"];
+        /** Save Observed Settings */
+        put: operations["save_observed_settings_roi_calculator_observed_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/observed/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Observed Sync */
+        get: operations["get_observed_sync_roi_calculator_observed_sync_get"];
+        put?: never;
+        /** Start Observed Sync */
+        post: operations["start_observed_sync_roi_calculator_observed_sync_post"];
+        /** Cancel Observed Sync */
+        delete: operations["cancel_observed_sync_roi_calculator_observed_sync_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -27284,9 +27447,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
+             * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -31331,6 +31494,8 @@ export interface components {
         };
         /** Deployment */
         Deployment: {
+            /** Blocked */
+            blocked?: boolean | null;
             litellm_params: components["schemas"]["LiteLLM_Params"];
             model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
@@ -34887,6 +35052,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -35150,6 +35351,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -39236,6 +39443,373 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** ObservedAccount */
+        ObservedAccount: {
+            /** Connection Id */
+            connection_id: string;
+            /** Login */
+            login: string;
+        };
+        /** ObservedApp */
+        ObservedApp: {
+            /** Api Url */
+            api_url?: string | null;
+            /** Callback Url */
+            callback_url?: string | null;
+            /**
+             * Can Install
+             * @default false
+             */
+            can_install: boolean;
+            /** Configured */
+            configured: boolean;
+        };
+        /** ObservedApps */
+        ObservedApps: {
+            github: components["schemas"]["ObservedApp"];
+            gitlab: components["schemas"]["ObservedApp"];
+        };
+        /** ObservedAuthorization */
+        ObservedAuthorization: {
+            /** Url */
+            url: string;
+        };
+        /** ObservedConnection */
+        ObservedConnection: {
+            /** Api Url */
+            api_url: string;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "token" | "app";
+            /** Has Token */
+            has_token: boolean;
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /** Ready */
+            ready: boolean;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
+        };
+        /** ObservedConnectionIdentities */
+        ObservedConnectionIdentities: {
+            /** Api Url */
+            api_url: string;
+            /** Id */
+            id: string;
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Unmatched Logins */
+            unmatched_logins: string[];
+        };
+        /** ObservedHumanSummary */
+        ObservedHumanSummary: {
+            /** Median Merge Hours */
+            median_merge_hours: number | null;
+        };
+        /** ObservedIdentities */
+        ObservedIdentities: {
+            /**
+             * Connections
+             * @default []
+             */
+            connections: components["schemas"]["ObservedConnectionIdentities"][];
+            /** Gateway Emails */
+            gateway_emails: string[];
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            /** Unmatched Logins */
+            unmatched_logins: string[];
+        };
+        /** ObservedIdentityUpdate */
+        ObservedIdentityUpdate: {
+            /** Accounts */
+            accounts?: components["schemas"]["ObservedAccount"][] | null;
+            /** Email */
+            email: string;
+            /**
+             * Logins
+             * @default []
+             */
+            logins: string[];
+        };
+        /** ObservedPeriod */
+        ObservedPeriod: {
+            /** Agent Authored */
+            agent_authored: number;
+            /** Agents Without Requester */
+            agents_without_requester: number;
+            /** Explicitly Titled Revert Prs */
+            explicitly_titled_revert_prs: number;
+            /** Human Authored */
+            human_authored: number;
+            human_summary: components["schemas"]["ObservedHumanSummary"];
+            /** Matched Internal Prs */
+            matched_internal_prs: number;
+            /** Matched Users Recorded Spend */
+            matched_users_recorded_spend: number;
+            /** Median Merge Hours */
+            median_merge_hours: number | null;
+            /** Merged Prs */
+            merged_prs: number;
+            /** Missing Author */
+            missing_author: number;
+            /** New Bug Labeled Issues */
+            new_bug_labeled_issues: number | null;
+            /** New Regression Labeled Issues */
+            new_regression_labeled_issues: number | null;
+            /**
+             * Spend Observation
+             * @enum {string}
+             */
+            spend_observation: "records_present" | "no_records";
+            window: components["schemas"]["ObservedWindow"];
+        };
+        /** ObservedPeriods */
+        ObservedPeriods: {
+            current: components["schemas"]["ObservedPeriod"];
+            last_year: components["schemas"]["ObservedPeriod"];
+            previous: components["schemas"]["ObservedPeriod"];
+        };
+        /** ObservedPerson */
+        ObservedPerson: {
+            /**
+             * Accounts
+             * @default []
+             */
+            accounts: components["schemas"]["ObservedAccount"][];
+            /** Email */
+            email: string;
+            /** Logins */
+            logins: string[];
+            /** Name */
+            name: string;
+            periods: components["schemas"]["ObservedPersonPeriods"];
+        };
+        /** ObservedPersonPeriod */
+        ObservedPersonPeriod: {
+            /** Declared Agent Owned */
+            declared_agent_owned: number;
+            /** Direct Authored */
+            direct_authored: number;
+            /** Gateway Recorded Spend */
+            gateway_recorded_spend: number;
+            /** Median Merge Hours */
+            median_merge_hours: number | null;
+            /** Merged Prs */
+            merged_prs: number;
+            /** Pr Urls */
+            pr_urls: string[];
+            /** Prs Per Week */
+            prs_per_week: number;
+            /** Recorded Spend Per Attributed Pr */
+            recorded_spend_per_attributed_pr: number | null;
+            /**
+             * Spend Observation
+             * @enum {string}
+             */
+            spend_observation: "records_present" | "no_records";
+        };
+        /** ObservedPersonPeriods */
+        ObservedPersonPeriods: {
+            current: components["schemas"]["ObservedPersonPeriod"];
+            last_year: components["schemas"]["ObservedPersonPeriod"];
+            previous: components["schemas"]["ObservedPersonPeriod"];
+        };
+        /** ObservedPullPeriods */
+        ObservedPullPeriods: {
+            /** Current */
+            current: components["schemas"]["ObservedPullResponse"][];
+            /** Last Year */
+            last_year: components["schemas"]["ObservedPullResponse"][];
+            /** Previous */
+            previous: components["schemas"]["ObservedPullResponse"][];
+        };
+        /** ObservedPullResponse */
+        ObservedPullResponse: {
+            /**
+             * Agent
+             * @default false
+             */
+            agent: boolean;
+            /** Author */
+            author: string;
+            branch_cost: components["schemas"]["ROIBranchAttribution"];
+            /**
+             * Connection Id
+             * @default
+             */
+            connection_id: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Merge Hours */
+            merge_hours: number | null;
+            /**
+             * Merged At
+             * Format: date-time
+             */
+            merged_at: string;
+            /** Number */
+            number: number;
+            /**
+             * Profile Email
+             * @default
+             */
+            profile_email: string;
+            /** Repo */
+            repo: string;
+            /**
+             * Requester
+             * @default
+             */
+            requester: string;
+            /**
+             * Source Branch
+             * @default
+             */
+            source_branch: string;
+            /**
+             * Source Repo
+             * @default
+             */
+            source_repo: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        };
+        /** ObservedReport */
+        ObservedReport: {
+            /**
+             * Captured At
+             * Format: date-time
+             */
+            captured_at: string;
+            /**
+             * Connections
+             * @default []
+             */
+            connections: components["schemas"]["ObservedSource"][];
+            /** People */
+            people: components["schemas"]["ObservedPerson"][];
+            periods: components["schemas"]["ObservedPeriods"];
+            pulls: components["schemas"]["ObservedPullPeriods"];
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab" | "mixed";
+            /** Unlinked Branches */
+            unlinked_branches: components["schemas"]["ROIBranchSpend"][];
+            /** Unmatched Logins */
+            unmatched_logins: string[];
+        };
+        /** ObservedReportResponse */
+        ObservedReportResponse: {
+            report: components["schemas"]["ObservedReport"] | null;
+        };
+        /** ObservedSettings */
+        ObservedSettings: {
+            /** Api Url */
+            api_url: string;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "token" | "app";
+            /**
+             * Connections
+             * @default []
+             */
+            connections: components["schemas"]["ObservedConnection"][];
+            /** Has Token */
+            has_token: boolean;
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /** Ready */
+            ready: boolean;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
+        };
+        /** ObservedSettingsUpdate */
+        ObservedSettingsUpdate: {
+            /** Api Url */
+            api_url: string;
+            /** Connection Id */
+            connection_id?: string | null;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+            /** Token */
+            token?: string | null;
+            /** Update Interval Minutes */
+            update_interval_minutes?: number | null;
+        };
+        /** ObservedSource */
+        ObservedSource: {
+            /** Api Url */
+            api_url: string;
+            /** Id */
+            id: string;
+            /** Repos */
+            repos: string[];
+            /**
+             * Source Provider
+             * @enum {string}
+             */
+            source_provider: "github" | "gitlab";
+        };
+        /** ObservedWindow */
+        ObservedWindow: {
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+        };
         /**
          * OpenIdConnectSecurityScheme
          * @description Defines a security scheme using OpenID Connect.
@@ -41591,6 +42165,12 @@ export interface components {
             };
             /** Ready */
             ready: boolean;
+            /**
+             * Report Mode
+             * @default legacy
+             * @enum {string}
+             */
+            report_mode: "legacy" | "observed";
             /** Repos */
             repos: string[];
             /**
@@ -41620,6 +42200,8 @@ export interface components {
             gitlab_api_url?: string | null;
             /** Gitlab Token */
             gitlab_token?: string | null;
+            /** Report Mode */
+            report_mode?: ("legacy" | "observed") | null;
             /** Repos */
             repos?: string[] | null;
             /** Source Provider */
@@ -47625,6 +48207,8 @@ export interface components {
             credential_values?: {
                 [key: string]: unknown;
             } | null;
+            /** Credential Values To Delete */
+            credential_values_to_delete?: string[] | null;
             /** Model Id */
             model_id?: string | null;
         };
@@ -49593,6 +50177,8 @@ export interface components {
         };
         /** WorkerCreated */
         WorkerCreated: {
+            /** Image */
+            image: string;
             /** Token */
             token: string;
             worker: components["schemas"]["Worker"];
@@ -49886,6 +50472,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -50149,6 +50771,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -56161,6 +56789,38 @@ export interface operations {
                 "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -62401,6 +63061,7 @@ export interface operations {
         parameters: {
             query?: {
                 protocol_version?: number;
+                worker_release?: string;
             };
             header?: never;
             path?: never;
@@ -62990,6 +63651,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_page_liteadmin_slack_connect__token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_account_liteadmin_slack_connect__token__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
             /** @description Validation Error */
@@ -69448,6 +70171,289 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    observed_apps_roi_calculator_observed_apps_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedApps"];
+                };
+            };
+        };
+    };
+    get_observed_identities_roi_calculator_observed_identities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedIdentities"];
+                };
+            };
+        };
+    };
+    save_observed_identities_roi_calculator_observed_identities_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObservedIdentityUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_observed_authorization_roi_calculator_observed_oauth__provider__start_post: {
+        parameters: {
+            query?: {
+                install?: boolean;
+            };
+            header?: never;
+            path: {
+                provider: "github" | "gitlab";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedAuthorization"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observed_report_roi_calculator_observed_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedReportResponse"];
+                };
+            };
+        };
+    };
+    observed_repositories_roi_calculator_observed_repositories_get: {
+        parameters: {
+            query?: {
+                connection?: string | null;
+                query?: string;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observed_settings_roi_calculator_observed_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedSettings"];
+                };
+            };
+        };
+    };
+    save_observed_settings_roi_calculator_observed_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ObservedSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObservedSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_observed_sync_roi_calculator_observed_sync_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
+    start_observed_sync_roi_calculator_observed_sync_post: {
+        parameters: {
+            query?: {
+                days?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_observed_sync_roi_calculator_observed_sync_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
                 };
             };
         };

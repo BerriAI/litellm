@@ -1,0 +1,114 @@
+suite: Lens worker release and credentials
+templates:
+  - lens/deployment.yaml
+  - backend/deployment.yaml
+  - gateway/configmap.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: keeps the worker opt in
+    template: lens/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: requires a limited worker credential when enabled
+    template: lens/deployment.yaml
+    set:
+      lensWorker.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: lensWorker.tokenSecret.name must reference a Lens worker token
+  - it: uses the chart release and a secret without granting Kubernetes access
+    template: lens/deployment.yaml
+    chart:
+      appVersion: v1.2.3
+    set:
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker:v1.2.3
+      - equal:
+          path: spec.template.spec.containers[0].env[1].valueFrom.secretKeyRef
+          value:
+            name: lens-credential
+            key: token
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value:
+            medium: Memory
+            sizeLimit: 1Gi
+  - it: advertises the same private dev image to standalone installers
+    template: backend/deployment.yaml
+    set:
+      lensWorker.image.repository: registry.example/lens-worker
+      lensWorker.image.tag: branch-main-1234567
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_WORKER_IMAGE
+            value: registry.example/lens-worker:branch-main-1234567
+  - it: supports an external gateway and a registry override
+    template: lens/deployment.yaml
+    set:
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.url: https://gateway.example/proxy
+      lensWorker.image.repository: registry.example/lens-worker
+      lensWorker.image.tag: branch-main-1234567
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example/lens-worker:branch-main-1234567
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: https://gateway.example/proxy
+  - it: prefixes a numeric chart release with v
+    template: lens/deployment.yaml
+    chart:
+      appVersion: 1.2.3-rc.4
+    set:
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker:v1.2.3-rc.4
+  - it: follows a backend image override when no worker tag is set
+    template: lens/deployment.yaml
+    set:
+      backend.image.tag: branch-main-1234567
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker:branch-main-1234567
+  - it: recommends the overridden backend release for standalone installers
+    template: backend/deployment.yaml
+    set:
+      backend.image.tag: v1.2.3-dev.4
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_WORKER_IMAGE
+            value: ghcr.io/berriai/litellm-lens-worker:v1.2.3-dev.4
+  - it: normalizes a numeric backend tag to the published worker tag
+    template: lens/deployment.yaml
+    set:
+      backend.image.tag: 1.2.3-dev.4
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker:v1.2.3-dev.4

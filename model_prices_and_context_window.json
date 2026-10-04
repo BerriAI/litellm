@@ -10841,31 +10841,31 @@
         "deprecation_date": "2028-02-09",
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "azure",
-        "max_input_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/text-embedding-3-small": {
         "deprecation_date": "2028-02-09",
         "input_cost_per_token": 2e-08,
         "litellm_provider": "azure",
-        "max_input_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/text-embedding-ada-002": {
         "deprecation_date": "2028-02-09",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "azure",
-        "max_input_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/speech/azure-tts": {
         "input_cost_per_character": 1.5e-05,
@@ -79983,6 +79983,7 @@
         "supports_web_search": false
     },
     "azure_ai/kimi-k2-thinking": {
+        "deprecation_date": "2026-03-29",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 262144,
