@@ -32,6 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { StreamScopeFields } from "../StreamScopeFields";
 import {
+  formatGuardrailMode,
   streamScopeByModeFromConfig,
   streamScopeForUpdate,
   streamScopePayload,
@@ -52,7 +53,7 @@ export interface EditGuardrailData {
   guardrail_id: string;
   guardrail_name: string;
   litellm_params: {
-    mode?: string | string[];
+    mode?: string | string[] | Record<string, unknown>;
     default_on?: boolean;
     custom_code?: string;
     [key: string]: any;
@@ -184,11 +185,14 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
     setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
-  // Normalize mode from API (string or string[]) to string[]
-  const normalizeMode = (m: string | string[] | undefined): string[] => {
+  // Normalize mode from API (string or string[]) to string[].
+  // A tag-scoped mode dict ({ tags, default }) is managed outside this editor, so it
+  // contributes no editable modes and is displayed read-only instead.
+  const normalizeMode = (m: string | string[] | Record<string, unknown> | undefined): string[] => {
     if (m === undefined || m === null) return ["pre_call"];
     if (Array.isArray(m)) return m.length ? m : ["pre_call"];
-    return [m];
+    if (typeof m === "string") return [m];
+    return [];
   };
 
   // Reset form when modal opens or editData changes
@@ -394,6 +398,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
 
   const lineCount = code.split("\n").length;
   const selectedModeOptions = mode.map((value) => MODE_OPTION_BY_VALUE[value]).filter(Boolean);
+  const rawEditMode = editData?.litellm_params?.mode;
+  const tagScopedModeLabel =
+    rawEditMode !== null && typeof rawEditMode === "object" && !Array.isArray(rawEditMode)
+      ? formatGuardrailMode(rawEditMode) || "-"
+      : null;
 
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && onClose()}>
@@ -416,32 +425,38 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             />
           </div>
           <div className="w-[280px]">
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">Mode (can select multiple)</label>
-            <Combobox
-              items={MODE_OPTIONS}
-              value={selectedModeOptions}
-              onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
-              multiple
-            >
-              <ComboboxChips render={<div ref={anchor} />} className="w-full">
-                {selectedModeOptions.map((option) => (
-                  <ComboboxChip key={option.value} aria-label={option.label}>
-                    {option.label}
-                  </ComboboxChip>
-                ))}
-                <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
-              </ComboboxChips>
-              <ComboboxContent anchor={anchor}>
-                <ComboboxEmpty>No matching modes</ComboboxEmpty>
-                <ComboboxList>
-                  {(option: ModeOption) => (
-                    <ComboboxItem key={option.value} value={option}>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              {tagScopedModeLabel ? "Mode (tag-scoped, read-only)" : "Mode (can select multiple)"}
+            </label>
+            {tagScopedModeLabel ? (
+              <Input value={tagScopedModeLabel} disabled aria-label="Mode (tag-scoped)" />
+            ) : (
+              <Combobox
+                items={MODE_OPTIONS}
+                value={selectedModeOptions}
+                onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
+                multiple
+              >
+                <ComboboxChips render={<div ref={anchor} />} className="w-full">
+                  {selectedModeOptions.map((option) => (
+                    <ComboboxChip key={option.value} aria-label={option.label}>
                       {option.label}
-                    </ComboboxItem>
-                  )}
-                </ComboboxList>
-              </ComboboxContent>
-            </Combobox>
+                    </ComboboxChip>
+                  ))}
+                  <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
+                </ComboboxChips>
+                <ComboboxContent anchor={anchor}>
+                  <ComboboxEmpty>No matching modes</ComboboxEmpty>
+                  <ComboboxList>
+                    {(option: ModeOption) => (
+                      <ComboboxItem key={option.value} value={option}>
+                        {option.label}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            )}
           </div>
           <div className="w-[180px]">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>
