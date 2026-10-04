@@ -3,16 +3,14 @@
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 import { OPEN_TRACE_PARSERS, RUN_FILTER_PARSERS } from "@/components/view_logs/TraceView/traceRouting";
-import { ALL_AGENTS, type Priority } from "./model/inbox";
 
-export const LENS_TABS = { traces: "Traces", findings: "Findings", investigations: "Investigations" } as const;
+export const LENS_TABS = { traces: "Traces", investigations: "Investigations" } as const;
 export type LensTab = keyof typeof LENS_TABS;
 const lensTabs = Object.keys(LENS_TABS) as LensTab[];
 
 export const RESULT_TABS = ["findings", "checks", "runs", "activity"] as const;
 export type ResultTab = (typeof RESULT_TABS)[number];
 export const FINDING_KINDS = ["issue", "pattern"] as const;
-const PRIORITY_FILTERS = ["all", "high", "medium", "low"] as const satisfies readonly (Priority | "all")[];
 export const LENS_DIALOGS = ["new", "edit", "duplicate", "run_now", "workers", "monitoring"] as const;
 export type LensDialog = (typeof LENS_DIALOGS)[number];
 
@@ -22,11 +20,7 @@ const LENS_PARSERS = {
   demo: parseAsBoolean.withDefault(false),
 };
 
-const INBOX_PARSERS = {
-  inbox_agent: parseAsString.withDefault(ALL_AGENTS),
-  priority: parseAsStringLiteral(PRIORITY_FILTERS).withDefault("all"),
-  issue: parseAsString,
-};
+const ISSUE_PARSERS = { issue: parseAsString };
 
 const LIST_PARSERS = { search: parseAsString.withDefault("") };
 
@@ -47,14 +41,14 @@ const SESSION_PARSERS = {
   ...LENS_PARSERS,
   ...OPEN_TRACE_PARSERS,
   ...RUN_FILTER_PARSERS,
-  ...INBOX_PARSERS,
+  ...ISSUE_PARSERS,
   ...LIST_PARSERS,
   ...RESULT_PARSERS,
   ...DIALOG_PARSERS,
 };
 const nulls = <K extends string>(keys: readonly K[]) =>
   Object.fromEntries(keys.map((key) => [key, null])) as Record<K, null>;
-/** Leaving the sample session clears every Lens key but the tab so sample ids never point at live data. */
+/** Switching the sample session clears every Lens key but the tab so ids never cross between live and sample data. */
 const CLEARED_SESSION = nulls(Object.keys(SESSION_PARSERS).filter((key) => key !== "tab"));
 const CLEARED_RESULTS = nulls(Object.keys(RESULT_PARSERS));
 
@@ -75,18 +69,17 @@ export function useLensRoute(): LensRoute {
     (next: string | null) => void setParams({ ...CLEARED_RESULTS, lens: next }),
     [setParams],
   );
-  const setDemo = useCallback((next: boolean) => void setParams(next ? { demo: true } : CLEARED_SESSION), [setParams]);
+  const setDemo = useCallback(
+    (next: boolean) => void setParams(next ? { ...CLEARED_SESSION, demo: true } : CLEARED_SESSION),
+    [setParams],
+  );
   return { tab, lensId: lens, demo, setTab, setLensId, setDemo };
 }
 
-export function useInboxRoute() {
-  const [{ inbox_agent, priority, issue }, setParams] = useQueryStates(INBOX_PARSERS);
+export function useIssueRoute() {
+  const [{ issue }, setParams] = useQueryStates(ISSUE_PARSERS);
   return {
-    agent: inbox_agent,
-    priority,
     issueKey: issue,
-    setAgent: useCallback((next: string) => void setParams({ inbox_agent: next }), [setParams]),
-    setPriority: useCallback((next: Priority | "all") => void setParams({ priority: next }), [setParams]),
     setIssueKey: useCallback(
       (next: string | null) => void setParams({ issue: next }, { history: "push" }),
       [setParams],

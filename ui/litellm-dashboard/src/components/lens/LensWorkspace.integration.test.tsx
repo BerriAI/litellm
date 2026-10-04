@@ -90,6 +90,25 @@ describe("Lens interactive demo", () => {
     await expectUrl(onUrlUpdate, (url) => expect([...url.keys()]).toEqual([]));
   });
 
+  it("drops the live run selection when entering the sample session", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    network.mockResolvedValue(Response.json({ detail: "Tracing is not enabled" }, { status: 501 }));
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Internal User" readOnly={false} />, {
+      searchParams: "?tab=traces&trace=live-trace&span=live-span&lens=live-lens",
+      onUrlUpdate,
+    });
+    await user.click(await screen.findByRole("switch", { name: "Demo data" }));
+    expect(await screen.findByText("Where is order #1042?")).toBeVisible();
+    await expectUrl(onUrlUpdate, (url) =>
+      expect([...url.entries()]).toEqual([
+        ["tab", "traces"],
+        ["demo", "true"],
+      ]),
+    );
+    expect(screen.queryByText(/Could not load trace/)).not.toBeInTheDocument();
+  });
+
   it("reopens a shared sample link on the same run, step and section", async () => {
     const data = createLensDemoData();
     const run = data.runs[0].trace;

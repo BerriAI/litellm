@@ -17,7 +17,6 @@ export function TraceSheet({
   accessToken: string;
   onClose: () => void;
 }) {
-  const selection = useLocalRunSelection(initialSpanId ?? null);
   return (
     <Sheet
       open={open}
@@ -31,16 +30,35 @@ export function TraceSheet({
           <SheetDescription>Recorded agent steps and evidence</SheetDescription>
         </SheetHeader>
         {open && (
-          <RunView
+          <SheetRun
             key={`${traceId}:${traceRef}:${initialSpanId}`}
             traceId={traceId}
             traceRef={traceRef}
-            selection={selection}
+            initialSpanId={initialSpanId ?? null}
             accessToken={accessToken}
             onBack={onClose}
           />
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+function SheetRun({
+  traceId,
+  traceRef,
+  initialSpanId,
+  accessToken,
+  onBack,
+}: {
+  traceId: string;
+  traceRef?: string;
+  initialSpanId: string | null;
+  accessToken: string;
+  onBack: () => void;
+}) {
+  const selection = useLocalRunSelection(initialSpanId);
+  return (
+    <RunView traceId={traceId} traceRef={traceRef} selection={selection} accessToken={accessToken} onBack={onBack} />
   );
 }

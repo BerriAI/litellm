@@ -108,6 +108,23 @@ describe("AgentTracesSection", () => {
     expect(agentTraceListCall).toHaveBeenCalledTimes(2);
   });
 
+  it("waits for the user before paging when filters hide every loaded run", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceListCall)
+      .mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" })
+      .mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: "later" });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox", { name: "Search runs" }), { target: { value: "no-such-run" } });
+    act(() => mockAllIsIntersecting(true));
+    expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Load older runs" }));
+    await waitFor(() => expect(agentTraceListCall).toHaveBeenCalledTimes(2));
+    act(() => mockAllIsIntersecting(true));
+    expect(agentTraceListCall).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the original time window and loaded rows when another page fails", async () => {
     const user = userEvent.setup();
     const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-01T00:00Z"));

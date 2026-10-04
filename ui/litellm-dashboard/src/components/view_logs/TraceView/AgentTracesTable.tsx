@@ -85,11 +85,12 @@ export function AgentTracesTable({
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
   const canContinue = settled && hasMore;
+  const autoContinue = canContinue && traces.length > 0;
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const { ref: tailRef, inView: nearTail } = useInView({ root: scroller, rootMargin: PREFETCH_MARGIN });
   useEffect(() => {
-    if (nearTail && canContinue && !isFetching) onLoadMore();
-  }, [nearTail, canContinue, isFetching, onLoadMore]);
+    if (nearTail && autoContinue && !isFetching) onLoadMore();
+  }, [nearTail, autoContinue, isFetching, onLoadMore]);
   return (
     <div ref={setScroller} className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
       <table
@@ -175,7 +176,7 @@ export function AgentTracesTable({
               </td>
             </tr>
           ))}
-          {canContinue &&
+          {autoContinue &&
             PLACEHOLDER_ROWS.map((row) => <PlaceholderRow key={row} rowRef={row === 0 ? tailRef : undefined} />)}
         </tbody>
       </table>
@@ -190,6 +191,14 @@ export function AgentTracesTable({
               Retry
             </Button>
           )}
+        </div>
+      )}
+      {canContinue && traces.length === 0 && (
+        <div className="flex items-center justify-center gap-3 py-16 text-[12px] text-muted-foreground">
+          <span>No loaded runs match these filters.</span>
+          <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
+            Load older runs
+          </Button>
         </div>
       )}
       {isEmpty && (
