@@ -10,6 +10,7 @@ import type { Job, Review } from "../../model/types";
 import { ConclusionsPanel } from "./ConclusionsPanel";
 import { ModelName } from "./LiveStrip";
 import { TraceList } from "./TraceList";
+import { useLensMode } from "./useLensMode";
 
 const STATUS: Record<Job["status"], { label: string; tone: StatusTone }> = {
   queued: { label: "Queued", tone: "neutral" },
@@ -29,6 +30,7 @@ export function LiveDrawer({
   reviewed,
   reviews,
   now,
+  done,
   reading,
   groups,
   scope,
@@ -42,6 +44,7 @@ export function LiveDrawer({
   reviewed: number;
   reviews: readonly Review[];
   now: string | null;
+  done: string | null;
   reading: readonly InFlight[];
   groups: readonly Conclusion[];
   scope: string;
@@ -49,6 +52,8 @@ export function LiveDrawer({
 }) {
   const [group, setGroup] = useState<string | null>(null);
   const badge = STATUS[status];
+  const live = status === "queued" || status === "running";
+  const mode = useLensMode(live);
   return (
     <Sheet open={open} onOpenChange={(value) => !value && onClose()}>
       <SheetContent className="flex h-full w-full flex-col gap-0 data-[side=right]:sm:max-w-[min(1200px,94vw)]">
@@ -63,13 +68,14 @@ export function LiveDrawer({
           <section aria-label="Traces" className="min-h-0 overflow-y-auto border-b px-4 py-4 md:border-r md:border-b-0">
             <div className="mb-2 flex items-baseline justify-between gap-3 px-2">
               <h2 className={PANE_TITLE}>Traces</h2>
-              <span className="text-[11px] tabular-nums text-muted-foreground">
-                {now ?? `${reviewed} reviewed`}
+              <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground">
+                {now ?? done ?? `${reviewed} reviewed`}
+                {done && !now && <ModelName model={model} />}
                 {reviewed > reviews.length && reviews.length ? ` · showing latest ${reviews.length}` : ""}
               </span>
             </div>
-            {reviews.length || reading.length ? (
-              <TraceList reading={reading} reviews={reviews} model={model} group={group} />
+            {reviews.length || reading.length || status === "running" ? (
+              <TraceList reading={reading} reviews={reviews} model={model} group={group} mode={mode} nowLine={now} />
             ) : (
               <div className="flex flex-col gap-1 px-2 py-6 text-[12px] text-muted-foreground">
                 <p className="text-[13px] text-foreground">Waiting for the first trace…</p>

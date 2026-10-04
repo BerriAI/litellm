@@ -5,6 +5,7 @@ import { useState } from "react";
 import { modelsUsed } from "../../model/inbox";
 import {
   analysisModel,
+  doneLine,
   conclusions,
   inFlight,
   issueCount,
@@ -80,6 +81,7 @@ export function LiveRun({
         reviews={reviews}
         now={job.status === "running" ? nowLine(job, reading.length) : null}
         reading={reading}
+        done={job.status === "completed" ? doneLine(job) : null}
         groups={conclusions(reviews, job.settings.checks)}
         scope={job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""}
         waiting={waiting}
