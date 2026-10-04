@@ -1,77 +1,8 @@
-import { useId } from "react";
+import { useState } from "react";
 import { ArrowRight, ArrowUpRight, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import styles from "./LensIntroduction.module.css";
-
-const swarmColors = ["fill-violet-400", "fill-sky-400", "fill-amber-400", "fill-rose-400", "fill-indigo-400"];
-
-function flowDot(index: number) {
-  const column = (index % 124) - 24;
-  const row = Math.floor(index / 124);
-  const phase = (column + 24) % 24;
-  const wave = 2.5 + 2.6 * Math.sin(((phase + 5) / 24) * Math.PI * 2);
-  if (Math.abs(row - wave) > 0.9) return null;
-  return {
-    x: column * 10 + 5,
-    y: row * 10 + 5,
-    color: swarmColors[(phase + row) % swarmColors.length],
-  };
-}
-
-const flowDots = Array.from({ length: 744 }, (_, index) => flowDot(index)).filter((dot) => dot !== null);
-
-function GatewayFlow() {
-  const patternId = useId();
-  const beforeGateway = `${patternId}-before`;
-  const afterGateway = `${patternId}-after`;
-  return (
-    <div className="mt-5 sm:mt-6">
-      <div className="grid grid-cols-3 gap-3 text-xs">
-        <div>
-          <p className="font-semibold">Agent swarms</p>
-          <p className="mt-0.5 leading-4 text-muted-foreground">Every run, every recorded step</p>
-        </div>
-        <div className="text-center">
-          <p className="font-semibold">LiteLLM gateway</p>
-          <p className="mt-0.5 leading-4 text-muted-foreground">One place, your infrastructure</p>
-        </div>
-        <div className="text-right">
-          <p className="font-semibold">Lens</p>
-          <p className="mt-0.5 leading-4 text-muted-foreground">Findings to improve your agents</p>
-        </div>
-      </div>
-      <svg aria-hidden="true" viewBox="0 0 1000 60" className="mt-2 h-auto w-full" focusable="false">
-        <defs>
-          <pattern id={patternId} width="10" height="10" patternUnits="userSpaceOnUse">
-            <circle cx="5" cy="5" r="2.3" className="fill-muted-foreground/10" />
-          </pattern>
-          <clipPath id={beforeGateway}>
-            <rect width="609" height="60" />
-          </clipPath>
-          <clipPath id={afterGateway}>
-            <rect x="609" width="391" height="60" />
-          </clipPath>
-        </defs>
-        <rect width="1000" height="60" fill={`url(#${patternId})`} />
-        <g clipPath={`url(#${beforeGateway})`}>
-          <g className={styles.flow}>
-            {flowDots.map((dot) => (
-              <circle key={`${dot.x}-${dot.y}`} cx={dot.x} cy={dot.y} r="2.3" className={dot.color} />
-            ))}
-          </g>
-        </g>
-        <g clipPath={`url(#${afterGateway})`} className="fill-indigo-600 dark:fill-indigo-400">
-          <g className={styles.flow}>
-            {flowDots.map((dot) => (
-              <circle key={`${dot.x}-${dot.y}`} cx={dot.x} cy={dot.y} r="2.3" />
-            ))}
-          </g>
-        </g>
-        <path d="M 615 1 H 609 V 59 H 615" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      </svg>
-    </div>
-  );
-}
+import { GatewayFlow } from "./GatewayFlow";
 
 const traceSteps = [
   { name: "research_agent", start: 0, duration: 14.2, failed: false },
@@ -84,9 +15,14 @@ const traceSteps = [
 
 const sampleAnswer = "The column store is 40% faster than the row store for your workload.";
 
-function TraceExample() {
+type EvidenceProps = { highlighted: boolean; onHighlight: () => void };
+
+function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
   return (
-    <section aria-labelledby="lens-sample-trace" className="min-w-0 rounded-xl border bg-card p-4">
+    <section
+      aria-labelledby="lens-sample-trace"
+      className={`${styles.sampleCard} min-w-0 rounded-xl border bg-card p-4`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <h3 id="lens-sample-trace" className="font-semibold">
           Tracing
@@ -94,38 +30,59 @@ function TraceExample() {
         <p className="text-xs text-muted-foreground">Sample trace · 14.2s</p>
       </div>
       <ol className="mt-3 space-y-1.5 text-xs leading-5 sm:text-[13px]" aria-label="Sample trace timeline">
-        {traceSteps.map((item, index) => (
-          <li
-            key={`${item.name}-${item.start}`}
-            className="grid grid-cols-[minmax(0,1fr)_minmax(48px,1fr)_2.5rem] items-center gap-2 sm:gap-3"
-          >
-            <span className={`flex min-w-0 items-center gap-1 ${index > 0 ? "pl-2" : ""}`}>
-              {index === 0 ? (
-                <ChevronDown aria-hidden="true" className="size-3 shrink-0" />
-              ) : (
-                <ChevronRight aria-hidden="true" className="size-3 shrink-0" />
-              )}
-              <span className="truncate" title={item.name}>
-                {item.name}
+        {traceSteps.map((item, index) => {
+          const linked = item.failed || item.name === "answer";
+          const rowClass =
+            "grid w-full grid-cols-[minmax(0,1fr)_minmax(48px,1fr)_2.5rem] items-center gap-2 text-left sm:gap-3";
+          const content = (
+            <>
+              <span className={`flex min-w-0 items-center gap-1 ${index > 0 ? "pl-2" : ""}`}>
+                {index === 0 ? (
+                  <ChevronDown aria-hidden="true" className="size-3 shrink-0" />
+                ) : (
+                  <ChevronRight aria-hidden="true" className="size-3 shrink-0" />
+                )}
+                <span className="truncate" title={item.name}>
+                  {item.name}
+                </span>
+                {item.failed && <span className="sr-only">Failed</span>}
               </span>
-              {item.failed && <span className="sr-only">Failed</span>}
-            </span>
-            <span aria-hidden="true" className="relative h-2.5 overflow-hidden rounded-sm bg-muted/70">
-              <span
-                className={`absolute inset-y-0 rounded-sm ${item.failed ? "bg-rose-400" : "bg-indigo-600 dark:bg-indigo-400"}`}
-                style={{ left: `${(item.start / 14.2) * 100}%`, width: `${(item.duration / 14.2) * 100}%` }}
-              />
-            </span>
-            <span className="text-right tabular-nums text-muted-foreground">{item.duration}s</span>
-          </li>
-        ))}
+              <span aria-hidden="true" className="relative h-2.5 overflow-hidden rounded-sm bg-muted/70">
+                <span
+                  className={`absolute inset-y-0 rounded-sm ${linked ? styles.evidenceBar : ""} ${item.failed ? "bg-rose-400" : "bg-indigo-600 dark:bg-indigo-400"}`}
+                  style={{ left: `${(item.start / 14.2) * 100}%`, width: `${(item.duration / 14.2) * 100}%` }}
+                />
+              </span>
+              <span className="text-right tabular-nums text-muted-foreground">{item.duration}s</span>
+            </>
+          );
+          return (
+            <li key={`${item.name}-${item.start}`}>
+              {linked ? (
+                <button
+                  type="button"
+                  className={`${rowClass} ${styles.evidenceLink}`}
+                  data-evidence-link=""
+                  aria-label={`${item.name}, ${item.duration} seconds${item.failed ? ", failed" : ""}. Highlight related finding`}
+                  aria-controls="lens-linked-finding"
+                  aria-pressed={highlighted}
+                  onClick={onHighlight}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div className={rowClass}>{content}</div>
+              )}
+            </li>
+          );
+        })}
       </ol>
       <div className="mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2">
-        <div className="rounded-lg bg-muted/60 p-2.5">
+        <div id="lens-benchmark-output" className={`${styles.evidenceOutput} rounded-lg bg-muted/60 p-2.5`}>
           <p className="text-xs text-muted-foreground">run_benchmark · output</p>
           <p className="mt-1.5 text-[13px] leading-[18px]">Error: benchmark runner unavailable (503)</p>
         </div>
-        <div className="rounded-lg bg-muted/60 p-2.5">
+        <div id="lens-answer-output" className={`${styles.evidenceOutput} rounded-lg bg-muted/60 p-2.5`}>
           <p className="text-xs text-muted-foreground">answer · output</p>
           <p className="mt-1.5 text-[13px] leading-[18px]">“{sampleAnswer}”</p>
         </div>
@@ -134,9 +91,12 @@ function TraceExample() {
   );
 }
 
-function FindingExamples() {
+function FindingExamples({ highlighted, onHighlight }: EvidenceProps) {
   return (
-    <section aria-labelledby="lens-sample-findings" className="min-w-0 rounded-xl border bg-card p-4">
+    <section
+      aria-labelledby="lens-sample-findings"
+      className={`${styles.sampleCard} min-w-0 rounded-xl border bg-card p-4`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <h3 id="lens-sample-findings" className="font-semibold">
           Lens findings
@@ -144,10 +104,19 @@ function FindingExamples() {
         <p className="text-xs text-muted-foreground">500 sample runs reviewed</p>
       </div>
       <div className="mt-3 divide-y border-t">
-        <article className="py-3">
-          <h4 className="flex items-start gap-2 text-sm font-semibold">
-            <span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full bg-rose-500" />
-            Claims numbers it never measured
+        <article id="lens-linked-finding" className={`${styles.evidenceFinding} py-3`}>
+          <h4 className="text-sm font-semibold">
+            <button
+              type="button"
+              className={`${styles.evidenceLink} flex w-full items-start gap-2 text-left`}
+              data-evidence-link=""
+              aria-controls="lens-benchmark-output lens-answer-output"
+              aria-pressed={highlighted}
+              onClick={onHighlight}
+            >
+              <span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full bg-rose-500" />
+              Claims numbers it never measured
+            </button>
           </h4>
           <div className="ml-4 mt-1.5 space-y-1.5 text-[13px] leading-[18px]">
             <p className="text-muted-foreground">Reports a speedup even though the benchmark failed.</p>
@@ -177,6 +146,8 @@ function FindingExamples() {
 }
 
 export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onDemo?: () => void }) {
+  const [highlighted, setHighlighted] = useState(false);
+  const toggleEvidence = () => setHighlighted((current) => !current);
   return (
     <section
       aria-labelledby="lens-introduction"
@@ -210,9 +181,12 @@ export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onD
         </a>
       </div>
       <GatewayFlow />
-      <div className="mt-4 grid items-stretch gap-3 md:grid-cols-2">
-        <TraceExample />
-        <FindingExamples />
+      <div
+        className={`${styles.examples} mt-4 grid items-stretch gap-3 md:grid-cols-2`}
+        data-evidence-active={highlighted}
+      >
+        <TraceExample highlighted={highlighted} onHighlight={toggleEvidence} />
+        <FindingExamples highlighted={highlighted} onHighlight={toggleEvidence} />
       </div>
     </section>
   );
