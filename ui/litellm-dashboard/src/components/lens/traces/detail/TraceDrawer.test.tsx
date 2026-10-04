@@ -3,6 +3,8 @@ import { focusManager, onlineManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "@/lib/http/client";
+
 import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 import researchTrace from "../__fixtures__/research_trace.json";
 import swarmTrace from "../__fixtures__/swarm_trace.json";
@@ -260,14 +262,21 @@ describe("RunView", () => {
     vi.mocked(agentTraceCall)
       .mockResolvedValueOnce(first)
       .mockResolvedValueOnce(second)
-      .mockRejectedValueOnce(new Error("Trace changed while paging; refresh the trace"))
+      .mockRejectedValueOnce(
+        new ApiError("Trace changed while paging", 409, {
+          detail: { code: "trace_changed", message: "Trace changed while paging" },
+        }),
+      )
       .mockResolvedValueOnce(fresh)
       .mockResolvedValueOnce(freshSecond);
     renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Load more steps" }));
     expect(await screen.findByText("old-snapshot-tool")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Load more steps" }));
-    await user.click(await screen.findByRole("button", { name: "Refresh trace" }));
+    expect(await screen.findByText(/This trace changed while you were browsing/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.getByText("old-snapshot-tool")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh trace" }));
     expect(await screen.findByText("Showing 1 of 2 steps")).toBeVisible();
     expect(screen.queryByText("old-snapshot-tool")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Load more steps" }));
@@ -280,6 +289,55 @@ describe("RunView", () => {
       null,
       "fresh-second",
     ]);
+  });
+
+  it("retries an unavailable page by itself after Retry-After and keeps loaded steps", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 2 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "next-page" };
+    const second: Trace = {
+      ...research,
+      summary,
+      spans: [
+        { ...research.spans[1], type: "tool", name: "later-page-tool", parent_span_id: research.spans[0].span_id },
+      ],
+      next_cursor: null,
+    };
+    const outage = new ApiError(
+      "Traces are temporarily unavailable",
+      503,
+      { detail: { code: "unavailable", message: "Traces are temporarily unavailable" } },
+      0,
+    );
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall).mockResolvedValueOnce(first).mockRejectedValueOnce(outage).mockResolvedValueOnce(second);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText("later-page-tool")).toBeVisible();
+    expect(screen.getAllByRole("treeitem")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Refresh trace" })).not.toBeInTheDocument();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page", "next-page"]);
+  });
+
+  it("offers no retry for a page that is too large, only a refresh", async () => {
+    const user = userEvent.setup();
+    const summary = { ...research.summary, span_count: 2 };
+    const first: Trace = { ...research, summary, spans: research.spans.slice(0, 1), next_cursor: "next-page" };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall)
+      .mockResolvedValueOnce(first)
+      .mockRejectedValueOnce(
+        new ApiError("Trace is too large", 413, { detail: { code: "too_large", message: "Trace is too large" } }),
+      );
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Load more steps" }));
+    expect(await screen.findByText(/too large to load here/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh trace" })).toBeVisible();
+    expect(screen.getByRole("tree", { name: "Spans in time order" })).toHaveTextContent(research.spans[0].name);
+    expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a loaded snapshot on focus and reconnect", async () => {
