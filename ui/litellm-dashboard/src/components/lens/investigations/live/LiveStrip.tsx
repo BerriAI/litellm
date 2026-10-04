@@ -13,16 +13,17 @@ import { outcome, providerOf, queueRows, reviewKey, shortVerdict, type IssueCoun
 import type { Playback } from "../../model/live";
 import type { Review } from "../../model/types";
 
-const RECENT = 5;
+const RECENT = 3;
 const MARK = { issue: "●", clear: "✓", unknown: "–" } as const;
+const LOGO = { sm: "size-3.5", md: "size-[18px]" } as const;
 
-export function ModelName({ model }: { model: string }) {
+export function ModelName({ model, size = "sm" }: { model: string; size?: keyof typeof LOGO }) {
   if (!model) return null;
   const provider = providerOf(model);
   return (
     <span data-testid="live-model" className="inline-flex shrink-0 items-center gap-1.5 text-foreground">
-      {provider && <ProviderLogo provider={provider} className="size-4 shrink-0" />}
-      <span className="font-mono text-[11px]">{model}</span>
+      {provider && <ProviderLogo provider={provider} className={cn("shrink-0", LOGO[size])} />}
+      <span className={cn("font-mono", size === "md" ? "text-[12px]" : "text-[11px]")}>{model}</span>
     </span>
   );
 }
@@ -31,7 +32,7 @@ function RecentLine({ review, now, onOpen }: { review: Review; now: number; onOp
   const result = outcome(review);
   const issue = result === "issue";
   return (
-    <li className="motion-safe:animate-in motion-safe:fade-in motion-safe:duration-300">
+    <li className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-300">
       <button
         type="button"
         onClick={() => onOpen(review)}
@@ -40,7 +41,7 @@ function RecentLine({ review, now, onOpen }: { review: Review; now: number; onOp
         <span aria-label={result} className={issue ? "text-[#e5484d]" : ""}>
           {MARK[result]}
         </span>
-        <span className="truncate">{review.agent || review.name}</span>
+        <span className="truncate text-foreground">{review.agent || review.name}</span>
         <span className={cn("truncate", issue && "text-[#e5484d]")}>{shortVerdict(review)}</span>
         <span className="tabular-nums">{agoLabel(Date.parse(review.at), now)}</span>
       </button>
@@ -80,7 +81,7 @@ export function LiveStrip({
   return (
     <section
       aria-label="Live trace results"
-      className="flex flex-wrap gap-x-6 gap-y-2 rounded-md bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground"
+      className="flex flex-wrap items-start gap-x-6 gap-y-2 rounded-md bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground"
     >
       <div className="flex min-w-[16rem] flex-col gap-1">
         <ModelName model={model} />
@@ -107,10 +108,10 @@ export function LiveStrip({
           </ol>
         )}
       </div>
-      <div className="flex shrink-0 items-start gap-1">
-        <Button variant="ghost" size="xs" onClick={() => onOpen()} disabled={!recent.length}>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button variant="outline" size="xs" onClick={() => onOpen()} disabled={!recent.length}>
           <PanelRight />
-          View live
+          View run
         </Button>
         <Button variant="ghost" size="icon-xs" aria-label="Hide live trace results" onClick={onClose}>
           <X />

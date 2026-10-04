@@ -6,6 +6,7 @@ import { modelsUsed } from "../../model/inbox";
 import {
   analysisModel,
   conclusions,
+  decidedReviews,
   focusedReview,
   issueCount,
   reviewKey,
@@ -15,30 +16,33 @@ import {
 import type { Job, Review } from "../../model/types";
 import { LiveDrawer } from "./LiveDrawer";
 import { LiveStrip } from "./LiveStrip";
-import { useDrawerOpen, useStripOpen } from "./useLivePanels";
+import { useStripOpen } from "./useLivePanels";
 import { useReviewPlayback } from "./useReviewPlayback";
 
-export function LiveRun({ job, name }: { job: Job; name: string }) {
+export function LiveRun({ job, reviews, name }: { job: Job; reviews: readonly Review[]; name: string }) {
   const live = job.status === "queued" || job.status === "running";
   const [stripOpen, setStripOpen] = useStripOpen();
-  const [drawerOpen, setDrawerOpen] = useDrawerOpen(job.id, live);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [pinned, setPinned] = useState<string | null>(null);
-  const playback = useReviewPlayback(job.reviews, live);
-  const model = analysisModel([...job.reviews.map((r) => r.model), ...modelsUsed(job.steps), job.settings.model]);
-  const { review: focused, following } = focusedReview(job.reviews, pinned, playback.current);
-  const issues = issueCount(job);
+  const playback = useReviewPlayback(reviews, live);
+  const withReviews = { ...job, reviews: [...reviews] };
+  const model = analysisModel([...reviews.map((r) => r.model), ...modelsUsed(job.steps), job.settings.model]);
+  const { review: focused, following } = focusedReview(reviews, pinned, playback.current);
+  const issues = issueCount(withReviews);
   const reviewed = live ? shownCount(job.reviewed, playback) : job.reviewed;
+  const decided = decidedReviews(playback, playback.phase.verdict);
+  const pin = (review: Review) => setPinned(review === playback.current ? null : reviewKey(review));
   const open = (review?: Review) => {
-    setPinned(review && review !== playback.current ? reviewKey(review) : null);
+    if (review) pin(review);
     setDrawerOpen(true);
   };
 
   return (
     <>
-      {stripOpen && (
+      {stripOpen ? (
         <LiveStrip
           model={model}
-          state={stripState(job, model)}
+          state={stripState(withReviews, model)}
           playback={playback}
           reviewed={reviewed}
           selected={job.coverage.selected}
@@ -47,8 +51,7 @@ export function LiveRun({ job, name }: { job: Job; name: string }) {
           onOpen={open}
           onClose={() => setStripOpen(false)}
         />
-      )}
-      {!stripOpen && (
+      ) : (
         <button
           type="button"
           onClick={() => setStripOpen(true)}
@@ -62,15 +65,17 @@ export function LiveRun({ job, name }: { job: Job; name: string }) {
         onClose={() => setDrawerOpen(false)}
         name={name}
         model={model}
-        job={job}
+        status={job.status}
+        reviewed={reviewed}
         playback={playback}
         live={live}
         focused={focused}
         following={following}
         phase={playback.phase}
-        groups={conclusions(job.reviews, job.settings.checks)}
-        scope={issues.scope === "findings" ? `from the last ${job.reviews.length} reviews` : issues.scope}
-        onPick={(review) => setPinned(review === playback.current ? null : reviewKey(review))}
+        groups={conclusions(decided, job.settings.checks)}
+        decided={decided.length}
+        scope={job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""}
+        onPick={pin}
         onFollow={() => setPinned(null)}
       />
     </>

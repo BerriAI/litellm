@@ -105,7 +105,7 @@ export function InvestigationDetail({
             onCancel={readOnly ? undefined : () => void update((api) => api.cancelRun(lens.id))}
           />
         )}
-        {live && <LiveRun key={live.id} job={live} name={lens.settings.name} />}
+        {live && <LiveRun key={live.id} job={live} reviews={live.reviews} name={lens.settings.name} />}
         {runNow && (
           <RunNowDialog
             lens={lens}
