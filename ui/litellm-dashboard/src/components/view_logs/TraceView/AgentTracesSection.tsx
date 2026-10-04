@@ -230,7 +230,8 @@ export function AgentTracesSection({
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}
         selectedKey={openTrace === null ? null : traceKey(openTrace)}
-        onSetUpTracing={live && traces.traces.length === 0 ? () => setShowSetup(true) : undefined}
+        rangeEmpty={traces.traces.length === 0}
+        onSetUpTracing={() => setShowSetup(true)}
       />
       <RunsFooter
         count={runs.length}

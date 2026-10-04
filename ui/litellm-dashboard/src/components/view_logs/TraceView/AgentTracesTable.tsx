@@ -25,6 +25,7 @@ interface AgentTracesTableProps {
   onLoadMore: () => void;
   onOpenTrace: (trace: TraceSummary) => void;
   selectedKey?: string | null;
+  rangeEmpty?: boolean;
   onSetUpTracing?: () => void;
 }
 
@@ -97,6 +98,7 @@ export function AgentTracesTable({
   onLoadMore,
   onOpenTrace,
   selectedKey = null,
+  rangeEmpty = false,
   onSetUpTracing,
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
@@ -219,7 +221,7 @@ export function AgentTracesTable({
           </Button>
         </div>
       )}
-      {isEmpty && <EmptyRuns onSetUpTracing={onSetUpTracing} />}
+      {isEmpty && <EmptyRuns onSetUpTracing={rangeEmpty ? onSetUpTracing : undefined} />}
     </div>
   );
 }
