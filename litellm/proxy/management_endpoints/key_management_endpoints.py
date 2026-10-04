@@ -353,9 +353,12 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _decode_json_string_column(column: str, value: object) -> object:
     if column in _KEY_UPDATE_JSON_STRING_COLUMNS and isinstance(value, str):
-        return json.loads(value)
+        return _DECODED_JSON.validate_python(json.loads(value))
     return value
 
 

@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal, TypedDict, cast
+from typing import Final, Literal, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -1409,7 +1409,7 @@ async def shared_health_check_status_endpoint(
         )
 
 
-def _read_license_data() -> dict[str, Any] | None:
+def _read_license_data() -> EnterpriseLicenseData | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: EnterpriseLicenseData | None = premium_user_data or _license_check.airgapped_license_data
@@ -1431,10 +1431,10 @@ def _read_license_data() -> dict[str, Any] | None:
 
     if license_data is None:
         return None
-    return cast(dict[str, Any], license_data)
+    return license_data
 
 
-def _read_allowed_features(license_data: dict[str, Any]) -> list:
+def _read_allowed_features(license_data: Mapping[str, object]) -> list:
     raw_allowed_features: Final = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)
@@ -1685,7 +1685,7 @@ def _show_env_credential_login_warning() -> bool:
 
 async def _get_health_readiness_details(
     response: Response | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Detailed health payload for authenticated diagnostics.
     """
@@ -1704,7 +1704,7 @@ async def _get_health_readiness_details(
             success_callback_names = litellm.success_callback
 
         # check Cache
-        cache_type: Any = None
+        cache_type: object = None
         if litellm.cache is not None:
             from litellm.caching.caching import RedisSemanticCache
 
@@ -1713,7 +1713,7 @@ async def _get_health_readiness_details(
             if isinstance(litellm.cache.cache, RedisSemanticCache):
                 # ping the cache
                 # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
-                index_info: Any
+                index_info: object
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
