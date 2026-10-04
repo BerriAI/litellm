@@ -44,6 +44,7 @@ def test_openai_like_embedding_sends_headers_as_http_headers_not_body(
 
     assert mock_route.called is True
     last_request: Final = mock_route.calls.last.request
+    assert last_request.headers["content-type"] == "application/json"
     assert last_request.headers["x-custom-header"] == "custom-value"
     assert last_request.headers["x-trace-id"] == "trace-123"
     assert last_request.headers["authorization"] == "Bearer sk-test-key"
@@ -70,6 +71,7 @@ def test_openai_like_embedding_extra_headers_kwarg_merged_into_http_headers(
 
     assert mock_route.called is True
     last_request: Final = mock_route.calls.last.request
+    assert last_request.headers["content-type"] == "application/json"
     assert last_request.headers["x-extra-header"] == "extra-val"
     assert last_request.headers["authorization"] == "Bearer sk-test-key"
 
@@ -94,6 +96,7 @@ def test_openai_like_embedding_both_headers_and_extra_headers_merge(
 
     assert mock_route.called is True
     last_request: Final = mock_route.calls.last.request
+    assert last_request.headers["content-type"] == "application/json"
     assert last_request.headers["x-main-header"] == "main-val"
     assert last_request.headers["x-extra-header"] == "extra-val"
 
@@ -171,6 +174,7 @@ def test_direct_handler_pops_extra_headers_from_optional_params(
 
     assert mock_route.called is True
     last_request: Final = mock_route.calls.last.request
+    assert last_request.headers["content-type"] == "application/json"
     assert last_request.headers["x-direct-header"] == "direct-val"
     assert last_request.headers["authorization"] == "Bearer sk-direct-key"
 
@@ -208,6 +212,7 @@ async def test_openai_like_aembedding_sends_headers_as_http_headers_not_body(
 
     assert mock_post.called is True
     _, kwargs = mock_post.call_args
+    assert kwargs["headers"]["Content-Type"] == "application/json"
     assert kwargs["headers"]["X-Async-Header"] == "async-value"
     assert kwargs["headers"]["Authorization"] == "Bearer sk-test-key"
 
