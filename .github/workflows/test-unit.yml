@@ -35,7 +35,6 @@ concurrency:
 # a matrix and carries a shard-coverage guard that reads that file by name.
 # Folding it in here is a follow-up, together with generalising that guard into
 # assert_ci_coverage.py.
-#
 jobs:
   unit:
     name: ${{ matrix.shard }}
