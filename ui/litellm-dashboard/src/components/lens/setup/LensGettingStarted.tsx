@@ -65,10 +65,10 @@ export function LensGettingStarted({
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8 py-4">
+    <div className="mx-auto w-full max-w-7xl space-y-10 py-5 sm:space-y-12 sm:py-7">
       {onDemo && <LensPreviewButton onClick={onDemo} />}
       <LensIntroduction onStart={start} onDemo={onDemo} />
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_260px]">
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_280px] xl:gap-8">
         <section
           ref={setupRef}
           tabIndex={-1}
@@ -76,13 +76,13 @@ export function LensGettingStarted({
           className="min-w-0 scroll-mt-4 outline-none"
           onFocusCapture={onStart}
         >
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 id="lens-setup-title" className="text-xl font-semibold tracking-tight">
+              <h2 id="lens-setup-title" className="text-2xl font-semibold tracking-tight">
                 Get Lens running
               </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                We’ll check each connection. Stay here until your first investigation is ready.
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                Each step checks your connection, so you’ll see when it’s working.
               </p>
             </div>
             {canLeave && (
@@ -117,20 +117,23 @@ export function LensGettingStarted({
             </p>
           )}
         </section>
-        <aside className="rounded-lg border p-5" aria-labelledby="lens-prerequisites">
-          <h2 id="lens-prerequisites" className="text-base font-medium">
+        <aside className="rounded-2xl border bg-card p-6" aria-labelledby="lens-prerequisites">
+          <h2 id="lens-prerequisites" className="text-base font-semibold">
             Before you start
           </h2>
-          <ul className="mt-4 space-y-4 text-sm text-muted-foreground">
+          <ul className="mt-5 space-y-5 text-sm">
             {[
-              "Access to your LiteLLM gateway configuration",
-              "ClickHouse for trace storage",
-              "A server with Docker for the worker",
-              "An analysis model on your gateway",
+              { title: "LiteLLM gateway", detail: "Access to its configuration" },
+              { title: "ClickHouse", detail: "Self-hosted or managed trace storage" },
+              { title: "A server with Docker", detail: "To run the analysis worker" },
+              { title: "An analysis model", detail: "Available through your gateway" },
             ].map((item) => (
-              <li key={item} className="flex gap-2">
-                <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-                {item}
+              <li key={item.title} className="flex gap-3">
+                <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <div>
+                  <p className="font-medium">{item.title}</p>
+                  <p className="mt-1 leading-5 text-muted-foreground">{item.detail}</p>
+                </div>
               </li>
             ))}
           </ul>

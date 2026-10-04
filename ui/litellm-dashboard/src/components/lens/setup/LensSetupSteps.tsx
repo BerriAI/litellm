@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { TracingSetupFields } from "@/components/view_logs/TraceView/TracingSetupCard";
 import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
 import type { LensSetupState } from "./useLensSetup";
+import { cn } from "@/lib/cva.config";
 
 type StepProps = {
   accessToken: string;
@@ -160,7 +161,7 @@ export function LensSetupSteps({ step, ...props }: StepProps & { step: number })
     },
   ];
   return (
-    <ol className="divide-y overflow-hidden rounded-lg border">
+    <ol className="divide-y overflow-hidden rounded-2xl border bg-card">
       {items.map((item, index) => (
         <li key={item.title}>
           <h3>
@@ -169,21 +170,30 @@ export function LensSetupSteps({ step, ...props }: StepProps & { step: number })
               aria-expanded={step === index}
               aria-controls={`lens-setup-step-${index}`}
               onClick={() => props.onStep(index)}
-              className="flex w-full items-start gap-3 p-5 text-left hover:bg-muted/30"
+              className="group flex w-full items-start gap-4 p-5 text-left outline-none hover:bg-muted/30 focus-visible:bg-muted/50 sm:p-6"
             >
               <span
-                className={
-                  item.complete
-                    ? "flex size-7 shrink-0 items-center justify-center rounded-full bg-success/10 text-success"
-                    : "flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium"
-                }
+                className={cn(
+                  "flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-medium",
+                  item.complete ? "bg-success/10 text-success" : "border text-muted-foreground",
+                  !item.complete && step === index && "border-primary bg-primary text-primary-foreground",
+                )}
                 aria-label={item.complete ? `Step ${index + 1} complete` : `Step ${index + 1}`}
               >
                 {item.complete ? <Check aria-hidden="true" className="size-4" /> : index + 1}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium">{item.title}</span>
-                <span className="mt-1 block text-sm font-normal text-muted-foreground">{item.description}</span>
+                <span
+                  className={cn(
+                    "block text-sm font-medium sm:text-base",
+                    step !== index && "text-muted-foreground group-hover:text-foreground",
+                  )}
+                >
+                  {item.title}
+                </span>
+                <span className="mt-1 block text-sm leading-6 font-normal text-muted-foreground">
+                  {item.description}
+                </span>
               </span>
               <ChevronDown
                 aria-hidden="true"
@@ -191,7 +201,7 @@ export function LensSetupSteps({ step, ...props }: StepProps & { step: number })
               />
             </button>
           </h3>
-          <div id={`lens-setup-step-${index}`} hidden={step !== index} className="px-5 pb-5 sm:pl-15">
+          <div id={`lens-setup-step-${index}`} hidden={step !== index} className="px-5 pb-6 sm:pr-6 sm:pb-7 sm:pl-18">
             {item.content}
           </div>
         </li>
