@@ -413,7 +413,7 @@ export function SpanTree({
           })}
         </div>
       </div>
-      <div className="flex h-10 shrink-0 items-center gap-x-3 overflow-hidden border-t border-border px-3 text-xs text-muted-foreground">
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
         {embedded ? (
           <>
             <span className="whitespace-nowrap">

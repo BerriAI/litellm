@@ -1,7 +1,8 @@
 "use client";
 
 import moment from "moment";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useMediaQuery, useResizeObserver } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
 
@@ -136,9 +137,10 @@ function drawField(canvas: HTMLCanvasElement, { buckets, max, band, hover, progr
 }
 
 function useRiseIn(): number {
+  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [progress, setProgress] = useState(0);
   useEffect(() => {
-    if (typeof window.matchMedia !== "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (reduceMotion) {
       setProgress(1);
       return;
     }
@@ -149,7 +151,7 @@ function useRiseIn(): number {
       if (t < 1) frame = requestAnimationFrame(rise);
     });
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [reduceMotion]);
   return progress;
 }
 
@@ -166,17 +168,10 @@ function DotField({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const progress = useRiseIn();
+  const { width, height } = useResizeObserver({ ref: canvas as RefObject<HTMLCanvasElement> });
   useEffect(() => {
-    const node = canvas.current;
-    if (!node) return;
-    const frame: FieldFrame = { buckets, max, band, hover, progress };
-    const paint = () => drawField(node, frame);
-    paint();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(paint);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [buckets, max, band, hover, progress]);
+    if (canvas.current) drawField(canvas.current, { buckets, max, band, hover, progress });
+  }, [buckets, max, band, hover, progress, width, height]);
   return (
     <canvas
       ref={canvas}
@@ -352,18 +347,10 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
   const [drag, setDrag] = useState<DragState | null>(null);
   const [draft, setDraft] = useState<Band | null>(null);
   const areaRef = useRef<HTMLDivElement>(null);
-  const [stripWidth, setStripWidth] = useState(0);
-
-  useEffect(() => {
-    const el = areaRef.current;
-    if (!el) return;
-    const measure = () => setStripWidth(el.getBoundingClientRect().width);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const { width: stripWidth = 0 } = useResizeObserver({
+    ref: areaRef as RefObject<HTMLDivElement>,
+    box: "border-box",
+  });
 
   const committed = bandForWindow(buckets, selection);
   const band = drag ? draft : committed;

@@ -161,6 +161,36 @@ describe("RunDrawer", () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
   });
 
+  it("leaves J, K and Escape to an open menu or listbox instead of stepping or closing the trace", () => {
+    const runs = [run("a"), run("b"), run("c")];
+    const onSelect = vi.fn();
+    renderWithProviders(
+      <>
+        <div role="menu">
+          <button type="button">menu item</button>
+        </div>
+        <div role="listbox">
+          <button type="button">option</button>
+        </div>
+        <RunDrawer
+          trace={traceRefOf(runs[1])}
+          runs={runs}
+          accessToken="sk"
+          selection={selection}
+          onSelect={onSelect}
+          fullScreen={false}
+          onFullScreenChange={vi.fn()}
+        />
+      </>,
+    );
+    for (const target of [screen.getByText("menu item"), screen.getByText("option")]) {
+      for (const key of ["j", "k", "Escape"]) fireEvent.keyDown(target, { key });
+    }
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "j" });
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(traceRefOf(runs[2]));
+  });
+
   it("closes on a press outside the panel but not inside it, on a trigger row, or in a dialog", () => {
     const runs = [run("a")];
     const onSelect = vi.fn();

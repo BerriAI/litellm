@@ -2,6 +2,7 @@
 
 import { ArrowRight, ArrowUpRight, Check, Copy, KeyRound, Loader2, Send } from "lucide-react";
 import { useState } from "react";
+import { useTimeout } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
 import { LensPreviewButton } from "@/components/lens/LensPreviewButton";
@@ -99,12 +100,8 @@ function CodeBlock({
   wrap?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    if (await copyToClipboard(code)) {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
-    }
-  };
+  useTimeout(() => setCopied(false), copied ? COPIED_RESET_MS : null);
+  const copy = async () => setCopied(await copyToClipboard(code));
   return (
     <div className="overflow-hidden rounded-md border border-border bg-muted/30">
       <div className="flex h-9 items-center border-b border-border px-3">
@@ -351,12 +348,8 @@ function TracingKey({
 
 function EndpointValue({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    if (await copyToClipboard(value)) {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), COPIED_RESET_MS);
-    }
-  };
+  useTimeout(() => setCopied(false), copied ? COPIED_RESET_MS : null);
+  const copy = async () => setCopied(await copyToClipboard(value));
   return (
     <button
       type="button"
@@ -456,11 +449,9 @@ function CodingAgentSetup({ proxyUrl, guide, model }: { proxyUrl: string; guide:
   const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
   const [copied, setCopied] = useState<string | null>(null);
   const command = codingAgentCommand(codingAgent, codingAgentPrompt(proxyUrl, guide, model));
+  useTimeout(() => setCopied(null), copied === null ? null : COPIED_RESET_MS);
   const copy = async () => {
-    if (await copyToClipboard(command)) {
-      setCopied(command);
-      window.setTimeout(() => setCopied(null), COPIED_RESET_MS);
-    }
+    if (await copyToClipboard(command)) setCopied(command);
   };
   return (
     <section className="mt-6" aria-labelledby="connect-project">

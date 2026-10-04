@@ -13,21 +13,20 @@ const MIN_LEFT_GAP = 100;
 const DEFAULT_FRACTION = 0.56;
 const KEY_STEP = 32;
 
-/** At least 700px when the screen allows, never wider than the screen minus a 100px strip of list (or the full screen). */
 export const clampDrawerWidth = (width: number, viewport: number): number => {
   const max = Math.max(Math.min(MIN_WIDTH, viewport), viewport - MIN_LEFT_GAP);
   return Math.round(Math.min(Math.max(width, Math.min(MIN_WIDTH, max)), max));
 };
 
-/** Rows that open or swap the panel's item; pressing one must not also close it. */
 export const PANEL_TRIGGER = { "data-side-panel-trigger": "" } as const;
 
 const KEEPS_PANEL_OPEN =
   "[data-side-panel-trigger], [role='dialog'], [role='menu'], [role='listbox'], [data-radix-popper-content-wrapper]";
 
-/** A dialog opened from inside the panel (a finding, a span) owns its own keys. */
-const insideDialog = (event: KeyboardEvent): boolean =>
-  event.target instanceof Element && event.target.closest("[role='dialog']") !== null;
+const OWNS_ITS_KEYS = "[role='dialog'], [role='menu'], [role='listbox']";
+
+const insideKeyOwner = (event: KeyboardEvent): boolean =>
+  event.target instanceof Element && event.target.closest(OWNS_ITS_KEYS) !== null;
 
 function useDrawerWidth() {
   const { width: viewport } = useWindowSize();
@@ -40,7 +39,6 @@ function useDrawerWidth() {
   return [width, update] as const;
 }
 
-/** Keeps the last item rendered while it plays its exit animation, then drops it. */
 function useExitPresence<T>(item: T | null, itemKey: (item: T) => string) {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [lastShown, setLastShown] = useState<T | null>(item);
@@ -128,11 +126,9 @@ function HeaderButton({
 export interface SidePanelProps<T> {
   item: T | null;
   itemKey: (item: T) => string;
-  /** Lower-case name of what the panel shows, used in its control labels ("trace", "investigation"). */
   noun: string;
   label: string;
   testId?: string;
-  /** Position of the open item in the list behind the panel, for J / K stepping. */
   index: number;
   total: number;
   onStep: (delta: number) => void;
@@ -142,7 +138,6 @@ export interface SidePanelProps<T> {
   children: (item: T) => ReactNode;
 }
 
-/** Right-side drawer over a list: resizable, swaps items in place, closes on a press outside it and its trigger rows. */
 export function SidePanel<T>({
   item,
   itemKey,
@@ -162,7 +157,7 @@ export function SidePanel<T>({
   const { shown, closing, onExited } = useExitPresence(item, itemKey);
 
   useEventListener("keydown", (event) => {
-    if (item === null || ignoresLetterShortcut(event) || insideDialog(event)) return;
+    if (item === null || ignoresLetterShortcut(event) || insideKeyOwner(event)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       onClose();
@@ -230,7 +225,6 @@ export function SidePanel<T>({
   );
 }
 
-/** Steps back one level inside a panel that swaps nested views in place. */
 export function PanelBackLink({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button
