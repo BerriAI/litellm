@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
 import { LiveRun } from "../live/LiveRun";
+import { LiveRunLoader } from "../live/LiveRunLoader";
 import { type QueueContext } from "../useQueueReason";
 import { liveJob } from "../../model/live";
 import { RunNowDialog } from "./RunNowDialog";
@@ -109,7 +110,12 @@ export function InvestigationDetail({
             onCancel={readOnly ? undefined : () => void update((api) => api.cancelRun(lens.id))}
           />
         )}
-        {live && <LiveRun key={live.id} job={live} reviews={live.reviews} name={lens.settings.name} queue={queue} />}
+        {live &&
+          (queue ? (
+            <LiveRunLoader key={live.id} lensId={lens.id} job={live} name={lens.settings.name} queue={queue} />
+          ) : (
+            <LiveRun key={live.id} job={live} reviews={live.reviews} name={lens.settings.name} />
+          ))}
         {runNow && (
           <RunNowDialog
             lens={lens}

@@ -112,7 +112,7 @@ export function LiveStrip({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <Button variant="outline" size="xs" onClick={() => onOpen()} disabled={!recent.length}>
+        <Button variant="outline" size="xs" onClick={() => onOpen()} disabled={state.kind === "done" && !recent.length}>
           <PanelRight />
           View run
         </Button>

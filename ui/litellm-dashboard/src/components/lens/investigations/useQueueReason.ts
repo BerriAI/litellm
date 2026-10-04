@@ -2,10 +2,12 @@
 
 import { useNow } from "@/hooks/useNow";
 
+import type { LensApi } from "../api/service";
 import { queueReason, type QueueReason } from "../model/status";
 import type { Job, Lens, LensList } from "../model/types";
 
 export interface QueueContext {
+  api: LensApi;
   lenses: readonly Lens[];
   workers: readonly LensList["workers"][number][];
   onConnect: () => void;

@@ -282,6 +282,7 @@ export function InvestigationsView({
           results={results}
           agents={Array.isArray(agents.data) ? agents.data : []}
           queue={{
+            api,
             lenses,
             workers: query.data?.workers ?? [],
             onConnect: () => setWorkerSetup(true),

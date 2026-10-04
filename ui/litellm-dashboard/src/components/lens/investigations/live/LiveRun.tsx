@@ -50,6 +50,12 @@ export function LiveRun({
     if (review) pin(review);
     setDrawerOpen(true);
   };
+  const waiting = reason && (
+    <>
+      <QueueReasonText reason={reason} onConnect={queue?.onConnect} />
+      <WorkerTasks reason={reason} queue={queue} />
+    </>
+  );
 
   return (
     <>
@@ -57,14 +63,7 @@ export function LiveRun({
         <LiveStrip
           model={model}
           state={stripState(withReviews, model, reason ? queueReasonText(reason) : undefined)}
-          waiting={
-            reason && (
-              <>
-                <QueueReasonText reason={reason} onConnect={queue?.onConnect} />
-                <WorkerTasks reason={reason} queue={queue} />
-              </>
-            )
-          }
+          waiting={waiting}
           playback={playback}
           reviewed={reviewed}
           selected={job.coverage.selected}
@@ -97,6 +96,7 @@ export function LiveRun({
         groups={conclusions(decided, job.settings.checks)}
         decided={decided.length}
         scope={job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""}
+        waiting={waiting}
         onPick={pin}
         onFollow={() => setPinned(null)}
       />

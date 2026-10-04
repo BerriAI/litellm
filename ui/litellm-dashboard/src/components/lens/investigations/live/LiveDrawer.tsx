@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
@@ -38,9 +38,11 @@ export function LiveDrawer({
   groups,
   decided,
   scope,
+  waiting,
   onPick,
   onFollow,
 }: {
+  waiting?: ReactNode;
   open: boolean;
   onClose: () => void;
   name: string;
@@ -86,7 +88,10 @@ export function LiveDrawer({
                 phase={following ? phase : SETTLED}
               />
             ) : (
-              <p className="py-6 text-[12px] text-muted-foreground">Waiting for the first trace review.</p>
+              <div className="flex flex-col gap-1 py-6 text-[12px] text-muted-foreground">
+                <p className="text-[13px] text-foreground">Waiting for the first trace…</p>
+                {waiting}
+              </div>
             )}
           </section>
           <section aria-label="Conclusions so far" className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 py-4">
