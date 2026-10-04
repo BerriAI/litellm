@@ -117,6 +117,28 @@ describe("Lens introduction", () => {
     expect(await screen.findByRole("dialog")).toBeVisible();
   });
 
+  it("lets settings bring back an introduction hidden with don't show again", async () => {
+    const user = userEvent.setup();
+    const first = renderWorkspace();
+    const intro = within(await screen.findByRole("dialog"));
+    await user.click(intro.getByRole("checkbox", { name: "Don’t show this again" }));
+    await user.click(intro.getByRole("button", { name: "Close" }));
+    first.unmount();
+
+    const settings = renderWorkspace({ searchParams: "?tab=settings" });
+    const toggle = within(await screen.findByRole("region", { name: "Introduction" })).getByRole("switch", {
+      name: "Show the introduction on each new session",
+    });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
+    settings.unmount();
+
+    window.sessionStorage.clear();
+    renderWorkspace();
+    expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
   it("never opens on its own inside the sample session", async () => {
     renderWorkspace({ searchParams: "?demo=true" });
     expect(await screen.findByText("Where is order #1042?")).toBeVisible();

@@ -1,9 +1,13 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Activity, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { useStoredValue } from "@/lib/storage";
+import { LENS_INTRO_DISMISSED } from "../setup/LensIntroDialog";
 import { WorkerSettings } from "./worker/WorkerSettings";
 import { SettingsCard, SettingsSection } from "./SettingsSection";
 import type { LensList } from "../model/types";
@@ -40,6 +44,21 @@ function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTra
   );
 }
 
+function IntroductionSection() {
+  const [dismissed, setDismissed] = useStoredValue(LENS_INTRO_DISMISSED);
+  const id = useId();
+  return (
+    <SettingsSection heading="Introduction" description="The getting started dialog shown when you open Lens.">
+      <SettingsCard className="flex items-center justify-between gap-3">
+        <Label htmlFor={id} className="text-sm font-normal">
+          Show the introduction on each new session
+        </Label>
+        <Switch id={id} checked={!dismissed} onCheckedChange={(show) => setDismissed(!show)} />
+      </SettingsCard>
+    </SettingsSection>
+  );
+}
+
 export function LensSettings({
   list,
   workerReadyAction,
@@ -59,6 +78,7 @@ export function LensSettings({
       >
         <WorkerSettings workers={list.workers} readyAction={workerReadyAction} />
       </SettingsSection>
+      <IntroductionSection />
     </div>
   );
 }
