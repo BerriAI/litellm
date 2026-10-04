@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   analysisModel,
   conclusions,
+  focusedReview,
+  issueCount,
+  shortVerdict,
+  stripState,
   tickerLine,
   liveJob,
   liveStats,
@@ -226,6 +230,91 @@ describe("which job the live run shows", () => {
     expect(liveJob([job("done", "completed", [review("a")])])?.id).toBe("done");
     expect(liveJob([job("done", "completed", []), job("older", "completed", [review("b")])])).toBeUndefined();
     expect(liveJob([])).toBeUndefined();
+  });
+});
+
+describe("strip state", () => {
+  const base = {
+    status: "running" as Job["status"],
+    error: "",
+    stage: "Reading executions",
+    steps: [] as Job["steps"],
+    coverage: { selected: 328 } as Job["coverage"],
+    reviews: [] as Review[],
+  };
+  const MODEL = "cerebras/gpt-oss-120b";
+
+  it("says what is happening before the first review instead of a silent spinner", () => {
+    expect(stripState(base, MODEL)).toEqual({ kind: "waiting", message: "Reading 328 traces with cerebras/gpt-oss-120b…" });
+    expect(stripState({ ...base, stage: "Grouping observations" }, "")).toEqual({
+      kind: "waiting",
+      message: "Grouping observations…",
+    });
+    expect(stripState({ ...base, status: "queued" }, MODEL).kind).toBe("waiting");
+  });
+
+  it("shows the job error plainly when the run failed", () => {
+    expect(stripState({ ...base, status: "failed", error: "Anthropic: credit balance too low" }, MODEL)).toEqual({
+      kind: "failed",
+      message: "Anthropic: credit balance too low",
+    });
+    expect(stripState({ ...base, status: "failed" }, MODEL)).toEqual({ kind: "failed", message: "The investigation failed" });
+  });
+
+  it("surfaces a model error step while still running with nothing reviewed", () => {
+    const steps = [{ kind: "error", label: "Model call failed: 400 credit balance too low" }] as Job["steps"];
+    expect(stripState({ ...base, steps }, MODEL)).toEqual({
+      kind: "failed",
+      message: "Model call failed: 400 credit balance too low",
+    });
+    expect(stripState({ ...base, steps, reviews: [review("a")] }, MODEL).kind).toBe("reviewing");
+  });
+
+  it("is done for finished runs and reviewing once reviews arrive", () => {
+    expect(stripState({ ...base, status: "completed" }, MODEL).kind).toBe("done");
+    expect(stripState({ ...base, reviews: [review("a")] }, MODEL).kind).toBe("reviewing");
+  });
+});
+
+describe("issue count", () => {
+  const issueReview = review("x", { verdicts: [issue("i")] });
+
+  it("uses the job's issue findings once the run completes", () => {
+    const findings = [{ kind: "issue" }, { kind: "pattern" }, { kind: "issue" }] as Job["findings"];
+    expect(issueCount({ status: "completed", findings, reviews: [issueReview], reviewed: 328 })).toEqual({
+      count: 2,
+      scope: "findings",
+    });
+  });
+
+  it("labels counts honestly when only the last reviews are kept", () => {
+    const reviews = [issueReview, review("y"), issueReview];
+    expect(issueCount({ status: "running", findings: null, reviews, reviewed: 3 })).toEqual({ count: 2, scope: "" });
+    expect(issueCount({ status: "running", findings: null, reviews, reviewed: 120 })).toEqual({
+      count: 2,
+      scope: "in last 3 reviewed",
+    });
+  });
+});
+
+describe("drawer focus", () => {
+  const reviews = [review("a"), review("b")];
+
+  it("follows the live review until one is picked", () => {
+    expect(focusedReview(reviews, null, reviews[1])).toEqual({ review: reviews[1], following: true });
+    expect(focusedReview(reviews, reviewKey(reviews[0]), reviews[1])).toEqual({ review: reviews[0], following: false });
+  });
+
+  it("goes back to live when the picked review was dropped by the cap", () => {
+    expect(focusedReview(reviews, "gone@x", reviews[1])).toEqual({ review: reviews[1], following: true });
+  });
+});
+
+describe("short verdict", () => {
+  it("prefers the issue, otherwise says no issues or not enough evidence", () => {
+    expect(shortVerdict(review("a", { verdicts: [pattern("p"), issue("i", "made it up")] }))).toBe("made it up");
+    expect(shortVerdict(review("a", { verdicts: [pattern("p")] }))).toBe("no issues");
+    expect(shortVerdict(review("a", { cannot_assess: true }))).toBe("not enough evidence");
   });
 });
 

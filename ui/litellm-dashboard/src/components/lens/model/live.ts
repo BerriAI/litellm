@@ -55,6 +55,55 @@ export function tickerLine(review: Pick<Review, "agent" | "name" | "trace_id">):
   return `reading ${review.agent || review.name} · ${review.trace_id.slice(0, 8)}`;
 }
 
+export function shortVerdict(review: Pick<Review, "cannot_assess" | "verdicts">): string {
+  const issue = review.verdicts.find((v) => v.kind === "issue");
+  if (issue) return issue.summary;
+  return review.cannot_assess ? "not enough evidence" : "no issues";
+}
+
+export type StripState =
+  | { kind: "failed"; message: string }
+  | { kind: "waiting"; message: string }
+  | { kind: "reviewing" }
+  | { kind: "done" };
+
+export function stripState(job: Pick<Job, "status" | "error" | "stage" | "steps" | "coverage" | "reviews">, model: string): StripState {
+  if (job.status === "failed") return { kind: "failed", message: job.error || "The investigation failed" };
+  const stepError = job.steps.findLast((step) => step.kind === "error");
+  if (stepError && !job.reviews.length) return { kind: "failed", message: stepError.label };
+  if (job.status === "completed" || job.status === "cancelled") return { kind: "done" };
+  if (job.reviews.length) return { kind: "reviewing" };
+  if (job.status === "queued") return { kind: "waiting", message: "Queued, waiting for a worker to pick this up" };
+  const { selected } = job.coverage;
+  const using = model ? ` with ${model}` : "";
+  if (job.stage === "Reading executions" && selected) {
+    return { kind: "waiting", message: `Reading ${selected} ${selected === 1 ? "trace" : "traces"}${using}…` };
+  }
+  return { kind: "waiting", message: `${job.stage || "Starting"}${using}…` };
+}
+
+export interface IssueCount {
+  count: number;
+  scope: string;
+}
+
+export function issueCount(job: Pick<Job, "status" | "findings" | "reviews" | "reviewed">): IssueCount {
+  const findings = job.findings?.filter((f) => f.kind === "issue").length;
+  if (job.status === "completed" && findings !== undefined) return { count: findings, scope: "findings" };
+  const count = job.reviews.filter((r) => outcome(r) === "issue").length;
+  if (job.reviewed > job.reviews.length) return { count, scope: `in last ${job.reviews.length} reviewed` };
+  return { count, scope: "" };
+}
+
+export function focusedReview(
+  reviews: readonly Review[],
+  pinned: string | null,
+  live: Review | null,
+): { review: Review | null; following: boolean } {
+  const picked = pinned ? reviews.find((r) => reviewKey(r) === pinned) : undefined;
+  return picked ? { review: picked, following: false } : { review: live, following: true };
+}
+
 export function verdictLine(review: Pick<Review, "cannot_assess" | "verdicts">): string {
   const issue = review.verdicts.find((v) => v.kind === "issue");
   if (issue) return issue.summary;
