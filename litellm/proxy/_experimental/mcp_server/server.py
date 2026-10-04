@@ -1795,15 +1795,15 @@ if MCP_AVAILABLE:
             # credential the legacy parser would exchange — no Authorization at all, or a withheld
             # LiteLLM key — while a bearer it would have exchanged (scheme-less value, tab separator)
             # still reaches the IdP, as before this change.
-            obo_gated: Final = server is not None and server.auth_type == MCPAuth.oauth2_token_exchange
-            inbound_bearer: Final = (
+            obo_gated = server is not None and server.auth_type == MCPAuth.oauth2_token_exchange
+            inbound_bearer = (
                 operations.global_mcp_server_manager._extract_bearer_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the legacy parse the exchange consumes
                     oauth2_headers, raw_headers
                 )
                 if server is not None
                 else None
             )
-            exchangeable_subject: Final = (
+            exchangeable_subject = (
                 operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # withholds the LiteLLM credentials the exchange must never see
                     oauth2_headers, raw_headers, user_api_key_auth
                 )
