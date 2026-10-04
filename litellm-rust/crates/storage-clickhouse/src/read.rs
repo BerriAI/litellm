@@ -110,6 +110,13 @@ pub async fn execute_read(
         .body(sql.to_owned());
     let mut response = request.send().await.map_err(|_| Error::Transport)?;
     if !response.status().is_success() {
+        if response
+            .headers()
+            .get("x-clickhouse-exception-code")
+            .is_some_and(|code| code == "396")
+        {
+            return Err(Error::ResponseTooLarge);
+        }
         return Err(Error::QueryFailed(response.status().as_u16()));
     }
 

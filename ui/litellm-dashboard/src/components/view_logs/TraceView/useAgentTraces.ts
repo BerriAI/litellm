@@ -1,4 +1,4 @@
-import { useTracesApi } from "@/components/lens/services";
+import { useTracesApi } from "./tracesApi";
 import { useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 import { useMemo } from "react";
@@ -7,6 +7,11 @@ import { ApiError } from "@/lib/http/client";
 
 import { LIVE_TAIL_INTERVAL_MS } from "../log_filter_logic";
 import type { TracePage, TraceSummary } from "./traceTypes";
+import type { TraceWindow } from "./tracesApi";
+
+interface LoadedTracePage extends TracePage {
+  window: TraceWindow;
+}
 
 export const TRACING_NOT_ENABLED_STATUS = 501;
 /** A proxy without the tracing routes at all answers 404; treat it like tracing being off. */
@@ -54,8 +59,8 @@ export const traceWindowStartMs = (startTime: string, endTime: string, isCustomD
   isCustomDate ? moment(startTime).valueOf() : nowMs - (moment(endTime).valueOf() - moment(startTime).valueOf());
 
 /**
- * GET /v1/traces for the Logs page time range, cursor-paginated ("Load more").
- * Preset ranges re-read "now" on every fetch, moving both bounds so the window keeps its length.
+ * GET /v1/traces for the Logs page time range, cursor-paginated as the runs list scrolls.
+ * Preset ranges roll on refresh; subsequent pages keep the first page's window.
  */
 export function useAgentTraces({
   accessToken,
@@ -66,19 +71,20 @@ export function useAgentTraces({
   enabled,
 }: UseAgentTracesOptions): AgentTracesResult {
   const traces = useTracesApi(accessToken);
-  const fetchPage = (pageParam: unknown): Promise<TracePage> => {
+  const fetchPage = async (pageParam: unknown): Promise<LoadedTracePage> => {
     const nowMs = Date.now();
-    return traces.list({
+    const window = (pageParam as TraceWindow | null) ?? {
       startMs: traceWindowStartMs(startTime, endTime, isCustomDate, nowMs),
       endMs: isCustomDate ? moment(endTime).valueOf() : nowMs,
-      cursor: pageParam as string | null,
-    });
+    };
+    return { ...(await traces.list(window)), window };
   };
-  const queryOptions: Parameters<typeof useInfiniteQuery<TracePage, Error>>[0] = {
+  const queryOptions: Parameters<typeof useInfiniteQuery<LoadedTracePage, Error>>[0] = {
     queryKey: ["agentTraces", accessToken, startTime, endTime, isCustomDate],
     queryFn: ({ pageParam }) => fetchPage(pageParam),
     initialPageParam: null,
-    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.next_cursor ? { ...lastPage.window, cursor: lastPage.next_cursor } : undefined,
     enabled,
     staleTime: LIVE_TAIL_INTERVAL_MS,
     retry: (failureCount, error) => !requiresUserAction(error) && failureCount < 1,
@@ -87,7 +93,7 @@ export function useAgentTraces({
     refetchOnReconnect: (q) => !requiresUserAction(q.state.error),
     refetchIntervalInBackground: false,
   };
-  const query = useInfiniteQuery<TracePage, Error>(queryOptions);
+  const query = useInfiniteQuery<LoadedTracePage, Error>(queryOptions);
 
   const loaded = useMemo(() => query.data?.pages.flatMap((page) => page.data) ?? [], [query.data]);
   const notEnabled = isTracingNotEnabled(query.error);
@@ -99,7 +105,9 @@ export function useAgentTraces({
     notEnabledDetail: notEnabled ? query.error?.message || "Agent tracing is not enabled" : null,
     error: notEnabled ? null : displayError(query.error),
     hasMore: query.hasNextPage,
-    loadMore: () => void query.fetchNextPage(),
+    loadMore: () => {
+      if (query.hasNextPage && !query.isFetching) void query.fetchNextPage({ cancelRefetch: false });
+    },
     refetch: () => void query.refetch(),
   };
 }

@@ -22,12 +22,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.create_views import SupportsExecuteRaw
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -468,6 +470,13 @@ WITH {_DAY_UPSERT_SQL}
 {_session_upsert_sql(user_scoped=True)}
 """
 
+_SESSION_TABLE_BY_STATEMENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        UPSERT_AUTOROUTER_SESSION_SQL: "LiteLLM_AutoRouterSession",
+        UPSERT_AUTOROUTER_USER_SESSION_SQL: "LiteLLM_AutoRouterUserSession",
+    }
+)
+
 
 def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | None:
     if isinstance(value, bool):
@@ -486,7 +495,8 @@ async def write_autorouter_turn(
     transaction: AutoRouterTurnTransaction,
     statement: str = UPSERT_AUTOROUTER_SESSION_SQL,
 ) -> None:
-    await db.execute_raw(statement, *_upsert_params(transaction))
+    async with db_span("write_autorouter_turn", _SESSION_TABLE_BY_STATEMENT.get(statement)):
+        await db.execute_raw(statement, *_upsert_params(transaction))
 
 
 async def _upsert_turn_with_retry(

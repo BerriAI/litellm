@@ -184,7 +184,13 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
     const response = await fetchChecked(method, path, options);
     const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    if (!text) return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      const type = response.headers.get("content-type") ?? "an unknown content type";
+      throw new ApiError(`Expected JSON from ${path} but the server returned ${type}`, response.status, text);
+    }
   }
 
   async function getBlob(path: string, options: RequestOptions = {}): Promise<Blob> {

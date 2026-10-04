@@ -1,71 +1,50 @@
 "use client";
-import type { useInvestigationResults } from "../useInvestigationResults";
 
 import { Button } from "@/components/ui/button";
 
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
+import { StepFeed } from "../StepFeed";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { InvestigationFailure } from "./InvestigationFailure";
 import { scopeLabel, sourceLabels } from "../../model/format";
-import { type Lens } from "../../model/types";
-import type { LensWrite } from "../../api/mutations";
+import type { OwnedFinding } from "../../model/inbox";
+import { activeJob } from "../../model/status";
+import { type Finding, type Lens } from "../../model/types";
+import { FindingPanel } from "../FindingDetails";
+import { useSectionRoute } from "../../route";
+import { useRunSnapshot } from "../useRunSnapshot";
 
-import { InvestigationActions } from "./InvestigationActions";
+import { InvestigationActions, type InvestigationIntents } from "./InvestigationActions";
 import { RunPicker } from "./RunPicker";
 import { FindingsTab } from "./FindingsTab";
 import { CriteriaTab } from "./CriteriaTab";
 import { HistoryTab } from "./HistoryTab";
+
+export type InvestigationDetailProps = InvestigationIntents & {
+  readonly lens: Lens;
+  readonly readOnly: boolean;
+  readonly ready: boolean;
+  readonly busy: boolean;
+  readonly connected: boolean;
+  readonly onReviewFinding: (owned: OwnedFinding, status: Finding["status"], reason: string) => void;
+};
+
 export function InvestigationDetail({
   lens,
   readOnly,
   ready,
   busy,
-  setEditing,
-  setMonitoring,
-  update,
   connected,
-  results,
-}: {
-  lens: Lens;
-  readOnly: boolean;
-  ready: boolean;
-  busy: boolean;
-  setEditing: (mode: "new" | "edit" | "duplicate") => void;
-  setMonitoring: (open: boolean) => void;
-  update: (write: LensWrite) => Promise<void>;
-  connected: boolean;
-  results: ReturnType<typeof useInvestigationResults>;
-}) {
-  const {
-    active,
-    job,
-    tab,
-    setTab,
-    batchSettings,
-    batchId,
-    setBatchId,
-    setFindingId,
-    selectedOutsideHistory,
-    history,
-    historyError,
-    refetchHistory,
-    historicalError,
-    refetchHistorical,
-    missingSnapshot,
-    kind,
-    setKind,
-    batchFindings,
-    filter,
-    setFilter,
-    visibleFindings,
-    setRequestOffset,
-    setEvidence,
-    openBatch,
-    historyOffset,
-    setHistoryOffset,
-  } = results;
+  onCancelRun,
+  onReviewFinding,
+  ...intents
+}: InvestigationDetailProps) {
+  const { section, setSection } = useSectionRoute();
+  const snapshot = useRunSnapshot(lens);
+  const { job, batchId, batchSettings, batchFindings, missingSnapshot } = snapshot;
+  const active = activeJob(lens.jobs);
   return (
     <div>
       <section className="min-w-0 space-y-5">
@@ -76,105 +55,47 @@ export function InvestigationDetail({
               {sourceLabels[lens.settings.source ?? "traces"]} · {scopeLabel(lens.settings)}
             </p>
           </div>
-          {!readOnly && (
-            <InvestigationActions
-              lens={lens}
-              ready={ready}
-              busy={busy}
-              active={active}
-              setEditing={setEditing}
-              setMonitoring={setMonitoring}
-              update={update}
-            />
-          )}
+          {!readOnly && <InvestigationActions lens={lens} ready={ready} busy={busy} {...intents} />}
         </div>
         <InvestigationSummary lens={lens} connected={connected} />
-        {active && (
-          <InvestigationProgress
-            key={active.id}
-            job={active}
-            onCancel={
-              readOnly
-                ? undefined
-                : () => {
-                    void update((api) => api.cancelRun(lens.id));
-                  }
-            }
-          />
-        )}
+        {active && <InvestigationProgress key={active.id} job={active} onCancel={readOnly ? undefined : onCancelRun} />}
+        {active && <StepFeed job={active} />}
         {job?.error && <InvestigationFailure job={job} connected={connected} />}
-        <Tabs value={tab} onValueChange={setTab} key={lens.id}>
+        <Tabs value={section} onValueChange={setSection} key={lens.id}>
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">
             <TabsList variant="line">
               <TabsTrigger value="findings">Findings</TabsTrigger>
               <TabsTrigger value="checks">Criteria</TabsTrigger>
-              <TabsTrigger value="runs">
-                {
-                  { requests: "Requests", both: "Traces & requests", traces: "Traces" }[
-                    batchSettings?.source ?? "traces"
-                  ]
-                }
-              </TabsTrigger>
+              <TabsTrigger value="runs">{sourceLabels[batchSettings?.source ?? "traces"]}</TabsTrigger>
               <TabsTrigger value="activity">History</TabsTrigger>
             </TabsList>
-            {tab !== "activity" && (
-              <RunPicker
-                batchId={batchId}
-                setBatchId={setBatchId}
-                setFindingId={setFindingId}
-                job={job}
-                selectedOutsideHistory={selectedOutsideHistory}
-                history={history}
-                lens={lens}
-              />
-            )}
+            {section !== "activity" && <RunPicker lens={lens} job={job} />}
           </div>
-          {historicalError && (
+          {snapshot.error && (
             <p role="alert" className="text-sm text-destructive">
               Could not load this run.{" "}
-              <Button variant="link" onClick={() => void refetchHistorical()}>
+              <Button variant="link" onClick={snapshot.refetch}>
                 Retry
               </Button>
             </p>
           )}
-          {missingSnapshot && tab !== "activity" && (
+          {missingSnapshot && section !== "activity" && (
             <p className="text-sm text-muted-foreground">
               This older batch predates saved result snapshots. Its findings remain available under All accumulated
               findings.
             </p>
           )}
-          <FindingsTab
-            kind={kind}
-            setKind={setKind}
-            batchFindings={batchFindings}
-            filter={filter}
-            setFilter={setFilter}
-            visibleFindings={visibleFindings}
-            setFindingId={setFindingId}
-            active={active}
-            lens={lens}
-            job={job}
-          />
-          <CriteriaTab batchSettings={batchSettings} readOnly={readOnly} setEditing={setEditing} />
-          <TabsContent value="runs" className="pt-4 space-y-4">
-            <RunsTab
-              key={job?.id ?? batchId}
-              job={job}
-              onOpen={(id) => {
-                setRequestOffset(0);
-                setEvidence({ id, span: "" });
-              }}
+          <FindingsTab lens={lens} job={job} findings={batchFindings}>
+            <FindingPanel
+              readOnly={readOnly}
+              busy={busy}
+              sampledRuns={job?.sample?.executions}
+              onReview={onReviewFinding}
             />
-          </TabsContent>
-          <HistoryTab
-            history={history}
-            historyError={historyError}
-            refetchHistory={refetchHistory}
-            lens={lens}
-            openBatch={openBatch}
-            historyOffset={historyOffset}
-            setHistoryOffset={setHistoryOffset}
-          />
+          </FindingsTab>
+          <CriteriaTab settings={batchSettings} readOnly={readOnly} onEditCriteria={intents.onEdit} />
+          <RunsTab key={job?.id ?? batchId} lens={lens} job={job} />
+          <HistoryTab lens={lens} />
         </Tabs>
       </section>
     </div>

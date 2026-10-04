@@ -5,8 +5,27 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const devProxyUrl = process.env.LENS_DEV_PROXY_URL;
+
 const nextConfig = {
-  output: "export",
+  ...(devProxyUrl
+    ? {
+        async rewrites() {
+          return {
+            beforeFiles: [
+              {
+                source: "/:path*",
+                has: [{ type: "header", key: "content-type", value: "application/json.*" }],
+                destination: `${devProxyUrl}/:path*`,
+              },
+              { source: "/ui/:path*", destination: "/:path*" },
+            ],
+            fallback: [{ source: "/:path*", destination: `${devProxyUrl}/:path*` }],
+          };
+        },
+      }
+    : {}),
+  output: devProxyUrl ? undefined : "export",
   typescript: { tsconfigPath: "tsconfig.production.json" },
   experimental: {
     useTypeScriptCli: false,
@@ -21,7 +40,8 @@ const nextConfig = {
   },
   basePath: "",
   assetPrefix: "/litellm-asset-prefix",
-  trailingSlash: true,
+  trailingSlash: !devProxyUrl,
+  skipTrailingSlashRedirect: Boolean(devProxyUrl),
   turbopack: {
     // Must be absolute; "." is no longer allowed
     root: __dirname,

@@ -1,120 +1,222 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Aperture } from "lucide-react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
+import { useId, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Aperture, ArrowUpRight } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
-import { DemoNotice } from "@/components/shared/DemoNotice";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LensDemoContext, useLensDemo } from "./LensDemoContext";
-import { LensServicesContext } from "./services";
-import { LensPreviewTarget } from "./LensPreviewButton";
+import { Button } from "@/components/ui/button";
+import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { LensServicesProvider, useLensAccessToken, useLensApi, useLiveLensServices } from "./data/LensServices";
+import { LensPreviewContext } from "@/components/view_logs/TraceView/LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
-import { createLensDemo } from "./demo/createLensDemo";
+import { LensSettings } from "./settings/LensSettings";
+import { createLensDemo } from "./data/demo/createLensDemo";
+import { lensQueries } from "./data/queries";
+import { LensModeSwitch } from "./LensModeSwitch";
+import { frameCard } from "./ui/frame";
+import { investigationActivity, listPollInterval } from "./model/status";
+import { cn } from "@/lib/cva.config";
+import { useDialogRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
+import { LensIntroDialog, useLensIntro } from "./onboarding/LensIntroDialog";
+import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
+import { traceRefOf, useOpenTraceRouting } from "@/components/view_logs/TraceView/traceRouting";
 
-type Tab = "traces" | "investigations";
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
 export function LensWorkspace(props: WorkspaceProps) {
-  const [demoTab, setDemoTab] = useState<Tab | null>(null);
-  return demoTab ? (
-    <DemoSession initialTab={demoTab} onExit={() => setDemoTab(null)} />
-  ) : (
-    <LensContent {...props} onDemo={setDemoTab} />
-  );
+  const { demo } = useLensRoute();
+  return demo ? <SampleSession /> : <LiveSession {...props} />;
 }
 
-function DemoSession({ initialTab, onExit }: { initialTab: Tab; onExit: () => void }) {
-  const [demo] = useState(createLensDemo);
-  const [client] = useState(
-    () => new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }),
-  );
-  useEffect(
-    () => () => {
-      client.clear();
-    },
-    [client],
-  );
+function LiveSession(props: WorkspaceProps) {
+  const services = useLiveLensServices(props.accessToken);
   return (
-    <LensServicesContext.Provider value={demo.services}>
-      <LensDemoContext.Provider value={demo}>
-        <QueryClientProvider client={client}>
-          <LensContent accessToken="lens-demo" userRole="" readOnly initialTab={initialTab} onExit={onExit} />
-        </QueryClientProvider>
-      </LensDemoContext.Provider>
-    </LensServicesContext.Provider>
+    <LensServicesProvider services={services}>
+      <LensContent userRole={props.userRole} readOnly={props.readOnly} />
+    </LensServicesProvider>
   );
 }
 
-function LensContent({
-  accessToken,
-  userRole,
-  readOnly,
-  initialTab = "traces",
-  onDemo,
-  onExit,
-}: WorkspaceProps & { initialTab?: Tab; onDemo?: (tab: Tab) => void; onExit?: () => void }) {
-  const demo = useLensDemo();
-  const [tab, setTab] = useQueryState(
-    "tab",
-    parseAsStringLiteral(["traces", "investigations"]).withOptions({ history: "push" }),
+function SampleSession() {
+  const [services] = useState(() => createLensDemo());
+  return (
+    <LensServicesProvider services={services}>
+      <LensContent userRole="proxy_admin_viewer" readOnly />
+    </LensServicesProvider>
   );
-  const [lensId] = useQueryState("lens", parseAsString);
-  const [demoTab, setDemoTab] = useState(initialTab);
+}
+
+function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolean) => void }) {
+  const id = useId();
+  return (
+    <div className={cn("flex items-center gap-2 text-xs", demo ? "font-medium text-info" : "text-muted-foreground")}>
+      <label htmlFor={id}>Demo data</label>
+      <Switch id={id} size="sm" checked={demo} onCheckedChange={onChange} className="data-checked:bg-info" />
+    </div>
+  );
+}
+
+/** The inline investigation editor marks the tab so the notch says where you are, not just which tab is open. */
+const SETUP_LABELS: Partial<Record<LensDialog, string>> = { new: "New", edit: "Editing", duplicate: "Duplicate" };
+
+/** The one always-mounted `/lens` observer; every other reader is a plain cache subscriber. */
+function useLensOverview(enabled: boolean, settingsOpen: boolean) {
+  const api = useLensApi();
+  const { data } = useQuery({
+    ...lensQueries.list(api),
+    enabled,
+    refetchInterval: (query) => listPollInterval(query.state.data, settingsOpen, Date.now()),
+  });
+  return { activity: investigationActivity(data?.lenses ?? []), list: data };
+}
+
+const PANEL =
+  "flex min-h-0 flex-1 flex-col overflow-y-auto animate-in fade-in-0 duration-300 motion-reduce:animate-none";
+
+function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">) {
+  const accessToken = useLensAccessToken();
+  const { tab, lensId, demo, settingUp, setTab, setDemo, setSetup } = useLensRoute();
+  const { dialog, openDialog } = useDialogRoute();
+  const { openTrace } = useOpenTraceRouting();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
+  const canViewInvestigations = isProxyAdminTierRole(userRole);
+  const isAdmin = isProxyAdminRole(userRole);
+  const canConfigure = canViewInvestigations && !readOnly;
   const defaultTab = lensId ? "investigations" : "traces";
-  const activeTab = demo ? demoTab : tab ?? defaultTab;
-  const openDemo = onDemo ? () => onDemo(activeTab) : undefined;
+  const activeTab = tab === "settings" && !canConfigure ? defaultTab : tab ?? defaultTab;
+  const intro = useLensIntro({ demo, settingUp });
+  const { activity, list } = useLensOverview(
+    canViewInvestigations,
+    (canConfigure && activeTab === "settings") || intro.open,
+  );
+  const workers = canConfigure && list ? list.workers : null;
+  const leaveIntro = (forever = false) => {
+    if (!intro.open) return;
+    intro.close(forever);
+    setSetup(false);
+  };
+  const startSetup = () => {
+    if (!settingUp) setSetup(true);
+  };
+  const exitIntro = (to: LensTab) => {
+    leaveIntro();
+    setTab(to);
+  };
+  const showSettings = () => {
+    leaveIntro();
+    setTab("settings");
+  };
+  const startFirstInvestigation = () => {
+    leaveIntro();
+    setTab("investigations");
+    openDialog("new");
+  };
+  const showSentTrace = (trace: TraceSummary) => {
+    leaveIntro();
+    setTab("traces");
+    openTrace(traceRefOf(trace));
+  };
+  const enterDemo = () => {
+    leaveIntro();
+    setDemo(true);
+  };
+  const onboarding: Onboarding = {
+    readOnly,
+    canViewInvestigations,
+    canInvestigate: isAdmin,
+    canMintTracingKey: isAdmin,
+    connect: showSettings,
+    create: startFirstInvestigation,
+    openTrace: showSentTrace,
+  };
+  const preview = (view: LensTab) => ({
+    target: previewTarget,
+    open: !demo && !intro.open && activeTab === view ? enterDemo : undefined,
+  });
   return (
-    <LensPreviewTarget.Provider value={previewTarget}>
-      <main className="flex w-full min-w-0 flex-1 flex-col gap-5 p-6 md:p-8">
-        <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <Aperture aria-hidden="true" className="size-7" strokeWidth={1.75} />
-            Lens
-          </h1>
-          <div ref={setPreviewTarget} />
-        </div>
-        {demo && <DemoNotice onExit={onExit} />}
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => (demo ? setDemoTab(value as Tab) : void setTab(value as Tab))}
-          className="min-h-0 flex-1 gap-4"
-        >
-          <TabsList variant="line" aria-label="Lens" className="w-full justify-start gap-6 border-b px-0">
-            <TabsTrigger value="traces" className="flex-none px-0">
-              Traces
-            </TabsTrigger>
-            <TabsTrigger value="investigations" className="flex-none px-0">
-              Investigations
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="traces" keepMounted className="min-h-0">
-            <AgentTracesPage
-              accessToken={accessToken}
-              isActive={activeTab === "traces"}
-              readOnly={readOnly}
-              canMintTracingKey={!demo && isProxyAdminRole(userRole)}
-              onDemo={activeTab === "traces" ? openDemo : undefined}
-            />
-          </TabsContent>
-          <TabsContent value="investigations" keepMounted={!!demo}>
-            {demo || isProxyAdminTierRole(userRole) ? (
-              <InvestigationsView
-                accessToken={accessToken}
-                readOnly={readOnly || !isProxyAdminRole(userRole)}
-                onDemo={activeTab === "investigations" ? openDemo : undefined}
-              />
-            ) : (
-              <p className="py-6 text-sm text-muted-foreground">
-                Investigations require proxy administrator access. You can still view your traces.
+    <OnboardingProvider value={onboarding}>
+      <main className="flex h-full w-full min-w-0 flex-1 flex-col px-4 pt-3 pb-4">
+        <Tabs value={activeTab} onValueChange={(value) => setTab(value as LensTab)} className="min-h-0 flex-1 gap-0">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+            <div className="flex min-w-0 flex-col gap-1 pb-3">
+              <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+                <Aperture aria-hidden="true" className="size-5" strokeWidth={2} />
+                Lens
+              </h1>
+              <p className="truncate text-xs text-muted-foreground">
+                Trace your agents and investigate what goes wrong.{" "}
+                <a
+                  href="https://docs.litellm.ai/docs/proxy/lens"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-0.5 font-medium text-foreground/80 underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  Docs
+                  <ArrowUpRight aria-hidden="true" className="size-3" />
+                </a>
               </p>
+            </div>
+            <LensModeSwitch
+              activity={activity}
+              demo={demo}
+              workers={workers}
+              setup={activeTab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined}
+            />
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
+              <div ref={setPreviewTarget} />
+              <DemoToggle demo={demo} onChange={(next) => (next ? enterDemo() : setDemo(false))} />
+            </div>
+          </div>
+          <div className={frameCard({ session: demo ? "demo" : "live" })}>
+            <TabsContent value="traces" keepMounted className={PANEL}>
+              <LensPreviewContext.Provider value={preview("traces")}>
+                <AgentTracesPage
+                  accessToken={accessToken}
+                  isActive={activeTab === "traces"}
+                  readOnly={readOnly}
+                  canMintTracingKey={isAdmin}
+                />
+              </LensPreviewContext.Provider>
+            </TabsContent>
+            <TabsContent value="investigations" className={PANEL}>
+              <LensPreviewContext.Provider value={preview("investigations")}>
+                {canViewInvestigations ? (
+                  <InvestigationsView readOnly={readOnly || !isAdmin} />
+                ) : (
+                  <p className="py-6 text-sm text-muted-foreground">
+                    Investigations require proxy administrator access. You can still view your traces.
+                  </p>
+                )}
+              </LensPreviewContext.Provider>
+            </TabsContent>
+            {workers && list && (
+              <TabsContent value="settings" keepMounted className={cn(PANEL, "p-6")}>
+                <LensSettings
+                  list={list}
+                  workerReadyAction={
+                    list.lenses.length === 0 ? (
+                      <Button className="w-full" onClick={startFirstInvestigation}>
+                        New investigation
+                      </Button>
+                    ) : undefined
+                  }
+                  onOpenTraces={() => setTab("traces")}
+                />
+              </TabsContent>
             )}
-          </TabsContent>
+          </div>
         </Tabs>
+        <LensIntroDialog
+          open={intro.open}
+          onClose={leaveIntro}
+          onStart={startSetup}
+          onExit={exitIntro}
+          onDemo={enterDemo}
+        />
       </main>
-    </LensPreviewTarget.Provider>
+    </OnboardingProvider>
   );
 }

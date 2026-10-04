@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/cva.config";
 
 import { FoldChevron } from "./Collapse";
+import { PaneBar } from "./PaneBar";
 import { groupFacts, SpanHoverCard, spanFacts } from "./SpanHoverCard";
 import { SpanIcon } from "./SpanIcon";
 import type { GroupRowData, SpanRowData, TreeRow } from "./traceTree";
@@ -33,8 +34,6 @@ interface SpanTreeProps {
   onToggleGroup: (id: string) => void;
   onLoadMore: (groupId: string) => void;
   onOpenDetails?: () => void;
-  /** Inside the side drawer J/K switch runs, so spans move with the arrow keys. */
-  embedded?: boolean;
   query: string;
   onQueryChange: (query: string) => void;
   errorsOnly: boolean;
@@ -50,9 +49,9 @@ const rowClass = (selected: boolean): string =>
     selected ? "border-l-primary bg-accent" : "border-l-transparent hover:bg-muted/60",
   );
 
-const LINE = "border-dashed border-border [border-width:0] [border-left-width:1px]";
-const ELBOW = "border-dashed border-border [border-width:0] [border-left-width:1px] [border-bottom-width:1px]";
-const NAME = "line-clamp-2 break-words text-[13px] leading-[1.2] font-medium";
+const LINE = "border-l border-dashed border-border";
+const ELBOW = "border-b border-l border-dashed border-border";
+const NAME = "line-clamp-2 break-words text-sm leading-tight font-medium";
 const META = "text-xs leading-4 text-muted-foreground tabular-nums";
 
 /** One 20px column per ancestor: pass-through rails for open branches, an elbow into this row's tile. */
@@ -99,7 +98,7 @@ function Caret({ open, onToggle, label }: { open: boolean; onToggle: () => void;
       role="button"
       tabIndex={-1}
       aria-label={label}
-      className="grid size-6 shrink-0 place-items-center self-start rounded-[4px] p-0.5 text-muted-foreground transition-colors duration-150 hover:bg-muted motion-reduce:transition-none"
+      className="grid size-6 shrink-0 place-items-center self-start rounded-sm p-0.5 text-muted-foreground transition-colors duration-150 hover:bg-muted motion-reduce:transition-none"
       onClick={(event) => {
         event.stopPropagation();
         onToggle();
@@ -274,7 +273,6 @@ export function SpanTree({
   onToggleGroup,
   onLoadMore,
   onOpenDetails,
-  embedded = false,
   query,
   onQueryChange,
   errorsOnly,
@@ -295,79 +293,78 @@ export function SpanTree({
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-border bg-card" aria-label="Run spans">
-      <div className="shrink-0 space-y-3 border-b px-3 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium">
-            Steps{" "}
-            <span className="ml-1 text-xs font-normal text-muted-foreground">
-              {summary.span_count.toLocaleString()}
-            </span>
+      <PaneBar className="justify-between">
+        <span className="text-sm font-medium">
+          Steps{" "}
+          <span className="ml-1 text-xs font-normal text-muted-foreground">
+            {filtering && `${rows.length.toLocaleString()} of `}
+            {summary.span_count.toLocaleString()}
           </span>
-          <div className="flex items-center gap-1">
-            {onOpenDetails && (
-              <Button variant="ghost" size="icon-xs" onClick={onOpenDetails} aria-label="Show details">
-                <PanelRightOpen className="size-4" />
-              </Button>
-            )}
-            <DropdownMenu>
-              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Step display options" />}>
-                <MoreHorizontal className="size-4" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                <DropdownMenuCheckboxItem checked={hideFramework} onCheckedChange={onToggleHideFramework}>
-                  Hide framework spans
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onCollapseAll}>Collapse branches</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+        </span>
+        <div className="flex items-center gap-1">
+          {onOpenDetails && (
+            <Button variant="ghost" size="icon-xs" onClick={onOpenDetails} aria-label="Show details">
+              <PanelRightOpen className="size-4" />
+            </Button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Step display options" />}>
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuCheckboxItem checked={hideFramework} onCheckedChange={onToggleHideFramework}>
+                Hide framework spans
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={onCollapseAll}>Collapse branches</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-        <div className="relative">
-          <Search className="pointer-events-none absolute top-2.5 left-2.5 size-3.5 text-muted-foreground" />
+      </PaneBar>
+      <PaneBar>
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             aria-label="Search steps"
             placeholder="Search steps"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
-            className="h-8 pr-8 pl-8 text-xs shadow-none md:text-xs"
+            className="h-7 pr-7 pl-7 text-xs shadow-none md:text-xs"
           />
           {query && (
             <Button
               variant="ghost"
               size="icon-xs"
               aria-label="Clear step search"
-              className="absolute top-1 right-1"
+              className="absolute top-1/2 right-0.5 -translate-y-1/2"
               onClick={() => onQueryChange("")}
             >
               <X className="size-3" />
             </Button>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant={!errorsOnly ? "secondary" : "ghost"}
-            size="xs"
-            aria-pressed={!errorsOnly}
-            onClick={() => onErrorsOnlyChange(false)}
-          >
-            All steps
-          </Button>
-          <Button
-            variant={errorsOnly ? "secondary" : "ghost"}
-            size="xs"
-            aria-pressed={errorsOnly}
-            onClick={() => onErrorsOnlyChange(true)}
-          >
-            Errors <span className="ml-1 text-muted-foreground">{summary.error_count}</span>
-          </Button>
-          {filtering && (
-            <span className="ml-auto text-xs text-muted-foreground" role="status">
-              {rows.length} found
-            </span>
-          )}
-        </div>
-      </div>
+        <Button
+          variant={!errorsOnly ? "secondary" : "ghost"}
+          size="xs"
+          aria-pressed={!errorsOnly}
+          onClick={() => onErrorsOnlyChange(false)}
+        >
+          All
+        </Button>
+        <Button
+          variant={errorsOnly ? "secondary" : "ghost"}
+          size="xs"
+          aria-pressed={errorsOnly}
+          onClick={() => onErrorsOnlyChange(true)}
+        >
+          Errors <span className="ml-1 text-muted-foreground">{summary.error_count}</span>
+        </Button>
+        {filtering && (
+          <span role="status" className="sr-only">
+            {rows.length} found
+          </span>
+        )}
+      </PaneBar>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-2">
         {rows.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
@@ -385,7 +382,7 @@ export function SpanTree({
                   key={row.id}
                   type="button"
                   onClick={() => onLoadMore(row.groupId)}
-                  className={cn(rowClass(false), "h-8 text-[13px] tracking-[-0.26px] text-muted-foreground")}
+                  className={cn(rowClass(false), "h-8 text-sm text-muted-foreground")}
                 >
                   <Gutters depth={row.depth} guide={guides[i]} />
                   <span className="ml-0.5 flex items-center gap-2">
@@ -413,36 +410,6 @@ export function SpanTree({
           })}
         </div>
       </div>
-      <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
-        {embedded ? (
-          <>
-            <span className="whitespace-nowrap">
-              <Kbd>↑</Kbd>/<Kbd>↓</Kbd> step
-            </span>
-            <span className="whitespace-nowrap">
-              <Kbd>J</Kbd>/<Kbd>K</Kbd> trace
-            </span>
-          </>
-        ) : (
-          <span className="whitespace-nowrap">
-            <Kbd>J</Kbd>/<Kbd>K</Kbd> move
-          </span>
-        )}
-        <span className="whitespace-nowrap">
-          <Kbd>←</Kbd>/<Kbd>→</Kbd> fold
-        </span>
-        <span className="whitespace-nowrap">
-          <Kbd>Esc</Kbd> close
-        </span>
-      </div>
     </section>
-  );
-}
-
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="rounded-[3px] border border-border border-b-2 bg-muted px-[3px] font-mono text-muted-foreground">
-      {children}
-    </kbd>
   );
 }

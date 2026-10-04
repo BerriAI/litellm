@@ -1,12 +1,15 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { mockAllIsIntersecting, setupIntersectionMocking } from "react-intersection-observer/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
 
-import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
+import { LensPreviewContext } from "./LensPreviewButton";
 import AgentTracesPage from "./AgentTracesPage";
+import { filterRuns } from "./runSearch/runQuery";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
@@ -32,17 +35,21 @@ import { agentTraceListCall, apiClient } from "../../networking";
 
 const runs = (traceList as TracePage).data as TraceSummary[];
 
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
+  new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
+
 const renderSection = () =>
   renderWithProviders(
-    <AgentTracesSection
-      accessToken="sk-test"
-      isActive
-      startTime="2026-09-29T00:00"
-      endTime="2026-09-30T00:00"
-      isCustomDate={false}
-      isLiveTail={false}
-      onDemo={vi.fn()}
-    />,
+    <LensPreviewContext.Provider value={{ target: document.body, open: vi.fn() }}>
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail={false}
+      />
+    </LensPreviewContext.Provider>,
   );
 
 // A UTC-pinned day around the fixture runs (2026-09-30 ~06:43 UTC), so they land in the same bucket in any timezone.
@@ -80,9 +87,65 @@ describe("AgentTracesSection", () => {
       y: 0,
       toJSON: () => ({}),
     } as DOMRect);
+    setupIntersectionMocking(vi.fn);
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+  });
+
+  it("loads the next page only once the list scrolls near its end, then stops at the last page", async () => {
+    vi.mocked(agentTraceListCall)
+      .mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" })
+      .mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: null });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+    act(() => mockAllIsIntersecting(false));
+    expect(agentTraceListCall).toHaveBeenCalledOnce();
+    act(() => mockAllIsIntersecting(true));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
+    expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toMatchObject({ cursor: "next" });
+    expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for the user before paging when filters hide every loaded run", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceListCall)
+      .mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" })
+      .mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: "later" });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    await user.type(screen.getByRole("combobox", { name: "Search runs" }), "no-such-run");
+    await waitFor(() => expect(screen.queryAllByTestId("agent-trace-row")).toHaveLength(0));
+    act(() => mockAllIsIntersecting(true));
+    expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Load older runs" }));
+    await waitFor(() => expect(agentTraceListCall).toHaveBeenCalledTimes(2));
+    act(() => mockAllIsIntersecting(true));
+    expect(agentTraceListCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the original time window and loaded rows when another page fails", async () => {
+    const user = userEvent.setup();
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-01T00:00Z"));
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    const first = vi.mocked(agentTraceListCall).mock.calls[0][0];
+    now.mockReturnValue(Date.parse("2026-10-01T01:00Z"));
+    vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Please try again", 403, {}));
+    act(() => mockAllIsIntersecting(true));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more runs");
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
+    expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toEqual({ ...first, cursor: "next" });
+    vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: null });
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -107,7 +170,6 @@ describe("AgentTracesSection", () => {
     expect(screen.getByText(`Could not load runs: ${message}`)).toBeVisible();
     expect(screen.queryByText(/Private token details/)).not.toBeInTheDocument();
     expect(agentTraceListCall).toHaveBeenCalledOnce();
-    expect(screen.getByTestId("runs-footer")).toHaveTextContent("Update failed");
   });
 
   it("renders the setup snippet when the proxy answers 501", async () => {
@@ -142,10 +204,12 @@ describe("AgentTracesSection", () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
     vi.mocked(apiClient.get).mockResolvedValue(traceList);
     renderSection();
-    expect(await screen.findByText("No runs match these filters.")).toBeVisible();
+    expect(await screen.findByText("No runs in this time range")).toBeVisible();
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/v1/traces", { accessToken: "sk-test", query: { start_ms: 0 } });
+    fireEvent.click(screen.getByRole("button", { name: "Set up tracing" }));
+    expect(await screen.findByRole("heading", { name: "Connect another agent" })).toBeVisible();
   });
 
   it("checks proxy readiness, waits for an agent, and confirms receipt using actual query results", async () => {
@@ -204,7 +268,7 @@ describe("AgentTracesSection", () => {
     await act(async () => {
       void testQueryClient.invalidateQueries({ queryKey: ["agentTraces"] });
     });
-    expect(await screen.findByText("Updating…")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("table", { name: "Agent runs" })).toHaveAttribute("aria-busy", "true"));
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
     expect(screen.getByRole("complementary", { name: "Trace details" })).toBe(drawer);
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
@@ -216,13 +280,13 @@ describe("AgentTracesSection", () => {
     vi.mocked(apiClient.get).mockRejectedValue(new ApiError("History unavailable", 503, {}));
     renderSection();
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not check earlier traces. History unavailable");
-    expect(screen.getByText("No runs match these filters.")).toBeVisible();
+    expect(screen.getByText("No runs in this time range")).toBeVisible();
     expect(screen.queryByText(/Could not load runs/)).not.toBeInTheDocument();
 
     vi.mocked(apiClient.get).mockResolvedValue(traceList);
     fireEvent.click(screen.getByRole("button", { name: "Retry trace check" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(screen.getByText("No runs match these filters.")).toBeVisible();
+    expect(screen.getByText("No runs in this time range")).toBeVisible();
     expect(agentTraceListCall).toHaveBeenCalledTimes(1);
   });
 
@@ -245,7 +309,6 @@ describe("AgentTracesSection", () => {
     expect(lead).toBeDefined();
     const failed = rows.find((row) => row.textContent?.includes("acme-404")) as HTMLElement;
     expect(within(failed).getByLabelText("2 errors")).toBeInTheDocument();
-    expect(screen.getByText(`${runs.length} runs`)).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Cost" })).toBeInTheDocument();
     expect(within(failed).getByText("—")).toBeInTheDocument();
   });
@@ -262,22 +325,24 @@ describe("AgentTracesSection", () => {
   });
 
   it("filters by input text and by trace id", async () => {
+    const user = userEvent.setup();
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderSection();
     await screen.findAllByTestId("agent-trace-row");
 
-    const search = screen.getByLabelText("Search runs");
-    fireEvent.change(search, { target: { value: "acme-404" } });
-    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
+    const search = screen.getByRole("combobox", { name: "Search runs" });
+    await user.type(search, "acme-404");
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1));
 
     const lead = runs.find((r) => r.name === "research_lead") as TraceSummary;
-    fireEvent.change(search, { target: { value: lead.trace_id.slice(0, 10) } });
-    const rows = screen.getAllByTestId("agent-trace-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toHaveTextContent("Should we store OTEL agent spans");
+    await user.clear(search);
+    await user.type(search, lead.trace_id.slice(0, 10));
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-trace-row")).toHaveTextContent("Should we store OTEL agent spans"),
+    );
   });
 
-  it("uses recorded agent names for the column and filter even when services are shared", async () => {
+  it("uses recorded agent names for the column, suggestions and filter even when services are shared", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({
       ...(traceList as TracePage),
       data: [
@@ -290,20 +355,19 @@ describe("AgentTracesSection", () => {
     await screen.findAllByTestId("agent-trace-row");
 
     expect(screen.getByRole("columnheader", { name: "Agent" })).toBeInTheDocument();
-    const agentFilter = screen.getByRole("combobox", { name: "Filter by agent" });
-    expect(agentFilter).toHaveTextContent("All agents");
+    await user.type(screen.getByRole("combobox", { name: "Search runs" }), "agent:");
+    const suggestions = screen.getByRole("listbox", { name: "Search suggestions" });
+    expect(
+      within(suggestions)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["billing-agent", "research-agent", "review-agent"]);
 
-    await chooseSelectOption(user, agentFilter, "billing-agent");
-    const rows = screen.getAllByTestId("agent-trace-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toHaveTextContent("billing-agent");
-    expect(rows[0]).not.toHaveTextContent("shared-app");
-
-    await chooseSelectOption(user, agentFilter, "review-agent");
-    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
-
-    await chooseSelectOption(user, agentFilter, "All agents");
-    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+    await user.click(within(suggestions).getByRole("option", { name: "review-agent" }));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1));
+    const row = screen.getByTestId("agent-trace-row");
+    expect(row).toHaveTextContent("billing-agent");
+    expect(row).not.toHaveTextContent("shared-app");
   });
 
   it("shows each run's agent name with the logo of the SDK that produced it", async () => {
@@ -320,13 +384,14 @@ describe("AgentTracesSection", () => {
     const agentCell = (row: HTMLElement) => within(row).getAllByRole("cell")[1];
 
     expect(agentCell(sdkRun)).toHaveTextContent(/^research-bot$/);
-    expect(agentCell(sdkRun)).toHaveAttribute("title", "research-bot · Claude Agent SDK");
+    expect(within(agentCell(sdkRun)).getByTitle("research-bot · Claude Agent SDK")).toBeInTheDocument();
     expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toHaveAttribute(
       "src",
       expect.stringContaining("anthropic.svg"),
     );
     expect(agentCell(cliRun)).toHaveTextContent(/^Claude Code$/);
     expect(within(plainRun).queryByRole("img", { hidden: true })).not.toBeInTheDocument();
+    expect(within(plainRun).getByTestId("span-icon")).toBeInTheDocument();
     expect(agentCell(plainRun)).toHaveTextContent((runs[2].agent_names ?? [runs[2].service]).join(", "));
   });
 
@@ -358,7 +423,7 @@ describe("AgentTracesSection", () => {
     expect(rows[0]).toHaveAttribute("aria-selected", "false");
 
     fireEvent.click(rows[1]);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(rows[1]).toHaveAttribute("aria-selected", "false");
   });
 
@@ -368,13 +433,115 @@ describe("AgentTracesSection", () => {
     const rows = await screen.findAllByTestId("agent-trace-row");
 
     fireEvent.click(rows[0]);
-    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "j" });
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
-    fireEvent.keyDown(window, { key: "k" });
+    fireEvent.keyDown(document.body, { key: "k" });
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[0].trace_id}`);
     expect(screen.getByRole("button", { name: "Previous trace (K)" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
+  });
+
+  it("opens full screen from a shared link and drops it from the URL on close", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail={false}
+      />,
+      { searchParams: `?trace=${runs[0].trace_id}&fullscreen=true`, onUrlUpdate },
+    );
+    const drawer = await screen.findByRole("complementary", { name: "Trace details" });
+    expect(drawer).toHaveStyle({ width: "100%" });
+    fireEvent.click(screen.getByRole("button", { name: "Close trace (Esc)" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
+    expect(lastUrl(onUrlUpdate).has("fullscreen")).toBe(false);
+  });
+
+  it("narrows the list to the zoom window named in the URL and clears it on request", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const startMs = Date.parse(runs[0].start_time);
+    const inWindow = runs.filter((run) => Math.abs(Date.parse(run.start_time) - startMs) <= 1);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-30T00:00Z"
+        endTime="2026-10-01T00:00Z"
+        isCustomDate
+        isLiveTail={false}
+      />,
+      { searchParams: `?from=${startMs - 1}&to=${startMs + 1}`, onUrlUpdate },
+    );
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(inWindow.length));
+    expect(inWindow.length).toBeLessThan(runs.length);
+    fireEvent.click(screen.getByRole("button", { name: "Clear time zoom" }));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length));
+    expect(lastUrl(onUrlUpdate).has("from")).toBe(false);
+  });
+
+  it("opens the run named by ?trace= even when it is outside the loaded list, and clears it on close", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail={false}
+      />,
+      { searchParams: "?trace=older-than-the-list&trace_ref=ref-9", onUrlUpdate },
+    );
+    const drawer = await screen.findByRole("complementary", { name: "Trace details" });
+    expect(within(drawer).getByTestId("run-view")).toHaveTextContent("run older-than-the-list");
+    expect(screen.getByRole("button", { name: "Next trace (J)" })).toBeDisabled();
+    const rows = await screen.findAllByTestId("agent-trace-row");
+    expect(rows.every((row) => row.getAttribute("aria-selected") === "false")).toBe(true);
+
+    fireEvent.click(rows[1]);
+    await waitFor(() => expect(lastUrl(onUrlUpdate).get("trace")).toBe(runs[1].trace_id));
+    expect(lastUrl(onUrlUpdate).get("trace_ref")).toBe(runs[1].trace_ref ?? null);
+    expect(onUrlUpdate.mock.lastCall?.[0].options.history).toBe("push");
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
+    expect(rows[1]).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("reads the query from the URL and writes typed changes back", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const onUrlUpdate = vi.fn();
+    const failed = filterRuns(runs, "status:error");
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail={false}
+      />,
+      { searchParams: "?q=status:error", onUrlUpdate },
+    );
+    expect(await screen.findAllByTestId("agent-trace-row")).toHaveLength(failed.length);
+    expect(failed.length).toBeLessThan(runs.length);
+    const search = screen.getByRole("combobox", { name: "Search runs" });
+    expect(search).toHaveTextContent("status:error");
+
+    await user.clear(search);
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length));
+    await user.type(search, "-status:error");
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length - failed.length));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).get("q")).toBe("-status:error"));
   });
 
   it("plots every loaded run on the timeline", async () => {
@@ -422,25 +589,6 @@ describe("AgentTracesSection", () => {
     expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
     expect(rowCount()).toBe(runs.length);
   });
-
-  it("clears timeline zoom when refreshed", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
-    renderWindowed({ rangeHours: 24, onRangeHoursChange: () => {}, onLiveChange: () => {} });
-    await screen.findAllByTestId("agent-trace-row");
-    const area = screen.getByTestId("timeline-area");
-    const x = (bucket: number) => bucket * 10 + 5;
-
-    fireEvent.pointerDown(area, { clientX: x(0), pointerId: 1 });
-    fireEvent.pointerMove(area, { clientX: x(1), pointerId: 1 });
-    fireEvent.pointerUp(area, { clientX: x(1), pointerId: 1 });
-    expect(screen.getByTestId("timeline-selection")).toBeInTheDocument();
-    expect(screen.queryAllByTestId("agent-trace-row")).toHaveLength(0);
-
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
-  });
 });
 
 describe("AgentTracesPage", () => {
@@ -450,37 +598,36 @@ describe("AgentTracesPage", () => {
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
   });
 
-  it("shows the actual range, switches presets from the popover, and toggles Live", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("names the rolling preset while Live and pins the actual range once paused", async () => {
+    const pausedAt = Date.parse("2026-10-03T12:00:00.500");
+    vi.useFakeTimers({ toFake: ["Date"], now: pausedAt });
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
     await screen.findByTestId("runs-table");
 
     const trigger = screen.getByRole("button", { name: "Time range" });
-    expect(trigger).toHaveTextContent(/ to /);
-    expect(screen.getByTestId("traces-timeline")).toHaveTextContent("Total 1d");
+    const live = screen.getByRole("button", { name: "Live" });
+    expect(live).toHaveAttribute("aria-pressed", "true");
+    expect(trigger).toHaveTextContent("Last 24 hours");
 
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last 7 days" }));
-    expect(await screen.findByText("Total 7d")).toBeInTheDocument();
-    const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
-    expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
+    expect(trigger).toHaveTextContent("Last 7 days");
+    await waitFor(() => {
+      const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
+      expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
+    });
 
-    const live = screen.getByRole("button", { name: "Live" });
-    expect(live).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(live);
     expect(live).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
-  });
+    expect(trigger).toHaveTextContent(/ to /);
+    expect(trigger).not.toHaveTextContent("Last 7 days");
 
-  it("refreshes the trace list", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
-    renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
-    await screen.findByTestId("runs-table");
-
-    const callsBeforeRefresh = vi.mocked(agentTraceListCall).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.length).toBeGreaterThan(callsBeforeRefresh));
+    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0].endMs).toBe(pausedAt - 500));
   });
 
   it("keeps the time controls on an empty range the user picked, instead of showing onboarding", async () => {
@@ -492,9 +639,26 @@ describe("AgentTracesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Time range" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last hour" }));
 
-    expect(await screen.findByText("No runs match these filters.")).toBeInTheDocument();
+    expect(await screen.findByText("No runs in this time range")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Time range" })).toBeInTheDocument();
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
+  });
+
+  it("opens on the range named by ?hours= and writes a new preset back", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<AgentTracesPage accessToken="sk-test" />, { searchParams: "?hours=168", onUrlUpdate });
+    await screen.findByTestId("runs-table");
+    const { startMs, endMs } = vi.mocked(agentTraceListCall).mock.calls[0][0];
+    expect(endMs - startMs).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
+
+    fireEvent.click(screen.getByRole("button", { name: "Time range" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last hour" }));
+    await waitFor(() => {
+      const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
+      expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeLessThanOrEqual(3600 * 1000 + 60_000);
+    });
+    await waitFor(() => expect(lastUrl(onUrlUpdate).get("hours")).toBe("1"));
   });
 
   it("asks the proxy for the last 24 hours by default", async () => {

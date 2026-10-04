@@ -1,41 +1,31 @@
 "use client";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import moment from "moment";
 import { useMemo, useState } from "react";
 
+import { filterRuns } from "./runSearch/runQuery";
+import { RunsToolbar } from "./runSearch/RunsToolbar";
+import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
-import { RunDrawer } from "./RunDrawer";
-import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
+import {
+  type TraceRef,
+  traceKey,
+  traceRefOf,
+  useOpenTraceRouting,
+  useRunFilterRouting,
+  useZoomRouting,
+} from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
-import { previewText, traceAgentNames } from "./traceUtils";
+import { RunView } from "./TraceDrawer";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
-import { ActiveDot } from "./ActiveDot";
 import { TracingSetupCard } from "./TracingSetupCard";
+import { useTracesLive } from "./tracesApi";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
-/** Client-side search (input text or trace id) plus agent / status filters over the loaded runs. */
-export function filterRuns(
-  runs: TraceSummary[],
-  query: string,
-  agent: string,
-  status: RunStatusFilter,
-): TraceSummary[] {
-  const q = query.trim().toLowerCase();
-  return runs.filter((run) => {
-    const haystack = [run.trace_id, previewText(run.input_preview), run.name].map((s) => s.toLowerCase());
-    const matchesQuery = !q || haystack.some((text) => text.includes(q));
-    const matchesAgent = agent === ALL_AGENTS || traceAgentNames(run).includes(agent);
-    const failed = run.error_count > 0;
-    const matchesStatus = status === "all" || (status === "error" ? failed : !failed);
-    return matchesQuery && matchesAgent && matchesStatus;
-  });
-}
-
-const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
+const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -58,11 +48,8 @@ interface AgentTracesSectionProps {
   isLiveTail: boolean;
   /** Page-owned time range + live state; when given, the toolbar shows the range / Live control group. */
   timeControls?: TimeControls;
-  /** Called when a run opens / closes, so the page can hide its own header while a run fills the view. */
-  onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
-  onDemo?: () => void;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -92,7 +79,7 @@ function TraceHistoryError({ history }: { history: ReturnType<typeof useTraceAva
   );
 }
 
-/** The Runs view: filters, the runs table and footer — or one run, in place, once a row is clicked. */
+/** The Runs view: filters and the runs table — or one run, in place, once a row is clicked. */
 export function AgentTracesSection({
   accessToken,
   isActive,
@@ -101,18 +88,14 @@ export function AgentTracesSection({
   isCustomDate,
   isLiveTail,
   timeControls,
-  onRunOpenChange,
   readOnly = false,
   canMintTracingKey = false,
-  onDemo,
 }: AgentTracesSectionProps) {
-  const demo = useLensDemo();
-  const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
-  const [query, setQuery] = useState("");
-  const [agent, setAgent] = useState(ALL_AGENTS);
-  const [status, setStatus] = useState<RunStatusFilter>("all");
+  const live = useTracesLive();
+  const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
+  const { query, setQuery } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
-  const [zoom, setZoom] = useState<TimeWindow | null>(null);
+  const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
   const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive };
   const traces = useAgentTraces(traceQuery);
@@ -125,18 +108,15 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  const agents = useMemo(() => Array.from(new Set(traces.traces.flatMap(traceAgentNames))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
   const range = useMemo(
     () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
     [startTime, endTime, isCustomDate, endMs],
   );
-  const filtered = useMemo(
-    () => filterRuns(traces.traces, query, agent, status),
-    [traces.traces, query, agent, status],
-  );
+  const filtered = useMemo(() => filterRuns(traces.traces, query), [traces.traces, query]);
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
+  const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
     setZoom(null);
@@ -144,16 +124,11 @@ export function AgentTracesSection({
     apply(hours);
   };
 
-  const openRun = (trace: TraceSummary | null) => {
-    setOpenTrace(trace);
-    onRunOpenChange?.(trace !== null);
-  };
-
   const openSentTrace = (trace: TraceSummary) => {
     setShowSetup(false);
     setRangeChanged(true);
     checkTraces();
-    openRun(trace);
+    openRun(traceRefOf(trace));
   };
   const setupProps = {
     accessToken,
@@ -164,18 +139,17 @@ export function AgentTracesSection({
     checking: traces.isFetching,
   };
 
-  if (setup.disabledDetail != null)
-    return <TracingSetupCard detail={setup.disabledDetail} onDemo={onDemo} {...setupProps} />;
+  if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
   if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} onDemo={onDemo} {...setupProps} />;
+    return <TracingSetupCard detail={null} {...setupProps} />;
   if (showSetup) {
     return (
       <div>
         <button
           type="button"
           onClick={() => setShowSetup(false)}
-          className="mb-3 text-[13px] text-muted-foreground hover:text-foreground"
+          className="mb-3 text-sm text-muted-foreground hover:text-foreground"
         >
           ← Back to traces
         </button>
@@ -184,108 +158,66 @@ export function AgentTracesSection({
     );
   }
 
-  const toggleRun = (trace: TraceSummary | null) =>
-    openRun(trace !== null && openTrace !== null && runKey(trace) === runKey(openTrace) ? null : trace);
-
   return (
-    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
-      {checkHistory && <TraceHistoryError history={history} />}
-      <TracesReceived received={setup.received} />
-      <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
-      <RunsToolbar
-        query={query}
-        agent={agent}
-        status={status}
-        agents={agents}
-        onQueryChange={setQuery}
-        onAgentChange={setAgent}
-        onStatusChange={setStatus}
-      >
-        {!demo && (
-          <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-            <ActiveDot />
-            Set up tracing
-          </Button>
-        )}
-        {timeControls && (
-          <TimeRangeControls
-            range={zoom ?? range}
-            rangeHours={timeControls.rangeHours}
-            onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
-            live={isLiveTail}
-            showLive={!demo}
-            onLiveChange={timeControls.onLiveChange}
-            onRefresh={() => {
-              setZoom(null);
-              checkTraces();
-            }}
-            refreshing={traces.isFetching}
-          />
-        )}
-      </RunsToolbar>
-      <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
-      <AgentTracesTable
-        traces={runs}
-        isLoading={traces.isLoading || (checkHistory && history.isLoading)}
-        error={traces.error}
-        hasMore={traces.hasMore}
-        onLoadMore={traces.loadMore}
-        onOpenTrace={toggleRun}
-        selectedKey={openTrace === null ? null : runKey(openTrace)}
-      />
-      <RunsFooter
-        count={runs.length}
-        zoom={zoom}
-        isFetching={traces.isFetching}
-        failed={!!traces.error}
-        onResetZoom={() => setZoom(null)}
-      />
-    </div>
+    <Inspector.Root
+      items={runRefs}
+      itemKey={traceKey}
+      selected={openTrace}
+      onSelectedChange={openRun}
+      noun="trace"
+      storageKey={DRAWER_WIDTH_KEY}
+      fullScreen={fullScreen}
+      onFullScreenChange={setFullScreen}
+    >
+      <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
+        {checkHistory && <TraceHistoryError history={history} />}
+        <TracesReceived received={setup.received} />
+        <Inspector.Panel label="Trace details" testId="run-drawer">
+          {(shown: TraceRef) => (
+            <RunView
+              traceId={shown.traceId}
+              traceRef={shown.traceRef}
+              selection={selection}
+              accessToken={accessToken}
+              onBack={() => openRun(null)}
+              embedded
+            />
+          )}
+        </Inspector.Panel>
+        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? range}>
+          {timeControls && (
+            <TimeRangeControls
+              fixedRange={zoom ?? (isLiveTail ? null : range)}
+              rangeHours={timeControls.rangeHours}
+              onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
+              live={isLiveTail}
+              showLive={live}
+              onLiveChange={timeControls.onLiveChange}
+            />
+          )}
+        </RunsToolbar>
+        <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
+        <AgentTracesTable
+          traces={runs}
+          isLoading={traces.isLoading || (checkHistory && history.isLoading)}
+          error={traces.error}
+          hasMore={traces.hasMore}
+          isFetching={traces.isFetching}
+          onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
+          onLoadMore={traces.loadMore}
+          rangeEmpty={traces.traces.length === 0}
+          onSetUpTracing={() => setShowSetup(true)}
+        />
+      </div>
+    </Inspector.Root>
   );
 }
 
 function TracesReceived({ received }: { received: boolean }) {
-  const demo = useLensDemo();
-  if (!received || demo) return null;
+  if (!received) return null;
   return (
     <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
       Traces received. Select a run to inspect it.
     </p>
-  );
-}
-
-function RunsFooter({
-  count,
-  zoom,
-  isFetching,
-  failed,
-  onResetZoom,
-}: {
-  count: number;
-  zoom: TimeWindow | null;
-  isFetching: boolean;
-  failed: boolean;
-  onResetZoom: () => void;
-}) {
-  const settled = failed ? "Update failed" : "Updated just now";
-  const status = isFetching ? "Updating…" : settled;
-  return (
-    <footer
-      data-testid="runs-footer"
-      className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground"
-    >
-      {count} {count === 1 ? "run" : "runs"}
-      {zoom && (
-        <button
-          type="button"
-          onClick={() => onResetZoom()}
-          aria-label="Clear time zoom"
-          className="ml-3 rounded border border-info/40 bg-info/10 px-1.5 text-info hover:bg-info/20"
-        >
-          {moment(zoom.startMs).format("MMM DD, HH:mm")} to {moment(zoom.endMs).format("MMM DD, HH:mm")} ×
-        </button>
-      )}
-      <span className="ml-auto">{status}</span>
-    </footer>
   );
 }

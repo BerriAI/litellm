@@ -1,5 +1,5 @@
 "use client";
-import { useTracesApi } from "@/components/lens/services";
+import { useTracesApi } from "./tracesApi";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { useState } from "react";
@@ -16,9 +16,8 @@ import { errorSource, parseJson, parseMessages, prettyPayload } from "./traceUti
 
 const ERROR_SOURCE_LABEL: Record<ErrorSource, string> = { tool: "Tool", model: "Model", litellm: "LiteLLM" };
 const TRACEBACK_MARKER = "Traceback (most recent call last):";
-const STATUS_TEXT = "px-5 py-2 text-[13px] tracking-[-0.26px] text-muted-foreground";
-const PAYLOAD_PRE =
-  "font-mono text-[13px] leading-[1.5] tracking-[-0.26px] break-words whitespace-pre-wrap text-foreground";
+const STATUS_TEXT = "px-3 py-2 text-sm text-muted-foreground";
+const PAYLOAD_PRE = "font-mono text-sm leading-normal break-words whitespace-pre-wrap text-foreground";
 
 /** Exporters record `repr(exc)` + traceback with no separator; keep the exception line. */
 export const errorHeadline = (error: string): string =>
@@ -46,9 +45,9 @@ export function ErrorBlock({ span }: { span: Span }) {
   return (
     <section
       aria-label="Error"
-      className="mx-3 mb-3 rounded-[4px] border-[0.67px] border-destructive/40 bg-destructive/5 px-3 py-2.5"
+      className="mx-3 mb-3 rounded-sm border border-destructive/40 bg-destructive/5 px-3 py-2.5"
     >
-      <div className="flex items-center gap-2 text-[13px] leading-[1.2] font-medium tracking-[-0.26px] text-destructive">
+      <div className="flex items-center gap-2 text-sm leading-tight font-medium text-destructive">
         <AlertTriangle className="size-3.5" />
         {ERROR_SOURCE_LABEL[source]} · {errorReason(headline)}
       </div>
@@ -210,7 +209,7 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
       : parseMessages(detail?.input ?? "")?.length;
 
   return (
-    <div className="flex flex-col px-2 pt-1 pb-4">
+    <div className="flex flex-col pt-1 pb-4">
       <ErrorBlock span={span} />
       {span.error && (
         <DiagnosticContent
@@ -239,9 +238,7 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
         </Section>
       ) : null}
       {empty && span.status !== "error" && (
-        <div className="py-12 text-center text-[13px] tracking-[-0.26px] text-muted-foreground">
-          No content recorded for this span.
-        </div>
+        <div className="py-12 text-center text-sm text-muted-foreground">No content recorded for this span.</div>
       )}
     </div>
   );

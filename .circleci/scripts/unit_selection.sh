@@ -41,6 +41,7 @@ legacy_paths() {
       echo tests/unit/enterprise/proxy/hooks
       echo tests/unit/enterprise/proxy/management_endpoints
       echo tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
+      echo tests/unit/enterprise/proxy/test_liteadmin.py
       echo tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py ;;
     enterprise-routing)
       echo tests/unit/google_genai
