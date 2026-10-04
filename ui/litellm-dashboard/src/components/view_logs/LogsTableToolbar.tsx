@@ -2,72 +2,59 @@
 
 import moment from "moment";
 import { CalendarDays } from "lucide-react";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/cva.config";
 
 import { QUICK_SELECT_OPTIONS } from "./constants";
 import { getTimeRangeDisplay } from "./logs_utils";
 
-interface LogsTableToolbarProps {
+const DATETIME_LOCAL_FORMAT = "YYYY-MM-DDTHH:mm";
+
+export interface LogsTimeRange {
   startTime: string;
-  onStartTimeChange: (value: string) => void;
   endTime: string;
-  onEndTimeChange: (value: string) => void;
   isCustomDate: boolean;
-  onIsCustomDateChange: (value: boolean) => void;
-  selectedTimeInterval: { value: number; unit: string };
-  onSelectedTimeIntervalChange: (value: { value: number; unit: string }) => void;
-  isLiveTail: boolean;
-  onIsLiveTailChange: (value: boolean) => void;
-  excludeInternalHealthChecks: boolean;
-  onExcludeInternalHealthChecksChange: (value: boolean) => void;
-  onResetToFirstPage: () => void;
-  onResetFilters: () => void;
+  interval: { value: number; unit: string };
 }
 
-export function LogsTableToolbar({
-  startTime,
-  onStartTimeChange,
-  endTime,
-  onEndTimeChange,
-  isCustomDate,
-  onIsCustomDateChange,
-  selectedTimeInterval,
-  onSelectedTimeIntervalChange,
-  isLiveTail,
-  onIsLiveTailChange,
-  excludeInternalHealthChecks,
-  onExcludeInternalHealthChecksChange,
-  onResetToFirstPage,
-  onResetFilters,
-}: LogsTableToolbarProps) {
-  const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+const relativeTimeRange = (interval: LogsTimeRange["interval"]): LogsTimeRange => ({
+  startTime: moment()
+    .subtract(interval.value, interval.unit as moment.unitOfTime.DurationConstructor)
+    .format(DATETIME_LOCAL_FORMAT),
+  endTime: moment().format(DATETIME_LOCAL_FORMAT),
+  isCustomDate: false,
+  interval,
+});
 
-  const applyQuickSelect = (option: { label: string; value: number; unit: string }) => {
-    onResetToFirstPage();
-    onEndTimeChange(moment().format("YYYY-MM-DDTHH:mm"));
-    onStartTimeChange(
-      moment()
-        .subtract(option.value, option.unit as moment.unitOfTime.DurationConstructor)
-        .format("YYYY-MM-DDTHH:mm"),
-    );
-    onSelectedTimeIntervalChange({ value: option.value, unit: option.unit });
-    onIsCustomDateChange(false);
-    setQuickSelectOpen(false);
-  };
+export const defaultLogsTimeRange = (): LogsTimeRange => relativeTimeRange({ value: 24, unit: "hours" });
+
+export function LogsToolbar({ className, ...props }: ComponentProps<"div">) {
+  return <div className={cn("flex flex-wrap items-center gap-2", className)} {...props} />;
+}
+
+interface LogsTimeRangePickerProps {
+  value: LogsTimeRange;
+  onValueChange: (value: LogsTimeRange) => void;
+}
+
+export function LogsTimeRangePicker({ value, onValueChange }: LogsTimeRangePickerProps) {
+  const [open, setOpen] = useState(false);
 
   const selectedOption = QUICK_SELECT_OPTIONS.find(
-    (option) => option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit,
+    (option) => option.value === value.interval.value && option.unit === value.interval.unit,
   );
-  const displayLabel = isCustomDate ? getTimeRangeDisplay(isCustomDate, startTime, endTime) : selectedOption?.label;
+  const displayLabel = value.isCustomDate
+    ? getTimeRangeDisplay(true, value.startTime, value.endTime)
+    : selectedOption?.label;
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Popover open={quickSelectOpen} onOpenChange={setQuickSelectOpen}>
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           render={
             <Button variant="outline" size="sm" className="gap-2">
@@ -83,7 +70,10 @@ export function LogsTableToolbar({
                 key={option.label}
                 variant="ghost"
                 className="w-full justify-start font-normal"
-                onClick={() => applyQuickSelect(option)}
+                onClick={() => {
+                  onValueChange(relativeTimeRange({ value: option.value, unit: option.unit }));
+                  setOpen(false);
+                }}
               >
                 {option.label}
               </Button>
@@ -92,10 +82,7 @@ export function LogsTableToolbar({
             <Button
               variant="ghost"
               className="w-full justify-start font-normal"
-              onClick={() => {
-                onIsCustomDateChange(!isCustomDate);
-                onResetToFirstPage();
-              }}
+              onClick={() => onValueChange({ ...value, isCustomDate: !value.isCustomDate })}
             >
               Custom Range
             </Button>
@@ -103,58 +90,32 @@ export function LogsTableToolbar({
         </PopoverContent>
       </Popover>
 
-      {isCustomDate && (
+      {value.isCustomDate && (
         <div className="flex items-center gap-2">
           <Input
             type="datetime-local"
             className="w-auto"
-            value={startTime}
-            onChange={(event) => {
-              onStartTimeChange(event.target.value);
-              onResetToFirstPage();
-            }}
+            value={value.startTime}
+            onChange={(event) => onValueChange({ ...value, startTime: event.target.value })}
           />
           <span className="text-sm text-muted-foreground">to</span>
           <Input
             type="datetime-local"
             className="w-auto"
-            value={endTime}
-            onChange={(event) => {
-              onEndTimeChange(event.target.value);
-              onResetToFirstPage();
-            }}
+            value={value.endTime}
+            onChange={(event) => onValueChange({ ...value, endTime: event.target.value })}
           />
         </div>
       )}
-
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-medium">Live Tail</span>
-        <Switch checked={isLiveTail} onCheckedChange={onIsLiveTailChange} aria-label="Live Tail" />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-medium">Hide Health Checks</span>
-        <Switch
-          checked={excludeInternalHealthChecks}
-          onCheckedChange={onExcludeInternalHealthChecksChange}
-          aria-label="Hide Health Checks"
-        />
-      </div>
-
-      <Button variant="outline" size="sm" onClick={onResetFilters}>
-        Reset Filters
-      </Button>
-    </div>
+    </>
   );
 }
 
-export function LiveTailBanner({ onStop }: { onStop: () => void }) {
+export function LogsToolbarSwitch({ label, ...props }: ComponentProps<typeof Switch> & { label: string }) {
   return (
-    <div className="mb-4 flex items-center justify-between rounded-md border border-success/20 bg-success/10 px-4 py-2">
-      <span className="text-sm text-success">Auto-refreshing every 15 seconds</span>
-      <button type="button" onClick={onStop} className="text-sm text-success hover:text-success/80">
-        Stop
-      </button>
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-medium">{label}</span>
+      <Switch aria-label={label} {...props} />
     </div>
   );
 }

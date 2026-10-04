@@ -194,6 +194,7 @@ describe("provider_info_helpers", () => {
         Providers.PETALS,
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
+        Providers.Sail,
         Providers.WANDB,
         Providers.ZAI,
       ];
@@ -207,6 +208,11 @@ describe("provider_info_helpers", () => {
     it("should resolve a provider to its own bundled logo via getProviderLogoAndName", () => {
       const { logo } = getProviderLogoAndName("openai");
       expect(logo).toContain("openai_small");
+    });
+
+    it("should resolve the Tencent provider to its bundled logo", () => {
+      const { logo } = getProviderLogoAndName("tencent");
+      expect(logo).toContain("tencent");
     });
   });
 
@@ -308,6 +314,10 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder("CHATGPT")).toBe("chatgpt/gpt-5.4");
     });
 
+    it("should return a tencent/ placeholder for the Tencent provider", () => {
+      expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
+    });
+
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
       expect(getPlaceholder("UnknownProvider" as any)).toBe("gpt-3.5-turbo");
     });
@@ -401,6 +411,14 @@ describe("provider_info_helpers", () => {
       expect(result).toContain("vertex_ai/text-bison");
       expect(result).toContain("vertex_ai_beta/something");
       expect(result).not.toContain("anthropic-native");
+    });
+
+    it("should list sail models when called with the 'Sail' provider key", () => {
+      const modelMap = {
+        "sail/openai/gpt-oss-120b": { litellm_provider: "sail" },
+        "sagemaker-model": { litellm_provider: "sagemaker" },
+      };
+      expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
     });
 
     it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {

@@ -1,8 +1,9 @@
 from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .straiker import StraikerGuardrail
@@ -16,6 +17,18 @@ class _V3Routing(BaseModel):
     agent_ref: str | None = None
     client: str | None = None
     format_hint: Literal["anthropic.messages", "openai.chat"] | None = None
+
+    @field_validator("api_version", mode="before")
+    @classmethod
+    def _unknown_api_version_is_unset(cls, value: object) -> object:
+        if value is None or value in ("v1", "v3"):
+            return value
+        verbose_proxy_logger.warning(
+            "Straiker guardrail: ignoring api_version %r, expected 'v1', 'v3' or unset; "
+            "the route follows the api_key prefix",
+            value,
+        )
+        return None
 
 
 _OPTIONAL_INIT_FIELDS: Final = (

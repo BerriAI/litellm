@@ -1,12 +1,13 @@
 """Live e2e: Together AI through the gateway on /chat/completions and /v1/messages.
 
 The reasoning and tool-calling backend is the cheapest live ``together_ai/`` chat row
-in the proxy's own cost map that carries both capability flags; the structured-output
-and cache-pricing backends are likewise the cheapest rows carrying
-``supports_response_schema`` and a ``cache_read_input_token_cost``. Two backends are
-pinned because the registry has no flag for what they prove: ``enable_thinking`` and
-the ``{"reasoning": {"enabled": false}}`` toggle that ``reasoning_effort="none"`` maps
-to are Qwen hybrid-model contracts, and MiniMax-M3 is the serverless model whose
+in the proxy's own cost map that carries both capability flags; the cache-pricing
+backend is likewise the cheapest row carrying a ``cache_read_input_token_cost``. Two
+backends are pinned because the registry has no flag for what they prove: ``enable_thinking``
+and the ``{"reasoning": {"enabled": false}}`` toggle that ``reasoning_effort="none"`` maps
+to are Qwen hybrid-model contracts, and the structured-output case runs on that hybrid
+model with reasoning off, since a reasoning-only model can spend the whole token budget
+thinking and return no content. MiniMax-M3 is the serverless model whose
 template renders a replayed ``reasoning_content`` back into the prompt (Qwen and
 DeepSeek silently drop it). MiniMax-M3 honors that replayed field on nearly every call, not
 every call (one miss in dozens of otherwise identical calls), so the replay case asks
@@ -109,7 +110,6 @@ MESSAGES_WEATHER_TOOL = AnthropicCustomTool(
 class _Needs:
     function_calling: bool = False
     reasoning: bool = False
-    response_schema: bool = False
     cache_read_pricing: bool = False
 
 
@@ -172,7 +172,6 @@ def _cheapest_together_chat_model(registry: Mapping[str, CostMapEntry], needs: _
             and (entry.output_cost_per_token or 0.0) > 0
             and (not needs.function_calling or bool(entry.supports_function_calling))
             and (not needs.reasoning or bool(entry.supports_reasoning))
-            and (not needs.response_schema or bool(entry.supports_response_schema))
             and (not needs.cache_read_pricing or (entry.cache_read_input_token_cost or 0.0) > 0)
         )
 
@@ -586,10 +585,9 @@ class TestTogetherChatCompletions:
 
     @pytest.mark.covers("llm.chat_completions.together_ai.structured_output.nonstream.works")
     def test_response_format_json_schema_shapes_the_reply(
-        self, client: PassthroughClient, resources: ResourceManager, registry: dict[str, CostMapEntry]
+        self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        backend = _cheapest_together_chat_model(registry, _Needs(response_schema=True))
-        model, key = _register(client, resources, backend)
+        model, key = _register(client, resources, HYBRID_REASONING_BACKEND)
 
         message = _message(
             unwrap(
@@ -599,12 +597,13 @@ class TestTogetherChatCompletions:
                         model=model,
                         messages=[ChatMessage(role="user", content=PERSON_PROMPT)],
                         max_tokens=1024,
+                        reasoning_effort="none",
                         response_format=PERSON_RESPONSE_FORMAT,
                     ),
                 )
             )
         )
-        assert message.content, f"{backend} returned no content: {message}"
+        assert message.content, f"{HYBRID_REASONING_BACKEND} returned no content: {message}"
         person = _Person.model_validate_json(message.content)
         assert person.name, f"schema-shaped reply carries an empty name: {message.content!r}"
 

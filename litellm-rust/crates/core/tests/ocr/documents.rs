@@ -1,6 +1,6 @@
 use base64::Engine;
 use litellm_core::ocr::types::OcrDocumentInput;
-use litellm_host::event::WireRequest;
+use litellm_host::interceptors::WireRequest;
 use rstest::rstest;
 use wiremock::{Mock, matchers::any};
 
@@ -45,7 +45,7 @@ impl Route {
     }
 }
 
-/// What the host does to the wire request in `before_send`.
+/// What the host does to the wire request in `before_provider_request`.
 #[derive(Clone, Copy, Debug)]
 enum Guardrail {
     Detached,
@@ -53,7 +53,7 @@ enum Guardrail {
 }
 
 impl Guardrail {
-    fn before_send(self, wire: WireRequest) -> WireRequest {
+    fn before_provider_request(self, wire: WireRequest) -> WireRequest {
         let Value::Object(fields) = wire.body else {
             return wire;
         };
@@ -96,8 +96,8 @@ async fn provider_document(route: Route, guardrail: Guardrail) -> Value {
         json!({"type": document_type, document_type: format!("{}/scan.png", documents.uri())}),
         route.options(),
     );
-    let host =
-        LocalOcrHost::new(request).with_before_send(move |wire, _| Ok(guardrail.before_send(wire)));
+    let host = LocalOcrHost::new(request)
+        .with_before_send(move |wire, _| Ok(guardrail.before_provider_request(wire)));
 
     perform_with(host).await.unwrap();
 
@@ -139,6 +139,7 @@ async fn a_document_replaced_by_the_host_reaches_the_provider(
     );
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn an_empty_byte_document_fails_before_sending() {
     let upstream = upstream([pages_response()]).await;
@@ -156,6 +157,7 @@ async fn an_empty_byte_document_fails_before_sending() {
     assert!(received(&upstream).await.is_empty());
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn a_missing_path_document_fails_before_sending() {
     let upstream = upstream([pages_response()]).await;
@@ -179,4 +181,52 @@ async fn a_missing_path_document_fails_before_sending() {
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::blocked(false)]
+#[case::allowed(true)]
+#[tokio::test]
+async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) {
+    let documents = document_server().await;
+    let upstream = upstream([pages_response()]).await;
+    let document_url = format!("{}/scan.png", documents.uri());
+    let authority = documents.address().to_string();
+    let route = build_ocr_route(
+        &resources(),
+        &http_config(),
+        litellm_http::media::UrlPolicy {
+            validate: true,
+            allowed_hosts: allowed.then_some(authority).into_iter().collect(),
+        },
+        Default::default(),
+        no_secrets(),
+    );
+    let host = LocalOcrHost::new(ocr_request_with_document(
+        "azure_ai/model",
+        &upstream.uri(),
+        json!({"type": "document_url", "document_url": document_url}),
+        json!({}),
+    ));
+    let result = litellm_host_native::in_process::run_hosted(
+        route.machine(host.request().unwrap(), None),
+        host.runtime(),
+    )
+    .await;
+
+    if !allowed {
+        assert!(matches!(result, Err(Error::BlockedDocumentUrl)));
+        assert!(received(&documents).await.is_empty());
+        assert!(received(&upstream).await.is_empty());
+        return;
+    }
+    result.unwrap();
+    assert_eq!(only_request(&documents).await.url.path(), "/scan.png");
+    assert_eq!(
+        only_request(&upstream).await.json()["document"]["document_url"],
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(SERVED_DOCUMENT)
+        )
+    );
 }
