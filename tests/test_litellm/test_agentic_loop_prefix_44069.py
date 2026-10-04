@@ -18,29 +18,38 @@ from litellm.types.utils import ModelResponse
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("execution_path", ("http", "sdk"))
-@pytest.mark.parametrize("use_patch_model", (False, True), ids=("original-model", "patch-model"))
 @pytest.mark.parametrize(
-    ("model_name", "custom_llm_provider", "expected_model"),
+    ("request_model", "patch_model", "custom_llm_provider", "expected_model"),
     (
-        ("zai-org/GLM-5.3-Flash", "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
-        ("hosted_vllm/zai-org/GLM-5.3-Flash", "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
-        ("hosted_vllm/zai-org/GLM-5.3-Flash", "", "hosted_vllm/zai-org/GLM-5.3-Flash"),
-        ("openai/gpt-4o", "hosted_vllm", "openai/gpt-4o"),
+        ("zai-org/GLM-5.3-Flash", None, "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
+        ("hosted_vllm/zai-org/GLM-5.3-Flash", None, "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
+        ("hosted_vllm/zai-org/GLM-5.3-Flash", None, "", "hosted_vllm/zai-org/GLM-5.3-Flash"),
+        ("openai/whisper-large-v3", None, "hosted_vllm", "hosted_vllm/openai/whisper-large-v3"),
+        ("original-model", "zai-org/GLM-5.3-Flash", "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
+        ("original-model", "hosted_vllm/zai-org/GLM-5.3-Flash", "hosted_vllm", "hosted_vllm/zai-org/GLM-5.3-Flash"),
+        ("original-model", "openai/gpt-4o", "hosted_vllm", "openai/gpt-4o"),
     ),
-    ids=("organization-model", "already-prefixed", "no-provider", "cross-provider"),
+    ids=(
+        "organization-model",
+        "already-prefixed",
+        "no-provider",
+        "organization-named-after-provider",
+        "patch-organization-model",
+        "patch-already-prefixed",
+        "patch-cross-provider",
+    ),
 )
 async def test_agentic_followup_preserves_provider_prefix(
     execution_path: Literal["http", "sdk"],
-    use_patch_model: bool,
-    model_name: str,
+    request_model: str,
+    patch_model: str | None,
     custom_llm_provider: str,
     expected_model: str,
 ) -> None:
-    model: Final = "original-model" if use_patch_model else model_name
     plan: Final = AgenticLoopPlan(
         run_agentic_loop=True,
         request_patch=AgenticLoopRequestPatch(
-            model=model_name if use_patch_model else None,
+            model=patch_model,
             messages=[{"role": "user", "content": "Continue"}],
         ),
     )
@@ -50,7 +59,7 @@ async def test_agentic_followup_preserves_provider_prefix(
         response: Final = (
             await BaseLLMHTTPHandler()._execute_chat_completion_agentic_plan(
                 plan=plan,
-                model=model,
+                model=request_model,
                 messages=[],
                 optional_params={"mock_response": "Follow-up complete"},
                 kwargs={"custom_llm_provider": custom_llm_provider},
@@ -64,7 +73,7 @@ async def test_agentic_followup_preserves_provider_prefix(
             else await _execute_chat_completion_agentic_plan(
                 plan=plan,
                 callback=CustomLogger(),
-                model=model,
+                model=request_model,
                 optional_params={"mock_response": "Follow-up complete"},
                 kwargs={"custom_llm_provider": custom_llm_provider},
                 logging_obj=None,
