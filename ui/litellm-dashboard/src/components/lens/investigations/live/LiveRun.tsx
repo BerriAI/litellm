@@ -6,7 +6,6 @@ import { modelsUsed } from "../../model/inbox";
 import {
   analysisModel,
   doneLine,
-  conclusions,
   inFlight,
   issueCount,
   nowLine,
@@ -19,6 +18,8 @@ import { useQueueReason, type QueueContext } from "../useQueueReason";
 import { LiveDrawer } from "./LiveDrawer";
 import { LiveStrip } from "./LiveStrip";
 import { useStripOpen } from "./useLivePanels";
+
+const MAX_LANES = 4;
 
 export function LiveRun({
   job,
@@ -79,10 +80,11 @@ export function LiveRun({
         status={job.status}
         reviewed={job.reviewed}
         reviews={reviews}
-        now={job.status === "running" ? nowLine(job, reading.length) : null}
         reading={reading}
+        counter={nowLine(job, reading.length)}
         done={job.status === "completed" ? doneLine(job) : null}
-        groups={conclusions(reviews, job.settings.checks)}
+        slots={Math.max(1, Math.min(job.settings.concurrency, MAX_LANES))}
+        checks={job.settings.checks}
         scope={job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""}
         waiting={waiting}
       />

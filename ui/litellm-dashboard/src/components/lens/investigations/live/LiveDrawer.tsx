@@ -5,12 +5,14 @@ import { useState, type ReactNode } from "react";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-import type { Conclusion, InFlight } from "../../model/live";
-import type { Job, Review } from "../../model/types";
+import { conclusions, type InFlight } from "../../model/live";
+import { releasedReviews } from "../../model/stage";
+import type { Job, Review, Settings } from "../../model/types";
 import { ConclusionsPanel } from "./ConclusionsPanel";
 import { ModelName } from "./LiveStrip";
+import { NowReading } from "./NowReading";
 import { TraceList } from "./TraceList";
-import { useLensMode } from "./useLensMode";
+import { useStage } from "./useStage";
 
 const STATUS: Record<Job["status"], { label: string; tone: StatusTone }> = {
   queued: { label: "Queued", tone: "neutral" },
@@ -21,6 +23,33 @@ const STATUS: Record<Job["status"], { label: string; tone: StatusTone }> = {
 };
 const PANE_TITLE = "text-[12px] font-semibold text-foreground";
 
+function Stage({
+  reviews,
+  reading,
+  running,
+  slots,
+  model,
+  counter,
+  checks,
+  children,
+}: {
+  reviews: readonly Review[];
+  reading: readonly InFlight[];
+  running: boolean;
+  slots: number;
+  model: string;
+  counter: string;
+  checks: Settings["checks"];
+  children: (listed: readonly Review[], groups: ReturnType<typeof conclusions>, nowReading: ReactNode) => ReactNode;
+}) {
+  const { stage, now, charMs } = useStage(reviews, reading, running, slots);
+  const listed = releasedReviews(reviews, stage);
+  const nowReading = running && (
+    <NowReading model={model} counter={counter} lanes={stage.lanes} now={now} charMs={charMs} />
+  );
+  return <>{children(listed, conclusions(listed, checks), nowReading)}</>;
+}
+
 export function LiveDrawer({
   open,
   onClose,
@@ -29,10 +58,11 @@ export function LiveDrawer({
   status,
   reviewed,
   reviews,
-  now,
-  done,
   reading,
-  groups,
+  counter,
+  done,
+  slots,
+  checks,
   scope,
   waiting,
 }: {
@@ -43,17 +73,17 @@ export function LiveDrawer({
   status: Job["status"];
   reviewed: number;
   reviews: readonly Review[];
-  now: string | null;
-  done: string | null;
   reading: readonly InFlight[];
-  groups: readonly Conclusion[];
+  counter: string;
+  done: string | null;
+  slots: number;
+  checks: Settings["checks"];
   scope: string;
   waiting?: ReactNode;
 }) {
   const [group, setGroup] = useState<string | null>(null);
   const badge = STATUS[status];
-  const live = status === "queued" || status === "running";
-  const mode = useLensMode(live);
+  const running = status === "running";
   return (
     <Sheet open={open} onOpenChange={(value) => !value && onClose()}>
       <SheetContent className="flex h-full w-full flex-col gap-0 data-[side=right]:sm:max-w-[min(1200px,94vw)]">
@@ -64,36 +94,59 @@ export function LiveDrawer({
             <ModelName model={model} size="md" />
           </SheetDescription>
         </SheetHeader>
-        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,55fr)_minmax(0,45fr)]">
-          <section aria-label="Traces" className="min-h-0 overflow-y-auto border-b px-4 py-4 md:border-r md:border-b-0">
-            <div className="mb-2 flex items-baseline justify-between gap-3 px-2">
-              <h2 className={PANE_TITLE}>Traces</h2>
-              <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground">
-                {now ?? done ?? `${reviewed} reviewed`}
-                {done && !now && <ModelName model={model} />}
-                {reviewed > reviews.length && reviews.length ? ` · showing latest ${reviews.length}` : ""}
-              </span>
-            </div>
-            {reviews.length || reading.length || status === "running" ? (
-              <TraceList reading={reading} reviews={reviews} model={model} group={group} mode={mode} nowLine={now} />
-            ) : (
-              <div className="flex flex-col gap-1 px-2 py-6 text-[12px] text-muted-foreground">
-                <p className="text-[13px] text-foreground">Waiting for the first trace…</p>
-                {waiting}
+        {open && (
+          <Stage
+            reviews={reviews}
+            reading={reading}
+            running={running}
+            slots={slots}
+            model={model}
+            counter={counter}
+            checks={checks}
+          >
+            {(listed, groups, nowReading) => (
+              <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,55fr)_minmax(0,45fr)]">
+                <section
+                  aria-label="Traces"
+                  className="min-h-0 overflow-y-auto border-b px-4 py-4 md:border-r md:border-b-0"
+                >
+                  <div className="mb-2 flex items-baseline justify-between gap-3 px-2">
+                    <h2 className={PANE_TITLE}>Traces</h2>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground">
+                      {done ?? `${reviewed} reviewed`}
+                      {done && <ModelName model={model} />}
+                      {reviewed > reviews.length && reviews.length ? ` · showing latest ${reviews.length}` : ""}
+                    </span>
+                  </div>
+                  {nowReading}
+                  {listed.length || reviews.length ? (
+                    <TraceList reviews={listed} group={group} />
+                  ) : (
+                    !running && (
+                      <div className="flex flex-col gap-1 px-2 py-6 text-[12px] text-muted-foreground">
+                        <p className="text-[13px] text-foreground">Waiting for the first trace…</p>
+                        {waiting}
+                      </div>
+                    )
+                  )}
+                </section>
+                <section
+                  aria-label="Conclusions so far"
+                  className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 py-4"
+                >
+                  <h2 className={PANE_TITLE}>Conclusions so far</h2>
+                  <ConclusionsPanel
+                    groups={groups}
+                    total={listed.length}
+                    scope={scope}
+                    selected={group}
+                    onSelect={setGroup}
+                  />
+                </section>
               </div>
             )}
-          </section>
-          <section aria-label="Conclusions so far" className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 py-4">
-            <h2 className={PANE_TITLE}>Conclusions so far</h2>
-            <ConclusionsPanel
-              groups={groups}
-              total={reviews.length}
-              scope={scope}
-              selected={group}
-              onSelect={setGroup}
-            />
-          </section>
-        </div>
+          </Stage>
+        )}
       </SheetContent>
     </Sheet>
   );
