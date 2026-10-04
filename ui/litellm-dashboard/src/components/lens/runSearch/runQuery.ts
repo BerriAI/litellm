@@ -62,14 +62,28 @@ function parseToken({ raw, from, to }: Span & { raw: string }): QueryClause {
 
 export const parseRunQuery = (text: string): QueryClause[] => tokenize(text).map(parseToken);
 
-const escapeRegExp = (text: string) => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-
 /** `bar` matches the whole value, `*bar*` is a glob; both ignore case. */
 function valueMatcher(pattern: string): (value: string) => boolean {
   const needle = pattern.toLowerCase();
   if (!needle.includes("*")) return (value) => value.toLowerCase() === needle;
-  const glob = new RegExp(`^${needle.split("*").map(escapeRegExp).join("[\\s\\S]*")}$`);
-  return (value) => glob.test(value.toLowerCase());
+  const segments = needle.split("*");
+  const first = segments[0];
+  const last = segments.at(-1);
+  const middle = segments.slice(1, -1).filter(Boolean);
+  return (value) => {
+    const candidate = value.toLowerCase();
+    if (first && !candidate.startsWith(first)) return false;
+    if (last && !candidate.endsWith(last)) return false;
+    const suffixStart = last ? candidate.length - last.length : candidate.length;
+    let cursor = first ? first.length : 0;
+    if (suffixStart < cursor) return false;
+    for (const segment of middle) {
+      const found = candidate.indexOf(segment, cursor);
+      if (found < 0 || found + segment.length > suffixStart) return false;
+      cursor = found + segment.length;
+    }
+    return true;
+  };
 }
 
 function matchesClause(run: TraceSummary, clause: QueryClause): boolean {

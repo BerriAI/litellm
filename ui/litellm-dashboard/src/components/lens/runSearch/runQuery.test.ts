@@ -45,6 +45,31 @@ describe("filterRuns", () => {
     expect(ids("name:res.arch_lead")).toEqual([]);
   });
 
+  it("matches glob segments case-insensitively without overlapping exact anchors", () => {
+    const billing = run({ trace_id: "billing", agent_names: ["BILLING-agent"] });
+    const research = run({ trace_id: "research", agent_names: ["research-billing-agent"] });
+    const doubled = run({ trace_id: "doubled", agent_names: ["agent"] });
+    const globRuns = [billing, research, doubled];
+
+    expect(filterRuns(globRuns, "agent:*bill*")).toEqual([billing, research]);
+    expect(filterRuns(globRuns, "agent:billing*")).toEqual([billing]);
+    expect(filterRuns(globRuns, "agent:*agent")).toEqual(globRuns);
+    expect(filterRuns([run({ name: "aa" })], "name:a*a")).toHaveLength(1);
+    expect(filterRuns([run({ name: "a" })], "name:a*a")).toHaveLength(0);
+    expect(filterRuns(globRuns, "agent:**")).toEqual(filterRuns(globRuns, "agent:*"));
+  });
+
+  it("matches adversarial globs without catastrophic backtracking", () => {
+    const longValue = run({ agent_names: ["a".repeat(5000)] });
+    const pattern = `agent:${"a*".repeat(30)}b`;
+    const startedAt = performance.now();
+    const matches = filterRuns([longValue], pattern);
+    const elapsed = performance.now() - startedAt;
+
+    expect(matches).toEqual([]);
+    expect(elapsed).toBeLessThan(100);
+  });
+
   it("searches the readable input text and quoted values with spaces", () => {
     expect(ids('input:"*vector stores"')).toEqual(["bbb222"]);
     expect(ids("trace_id:bbb222")).toEqual(["bbb222"]);

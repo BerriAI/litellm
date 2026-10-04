@@ -21,20 +21,22 @@ export const run = (overrides: Partial<TraceSummary>): TraceSummary => ({
   ...overrides,
 });
 
-const refund = run({
+const refundOverrides = {
   trace_id: "aaa111",
   name: "support",
   input_preview: "Where is my refund?",
   agent_names: ["billing-agent", "triage"],
   models: ["gpt-5"],
-});
-const research = run({
+};
+const refund = run(refundOverrides);
+const researchOverrides = {
   trace_id: "bbb222",
   name: "research_lead",
   input_preview: "Compare vector stores",
   agent_names: ["researcher"],
   models: ["claude-opus"],
   error_count: 2,
-});
+};
+const research = run(researchOverrides);
 const plain = run({ trace_id: "ccc333", name: "health", service: "cron" });
 export const runs = [refund, research, plain];

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ChevronRight,
   Circle,
@@ -30,6 +30,12 @@ const PRIORITY_COLOR = { high: "text-destructive", medium: "text-amber-500", low
 const ROW =
   "border-b border-border/60 transition-colors duration-150 hover:bg-trace-row-hover motion-reduce:transition-none";
 const META = "truncate text-xs text-muted-foreground";
+
+function openOnRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, open: () => void) {
+  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  open();
+}
 
 function JobIcon({ lens }: { lens: Lens }) {
   const status = lens.jobs[0]?.status;
@@ -115,8 +121,10 @@ export function InvestigationList({
                 <Fragment key={lens.id}>
                   <tr
                     onClick={() => onOpen(lens.id)}
+                    onKeyDown={(event) => openOnRowKeyDown(event, () => onOpen(lens.id))}
+                    tabIndex={0}
                     aria-label={lens.settings.name}
-                    className={cn(ROW, "group h-14 cursor-pointer")}
+                    className={cn(ROW, "group h-14 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring")}
                   >
                     <td className="pl-2">
                       <span className="flex min-w-0 items-center gap-2">
@@ -213,8 +221,10 @@ export function InvestigationList({
                         <tr
                           key={finding.id}
                           onClick={() => onOpenFinding(lens, finding)}
+                          onKeyDown={(event) => openOnRowKeyDown(event, () => onOpenFinding(lens, finding))}
+                          tabIndex={0}
                           aria-label={finding.title}
-                          className={cn(ROW, "h-12 cursor-pointer")}
+                          className={cn(ROW, "h-12 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring")}
                         >
                           <td className="pl-2" title={finding.suggestion ? `Fix: ${finding.suggestion}` : undefined}>
                             <span className="flex min-w-0 items-center gap-2">

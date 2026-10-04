@@ -441,7 +441,7 @@ function LoadedRun({
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
   const queryKey = ["agentTrace", traceId, traceRef, accessToken];
-  const traceQuery = useSuspenseInfiniteQuery({
+  const traceQueryOptions = {
     queryKey,
     queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceId, traceRef, pageParam),
     initialPageParam: null as string | null,
@@ -451,7 +451,8 @@ function LoadedRun({
     refetchOnReconnect: false,
     refetchOnMount: false,
     retry: false,
-  });
+  };
+  const traceQuery = useSuspenseInfiniteQuery(traceQueryOptions);
   const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
   const trace = useMemo(() => {
     const [first, ...rest] = traceQuery.data.pages;

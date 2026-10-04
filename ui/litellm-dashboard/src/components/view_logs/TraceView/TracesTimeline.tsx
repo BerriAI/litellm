@@ -171,7 +171,10 @@ function DotField({
   const progress = useRiseIn();
   const { width, height } = useResizeObserver({ ref: canvas as RefObject<HTMLCanvasElement> });
   useEffect(() => {
-    if (canvas.current) drawField(canvas.current, { buckets, max, band, hover, progress });
+    if (canvas.current) {
+      const fieldFrame = { buckets, max, band, hover, progress };
+      drawField(canvas.current, fieldFrame);
+    }
   }, [buckets, max, band, hover, progress, width, height]);
   return (
     <canvas

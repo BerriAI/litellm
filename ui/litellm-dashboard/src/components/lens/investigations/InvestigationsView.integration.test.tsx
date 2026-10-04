@@ -603,6 +603,8 @@ it("lists investigations without edit or run controls for read-only viewers", as
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/lens/runs") return [];
+    if (path === "/lens/agents") return [];
     return { data: [] };
   });
   const user = userEvent.setup();
@@ -610,7 +612,37 @@ it("lists investigations without edit or run controls for read-only viewers", as
   const row = await screen.findByRole("row", { name: lens.settings.name });
   expect(within(row).queryByRole("button", { name: /now/ })).not.toBeInTheDocument();
   await user.click(row);
+  expect(await screen.findByRole("heading", { level: 2, name: lens.settings.name })).toBeVisible();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("opens investigations from the keyboard without treating nested edit keys as row activation", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/lens/runs") return [];
+    if (path === "/lens/agents") return [];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  const row = await screen.findByRole("row", { name: lens.settings.name });
+  row.focus();
+  expect(row).toHaveFocus();
+  await user.keyboard("{Enter}");
+  expect(await screen.findByRole("heading", { level: 2, name: lens.settings.name })).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "Back" }));
+  const editButton = await screen.findByRole("button", { name: `Edit ${lens.settings.name}` });
+  editButton.focus();
+  expect(editButton).toHaveFocus();
+  await user.keyboard("{Enter}");
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
+  expect(screen.queryByRole("heading", { level: 2, name: lens.settings.name })).not.toBeInTheDocument();
 });
 
 it("opens a failed investigation's details from its row and edits only from the pencil", async () => {
