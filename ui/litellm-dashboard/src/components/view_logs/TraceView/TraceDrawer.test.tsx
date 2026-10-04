@@ -321,7 +321,7 @@ describe("RunView", () => {
     const search = await screen.findByRole("textbox", { name: "Search steps" });
     const selected = screen.getByTestId("detail-pane").getAttribute("data-row-id");
     await user.type(search, "jk{ArrowDown}{ArrowUp}");
-    expect(search).toHaveValue("jk");
+    await waitFor(() => expect(search).toHaveValue("jk"));
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selected);
   });
 
