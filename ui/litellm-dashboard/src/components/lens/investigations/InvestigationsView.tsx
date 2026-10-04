@@ -161,14 +161,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const showReadinessBanner = showReadiness && !onSetup && !ready;
   return (
     <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
-      {showDetailNav && (
-        <InvestigationNavigation
-          showActions={showActions}
-          ready={ready}
-          onBack={() => selectLens(null)}
-          onCreate={() => setEditing("new")}
-        />
-      )}
+      {showDetailNav && <InvestigationNavigation onBack={() => selectLens(null)} />}
       {query.error && !query.data ? (
         <InvestigationsLoadFailed queryError={query.error} refresh={refresh} />
       ) : (
