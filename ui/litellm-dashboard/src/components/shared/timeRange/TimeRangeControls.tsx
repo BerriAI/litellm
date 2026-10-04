@@ -45,7 +45,7 @@ export function TimeRangeControls({
 }: TimeRangeControlsProps) {
   const live = isLive(range);
   return (
-    <div className="flex items-stretch divide-x divide-border border-l border-border">
+    <div className="flex items-stretch border-l border-border">
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Time range"
@@ -75,6 +75,7 @@ export function TimeRangeControls({
           onClick={() => onLiveChange(!live)}
           className={cn(
             SEGMENT,
+            "border-l border-border",
             live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
           )}
         >
