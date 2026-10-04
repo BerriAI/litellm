@@ -13,14 +13,17 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from starlette.websockets import WebSocket
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.clinepass.chat.transformation import (
     ClinePassConfig,
     _apply_model_prefix,
     _unwrap_response_envelope,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.responses.main import _aresponses_websocket
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -120,6 +123,89 @@ async def test_async_chat_sends_only_clinepass_credentials(monkeypatch, unrelate
     assert captured["url"] == "https://api.cline.bot/api/v1/chat/completions"
     assert captured["headers"].get("authorization") == (f"Bearer {expected_key}" if expected_key else None)
     assert response.choices[0].message.content == "pong"
+
+
+@pytest.mark.parametrize("credential_source", ["missing", "environment", "explicit"])
+@pytest.mark.parametrize("connection_provider", ["clinepass", "mistral"])
+@pytest.mark.asyncio
+async def test_managed_responses_websocket_sends_only_clinepass_credentials(
+    monkeypatch, unrelated_credentials, credential_source, connection_provider
+):
+    if credential_source == "missing":
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    connection_key: Final = (
+        "sk-unrelated-mistral"
+        if connection_provider == "mistral"
+        else "cp-request-key"
+        if credential_source == "explicit"
+        else None
+    )
+    sent = []
+    received = []
+    lifecycle = iter(({"type": "websocket.connect"}, {"type": "websocket.disconnect", "code": 1000}))
+
+    async def receive():
+        return next(lifecycle)
+
+    async def send(message):
+        if message["type"] == "websocket.send":
+            received.append(json.loads(message["text"]))
+
+    websocket: Final = WebSocket(
+        scope={"type": "websocket", "path": "/v1/responses", "headers": [], "query_string": b""},
+        receive=receive,
+        send=send,
+    )
+    await websocket.accept()
+    chunk: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "cline-pass/deepseek-v4-flash",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+    }
+
+    async def fake_post(self, url, *args, **kwargs):
+        sent.append((str(url), httpx.Headers(kwargs["headers"]).get("authorization")))
+        return httpx.Response(
+            200,
+            content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode(),
+            headers={"content-type": "text/event-stream"},
+            request=httpx.Request("POST", str(url)),
+        )
+
+    with patch.object(AsyncHTTPHandler, "post", fake_post):
+        result = await _aresponses_websocket.__wrapped__(
+            model=f"{connection_provider}/deepseek-v4-flash",
+            websocket=websocket,
+            api_key=connection_key,
+            first_message=json.dumps(
+                {"type": "response.create", "model": "clinepass/deepseek-v4-flash", "input": "ping"}
+            ),
+            litellm_logging_obj=Logging(
+                model=f"{connection_provider}/deepseek-v4-flash",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="cp-ws-test",
+                function_id="cp-ws-test",
+            ),
+        )
+
+    expected_key: Final = (
+        connection_key
+        if connection_provider == "clinepass" and credential_source == "explicit"
+        else API_KEY
+        if credential_source != "missing"
+        else None
+    )
+    assert sent == [
+        ("https://api.cline.bot/api/v1/chat/completions", f"Bearer {expected_key}" if expected_key else None)
+    ]
+    assert result is None
+    assert "response.completed" in [event["type"] for event in received]
+    assert "error" not in [event["type"] for event in received]
 
 
 # --------------------------------------------------------------------------

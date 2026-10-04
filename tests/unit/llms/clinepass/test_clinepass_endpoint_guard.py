@@ -17,6 +17,7 @@ from typing import Final
 
 import httpx
 import pytest
+from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -67,6 +68,74 @@ def test_speech_makes_no_outbound_request(no_request_allowed):
         pass
 
     assert no_request_allowed == []
+
+
+@pytest.mark.parametrize("clinepass_key", [None, "cp-test-key"])
+@pytest.mark.parametrize("custom_llm_provider", [None, "clinepass"])
+@pytest.mark.parametrize("explicit_key", [None, "cp-explicit-key"])
+def test_moderation_rejects_clinepass_before_credential_fallback(
+    monkeypatch, no_request_allowed, clinepass_key, custom_llm_provider, explicit_key
+):
+    if clinepass_key is None:
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", SENTINEL_OPENAI_KEY)
+    model: Final = "deepseek-v4-flash" if custom_llm_provider else "clinepass/deepseek-v4-flash"
+
+    with pytest.raises(litellm.BadRequestError, match="ClinePass does not support moderation endpoints"):
+        litellm.moderation(model=model, input="hi", custom_llm_provider=custom_llm_provider, api_key=explicit_key)
+
+    assert no_request_allowed == []
+
+
+@pytest.mark.parametrize("clinepass_key", [None, "cp-test-key"])
+@pytest.mark.parametrize("custom_llm_provider", [None, "clinepass"])
+@pytest.mark.parametrize("explicit_key", [None, "cp-explicit-key"])
+@pytest.mark.asyncio
+async def test_async_moderation_rejects_clinepass_before_credential_fallback(
+    monkeypatch, no_request_allowed, clinepass_key, custom_llm_provider, explicit_key
+):
+    if clinepass_key is None:
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", SENTINEL_OPENAI_KEY)
+    model: Final = "deepseek-v4-flash" if custom_llm_provider else "clinepass/deepseek-v4-flash"
+
+    with pytest.raises(litellm.BadRequestError, match="ClinePass does not support moderation endpoints"):
+        await litellm.amoderation(
+            model=model, input="hi", custom_llm_provider=custom_llm_provider, api_key=explicit_key
+        )
+
+    assert no_request_allowed == []
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_openai_moderation_remains_supported(async_mode):
+    sent = []
+
+    def respond(request):
+        sent.append((str(request.url), request.headers["authorization"]))
+        return httpx.Response(
+            200,
+            json={
+                "id": "modr-test",
+                "model": "moderation-test",
+                "results": [{"flagged": False, "categories": {"violence": False}, "category_scores": {"violence": 0}}],
+            },
+        )
+
+    transport: Final = httpx.MockTransport(respond)
+    if async_mode:
+        async with AsyncOpenAI(
+            api_key="sk-moderation-test", http_client=httpx.AsyncClient(transport=transport)
+        ) as client:
+            response = await litellm.amoderation(model="openai/moderation-test", input="hi", client=client)
+    else:
+        with OpenAI(api_key="sk-moderation-test", http_client=httpx.Client(transport=transport)) as client:
+            response = litellm.moderation(model="moderation-test", input="hi", client=client)
+
+    assert sent == [("https://api.openai.com/v1/moderations", "Bearer sk-moderation-test")]
+    assert response.id == "modr-test"
+    assert response.results[0].flagged is False
 
 
 def test_transcription_makes_no_outbound_request(no_request_allowed, tmp_path):

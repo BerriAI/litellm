@@ -14,7 +14,7 @@ ClinePass is OpenAI-compatible apart from two quirks, both handled here:
 Documentation: https://docs.cline.bot/
 
 Credentials come only from the request's api_key or CLINEPASS_API_KEY.
-Realtime endpoints are unsupported and rejected before HTTP dispatch.
+Moderation and realtime endpoints are unsupported and rejected before dispatch.
 """
 
 import json
@@ -131,6 +131,18 @@ class ClinePassConfig(OpenAIGPTConfig):
         raise BadRequestError(
             message="ClinePass does not support realtime endpoints",
             model=model,
+            llm_provider="clinepass",
+        )
+
+    @staticmethod
+    def validate_moderation(model: str | None, custom_llm_provider: str | None = None) -> None:
+        if custom_llm_provider != "clinepass" and not (model or "").startswith("clinepass/"):
+            return
+        from litellm.exceptions import BadRequestError
+
+        raise BadRequestError(
+            message="ClinePass does not support moderation endpoints",
+            model=model or "",
             llm_provider="clinepass",
         )
 

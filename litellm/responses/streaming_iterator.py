@@ -2824,9 +2824,10 @@ class ManagedResponsesWebSocketHandler:
 
     def _inject_credentials(self, call_kwargs: dict[str, object], model: str | None = None) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
-        if self.api_key is not None:
+        same_provider: Final = self._same_provider(model)
+        if self.api_key is not None and same_provider:
             call_kwargs["api_key"] = self.api_key
-        if self.api_base is not None:
+        if self.api_base is not None and same_provider:
             call_kwargs["api_base"] = self.api_base
         if self.timeout is not None:
             call_kwargs["timeout"] = self.timeout
@@ -2835,7 +2836,7 @@ class ManagedResponsesWebSocketHandler:
         # (e.g., connection is vertex_ai but event says openai/gpt-4), let litellm
         # re-resolve from the model string. Same-provider model variants (e.g.,
         # vertex_ai/gemini-2.0 -> vertex_ai/gemini-1.5) still inherit the provider.
-        if self.custom_llm_provider is not None and self._same_provider(model):
+        if self.custom_llm_provider is not None and same_provider:
             call_kwargs["custom_llm_provider"] = self.custom_llm_provider
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
