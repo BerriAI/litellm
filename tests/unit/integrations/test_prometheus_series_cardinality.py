@@ -367,10 +367,14 @@ def test_series_stay_unbounded_unless_a_limit_is_configured():
         ("prometheus_metrics_max_series_per_metric", -5),
         ("prometheus_metrics_ttl_seconds", 0.0),
         ("prometheus_metrics_ttl_seconds", -1.0),
+        ("prometheus_metrics_max_series_per_metric", "five"),
+        ("prometheus_metrics_max_series_per_metric", True),
+        ("prometheus_metrics_max_series_per_metric", 2.5),
+        ("prometheus_metrics_ttl_seconds", ""),
     ],
 )
-def test_a_non_positive_series_limit_is_ignored_with_a_warning_and_metrics_keep_flowing(
-    setting: str, value: float, clock, caplog
+def test_a_series_limit_that_is_not_a_positive_number_is_ignored_with_a_warning_and_metrics_keep_flowing(
+    setting: str, value: object, clock, caplog
 ):
     litellm.prometheus_metrics_cleanup_interval_seconds = 0.0
     setattr(litellm, setting, value)
@@ -384,3 +388,16 @@ def test_a_non_positive_series_limit_is_ignored_with_a_warning_and_metrics_keep_
     series: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
     assert _label_values(series, "user_agent") == {"agent-0", "agent-1", "agent-2"}
     assert setting in caplog.text
+
+
+def test_a_series_cap_written_as_a_numeric_string_is_honored(caplog):
+    litellm.prometheus_metrics_max_series_per_metric = "2"
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        logger: Final = PrometheusLogger()
+    for index in range(3):
+        _count_request(logger, f"agent-{index}")
+
+    series: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
+    assert _label_values(series, "user_agent") == {"agent-0", "agent-1", "other"}
+    assert "prometheus_metrics_max_series_per_metric" not in caplog.text

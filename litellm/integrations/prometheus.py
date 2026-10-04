@@ -12,9 +12,9 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -256,13 +256,27 @@ class _LabeledMetric:
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
 
 _SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+_POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
+_POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
 
 
-def _positive_or_ignored(setting: str, value: _SeriesLimitT | None) -> _SeriesLimitT | None:
-    if value is None or value > 0:
-        return value
+def _positive_number(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return limit.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _positive_or_ignored(setting: str, value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
+    if value is None:
+        return None
+    validated: Final = _positive_number(value, limit)
+    if validated is not None:
+        return validated
     verbose_logger.warning(
-        "%s is ignored because it is not greater than 0 (got %s). Prometheus metrics are emitted without it",
+        "%s is ignored because it is not a number greater than 0 (got %r). Prometheus metrics are emitted without it",
         setting,
         value,
     )
@@ -1299,9 +1313,13 @@ class PrometheusLogger(CustomLogger):
     def _configured_series_limits(multiprocess_mode: bool) -> PrometheusSeriesLimits:
         limits: Final = PrometheusSeriesLimits(
             max_series=_positive_or_ignored(
-                "prometheus_metrics_max_series_per_metric", litellm.prometheus_metrics_max_series_per_metric
+                "prometheus_metrics_max_series_per_metric",
+                litellm.prometheus_metrics_max_series_per_metric,
+                _POSITIVE_SERIES_CAP,
             ),
-            ttl_seconds=_positive_or_ignored("prometheus_metrics_ttl_seconds", litellm.prometheus_metrics_ttl_seconds),
+            ttl_seconds=_positive_or_ignored(
+                "prometheus_metrics_ttl_seconds", litellm.prometheus_metrics_ttl_seconds, _POSITIVE_SERIES_TTL
+            ),
             cleanup_interval_seconds=litellm.prometheus_metrics_cleanup_interval_seconds,
         )
         if limits.ttl_seconds is None or not multiprocess_mode:

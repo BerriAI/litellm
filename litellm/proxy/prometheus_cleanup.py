@@ -19,19 +19,32 @@ _LIVE_GAUGE_PID: Final = re.compile(r"gauge_live[a-z]*_(\d+)\.db$")
 
 def wipe_directory(directory: str) -> None:
     """Delete all .db files and admitted-series files in the directory. Called once before workers fork."""
-    files: Final = (
-        *glob.glob(os.path.join(directory, "*.db")),
-        *glob.glob(os.path.join(directory, f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}*")),
-    )
-    deleted = 0
-    for filepath in files:
-        try:
-            os.remove(filepath)
-            deleted += 1
-        except OSError as e:
-            verbose_proxy_logger.warning("Failed to delete stale prometheus file %s: %s", filepath, e)
+    _remove(directory, (*glob.glob(os.path.join(directory, "*.db")), *_admitted_series_files(directory)))
+
+
+def wipe_admitted_series(directory: str) -> None:
+    """Drop only litellm's own admitted-series files, so a restart that keeps an operator-managed directory
+    (one worker, no separate metrics server) still starts the series cap from an empty set."""
+    _remove(directory, _admitted_series_files(directory))
+
+
+def _admitted_series_files(directory: str) -> tuple[str, ...]:
+    return tuple(glob.glob(os.path.join(directory, f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}*")))
+
+
+def _remove(directory: str, files: tuple[str, ...]) -> None:
+    deleted: Final = sum(_removed(filepath) for filepath in files)
     if deleted:
         verbose_proxy_logger.info("Prometheus cleanup: wiped %s stale files from %s", deleted, directory)
+
+
+def _removed(filepath: str) -> int:
+    try:
+        os.remove(filepath)
+    except OSError as e:
+        verbose_proxy_logger.warning("Failed to delete stale prometheus file %s: %s", filepath, e)
+        return 0
+    return 1
 
 
 def mark_worker_exit(worker_pid: int) -> None:
