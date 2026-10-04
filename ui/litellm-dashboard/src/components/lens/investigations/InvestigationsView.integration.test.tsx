@@ -7,7 +7,7 @@ import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
 import { lensKeys } from "../data/queries";
 import { InvestigationsView } from "./InvestigationsView";
-import { LensPreviewContext } from "@/components/view_logs/TraceView/LensPreviewButton";
+import { LensPreviewContext } from "@/components/lens/ui/LensPreviewButton";
 import { briefMarkdown } from "../model/findings";
 import { findingKey } from "../model/inbox";
 import { runTime } from "../model/format";

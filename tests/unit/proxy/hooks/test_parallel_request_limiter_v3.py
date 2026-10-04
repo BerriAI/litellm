@@ -13,6 +13,7 @@ from typing import Any, Dict, Final, List, Optional
 
 import pytest
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
@@ -21,6 +22,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
@@ -39,6 +41,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.mcp import MCPPreCallRequestObject
 from litellm.types.utils import (
     EmbeddingResponse,
     ModelResponse,
@@ -106,6 +109,159 @@ def test_api_key_descriptor_applies_budget_throttle(
     api_key_descriptor = next(d for d in descriptors if d["key"] == "api_key")
     assert api_key_descriptor["rate_limit"]["requests_per_unit"] == expected_rpm
     assert api_key_descriptor["rate_limit"]["tokens_per_unit"] == expected_tpm
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "description", [None, "Gateway metadata, not caller input. " * 100], ids=["unlisted", "listed"]
+)
+@pytest.mark.parametrize("arguments_rewritten", [False, True])
+async def test_mcp_description_does_not_change_admission_or_reserved_tokens(
+    description: str | None, arguments_rewritten: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    schema: Final = {"type": "object", "properties": {"q": {"type": "string", "description": "Schema text " * 100}}}
+    request: Final = MCPPreCallRequestObject(
+        tool_name="echo", arguments={"q": "hello"}, tool_description=description, tool_input_schema=schema
+    )
+    data: Final = TypeAdapter(dict[str, object]).validate_python(logger._convert_mcp_to_llm_format(request, {}))
+    messages: Final = data["messages"]
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-mcp-description-reservation"), tpm_limit=64)
+
+    if arguments_rewritten:
+        data["mcp_arguments"] = {"q": "Transformed arguments " * 100}
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    await logger.pre_call_hook(user_api_key_dict=caller, data=data, call_type="call_mcp_tool")
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens == 25
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", caller.api_key, "tokens"), local_only=True
+        )
+        == 25
+    )
+    assert data["messages"] is messages
+    assert data.get("mcp_tool_description") == description
+    assert data["mcp_input_schema"] == schema
+    assert messages == [
+        {
+            "role": "user",
+            "content": "Tool: echo\nArguments: {'q': 'hello'}",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "description", [None, "Gateway metadata, not caller input. " * 100], ids=["unlisted", "listed"]
+)
+@pytest.mark.parametrize("itpm_limit,otpm_limit", [(64, 4096), (4096, 64), (4096, 4096)])
+@pytest.mark.parametrize("arguments_rewritten", [False, True])
+async def test_mcp_description_preserves_project_input_and_output_reservations(
+    description: str | None, itpm_limit: int, otpm_limit: int,
+    arguments_rewritten: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    schema: Final = {"type": "object", "properties": {"q": {"type": "string", "description": "Schema text " * 100}}}
+    request: Final = MCPPreCallRequestObject(
+        tool_name="echo", arguments={"q": "hello"}, tool_description=description, tool_input_schema=schema
+    )
+    data: Final = TypeAdapter(dict[str, object]).validate_python(logger._convert_mcp_to_llm_format(request, {}))
+    messages: Final = data["messages"]
+    base_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "Tool: echo\nArguments: {'q': 'hello'}"}]
+    }
+    expected_input: Final = handler._estimate_precise_input_tokens(base_data, "mcp-tool-call", "call_mcp_tool")
+    expected_output: Final = handler.no_max_tokens_output_floor(otpm_limit)
+    expected_combined: Final = handler._estimate_tokens_for_request(
+        base_data, min_configured_tpm_limit=4096, call_type="call_mcp_tool"
+    )
+    caller: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-project-reservation"),
+        tpm_limit=4096,
+        project_id="mcp-project-reservation",
+        project_metadata={
+            "model_itpm_limit": {"mcp-tool-call": itpm_limit},
+            "model_otpm_limit": {"mcp-tool-call": otpm_limit},
+        },
+    )
+
+    if arguments_rewritten:
+        data["mcp_arguments"] = {"q": "Transformed arguments " * 100}
+    monkeypatch.setattr(litellm, "callbacks", [handler])
+    await logger.pre_call_hook(user_api_key_dict=caller, data=data, call_type="call_mcp_tool")
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens) == (
+        expected_combined,
+        expected_input,
+        expected_output,
+    )
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys(
+                "model_per_project_itpm", f"{caller.project_id}:mcp-tool-call", "tokens"
+            ),
+            local_only=True,
+        )
+        == expected_input
+    )
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys(
+                "model_per_project_otpm", f"{caller.project_id}:mcp-tool-call", "tokens"
+            ),
+            local_only=True,
+        )
+        == expected_output
+    )
+    assert data["messages"] is messages
+    assert data.get("mcp_tool_description") == description
+    assert data["mcp_input_schema"] == schema
+    assert messages == [
+        {
+            "role": "user",
+            "content": "Tool: echo\nArguments: {'q': 'hello'}",
+        }
+    ]
+
+
+def test_llm_tpm_estimation_still_counts_messages_with_mcp_metadata() -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "x" * 400}],
+        "max_tokens": 1,
+        "mcp_tool_name": "echo",
+        "mcp_arguments": {},
+    }
+    assert handler._estimate_tokens_for_request(data, call_type="acompletion") == 101
+
+
+@pytest.mark.asyncio
+async def test_unconverted_mcp_request_keeps_its_reservation() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-raw-mcp-request"), tpm_limit=64)
+    data: Final[dict[str, object]] = {"name": "echo", "arguments": {"q": "hello"}, "server_id": "fixture"}
+
+    await handler.async_pre_call_hook(user_api_key_dict=caller, cache=cache, data=data, call_type="call_mcp_tool")
+
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens == 16
+    assert (
+        await cache.async_get_cache(
+            key=handler.create_rate_limit_keys("api_key", caller.api_key, "tokens"), local_only=True
+        )
+        == 16
+    )
 
 
 @pytest.mark.flaky(reruns=3)
