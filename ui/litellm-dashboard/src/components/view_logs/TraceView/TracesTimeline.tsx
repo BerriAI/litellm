@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "@/lib/cva.config";
 
-import { FIELD_COLS, FIELD_ROWS, agentDotColor, agoLabel, columnDots, isReceiving } from "./lensField";
+import { FIELD_COLS, FIELD_ROWS, columnDots } from "./lensField";
 import type { TraceSummary } from "./traceTypes";
 import { traceAgentNames } from "./traceUtils";
 
@@ -189,74 +189,6 @@ function DotField({
 
 function BucketBar({ bucket }: { bucket: Bucket }) {
   return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-runs={bucket.runs} />;
-}
-
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
-    return () => window.clearInterval(timer);
-  }, [intervalMs]);
-  return now;
-}
-
-function LivePulse({ live }: { live: boolean }) {
-  return (
-    <span aria-hidden="true" className="relative flex size-2">
-      {live && (
-        <span className="absolute inline-flex size-full rounded-full bg-[#3b5bfd] opacity-60 motion-safe:animate-ping" />
-      )}
-      <span
-        className={cn("relative inline-flex size-2 rounded-full", live ? "bg-[#3b5bfd]" : "bg-muted-foreground/50")}
-      />
-    </span>
-  );
-}
-
-function latestStart(runs: readonly TraceSummary[]): number | null {
-  return runs.reduce<number | null>((latest, run) => {
-    const t = moment(run.start_time).valueOf();
-    return latest === null || t > latest ? t : latest;
-  }, null);
-}
-
-function FieldHeader({ runs, range }: { runs: readonly TraceSummary[]; range: TimeWindow }) {
-  const now = useNow(1000);
-  const agents = Array.from(new Set(runs.flatMap(traceAgentNames)));
-  const failed = runs.filter((run) => run.error_count > 0).length;
-  const lastMs = latestStart(runs);
-  const live = isReceiving(lastMs, now);
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 font-mono text-xs leading-none">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground tabular-nums">
-        <span className="flex items-center gap-2" role="status" data-testid="traces-last-seen">
-          <LivePulse live={live} />
-          <span className={cn("font-semibold", live ? "text-info" : "text-foreground")}>
-            {live ? "receiving" : "idle"}
-          </span>
-          {lastMs !== null && <span>last trace {agoLabel(lastMs, now)}</span>}
-        </span>
-        <span>
-          <span className="font-semibold text-foreground">{runs.length.toLocaleString()}</span>{" "}
-          {runs.length === 1 ? "run" : "runs"} from{" "}
-          <span className="font-semibold text-foreground">{agents.length}</span>{" "}
-          {agents.length === 1 ? "agent" : "agents"}
-          {failed > 0 && <span className="text-destructive"> · {failed} failed</span>}
-        </span>
-      </div>
-      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-muted-foreground">
-        {agents.slice(0, 6).map((agent) => (
-          <span key={agent} className="flex items-center gap-1.5">
-            <span className="size-[6px] rounded-full" style={{ backgroundColor: agentDotColor(agent) }} />
-            {agent}
-          </span>
-        ))}
-        <span className="rounded border border-border bg-muted/50 px-1.5 py-px">
-          Total {formatSpan(range.endMs - range.startMs)}
-        </span>
-      </div>
-    </div>
-  );
 }
 
 function NowEdge() {
@@ -485,12 +417,11 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
-      <FieldHeader runs={runs} range={range} />
       <div
         ref={areaRef}
         role="presentation"
         data-testid="timeline-area"
-        className="relative mt-2 flex cursor-crosshair touch-none items-end"
+        className="relative flex cursor-crosshair touch-none items-end"
         style={{ height: FIELD_HEIGHT }}
         onPointerDown={(e) => begin("select", e)}
         onPointerMove={onMove}

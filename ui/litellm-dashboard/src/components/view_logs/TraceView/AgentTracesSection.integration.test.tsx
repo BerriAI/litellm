@@ -602,13 +602,13 @@ describe("AgentTracesPage", () => {
 
     const trigger = screen.getByRole("button", { name: "Time range" });
     expect(trigger).toHaveTextContent(/ to /);
-    expect(screen.getByTestId("traces-timeline")).toHaveTextContent("Total 1d");
 
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last 7 days" }));
-    expect(await screen.findByText("Total 7d")).toBeInTheDocument();
-    const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
-    expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
+    await waitFor(() => {
+      const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
+      expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
+    });
 
     const live = screen.getByRole("button", { name: "Live" });
     expect(live).toHaveAttribute("aria-pressed", "true");
@@ -647,13 +647,15 @@ describe("AgentTracesPage", () => {
     const onUrlUpdate = vi.fn();
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />, { searchParams: "?hours=168", onUrlUpdate });
     await screen.findByTestId("runs-table");
-    expect(screen.getByTestId("traces-timeline")).toHaveTextContent("Total 7d");
     const { startMs, endMs } = vi.mocked(agentTraceListCall).mock.calls[0][0];
     expect(endMs - startMs).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
 
     fireEvent.click(screen.getByRole("button", { name: "Time range" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last hour" }));
-    expect(await screen.findByText("Total 1h")).toBeInTheDocument();
+    await waitFor(() => {
+      const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
+      expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeLessThanOrEqual(3600 * 1000 + 60_000);
+    });
     await waitFor(() => expect(lastUrl(onUrlUpdate).get("hours")).toBe("1"));
   });
 
