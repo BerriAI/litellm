@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
+    find_anthropic_server_tool_result,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.wif import (
@@ -1832,6 +1833,20 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
         return _SERVER_TOOL_USE_ADAPTER.validate_python(block)
     except ValidationError:
         return None
+
+
+def tool_call_is_rebuilt_as_server_tool_use(tool_call_id: object, provider_specific_fields: object) -> bool:
+    fields: Final = _validated_claude_code_mapping(provider_specific_fields)
+    if not isinstance(tool_call_id, str) or fields is None:
+        return False
+    return (
+        find_anthropic_server_tool_result(
+            tool_call_id,
+            _validated_claude_code_list(fields.get("web_search_results")),
+            _validated_claude_code_list(fields.get("tool_results")),
+        )
+        is not None
+    )
 
 
 def _render_web_search_results(
