@@ -4,8 +4,11 @@ import {
   briefReasoning,
   checkLabel,
   conclusions,
-  traceRows,
-  decidedReviews,
+  durationLabel,
+  newestFirst,
+  nowLine,
+  inFlight,
+  liveRows,
   grownGroups,
   inGroup,
   share,
@@ -17,16 +20,10 @@ import {
   liveJob,
   liveStats,
   outcome,
-  playbackPhase,
-  playbackReducer,
   providerOf,
-  queueRows,
   rateLabel,
   reviewKey,
   secondsToFinishReading,
-  shownCount,
-  startPlayback,
-  stepDuration,
   tokenLabel,
 } from "./live";
 import type { Job, Review } from "./types";
@@ -145,141 +142,12 @@ describe("conclusions", () => {
     expect([...grownGroups(before, after)]).toEqual(["y"]);
   });
 
-  it("lists upcoming traces above the one being read and finished ones below, newest first", () => {
-    const [a, b, c, d] = ["a", "b", "c", "d"].map((id) => review(id));
-    const rows = traceRows({ played: [a], current: b, pending: [c, d] }, 10);
-    expect(rows.map((row) => [row.review.execution_id, row.state])).toEqual([
-      ["d", "queued"],
-      ["c", "queued"],
-      ["b", "reviewing"],
-      ["a", "done"],
-    ]);
-    expect(traceRows({ played: [a], current: b, pending: [c, d] }, 2)).toHaveLength(2);
-  });
-
   it("gives a bar share bounded to the total", () => {
     expect(share(3, 12)).toBe(0.25);
     expect(share(5, 0)).toBe(0);
     expect(share(9, 4)).toBe(1);
   });
 
-  it("only counts the trace being read once its verdict is on screen", () => {
-    const [a, b] = [review("a"), review("b")];
-    expect(decidedReviews({ played: [a], current: b }, false)).toEqual([a]);
-    expect(decidedReviews({ played: [a], current: b }, true)).toEqual([a, b]);
-  });
-});
-
-describe("playback pacing", () => {
-  it("slows to a full window for one review and speeds up as the backlog grows", () => {
-    expect(stepDuration(1)).toBe(2400);
-    expect(stepDuration(0)).toBe(2400);
-    expect(stepDuration(2)).toBeLessThan(stepDuration(1));
-  });
-
-  it("keeps every trace on screen long enough to read, however large the backlog", () => {
-    expect(stepDuration(3)).toBeGreaterThanOrEqual(1200);
-    expect(stepDuration(10_000)).toBeGreaterThanOrEqual(1200);
-  });
-
-  it("highlights spans one at a time, then types reasoning, then leaves the verdict up", () => {
-    const duration = 2000;
-    expect(playbackPhase(0, duration, 4, 100)).toEqual({ span: 0, typed: 0, verdict: false });
-    expect(playbackPhase(duration * 0.29, duration, 4, 100).span).toBe(3);
-    const typing = playbackPhase(duration * 0.475, duration, 4, 100);
-    expect(typing).toEqual({ span: -1, typed: 50, verdict: false });
-    const done = playbackPhase(duration * 0.65, duration, 4, 100);
-    expect(done).toEqual({ span: -1, typed: 100, verdict: true });
-    expect(playbackPhase(duration * 0.99, duration, 4, 100)).toEqual(done);
-  });
-
-  it("shows a settled review whole", () => {
-    expect(playbackPhase(0, 0, 4, 100)).toEqual({ span: -1, typed: 100, verdict: true });
-  });
-});
-
-describe("playback queue", () => {
-  const reviews = ["a", "b", "c", "d", "e"].map((id) => review(id));
-
-  it("opens a live job replaying the last few reviews and a finished job on its final review", () => {
-    const live = startPlayback(reviews, true);
-    expect(live.played.map((r) => r.execution_id)).toEqual(["a", "b"]);
-    expect(live.current).toBeNull();
-    expect(live.pending.map((r) => r.execution_id)).toEqual(["c", "d", "e"]);
-
-    const done = startPlayback(reviews, false);
-    expect(done.played.map((r) => r.execution_id)).toEqual(["a", "b", "c", "d"]);
-    expect(done.current?.execution_id).toBe("e");
-    expect(done.pending).toEqual([]);
-  });
-
-  it("enqueues only reviews it has not seen, so repeated polls do not replay", () => {
-    const start = startPlayback(reviews.slice(0, 2), true);
-    const polled = playbackReducer(start, { type: "enqueue", reviews: reviews.slice(0, 4) });
-    expect(polled.pending.map((r) => r.execution_id)).toEqual(["a", "b", "c", "d"]);
-    expect(playbackReducer(polled, { type: "enqueue", reviews: reviews.slice(0, 4) })).toBe(polled);
-  });
-
-  it("treats a re-reviewed execution at a new time as new", () => {
-    const start = startPlayback([reviews[0]], false);
-    const again = review("a", { at: "2026-10-03T17:00:00Z" });
-    expect(reviewKey(again)).not.toBe(reviewKey(reviews[0]));
-    expect(playbackReducer(start, { type: "enqueue", reviews: [again] }).pending).toEqual([again]);
-  });
-
-  it("advances one review per step and holds until the step finishes", () => {
-    const start = startPlayback(reviews.slice(0, 2), true);
-    expect(start.pending).toHaveLength(2);
-    const first = playbackReducer(start, { type: "tick", now: 1000 });
-    expect(first.current?.execution_id).toBe("a");
-    expect(first.duration).toBe(stepDuration(2));
-    expect(playbackReducer(first, { type: "tick", now: 1000 + first.duration - 1 })).toBe(first);
-    const second = playbackReducer(first, { type: "tick", now: 1000 + first.duration });
-    expect(second.current?.execution_id).toBe("b");
-    expect(second.played.map((r) => r.execution_id)).toEqual(["a"]);
-    expect(playbackReducer(second, { type: "tick", now: 1e9 })).toBe(second);
-  });
-
-  it("catches up on a big backlog by skipping to the newest few, never by shortening steps", () => {
-    const many = Array.from({ length: 40 }, (_, n) => review(`r${n}`));
-    const step = playbackReducer(startPlayback([], true), { type: "enqueue", reviews: many });
-    const first = playbackReducer(step, { type: "tick", now: 0 });
-    expect(first.current?.execution_id).toBe("r37");
-    expect(first.pending.map((r) => r.execution_id)).toEqual(["r38", "r39"]);
-    expect(first.played.map((r) => r.execution_id)).toEqual(many.slice(0, 37).map((r) => r.execution_id));
-    expect(first.duration).toBeGreaterThanOrEqual(1200);
-    expect(playbackReducer(first, { type: "tick", now: 1199 })).toBe(first);
-  });
-
-  it("replays a finished run, jumping to the last few", () => {
-    const done = startPlayback(reviews, false);
-    const again = playbackReducer(done, { type: "replay" });
-    expect(again.current).toBeNull();
-    expect(again.played).toEqual([]);
-    expect(again.pending.map((r) => r.execution_id)).toEqual(["a", "b", "c", "d", "e"]);
-    expect(playbackReducer(again, { type: "tick", now: 0 }).current?.execution_id).toBe("c");
-  });
-
-  it("settles everything at once for reduced motion", () => {
-    const start = startPlayback(reviews, true);
-    const settled = playbackReducer(start, { type: "settle" });
-    expect(settled.current?.execution_id).toBe("e");
-    expect(settled.played.map((r) => r.execution_id)).toEqual(["a", "b", "c", "d"]);
-    expect(settled.pending).toEqual([]);
-  });
-
-  it("lists the newest review first, starting with the one being read", () => {
-    const start = startPlayback(reviews, false);
-    expect(queueRows(start, 3).map((r) => r.execution_id)).toEqual(["e", "d", "c"]);
-    const live = playbackReducer(startPlayback(reviews, true), { type: "tick", now: 0 });
-    expect(queueRows(live, 10).map((r) => r.execution_id)).toEqual(["c", "b", "a"]);
-  });
-
-  it("counts reviews beyond the capped list without counting the unplayed backlog", () => {
-    const start = startPlayback(reviews, true);
-    expect(shownCount(5, start)).toBe(2);
-    expect(shownCount(120, start)).toBe(117);
-  });
 });
 
 describe("which job the live run shows", () => {
@@ -460,5 +328,51 @@ describe("live stats", () => {
     expect(tokenLabel(950)).toBe("950 tok");
     expect(tokenLabel(2500)).toBe("2.5k tok");
     expect(tokenLabel(3_400_000)).toBe("3.4M tok");
+  });
+});
+
+describe("honest live list", () => {
+  it("lists completed reviews newest first in the order they finished, never re-sorted by time", () => {
+    const reviews = [review("a", { at: "2026-10-03T16:05:00Z" }), review("b", { at: "2026-10-03T16:01:00Z" }), review("c")];
+    expect(newestFirst(reviews, 10).map((r) => r.execution_id)).toEqual(["c", "b", "a"]);
+    expect(newestFirst(reviews, 2).map((r) => r.execution_id)).toEqual(["c", "b"]);
+    expect(reviews.map((r) => r.execution_id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("says how many traces are in flight and how many are done", () => {
+    const job = (reviewed: number, selected: number) => ({ reviewed, coverage: { selected } }) as unknown as Job;
+    expect(nowLine(job(18, 30), 4)).toBe("Reviewing 4 at a time · 18 of 30 done");
+    expect(nowLine(job(30, 30), 0)).toBe("30 of 30 done");
+    expect(nowLine(job(3, 0), 1)).toBe("Reviewing 1 at a time · 3 done");
+  });
+
+  it("keeps a trace as the same row from in flight to finished", () => {
+    const reading = (id: string) => ({ execution_id: id, trace_id: `t-${id}`, agent: "bot", started_at: "2026-10-03T16:00:00Z" });
+    const before = liveRows([reading("x"), reading("y")], [review("a")], 10);
+    expect(before.map((row) => [row.kind, row.key])).toEqual([
+      ["reading", "x"],
+      ["reading", "y"],
+      ["done", "a"],
+    ]);
+    const after = liveRows([reading("x"), reading("y")], [review("a"), review("y")], 10);
+    expect(after.map((row) => [row.kind, row.key])).toEqual([
+      ["reading", "x"],
+      ["done", "y"],
+      ["done", "a"],
+    ]);
+  });
+
+  it("only shows in-flight traces while the job runs", () => {
+    const item = { execution_id: "x", trace_id: "t", agent: "bot", started_at: "2026-10-03T16:00:00Z" };
+    const job = (status: Job["status"]) => ({ status, reading: [item] }) as unknown as Job;
+    expect(inFlight(job("running"))).toEqual([item]);
+    expect(inFlight(job("completed"))).toEqual([]);
+    expect(inFlight({ status: "running" } as Job)).toEqual([]);
+  });
+
+  it("formats review time", () => {
+    expect(durationLabel(420)).toBe("420ms");
+    expect(durationLabel(1420)).toBe("1.4s");
+    expect(durationLabel(83_000)).toBe("1m 23s");
   });
 });

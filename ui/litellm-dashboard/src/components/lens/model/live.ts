@@ -12,25 +12,12 @@ export interface Conclusion {
   issue: boolean;
 }
 
-export interface Phase {
-  span: number;
-  typed: number;
-  verdict: boolean;
-}
-
 export interface LiveStats {
   perSecond: number | null;
   tokens: number;
   cost: number;
   elapsedSeconds: number;
 }
-
-const PACE_WINDOW_MS = 2400;
-const MIN_VISIBLE_MS = 1500;
-const CATCH_UP_BACKLOG = 3;
-const READ_SHARE = 0.3;
-const TYPE_SHARE = 0.35;
-const REPLAY_ON_OPEN = 3;
 
 export function liveJob(jobs: readonly Job[]): Job | undefined {
   const active = jobs.find((job) => job.status === "queued" || job.status === "running");
@@ -116,21 +103,8 @@ export function unseen(reviews: readonly Review[], seen: ReadonlySet<string>): R
   return reviews.filter((review) => !seen.has(reviewKey(review)));
 }
 
-export function stepDuration(backlog: number): number {
-  return Math.max(MIN_VISIBLE_MS, Math.min(PACE_WINDOW_MS, Math.round(PACE_WINDOW_MS / Math.max(1, backlog))));
-}
-
 export function analysisModel(candidates: readonly string[]): string {
   return candidates.find((model) => providerOf(model)) ?? candidates.find(Boolean) ?? "";
-}
-
-export function playbackPhase(elapsed: number, duration: number, spans: number, chars: number): Phase {
-  if (duration <= 0) return { span: -1, typed: chars, verdict: true };
-  const t = Math.max(0, elapsed) / duration;
-  const reading = t < READ_SHARE;
-  const span = reading && spans > 0 ? Math.min(spans - 1, Math.floor((t / READ_SHARE) * spans)) : -1;
-  const typing = Math.min(1, Math.max(0, (t - READ_SHARE) / TYPE_SHARE));
-  return { span, typed: Math.round(typing * chars), verdict: t >= READ_SHARE + TYPE_SHARE };
 }
 
 const SHORT_LABEL = 48;
@@ -192,23 +166,6 @@ export function grownGroups(before: readonly Conclusion[], after: readonly Concl
   );
 }
 
-export type TraceRowState = "queued" | "reviewing" | "done";
-
-export function traceRows(
-  playback: Pick<Playback, "played" | "current" | "pending">,
-  limit: number,
-): { review: Review; state: TraceRowState }[] {
-  return [
-    ...[...playback.pending].reverse().map((review) => ({ review, state: "queued" as const })),
-    ...(playback.current ? [{ review: playback.current, state: "reviewing" as const }] : []),
-    ...[...playback.played].reverse().map((review) => ({ review, state: "done" as const })),
-  ].slice(0, limit);
-}
-
-export function decidedReviews(playback: Pick<Playback, "played" | "current">, verdictShown: boolean): Review[] {
-  return [...playback.played, ...(playback.current && verdictShown ? [playback.current] : [])];
-}
-
 export function readingStart(job: Pick<Job, "steps" | "created_at">): string {
   return job.steps.find((step) => step.kind === "stage" && step.label === "Reading executions")?.at ?? job.created_at;
 }
@@ -245,98 +202,40 @@ export function tokenLabel(tokens: number): string {
   return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`;
 }
 
-export interface Playback {
-  played: readonly Review[];
-  current: Review | null;
-  pending: readonly Review[];
-  seen: ReadonlySet<string>;
-  startedAt: number;
-  duration: number;
+export function newestFirst(reviews: readonly Review[], limit: number): Review[] {
+  return [...reviews].reverse().slice(0, limit);
 }
 
-export type PlaybackAction =
-  | { type: "enqueue"; reviews: readonly Review[] }
-  | { type: "tick"; now: number }
-  | { type: "settle" }
-  | { type: "replay" };
-
-const PLAYED_LIMIT = 200;
-
-export function startPlayback(reviews: readonly Review[], live: boolean): Playback {
-  const replay = live ? Math.min(REPLAY_ON_OPEN, reviews.length) : 0;
-  const shown = reviews.slice(0, reviews.length - replay);
-  return {
-    played: live ? shown : shown.slice(0, -1),
-    current: live ? null : shown.at(-1) ?? null,
-    pending: reviews.slice(shown.length),
-    seen: new Set(reviews.map(reviewKey)),
-    startedAt: Number.NEGATIVE_INFINITY,
-    duration: 0,
-  };
+export interface InFlight {
+  execution_id: string;
+  trace_id: string;
+  agent: string;
+  started_at: string;
 }
 
-function enqueue(state: Playback, reviews: readonly Review[]): Playback {
-  const fresh = unseen(reviews, state.seen);
-  if (!fresh.length) return state;
-  return {
-    ...state,
-    pending: [...state.pending, ...fresh],
-    seen: new Set([...state.seen, ...fresh.map(reviewKey)]),
-  };
+export function inFlight(job: Job): readonly InFlight[] {
+  const reading = (job as Job & { reading?: readonly InFlight[] }).reading;
+  return job.status === "running" ? (reading ?? []) : [];
 }
 
-function advance(state: Playback, now: number): Playback {
-  if (!state.pending.length) return state;
-  if (state.current && now - state.startedAt < state.duration) return state;
-  const skip = Math.max(0, state.pending.length - CATCH_UP_BACKLOG);
-  const [next, ...rest] = state.pending.slice(skip);
-  const finished = [...(state.current ? [state.current] : []), ...state.pending.slice(0, skip)];
-  return {
-    ...state,
-    played: [...state.played, ...finished].slice(-PLAYED_LIMIT),
-    current: next,
-    pending: rest,
-    startedAt: now,
-    duration: stepDuration(rest.length + 1),
-  };
+export type LiveRow = { kind: "reading"; key: string; item: InFlight } | { kind: "done"; key: string; review: Review };
+
+export function liveRows(reading: readonly InFlight[], reviews: readonly Review[], limit: number): LiveRow[] {
+  const finished = new Set(reviews.map((review) => review.execution_id));
+  const open = reading.filter((item) => !finished.has(item.execution_id));
+  return [
+    ...open.map((item) => ({ kind: "reading" as const, key: item.execution_id, item })),
+    ...newestFirst(reviews, limit).map((review) => ({ kind: "done" as const, key: review.execution_id, review })),
+  ];
 }
 
-function settle(state: Playback): Playback {
-  const all = [...state.played, ...(state.current ? [state.current] : []), ...state.pending];
-  return {
-    ...state,
-    played: all.slice(0, -1).slice(-PLAYED_LIMIT),
-    current: all.at(-1) ?? null,
-    pending: [],
-    startedAt: Number.NEGATIVE_INFINITY,
-    duration: 0,
-  };
+export function nowLine(job: Pick<Job, "coverage" | "reviewed">, reading: number): string {
+  const { selected } = job.coverage;
+  const done = selected ? `${Math.min(job.reviewed, selected)} of ${selected} done` : `${job.reviewed} done`;
+  return reading ? `Reviewing ${reading} at a time · ${done}` : done;
 }
 
-function replay(state: Playback): Playback {
-  const all = [...state.played, ...(state.current ? [state.current] : []), ...state.pending];
-  return { ...state, played: [], current: null, pending: all, startedAt: Number.NEGATIVE_INFINITY, duration: 0 };
-}
-
-export function playbackReducer(state: Playback, action: PlaybackAction): Playback {
-  switch (action.type) {
-    case "enqueue":
-      return enqueue(state, action.reviews);
-    case "tick":
-      return advance(state, action.now);
-    case "settle":
-      return settle(state);
-    case "replay":
-      return replay(state);
-  }
-}
-
-export function queueRows(playback: Pick<Playback, "played" | "current">, limit: number): Review[] {
-  const newest = playback.current ? [playback.current] : [];
-  return [...newest, ...[...playback.played].reverse()].slice(0, limit);
-}
-
-export function shownCount(reviewed: number, playback: Pick<Playback, "played" | "current" | "pending">): number {
-  const local = playback.played.length + (playback.current ? 1 : 0);
-  return Math.max(local, reviewed - playback.pending.length);
+export function durationLabel(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
+  return ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
