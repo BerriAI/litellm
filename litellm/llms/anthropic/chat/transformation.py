@@ -284,6 +284,9 @@ DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING: Final = (
     "Dropping adaptive `thinking` for model=%s: max_tokens is too small to fit the minimum thinking budget."
 )
 
+# `between_tools` is Sonnet 5.5's documented thinking-off equivalent (see #44299).
+VALID_THINKING_TYPES: Final = ("enabled", "adaptive", "disabled", "between_tools")
+
 DROP_UNSUPPORTED_SPEED_WARNING: Final = (
     "Dropping unsupported `speed` for model=%s (drop_params=True). Fast mode is only supported on select Opus models."
 )
@@ -1895,6 +1898,40 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers=headers,
         )
 
+    def _promote_thinking_from_extra_body(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: in-place out-param, as in _maybe_drop_speed_param
+        model: str,
+    ) -> None:
+        """Forward `thinking` sent via OpenAI-style `extra_body`.
+
+        ChatOpenAI-style callers (e.g. through the LiteLLM proxy) pass
+        provider params inside `extra_body`, which otherwise never reaches the
+        Anthropic translation layer and is silently dropped. Promote it to the
+        first-class `thinking` param so validation and the thinking pipeline
+        below apply. A top-level `thinking` always wins.
+        """
+        extra_body: Final = optional_params.get("extra_body")
+        if not isinstance(extra_body, dict) or "thinking" in optional_params:
+            return
+        thinking: Final = extra_body.pop("thinking", None)
+        if thinking is None:
+            return
+        if isinstance(thinking, dict):
+            thinking_type: Final = thinking.get("type")
+            if thinking_type is not None and thinking_type not in VALID_THINKING_TYPES:
+                raise litellm.exceptions.BadRequestError(
+                    message=(
+                        f"Invalid thinking.type: {thinking_type!r}. "
+                        f"Must be one of: {', '.join(repr(t) for t in VALID_THINKING_TYPES)}"
+                    ),
+                    model=model,
+                    llm_provider=self._resolved_provider,
+                )
+        optional_params["thinking"] = thinking
+        if not extra_body:
+            optional_params.pop("extra_body", None)
+
     def transform_request(
         self,
         model: str,
@@ -1911,6 +1948,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
         )
+
+        self._promote_thinking_from_extra_body(optional_params=optional_params, model=model)
 
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
