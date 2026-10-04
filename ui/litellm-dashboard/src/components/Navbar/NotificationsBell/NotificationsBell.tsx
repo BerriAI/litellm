@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@/i18n/useTranslation";
 import {
   HIDE_AUTO_ROUTER_ANNOUNCEMENT_KEY,
   useHideAutoRouterAnnouncement,
@@ -15,6 +16,7 @@ import React, { useState } from "react";
 export const AUTO_ROUTER_DOCS_URL = "https://docs.litellm.ai/docs/proxy/auto_routing";
 
 export const NotificationsBell: React.FC = () => {
+  const { t } = useTranslation();
   const hidden = useHideAutoRouterAnnouncement();
   const hasUnread = !hidden;
   const [open, setOpen] = useState(false);
@@ -27,9 +29,9 @@ export const NotificationsBell: React.FC = () => {
 
   const content = (
     <div className="max-w-[280px]">
-      <PopoverTitle className="mt-0! mb-2!">LiteLLM Auto Router</PopoverTitle>
+      <PopoverTitle className="mt-0! mb-2!">{t("LiteLLM Auto Router")}</PopoverTitle>
       <PopoverDescription className="mb-3! text-sm leading-snug">
-        Route every request to the cheapest model that can handle it, no prompt changes needed.
+        {t("Route every request to the cheapest model that can handle it, no prompt changes needed.")}
       </PopoverDescription>
       <div className="flex flex-wrap items-center gap-2">
         <a
@@ -38,11 +40,11 @@ export const NotificationsBell: React.FC = () => {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Read the docs
+          {t("Read the docs")}
         </a>
         {hasUnread ? (
           <Button variant="link" size="sm" className="px-1!" onClick={markDismissed}>
-            Mark as read
+            {t("Mark as read")}
           </Button>
         ) : null}
       </div>
@@ -53,7 +55,7 @@ export const NotificationsBell: React.FC = () => {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className="flex! h-9! w-9! items-center justify-center rounded-md! text-muted-foreground transition-colors hover:bg-accent! hover:text-foreground!"
-        aria-label="Notifications"
+        aria-label={t("Notifications")}
       >
         <span className="relative inline-flex">
           <Bell className="size-4" aria-hidden />

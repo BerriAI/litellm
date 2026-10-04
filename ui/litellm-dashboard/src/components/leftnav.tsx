@@ -1,3 +1,4 @@
+import { useTranslation } from "@/i18n/useTranslation";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
@@ -111,6 +112,7 @@ interface MenuItem {
   roles?: string[];
   children?: MenuItem[];
   icon?: React.ReactNode;
+  badge?: React.ReactNode;
   external_url?: string;
 }
 
@@ -218,22 +220,16 @@ const menuGroups: MenuGroup[] = [
         page: "model-insights",
         icon: <Trophy {...ICON} />,
         roles: all_admin_roles,
-        label: (
-          <span className="flex items-center gap-2">
-            Model Leaderboard <BetaBadge />
-          </span>
-        ),
+        label: "Model Leaderboard",
+        badge: <BetaBadge />,
       },
       {
         key: "roi-calculator",
         page: "roi-calculator",
         icon: <Calculator {...ICON} />,
         roles: all_admin_roles,
-        label: (
-          <span className="flex items-center gap-2">
-            ROI Calculator <BetaBadge />
-          </span>
-        ),
+        label: "ROI Calculator",
+        badge: <BetaBadge />,
       },
       {
         key: "cost-optimization",
@@ -269,11 +265,8 @@ const menuGroups: MenuGroup[] = [
       {
         key: "projects",
         page: "projects",
-        label: (
-          <span className="flex items-center gap-2">
-            Projects <BetaBadge />
-          </span>
-        ),
+        label: "Projects",
+        badge: <BetaBadge />,
         icon: <Folder {...ICON} />,
         roles: all_admin_roles,
       },
@@ -465,6 +458,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
+  const { t } = useTranslation();
   const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
   const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
@@ -558,10 +552,24 @@ const Sidebar_: React.FC<SidebarProps> = ({
     });
   };
 
+  const translatedLabel = (item: MenuItem) => {
+    const label = typeof item.label === "string" ? t(item.label) : item.label;
+    return item.badge ? (
+      <span className="flex items-center gap-2">
+        {label}
+        {item.badge}
+      </span>
+    ) : (
+      label
+    );
+  };
+
   const renderLeaf = (item: MenuItem, isChild: boolean) => {
     const active = selectedKey === item.key;
     const size = isChild ? "sub" : "default";
-    const label = <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>;
+    const label = (
+      <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{translatedLabel(item)}</span>
+    );
 
     if (item.external_url) {
       return (
@@ -570,7 +578,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           href={item.external_url}
           target="_blank"
           rel="noopener noreferrer"
-          title={collapsed ? labelText(item) : undefined}
+          title={collapsed ? t(labelText(item)) : undefined}
           data-active={active || undefined}
           className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
         >
@@ -585,7 +593,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <Link
         key={item.key}
         href={uiHref(routeOf(item))}
-        title={collapsed ? labelText(item) : undefined}
+        title={collapsed ? t(labelText(item)) : undefined}
         data-active={active || undefined}
         className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
       >
@@ -609,10 +617,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
           isActive={active}
           aria-expanded={open}
           onClick={() => toggleGroup(item.key)}
-          title={collapsed ? labelText(item) : undefined}
+          title={collapsed ? t(labelText(item)) : undefined}
         >
           {item.icon}
-          <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{item.label}</span>
+          <span className="flex-1 truncate group-data-[collapsed=true]/sidebar:hidden">{translatedLabel(item)}</span>
           <ChevronRight
             className={cn(
               "size-4 shrink-0 transition-transform group-data-[collapsed=true]/sidebar:hidden",
@@ -640,7 +648,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <Link href={uiHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+            <Link href={uiHref("")} className="flex min-w-0 items-center" aria-label={t("LiteLLM home")}>
               <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
               <img
                 src={darkLogoSrc}
@@ -665,7 +673,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
               variant="ghost"
               size="icon-sm"
               onClick={onToggleCollapsed}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={collapsed ? t("Expand sidebar") : t("Collapse sidebar")}
               className="flex-none text-muted-foreground"
             >
               {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
@@ -679,7 +687,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           {visibleGroups.map((group, gi) => (
             <SidebarGroup key={group.groupLabel}>
               {gi > 0 && <SidebarSeparator className="hidden group-data-[collapsed=true]/sidebar:block" />}
-              <SidebarGroupLabel>{group.groupLabel}</SidebarGroupLabel>
+              <SidebarGroupLabel>{t(group.groupLabel)}</SidebarGroupLabel>
               <SidebarMenu>{group.items.map((item) => renderItem(item))}</SidebarMenu>
             </SidebarGroup>
           ))}
