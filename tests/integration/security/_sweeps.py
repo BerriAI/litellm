@@ -106,6 +106,7 @@ ROUTE_DENY_LIST: Final = MappingProxyType(
         "/openai_passthrough/{endpoint:path}": "forwards to a provider, not a proxy read",
         "/get/latest_release_info": "fetches the latest release from api.github.com",
         "/roi-calculator/repositories": "lists repositories from the configured GitHub API, api.github.com by default",
+        "/roi-calculator/observed/repositories": "lists repositories from the connected GitHub or GitLab API, api.github.com by default",
     }
 )
 
