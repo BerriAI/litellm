@@ -164,7 +164,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               />
             </LensPreviewContext.Provider>
           </TabsContent>
-          <TabsContent value="investigations" className={cn(PANEL, "p-4")}>
+          <TabsContent value="investigations" className={PANEL}>
             <LensPreviewContext.Provider value={preview("investigations")}>
               {canInvestigate ? (
                 <InvestigationsView accessToken={accessToken} readOnly={readOnly || !isProxyAdminRole(userRole)} />

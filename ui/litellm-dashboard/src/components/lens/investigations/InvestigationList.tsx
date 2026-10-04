@@ -11,12 +11,10 @@ import {
   CircleX,
   Pencil,
   Play,
-  Search,
 } from "lucide-react";
 
 import { useNow } from "@/hooks/useNow";
 import { Inspector } from "@/components/shared/Inspector";
-import { Input } from "@/components/ui/input";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 import { agoLabel } from "@/components/lens/model/format";
@@ -24,9 +22,12 @@ import { agoLabel } from "@/components/lens/model/format";
 import { findingAgents, findingKey, openFindings, scheduleLabel } from "../model/inbox";
 import { lensStatus } from "../model/status";
 import { scopeLabel } from "../model/format";
+import { SearchBox } from "../search/SearchBox";
+import { itemValues } from "../search/valueSource";
 import { type Finding, type Lens } from "../model/types";
 import { useListSearchRoute } from "../route";
 import { FINDING_PANEL_WIDTH_KEY } from "./FindingDetails";
+import { filterInvestigations, INVESTIGATION_INDEX, INVESTIGATION_QUERY } from "./investigationQuery";
 
 const PRIORITY_COLOR = { high: "text-destructive", medium: "text-amber-500", low: "text-muted-foreground" } as const;
 const ROW =
@@ -98,9 +99,7 @@ export function InvestigationList({
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  const shown = lenses.filter((lens) =>
-    `${lens.settings.name} ${scopeLabel(lens.settings)}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  const shown = filterInvestigations([...lenses], search);
   const sections = shown.map((lens) => {
     const findings = openFindings(lens);
     return { lens, findings, expanded: findings.length > 0 && !collapsed.has(lens.id) };
@@ -119,19 +118,22 @@ export function InvestigationList({
       noun={noun}
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
-      <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
-        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2">
-          <div className="relative min-w-40 flex-1 basis-60 max-w-[380px]">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              aria-label="Search investigations"
-              placeholder="Search investigations"
-              className="h-7 bg-background pl-8 text-xs"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+      <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden bg-card">
+        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2">
+          <SearchBox.Root
+            language={INVESTIGATION_QUERY}
+            values={itemValues(INVESTIGATION_INDEX, lenses)}
+            value={search}
+            onValueChange={setSearch}
+            label="Search investigations"
+          >
+            <SearchBox.Input
+              className="rounded-lg"
+              placeholder="Search investigations, or filter like status:failed schedule:watching"
             />
-          </div>
-          {actions && <div className="ml-auto flex items-center gap-3">{actions}</div>}
+            <SearchBox.Suggestions />
+          </SearchBox.Root>
+          {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           <table aria-label="Investigations" className="w-full min-w-[720px] table-fixed border-collapse text-left">
@@ -294,10 +296,6 @@ export function InvestigationList({
             <div className="py-16 text-center text-xs text-muted-foreground">No investigations match your search.</div>
           )}
         </div>
-        <footer className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-xs text-muted-foreground">
-          {shown.length} {shown.length === 1 ? "investigation" : "investigations"} ·{" "}
-          {lenses.filter((l) => l.settings.enabled).length} watching
-        </footer>
       </div>
       <Inspector.Panel label={ROW_LABEL[noun]} testId="investigation-panel">
         {children}

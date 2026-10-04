@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 import { useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
 
 import { lensKeys, lensQueries } from "../api/queries";
@@ -40,6 +41,23 @@ export interface InvestigationsViewProps {
 const assertNever = (value: never): never => {
   throw new Error(`Unhandled screen ${JSON.stringify(value)}`);
 };
+
+interface BannersProps {
+  readonly error: Error | null | undefined;
+  readonly activityReady: boolean | null;
+  readonly flush: boolean;
+  readonly refresh: () => void;
+}
+
+function Banners({ error, activityReady, flush, refresh }: BannersProps) {
+  if (!error && activityReady === null) return null;
+  return (
+    <div className={cn("flex flex-col gap-3", flush && "p-2 pb-0")}>
+      {error && <InvestigationError message={error.message} refresh={refresh} />}
+      {activityReady !== null && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
+    </div>
+  );
+}
 
 export function InvestigationsView({ accessToken, readOnly = false }: InvestigationsViewProps) {
   const api = useLensApi();
@@ -132,7 +150,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
               !readOnly && (
                 <>
                   <WatchAllBanner lenses={current.lenses} />
-                  <Button size="sm" className="h-7" disabled={!status.ready} onClick={() => openDialog("new")}>
+                  <Button size="sm" className="h-8" disabled={!status.ready} onClick={() => openDialog("new")}>
                     <Plus className="size-4" /> New investigation
                   </Button>
                 </>
@@ -190,9 +208,16 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
   };
 
   return (
-    <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
-      {bannerError && <InvestigationError message={bannerError.message} refresh={refresh} />}
-      {showReadiness && <ReadinessBanner activityReady={status.activityReady} className="py-2 text-xs" />}
+    <section
+      aria-label="Investigations"
+      className={cn("flex w-full min-w-0 flex-1 flex-col", !browsing && "gap-3 p-4")}
+    >
+      <Banners
+        error={bannerError}
+        activityReady={showReadiness ? status.activityReady : null}
+        flush={browsing}
+        refresh={refresh}
+      />
       {content(screen)}
       {dialog === "run_now" && dialogLens && (
         <RunNowDialog
