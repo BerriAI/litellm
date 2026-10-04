@@ -251,7 +251,9 @@ describe("Lens interactive demo", () => {
     await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const panel = within(screen.getByRole("region", { name: "Settings" }));
+    expect(panel.getByRole("status")).toHaveTextContent("Tracing enabled");
     expect(panel.getByRole("heading", { name: "Analysis worker" })).toBeVisible();
+    expect(panel.getByRole("heading", { name: worker.name })).toBeVisible();
     expect(panel.getByText("Connected")).toBeVisible();
     await user.click(panel.getByRole("button", { name: "Edit access" }));
     expect(panel.getByRole("heading", { name: "Analysis access" })).toBeVisible();
@@ -262,6 +264,9 @@ describe("Lens interactive demo", () => {
     await waitFor(() => expect(settings).toHaveAttribute("title", "Connect worker"));
     expect(panel.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
     expect(panel.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    await user.click(panel.getByRole("button", { name: "Connect an agent" }));
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("traces"));
+    expect(tabs.getByRole("tab", { name: "Traces" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("sends the first-time guide's Connect worker into the Settings tab", async () => {

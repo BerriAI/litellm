@@ -17,6 +17,7 @@ import { workerFormSchema, type WorkerFormInput } from "./workerSchema";
 import type { LensList, WorkerCreated } from "../../model/types";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { cn } from "@/lib/cva.config";
+import { SettingsCard } from "../SettingsLayout";
 
 function defaultWorkerFormValues(): WorkerFormInput {
   return {
@@ -58,8 +59,7 @@ export function WorkerSettings({
   const screen = created ? "install" : uninstalledScreen;
   const createdTitle = connected ? "Worker connected" : "Run the worker";
   const formTitle = editingWorker ? "Analysis access" : "Connect a worker";
-  const baseTitle = formVisible ? formTitle : "Analysis worker";
-  const title = created ? createdTitle : baseTitle;
+  const title = created ? createdTitle : formTitle;
   const actionLabel = editingWorker ? "Save analysis access" : "Get install command";
   const cancelForm = () => {
     setEditingWorker(null);
@@ -113,20 +113,28 @@ export function WorkerSettings({
   const awaitingConnection = !editingWorker && !connected;
   const describeSetup = awaitingConnection && (formVisible || !!created);
   const completed = !!created && connected;
-  const description = describeSetup ? setupDescription : "Worker status and model access";
+  const description = describeSetup ? setupDescription : "Choose which key pays for analysis.";
+  if (screen === "list")
+    return (
+      <>
+        <WorkerList workers={workers} now={now} accessToken={accessToken} editBilling={editBilling} revoke={revoke} />
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+      </>
+    );
   return (
     <FormProvider {...form}>
-      <section
-        aria-label="Settings"
-        className={cn("flex w-full flex-col gap-6", completed ? "max-w-sm items-center text-center" : "max-w-xl")}
-      >
+      <SettingsCard className={cn("flex flex-col gap-5", completed && "items-center text-center")}>
         <header className={cn("space-y-1", completed && "flex flex-col items-center gap-3")}>
           {completed && (
             <div className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
               <CheckCircle2 className="size-6" />
             </div>
           )}
-          <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+          <h3 className="text-base font-semibold">{title}</h3>
           <p className="text-sm text-muted-foreground">{completed ? "Ready to run investigations." : description}</p>
         </header>
         {screen === "form" && <WorkerForm accessToken={accessToken} editingWorker={editingWorker} />}
@@ -154,15 +162,12 @@ export function WorkerSettings({
             </Button>
           </div>
         )}
-        {screen === "list" && (
-          <WorkerList workers={workers} now={now} accessToken={accessToken} editBilling={editBilling} revoke={revoke} />
-        )}
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
           </p>
         )}
-      </section>
+      </SettingsCard>
     </FormProvider>
   );
 }

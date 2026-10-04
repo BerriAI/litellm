@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { CheckCircle2 } from "lucide-react";
 import { workerConnected } from "../../model/status";
 import { AnalysisKeyDetails } from "./AnalysisKeyDetails";
+import { SettingsCard } from "../SettingsLayout";
 import type { LensList } from "../../model/types";
 
 function workerStatus(worker: LensList["workers"][number], now: number): string {
@@ -32,9 +33,9 @@ export function WorkerList({
         .map((worker) => {
           const connected = workerConnected(worker, now);
           return (
-            <section key={worker.id} className="space-y-5 text-sm">
+            <SettingsCard key={worker.id} className="space-y-4 text-sm">
               <div className="flex items-center justify-between gap-3">
-                {workers.filter((w) => !w.revoked).length > 1 && <h3 className="font-medium">{worker.name}</h3>}
+                <h3 className="font-medium">{worker.name}</h3>
                 <span
                   data-state={connected ? "active" : "inactive"}
                   className="flex items-center gap-2 text-muted-foreground data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400"
@@ -46,7 +47,7 @@ export function WorkerList({
               {worker.analysis_key_id && (
                 <AnalysisKeyDetails accessToken={accessToken} keyId={worker.analysis_key_id} showName />
               )}
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
                 <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>
                   Edit access
                 </Button>
@@ -54,7 +55,7 @@ export function WorkerList({
                   Revoke access
                 </Button>
               </div>
-            </section>
+            </SettingsCard>
           );
         })}
     </>

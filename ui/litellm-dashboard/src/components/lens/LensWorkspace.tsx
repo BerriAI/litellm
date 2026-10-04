@@ -12,7 +12,7 @@ import { LensServicesProvider } from "./LensServicesProvider";
 import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
-import { WorkerSettings } from "./setup/worker/WorkerSettings";
+import { LensSettings } from "./setup/LensSettings";
 import { createLensDemo } from "./demo/createLensDemo";
 import { lensKeys, lensQueries } from "./api/queries";
 import { useLensApi } from "./services";
@@ -171,8 +171,7 @@ function useLensOverview(accessToken: string, enabled: boolean, settingsOpen: bo
   const { data } = useQuery({ ...lensQueries.list(api, settingsOpen), enabled });
   return {
     activity: investigationActivity(data?.lenses ?? []),
-    lenses: data?.lenses,
-    workers: data?.workers,
+    list: data,
     refresh: () => void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) }),
   };
 }
@@ -187,13 +186,13 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canInvestigate = isProxyAdminTierRole(userRole);
   const canConfigure = canInvestigate && !readOnly;
-  const { activity, lenses, workers, refresh } = useLensOverview(
+  const { activity, list, refresh } = useLensOverview(
     accessToken,
     canInvestigate,
     canConfigure && activeTab === "settings",
   );
   const worker: WorkerStatus =
-    canConfigure && workers ? { connected: workers.some((candidate) => workerConnected(candidate)) } : null;
+    canConfigure && list ? { connected: list.workers.some((candidate) => workerConnected(candidate)) } : null;
   const startFirstInvestigation = () => {
     setTab("investigations");
     openDialog("new");
@@ -252,13 +251,14 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               )}
             </LensPreviewContext.Provider>
           </TabsContent>
-          {worker && (
-            <TabsContent value="settings" className={cn(PANEL, "p-4")}>
-              <WorkerSettings
+          {worker && list && (
+            <TabsContent value="settings" className={cn(PANEL, "p-6")}>
+              <LensSettings
                 accessToken={accessToken}
-                workers={workers ?? []}
+                list={list}
                 onChanged={refresh}
-                onReady={lenses?.length === 0 ? startFirstInvestigation : undefined}
+                onReady={list.lenses.length === 0 ? startFirstInvestigation : undefined}
+                onOpenTraces={() => setTab("traces")}
               />
             </TabsContent>
           )}
