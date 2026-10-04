@@ -429,13 +429,8 @@ func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
 
 // /key/generate replaces declared routes with the key_type preset while
 // /key/update stores them verbatim, so create must re-assert the declared
-// list when the proxy overrode it. The restore body stays surgical (routes
-// plus the two fields /key/update requires non-null) so server-applied
-// values the config never declared survive it. A generate that already
-// honored the declared routes must not trigger the restore, a rejected
-// restore must delete a proxy-minted key so a retried apply does not orphan
-// it, and a config-supplied key (which /key/generate upserts, possibly an
-// existing credential) is never deleted.
+// list; the restore body may only touch allowed_routes plus the two fields
+// /key/update requires non-null.
 func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 	cases := map[string]struct {
 		generateRoutes []interface{}
