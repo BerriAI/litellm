@@ -85,6 +85,8 @@ describe("useLogFilterLogic", () => {
       { id: LOG_FILTER_IDS.STATUS, value: "failure", param: "status_filter" },
       { id: LOG_FILTER_IDS.CACHE_STATUS, value: "hit", param: "cache_hit_filter" },
       { id: LOG_FILTER_IDS.CACHE_STATUS, value: "miss", param: "cache_hit_filter" },
+      { id: LOG_FILTER_IDS.CREDENTIAL, value: "true", param: "used_client_oauth_token" },
+      { id: LOG_FILTER_IDS.CREDENTIAL, value: "false", param: "used_client_oauth_token" },
       { id: LOG_FILTER_IDS.SPAN_TYPE, value: "batch", param: "span_type" },
       { id: LOG_FILTER_IDS.SPAN_TYPE, value: "mcp", param: "span_type" },
       { id: LOG_FILTER_IDS.MODEL_ID, value: "model-uuid-1", param: "model_id" },

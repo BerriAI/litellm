@@ -16,6 +16,7 @@ import { DocsLink } from "@/components/Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
+import LiteAdmin from "@/components/liteadmin/LiteAdmin";
 import ThemeToggle from "@/components/ThemeToggle/ThemeToggle";
 import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
@@ -62,6 +63,7 @@ export function DashboardHeader() {
             <ToolbarSeparator />
           </>
         )}
+        <LiteAdmin />
         <DocsLink />
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}

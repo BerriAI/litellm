@@ -20,6 +20,7 @@ from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
@@ -41,7 +42,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
 )
-from litellm.proxy.utils import invalidate_config_param
+from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -333,8 +334,8 @@ class UISettings(BaseModel):
             "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
-        json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
-            "items": {"type": "string", "enum": [*_TEAM_ADMIN_FIELD_ENUM]},  # mutable-ok: nested in the dict above
+        json_schema_extra={
+            "items": {"type": "string", "enum": [*_TEAM_ADMIN_FIELD_ENUM]},
         },
     )
 
@@ -597,11 +598,11 @@ async def get_allowed_ips():
 
 def _store_allowed_ips(general_settings: MutableMapping[str, object], allowed_ips: Sequence[str]) -> None:
     try:
-        general_settings["allowed_ips"] = list(allowed_ips)  # mutable-ok: compared against the file's own list
+        general_settings["allowed_ips"] = list(allowed_ips)
     except ConfigOwnedKeyError as owned:
         raise HTTPException(
             status_code=400,
-            detail={  # mutable-ok: HTTPException serializes its detail as json
+            detail={
                 "error": str(owned),
                 "keys": (owned.key,),
                 "section": owned.section,
@@ -952,9 +953,7 @@ async def _validate_default_organization_exists(organization_id: str) -> None:
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
-                "error": "Database not connected. Please connect a database."
-            },
+            detail={"error": "Database not connected. Please connect a database."},
         )
 
     organization_exists: Final = await OrganizationRepository(prisma_client).exists(
@@ -963,7 +962,7 @@ async def _validate_default_organization_exists(organization_id: str) -> None:
     if not organization_exists:
         raise HTTPException(
             status_code=400,
-            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+            detail={
                 "error": f"Organization not found: {organization_id}. "
                 "An organization must exist before it can be set as the default organization for new teams."
             },
@@ -1615,8 +1614,8 @@ async def update_websearch_interception_settings(
 
 @router.get(
     "/get/mcp_tool_search_settings",
-    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=MCPToolSearchSettingsResponse,
 )
 async def get_mcp_tool_search_settings(
@@ -1641,8 +1640,8 @@ async def get_mcp_tool_search_settings(
 
 @router.patch(
     "/update/mcp_tool_search_settings",
-    tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def update_mcp_tool_search_settings(
     settings: MCPToolSearchSettings,
@@ -1670,6 +1669,7 @@ UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
 
+@with_service_target(CONFIG_PARAMS_TARGET)
 async def get_ui_settings_cached() -> dict[str, JsonValue]:
     """
     Return the persisted UI settings dict, using DualCache for reads.
@@ -1749,6 +1749,7 @@ async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping
     tags=["UI Settings"],
     response_model=UISettingsResponse,
 )
+@with_service_target(CONFIG_PARAMS_TARGET)
 async def get_ui_settings():
     """
     Get UI-specific configuration flags.
@@ -1827,6 +1828,7 @@ async def get_ui_settings():
     tags=["UI Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
+@with_service_target(CONFIG_PARAMS_TARGET)
 async def update_ui_settings(
     settings_body: dict[str, object] = Body(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -1884,7 +1886,7 @@ async def update_ui_settings(
     if unsupported_team_fields:
         raise HTTPException(
             status_code=400,
-            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+            detail={
                 "error": (
                     f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
                     f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS)}."

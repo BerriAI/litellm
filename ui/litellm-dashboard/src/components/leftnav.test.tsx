@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nextProvider } from "react-i18next";
 import { createDashboardI18n } from "@/i18n";
@@ -136,6 +136,37 @@ describe("Sidebar (leftnav)", () => {
     expect(classesOf(light).has("hidden")).toBe(false);
     expect(classesOf(dark).has("hidden")).toBe(true);
     expect(classesOf(dark).has("dark:block")).toBe(true);
+  });
+
+  const collapsedLogos = () => {
+    const home = within(screen.getByRole("link", { name: /litellm home/i }));
+    return {
+      light: home.getByRole("img", { name: "LiteLLM" }),
+      dark: home.getByRole("presentation", { hidden: true }),
+    };
+  };
+
+  it("requests the bundled monogram for both themes when collapsed", () => {
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image\?variant=monogram$/));
+    expect(dark).toHaveAttribute("src", expect.stringMatching(/\/get_image\?theme=dark&variant=monogram$/));
+  });
+
+  it("keeps a configured custom logo when collapsed instead of the LiteLLM monogram", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
   });
 
   it("prefers a configured dark logo over the light one in dark mode", () => {
@@ -467,6 +498,7 @@ describe("Sidebar (leftnav)", () => {
 
       expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
       expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("href", "/ui/lens");
       expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
     });
 
@@ -578,13 +610,13 @@ describe("Sidebar (leftnav)", () => {
     expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
   });
 
-  it("shows Cost Optimization with a Beta badge and no feature-flag gate", () => {
+  it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
-    expect(costOptimization!).toHaveTextContent(/Cost Optimization/);
-    expect(costOptimization!).toHaveTextContent(/Beta/);
+    expect(costOptimization!).toHaveTextContent("Cost Optimization");
+    expect(costOptimization!).not.toHaveTextContent("Beta");
 
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });
@@ -627,6 +659,32 @@ describe("getBreadcrumb", () => {
 });
 
 describe("localized navigation", () => {
+  it("translates new navigation labels while preserving their routes and Beta badges", async () => {
+    mockUseAuthorized.mockReset();
+    const instance = createDashboardI18n("zh-CN");
+    renderWithProviders(
+      <I18nextProvider i18n={instance}>
+        <Sidebar collapsed />
+      </I18nextProvider>,
+    );
+
+    const leaderboard = screen.getByRole("link", { name: /模型排行榜/ });
+    expect(leaderboard).toHaveAttribute("href", "/ui/model-insights");
+    expect(leaderboard).toHaveAttribute("title", "模型排行榜");
+    expect(within(leaderboard).getByText("Beta")).toBeInTheDocument();
+    const roiCalculator = screen.getByRole("link", { name: /投资回报计算器/ });
+    expect(roiCalculator).toHaveAttribute("href", "/ui/roi-calculator");
+    expect(roiCalculator).toHaveAttribute("title", "投资回报计算器");
+    expect(within(roiCalculator).getByText("Beta")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "成本优化", exact: true })).not.toHaveTextContent("Beta");
+
+    await act(async () => {
+      await instance.changeLanguage("en");
+    });
+    expect(screen.getByRole("link", { name: /Model Leaderboard/ })).toHaveAttribute("title", "Model Leaderboard");
+    expect(screen.getByRole("link", { name: /ROI Calculator/ })).toHaveAttribute("title", "ROI Calculator");
+  });
+
   it("changes visible and collapsed labels while retaining routes and permission filtering", async () => {
     const internalUser = {
       userId: "test-user-id",

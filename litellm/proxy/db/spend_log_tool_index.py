@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.repositories.table_repositories import SpendLogToolIndexRepository
 
@@ -135,8 +136,12 @@ async def flush_tool_usage_transactions(
             for statement_rows in spend_log_write_batches(
                 index_rows, SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
             ):
-                await index_table.create_many(data=statement_rows, skip_duplicates=True)
-            async with prisma_client.db.batch_() as batcher:
+                async with db_span("index_spend_log_tools", "LiteLLM_SpendLogToolIndex"):
+                    await index_table.create_many(data=statement_rows, skip_duplicates=True)
+            async with (
+                db_span("commit_daily_tool_spend", "LiteLLM_DailyToolSpend"),
+                prisma_client.db.batch_() as batcher,
+            ):
                 for (date_key, tool_name), grouped in groupby(per_tool_day, key=lambda entry: (entry[0], entry[1])):
                     entries = tuple(grouped)
                     spend = sum(entry[2] for entry in entries)

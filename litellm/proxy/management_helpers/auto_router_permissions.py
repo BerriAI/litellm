@@ -33,6 +33,10 @@ from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router import Router
+from litellm.router_strategy.complexity_router.config import (
+    ComplexityRouterConfigWrite,
+    resolve_complexity_router_config_write,
+)
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
 from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.types.router import Deployment, updateDeployment
@@ -65,12 +69,12 @@ class _MemberRouterGenerationParams(BaseModel):
     stop: str | tuple[str, ...] | None = None
 
 
-class _MemberJevClassifierConfig(BaseModel):
-    """The Jev classifier settings a team member may set. Credentials stay the proxy's own: a member-chosen
-    api_base would receive the proxy's TYPESAFE_API_KEY, and a member-chosen api_key would be sent from the proxy."""
+class _MemberOpenSourceClassifierConfig(BaseModel):
+    """Classifier settings a team member may set while the gateway owns the connection."""
 
     model_config = ConfigDict(extra="forbid")
 
+    provider: Literal["jev", "laya", "bespoke"] = "jev"
     model: str
     api_key: None = None
     api_base: None = None
@@ -123,14 +127,21 @@ def authorize_member_auto_router_team(
 
 
 def validate_member_auto_router_config(config: Mapping[str, object]) -> RequestComplexityRouterConfig:
+    return _validate_member_auto_router_config_write(resolve_complexity_router_config_write(config, None))
+
+
+def _validate_member_auto_router_config_write(write: ComplexityRouterConfigWrite) -> RequestComplexityRouterConfig:
+    if write.effective is None:
+        raise HTTPException(status_code=400, detail="A complexity_router_config is required.")
     try:
-        validated: Final = _MemberComplexityRouterConfig.model_validate(config)
-        for entries in validated.tier_model_configs.values():
-            for entry in entries:
-                _MemberRouterGenerationParams.model_validate(entry.litellm_params)
-        if validated.jev_classifier_config is not None:
-            _MemberJevClassifierConfig.model_validate(validated.jev_classifier_config.model_dump())
-        return validated
+        if write.submitted is not None:
+            validated: Final = _MemberComplexityRouterConfig.model_validate(write.submitted)
+            for entries in validated.tier_model_configs.values():
+                for entry in entries:
+                    _MemberRouterGenerationParams.model_validate(entry.litellm_params)
+            if validated.opensource_classifier_config is not None:
+                _MemberOpenSourceClassifierConfig.model_validate(validated.opensource_classifier_config.model_dump())
+        return RequestComplexityRouterConfig.model_validate(write.effective)
     except ValidationError as exc:
         location: Final = ".".join(str(part) for part in exc.errors()[0]["loc"])
         raise HTTPException(status_code=400, detail=f"Invalid member auto-router configuration at {location}.") from exc
@@ -151,9 +162,7 @@ async def authorize_member_auto_router_dependencies(
     if team.blocked:
         raise HTTPException(status_code=403, detail="This auto router's team is blocked.")
     aliases: Final = team_model_aliases(team)
-    alias_dict: Final = (
-        dict(aliases) if aliases is not None else None  # mutable-ok: auth model and helpers require dict
-    )
+    alias_dict: Final = dict(aliases) if aliases is not None else None
     scoped_actor: Final = user_api_key_dict.model_copy(
         update=MappingProxyType({"team_id": team.team_id, "team_models": team.models, "team_model_aliases": alias_dict})
     )
@@ -334,16 +343,15 @@ async def authorize_member_auto_router_write(
     if existing is not None and incoming.model_name not in (None, public_name, existing.model_name):
         raise HTTPException(status_code=403, detail="Team members cannot rename an auto router.")
     supplied_config: Final = _RouterConfigSource.model_validate(params.model_dump()).complexity_router_config
-    raw_config: Final = (
-        supplied_config
-        if supplied_config is not None
-        else _RouterConfigSource.model_validate(existing.litellm_params.model_dump()).complexity_router_config
+    stored_config: Final = (
+        _RouterConfigSource.model_validate(existing.litellm_params.model_dump()).complexity_router_config
         if existing is not None
         else None
     )
-    if raw_config is None:
-        raise HTTPException(status_code=400, detail="A complexity_router_config is required.")
-    config: Final = validate_member_auto_router_config(raw_config)
+    resolved_config: Final = resolve_complexity_router_config_write(supplied_config, stored_config)
+    if resolved_config.supplied_connection_fields:
+        raise HTTPException(status_code=403, detail="Team members cannot change classifier connections.")
+    config: Final = _validate_member_auto_router_config_write(resolved_config)
     stored_default: Final = existing.litellm_params.complexity_router_default_model if existing is not None else None
     default_model: Final = (
         params.complexity_router_default_model
