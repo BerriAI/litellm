@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   ChevronRight,
   Circle,
@@ -26,16 +26,22 @@ import { scopeLabel } from "../model/format";
 import { type Finding, type Lens } from "../model/types";
 import { useListSearchRoute } from "../route";
 
-const PRIORITY_COLOR = { high: "text-[#e5484d]", medium: "text-amber-500", low: "text-muted-foreground" } as const;
+const PRIORITY_COLOR = { high: "text-destructive", medium: "text-amber-500", low: "text-muted-foreground" } as const;
 const ROW =
   "border-b border-border/60 transition-colors duration-150 hover:bg-trace-row-hover motion-reduce:transition-none";
-const META = "truncate text-[11px] text-muted-foreground";
+const META = "truncate text-xs text-muted-foreground";
+
+function openOnRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, open: () => void) {
+  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  open();
+}
 
 function JobIcon({ lens }: { lens: Lens }) {
   const status = lens.jobs[0]?.status;
   const className = "size-4 shrink-0";
   if (status === "queued" || status === "running")
-    return <CircleDashed aria-hidden="true" className={cn(className, "text-[#3b5bfd]")} />;
+    return <CircleDashed aria-hidden="true" className={cn(className, "text-info")} />;
   if (status === "failed") return <CircleX aria-hidden="true" className={cn(className, "text-destructive")} />;
   if (status === "cancelled")
     return <CircleSlash aria-hidden="true" className={cn(className, "text-muted-foreground")} />;
@@ -47,7 +53,7 @@ function TwoLine({ meta, title, className }: { meta: ReactNode; title: ReactNode
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span className={META}>{meta}</span>
-      <span className={cn("truncate text-[13px] text-foreground", className)}>{title}</span>
+      <span className={cn("truncate text-sm text-foreground", className)}>{title}</span>
     </span>
   );
 }
@@ -56,6 +62,7 @@ export function InvestigationList({
   lenses,
   connected,
   readOnly = false,
+  onOpen,
   onEdit,
   onRunNow,
   onOpenFinding,
@@ -63,6 +70,7 @@ export function InvestigationList({
   lenses: Lens[];
   connected: boolean;
   readOnly?: boolean;
+  onOpen: (id: string) => void;
   onEdit: (id: string) => void;
   onRunNow: (id: string) => void;
   onOpenFinding: (lens: Lens, finding: Finding) => void;
@@ -87,7 +95,7 @@ export function InvestigationList({
           <Input
             aria-label="Search investigations"
             placeholder="Search investigations"
-            className="h-7 bg-background pl-8 text-[12px]"
+            className="h-7 bg-background pl-8 text-xs"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -112,9 +120,11 @@ export function InvestigationList({
               return (
                 <Fragment key={lens.id}>
                   <tr
-                    onClick={readOnly ? undefined : () => onEdit(lens.id)}
+                    onClick={() => onOpen(lens.id)}
+                    onKeyDown={(event) => openOnRowKeyDown(event, () => onOpen(lens.id))}
+                    tabIndex={0}
                     aria-label={lens.settings.name}
-                    className={cn(ROW, "group h-14", !readOnly && "cursor-pointer")}
+                    className={cn(ROW, "group h-14 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring")}
                   >
                     <td className="pl-2">
                       <span className="flex min-w-0 items-center gap-2">
@@ -149,7 +159,7 @@ export function InvestigationList({
                     </td>
                     <td
                       className={cn(
-                        "w-[180px] truncate px-3 text-right text-[12px]",
+                        "w-[180px] truncate px-3 text-right text-xs",
                         latest?.status === "failed" ? "text-destructive" : "text-muted-foreground",
                       )}
                     >
@@ -159,14 +169,14 @@ export function InvestigationList({
                       {findings.length > 0 && (
                         <span
                           title={`${findings.length} open ${findings.length === 1 ? "finding" : "findings"}`}
-                          className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 font-mono text-[11px] tabular-nums text-foreground"
+                          className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 font-mono text-xs tabular-nums text-foreground"
                         >
                           {findings.length}
                         </span>
                       )}
                     </td>
                     <td
-                      className="w-[120px] px-3 text-right text-[12px] text-muted-foreground"
+                      className="w-[120px] px-3 text-right text-xs text-muted-foreground"
                       title={latest ? formatActivityTimestamp(latest.created_at) : undefined}
                     >
                       {latest ? agoLabel(Date.parse(latest.created_at), now) : "never run"}
@@ -186,12 +196,18 @@ export function InvestigationList({
                           >
                             <Play className="size-3.5" />
                           </button>
-                          <span
-                            aria-hidden="true"
-                            className="inline-flex size-7 items-center justify-center text-muted-foreground/60 group-hover:text-muted-foreground"
+                          <button
+                            type="button"
+                            aria-label={`Edit ${lens.settings.name}`}
+                            title="Edit"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onEdit(lens.id);
+                            }}
+                            className="inline-flex size-7 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground group-hover:text-muted-foreground"
                           >
                             <Pencil className="size-3.5" />
-                          </span>
+                          </button>
                         </span>
                       )}
                     </td>
@@ -205,8 +221,10 @@ export function InvestigationList({
                         <tr
                           key={finding.id}
                           onClick={() => onOpenFinding(lens, finding)}
+                          onKeyDown={(event) => openOnRowKeyDown(event, () => onOpenFinding(lens, finding))}
+                          tabIndex={0}
                           aria-label={finding.title}
-                          className={cn(ROW, "h-12 cursor-pointer")}
+                          className={cn(ROW, "h-12 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring")}
                         >
                           <td className="pl-2" title={finding.suggestion ? `Fix: ${finding.suggestion}` : undefined}>
                             <span className="flex min-w-0 items-center gap-2">
@@ -227,12 +245,12 @@ export function InvestigationList({
                               />
                             </span>
                           </td>
-                          <td className="px-3 text-right text-[12px] text-muted-foreground">
+                          <td className="px-3 text-right text-xs text-muted-foreground">
                             {runs} {runs === 1 ? "run" : "runs"}
                           </td>
                           <td />
                           <td
-                            className="px-3 text-right text-[12px] text-muted-foreground"
+                            className="px-3 text-right text-xs text-muted-foreground"
                             title={formatActivityTimestamp(finding.last_seen)}
                           >
                             {agoLabel(Date.parse(finding.last_seen), now)}
@@ -249,12 +267,10 @@ export function InvestigationList({
           </tbody>
         </table>
         {!shown.length && (
-          <div className="py-16 text-center text-[12px] text-muted-foreground">
-            No investigations match your search.
-          </div>
+          <div className="py-16 text-center text-xs text-muted-foreground">No investigations match your search.</div>
         )}
       </div>
-      <footer className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground">
+      <footer className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-xs text-muted-foreground">
         {shown.length} {shown.length === 1 ? "investigation" : "investigations"} ·{" "}
         {lenses.filter((l) => l.settings.enabled).length} watching
       </footer>

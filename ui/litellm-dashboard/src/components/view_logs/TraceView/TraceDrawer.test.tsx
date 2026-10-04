@@ -135,6 +135,36 @@ describe("RunView", () => {
     expect(screen.queryByRole("button", { name: "Back to runs" })).not.toBeInTheDocument();
   });
 
+  it("keeps the current run on screen, inert, while an unvisited run loads in the drawer", async () => {
+    const user = userEvent.setup();
+    let resolveSwarm: (trace: Trace) => void = () => {};
+    vi.mocked(agentTraceCall).mockImplementation((_token, traceId) =>
+      traceId === swarm.summary.trace_id
+        ? new Promise<Trace>((resolve) => {
+            resolveSwarm = resolve;
+          })
+        : Promise.resolve(research),
+    );
+    const props = { accessToken: "sk-test", onBack: vi.fn(), embedded: true };
+    const { rerender } = renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} {...props} />);
+    const root = rootSpanId(research);
+    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+
+    rerender(<RoutedRunView traceId={swarm.summary.trace_id} {...props} />);
+    await waitFor(() => expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "true"));
+    expect(screen.queryByRole("status", { name: "Loading trace" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+
+    act(() => resolveSwarm(swarm));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(swarm.summary)),
+    );
+    expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "false");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", initialRunSelection(swarm).selectedId);
+  });
+
   it("moves the selection with J / K and closes the detail pane with Esc", async () => {
     const user = userEvent.setup();
     renderRun(research);
@@ -297,6 +327,15 @@ describe("RunView", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  it("loads the run on retry after a failed load", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceCall).mockRejectedValueOnce(new Error("Traces are temporarily unavailable"));
+    renderRun(research);
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+  });
+
   it("finds a step beyond a folded group's first page and reveals it after search clears", async () => {
     const user = userEvent.setup();
     const root = research.spans.find((span) => span.parent_span_id === null)!;
@@ -342,12 +381,14 @@ describe("RunView", () => {
   });
 
   it("does not navigate steps while typing or moving the search cursor", async () => {
-    const user = userEvent.setup();
     renderRun(research);
     const search = await screen.findByRole("textbox", { name: "Search steps" });
     const selected = screen.getByTestId("detail-pane").getAttribute("data-row-id");
-    await user.type(search, "jk{ArrowDown}{ArrowUp}");
+    fireEvent.change(search, { target: { value: "jk" } });
     expect(search).toHaveValue("jk");
+    for (const key of ["j", "k", "ArrowDown", "ArrowUp"]) {
+      fireEvent.keyDown(search, { key });
+    }
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selected);
   });
 

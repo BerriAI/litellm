@@ -1,4 +1,4 @@
-import { nextCheckStatus, workerConnected } from "./status";
+import { investigationActivity, nextCheckStatus, workerConnected } from "./status";
 import { describe, expect, it } from "vitest";
 
 import type { Job, Lens, LensList } from "./types";
@@ -101,4 +101,13 @@ it("shows the actual next schedule and avoids a stale countdown during active sc
     "Waiting for an analyzer",
   );
   expect(nextCheckStatus(lens, now)).toBeNull();
+});
+
+it("summarizes activity across investigations, preferring a running scan over a queued one", () => {
+  const withStatus = (status: Job["status"]): Lens => ({ ...lens, jobs: [{ ...job, status }] });
+  expect(investigationActivity([])).toBe("idle");
+  expect(investigationActivity([lens, withStatus("failed")])).toBe("idle");
+  expect(investigationActivity([lens, withStatus("queued")])).toBe("queued");
+  expect(investigationActivity([withStatus("queued"), withStatus("running")])).toBe("running");
+  expect(investigationActivity([{ ...lens, jobs: [lens.jobs[0], { ...job, status: "running" }] }])).toBe("running");
 });

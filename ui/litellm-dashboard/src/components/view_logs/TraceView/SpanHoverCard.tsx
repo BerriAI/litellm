@@ -125,7 +125,7 @@ function HoverCardBody({ facts, traceStartMs }: { facts: HoverFacts; traceStartM
               </span>
             )}
           </div>
-          <span className="text-[12px] text-trace-duration">
+          <span className="text-xs text-trace-duration">
             {TYPE_LABEL[facts.type]}
             {facts.model ? ` · ${facts.model}` : ""}
           </span>
@@ -150,7 +150,7 @@ function HoverCardBody({ facts, traceStartMs }: { facts: HoverFacts; traceStartM
         <FactSection title="Tags">
           <ul className="flex flex-wrap gap-1">
             {facts.tags.map((tag) => (
-              <li key={tag} className="rounded-[3px] bg-trace-tag px-1 py-0.5 text-trace-duration">
+              <li key={tag} className="rounded-sm bg-trace-tag px-1 py-0.5 text-trace-duration">
                 {tag}
               </li>
             ))}
@@ -158,7 +158,7 @@ function HoverCardBody({ facts, traceStartMs }: { facts: HoverFacts; traceStartM
         </FactSection>
       )}
       {facts.error && (
-        <div className="rounded-[4px] bg-destructive/10 px-2 py-1.5 font-mono text-[12px] break-words text-destructive">
+        <div className="rounded-sm bg-destructive/10 px-2 py-1.5 font-mono text-xs break-words text-destructive">
           {errorHeadline(facts.error)}
         </div>
       )}
@@ -183,7 +183,7 @@ export function SpanHoverCard({ facts, traceStartMs, children }: SpanHoverCardPr
         sideOffset={0}
         alignOffset={0}
         data-testid="span-hover-card"
-        className="max-h-[min(520px,calc(100vh-16px))] w-auto max-w-[420px] overflow-y-auto rounded-[6px] border border-trace-border bg-trace-surface p-3 text-[13px] leading-[1.2] tracking-[-0.26px] text-trace-text shadow-trace-md ring-0 transition-opacity duration-150 ease-[cubic-bezier(0,0,0.2,1)] data-closed:animate-none data-ending-style:opacity-0 data-open:animate-none motion-reduce:transition-none"
+        className="max-h-[min(520px,calc(100vh-16px))] w-auto max-w-[420px] overflow-y-auto rounded-md border border-trace-border bg-trace-surface p-3 text-sm leading-tight text-trace-text shadow-trace-md ring-0 transition-opacity duration-150 ease-[cubic-bezier(0,0,0.2,1)] data-closed:animate-none data-ending-style:opacity-0 data-open:animate-none motion-reduce:transition-none"
       >
         <HoverCardBody facts={facts} traceStartMs={traceStartMs} />
       </HoverCardContent>

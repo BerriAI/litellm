@@ -6,7 +6,6 @@ import {
   FIELD_ROWS,
   UNNAMED_AGENT_COLOR,
   agoLabel,
-  isReceiving,
   agentDotColor,
   columnDots,
   columnTop,
@@ -100,15 +99,5 @@ describe("agoLabel", () => {
 
   it("treats a timestamp slightly in the future as just now instead of negative", () => {
     expect(agoLabel(now + 10_000, now)).toBe("just now");
-  });
-});
-
-describe("isReceiving", () => {
-  const now = Date.UTC(2026, 9, 3, 12, 0, 0);
-
-  it("is live only when a trace landed in the last five minutes", () => {
-    expect(isReceiving(now - 4 * 60_000, now)).toBe(true);
-    expect(isReceiving(now - 6 * 60_000, now)).toBe(false);
-    expect(isReceiving(null, now)).toBe(false);
   });
 });
