@@ -83,12 +83,8 @@ export function useOpenTraceRouting(): OpenTraceRouting {
   const [params, setParams] = useQueryStates(OPEN_TRACE_PARSERS, { history: "push" });
   const openTrace = useCallback(
     (ref: TraceRef | null) => {
-      void setParams({
-        ...FRESH_RUN,
-        trace: ref?.traceId ?? null,
-        trace_ref: ref?.traceRef || null,
-        ...(ref === null && { fullscreen: null }),
-      });
+      const run = { trace: ref?.traceId ?? null, trace_ref: ref?.traceRef || null };
+      void setParams(ref === null ? { ...FRESH_RUN, ...run, fullscreen: null } : { ...FRESH_RUN, ...run });
     },
     [setParams],
   );

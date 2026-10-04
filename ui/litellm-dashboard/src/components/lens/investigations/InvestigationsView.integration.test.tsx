@@ -8,6 +8,7 @@ import { lensKeys } from "../api/queries";
 import { InvestigationsView } from "./InvestigationsView";
 import { LensPreviewContext } from "../LensPreviewButton";
 import { briefMarkdown } from "../model/findings";
+import { inboxRows } from "../model/inbox";
 import { runTime } from "../model/format";
 import { type Lens, type Finding } from "../model/types";
 
@@ -507,7 +508,7 @@ it("allows request-only accounts to connect a worker without requiring agent tra
   expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
 });
 
-it("closes editing when browser navigation leaves the investigation", async () => {
+it("reopens the edit dialog from a shared link and drops it from the URL on cancel", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
@@ -515,17 +516,45 @@ it("closes editing when browser navigation leaves the investigation", async () =
     if (path === "/lens/agents") return [];
     return { data: [] };
   });
+  const onUrlUpdate = vi.fn();
   const user = userEvent.setup();
-  renderWithProviders(<InvestigationsView accessToken="test" />);
-  await user.click(await screen.findByRole("button", { name: "Investigation actions" }));
-  await user.click(await screen.findByRole("menuitem", { name: "Edit investigation" }));
-  expect(await screen.findByRole("dialog")).toBeVisible();
-  await act(async () => {
-    window.history.replaceState({}, "", "/lens/");
-    window.dispatchEvent(new PopStateEvent("popstate"));
+  renderWithProviders(<InvestigationsView accessToken="test" />, {
+    searchParams: `?lens=${lens.id}&dialog=edit`,
+    onUrlUpdate,
   });
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  const url = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
+  expect(url.has("dialog")).toBe(false);
+  expect(url.get("lens")).toBe(lens.id);
   expect(apiClient.request).not.toHaveBeenCalled();
+});
+
+it("reopens an inbox finding and a results section from shared links", async () => {
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return lens.jobs;
+    return { data: [] };
+  });
+  const [row] = inboxRows([lens]);
+  const onUrlUpdate = vi.fn();
+  const user = userEvent.setup();
+  const { unmount } = renderWithProviders(<InvestigationsView accessToken="test" />, {
+    searchParams: `?issue=${encodeURIComponent(row.key)}`,
+    onUrlUpdate,
+  });
+  const sheet = await screen.findByRole("dialog");
+  expect(within(sheet).getAllByText(issue.title)[0]).toBeVisible();
+  await user.click(within(sheet).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString)).has("issue")).toBe(false);
+  unmount();
+
+  renderWithProviders(<InvestigationsView accessToken="test" />, { searchParams: `?lens=${lens.id}&section=checks` });
+  expect(await screen.findByRole("tab", { name: "Criteria", selected: true })).toBeVisible();
 });
 
 it("resolves every investigation's copy of a merged finding from one row", async () => {

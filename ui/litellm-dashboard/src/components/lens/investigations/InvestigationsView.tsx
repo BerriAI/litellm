@@ -71,8 +71,10 @@ export function InvestigationsView({
   const lens = lenses.find((e) => e.id === selected);
   const targetLens = dialogTarget ? lenses.find((e) => e.id === dialogTarget) : lens;
   const editing = dialog === "new" || dialog === "edit" || dialog === "duplicate" ? dialog : null;
+  const setupMode = editing === "new" || targetLens ? editing : null;
   const peeked = issueKey ? inboxRows(lenses).find((row) => row.key === issueKey) : undefined;
-  const results = useInvestigationResults(accessToken, peeked?.sources[0].lens ?? lens);
+  const resultsLens = peeked?.sources[0].lens ?? lens;
+  const results = useInvestigationResults(accessToken, resultsLens);
   const {
     finding,
     sampledRuns,
@@ -255,10 +257,10 @@ export function InvestigationsView({
           results={results}
         />
       )}
-      {editing && (
+      {setupMode && (
         <InvestigationSetupDialog
           ready={ready}
-          mode={editing}
+          mode={setupMode}
           initial={setupSettings()}
           defaultModel={defaultModel}
           defaultSource={!tracesReady && requestsReady ? "requests" : "traces"}
@@ -316,7 +318,7 @@ export function InvestigationsView({
           setEvidence(value);
         }}
       />
-      {lens && target?.source === "traces" && (
+      {resultsLens && target?.source === "traces" && (
         <TraceSheet
           open={!!evidence}
           traceId={target.id}

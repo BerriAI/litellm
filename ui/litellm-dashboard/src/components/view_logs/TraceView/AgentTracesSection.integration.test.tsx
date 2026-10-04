@@ -422,6 +422,29 @@ describe("AgentTracesSection", () => {
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
   });
 
+  it("narrows the list to the zoom window named in the URL and clears it on request", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const startMs = Date.parse(runs[0].start_time);
+    const inWindow = runs.filter((run) => Math.abs(Date.parse(run.start_time) - startMs) <= 1);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-30T00:00Z"
+        endTime="2026-10-01T00:00Z"
+        isCustomDate
+        isLiveTail={false}
+      />,
+      { searchParams: `?from=${startMs - 1}&to=${startMs + 1}`, onUrlUpdate },
+    );
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(inWindow.length));
+    expect(inWindow.length).toBeLessThan(runs.length);
+    fireEvent.click(screen.getByRole("button", { name: "Clear time zoom" }));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length));
+    expect(lastUrl(onUrlUpdate).has("from")).toBe(false);
+  });
+
   it("opens the run named by ?trace= even when it is outside the loaded list, and clears it on close", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     const onUrlUpdate = vi.fn();

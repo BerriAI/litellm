@@ -1,4 +1,4 @@
-import { screen, within, waitFor, act } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { focusManager, onlineManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -289,7 +289,7 @@ describe("RunView", () => {
     );
     renderRun({ ...research, spans: [root, ...children] });
     const search = await screen.findByRole("textbox", { name: "Search steps" });
-    await user.type(search, "case 43");
+    fireEvent.change(search, { target: { value: "case 43" } });
     expect(screen.getAllByRole("treeitem")).toHaveLength(1);
     await user.click(screen.getByRole("treeitem"));
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", "case-43");
@@ -298,9 +298,20 @@ describe("RunView", () => {
     await user.click(screen.getByRole("button", { name: /^Errors/ }));
     expect(screen.getAllByRole("treeitem")).toHaveLength(1);
     expect(screen.getByRole("treeitem")).toHaveAttribute("data-row-id", "case-44");
-    await user.type(search, "not present");
+    fireEvent.change(search, { target: { value: "not present" } });
     expect(screen.getByText("No matching steps")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
+  });
+
+  it("restores the step search and errors filter from a shared link", async () => {
+    vi.mocked(agentTraceCall).mockResolvedValue(research);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />, {
+      searchParams: "?steps_q=no+such+step&errors=true",
+    });
+    expect(await screen.findByRole("textbox", { name: "Search steps" })).toHaveValue("no such step");
+    expect(screen.getByText("No matching steps")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
   });
 

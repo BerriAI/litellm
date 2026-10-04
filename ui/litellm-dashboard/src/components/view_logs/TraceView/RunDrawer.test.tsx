@@ -1,4 +1,4 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../tests/test-utils";
@@ -88,7 +88,7 @@ describe("RunDrawer", () => {
     window.localStorage.clear();
   });
 
-  it("fills the page across trace navigation and restores the resized drawer width", () => {
+  it("fills the page across trace navigation and restores the resized drawer width", async () => {
     const runs = [run("a"), run("b")];
     const onUrlUpdate = vi.fn();
     renderWithProviders(<RoutedDrawer runs={runs} />, { searchParams: "?trace=a", onUrlUpdate });
@@ -103,7 +103,7 @@ describe("RunDrawer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
     expect(drawer).toHaveStyle({ width: "100%" });
     expect(screen.getByTestId("run-view")).toHaveTextContent("run b");
-    expect(lastUrl(onUrlUpdate).get("fullscreen")).toBe("true");
+    await waitFor(() => expect(lastUrl(onUrlUpdate).get("fullscreen")).toBe("true"));
 
     fireEvent.click(screen.getByRole("button", { name: "Exit full screen" }));
     expect(drawer).toHaveStyle({ width: resizedWidth });
@@ -111,12 +111,12 @@ describe("RunDrawer", () => {
     expect(window.localStorage.getItem("litellm.agentTraces.drawerWidth")).toBe(storedWidth);
   });
 
-  it("opens full screen from a shared link and drops it from the URL on close", () => {
+  it("opens full screen from a shared link and drops it from the URL on close", async () => {
     const onUrlUpdate = vi.fn();
     renderWithProviders(<RoutedDrawer runs={[run("a")]} />, { searchParams: "?trace=a&fullscreen=true", onUrlUpdate });
     expect(screen.getByRole("complementary", { name: "Trace details" })).toHaveStyle({ width: "100%" });
     fireEvent.click(screen.getByRole("button", { name: "Close trace (Esc)" }));
-    expect(lastUrl(onUrlUpdate).has("trace")).toBe(false);
+    await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
     expect(lastUrl(onUrlUpdate).has("fullscreen")).toBe(false);
   });
 
