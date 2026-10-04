@@ -17,7 +17,18 @@ from litellm.constants import (
 )
 
 from .analysis import AnalysisResponseError, analyze_sample, validation_details
-from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Review, Sample
+from .models import (
+    Claim,
+    Coverage,
+    ExecutionContent,
+    InFlight,
+    ModelRequest,
+    ModelResult,
+    Progress,
+    Result,
+    Review,
+    Sample,
+)
 
 logger: Final = logging.getLogger("litellm.lens.worker")
 
@@ -190,10 +201,16 @@ class LensWorker:
             result.raise_for_status()
             return ExecutionContent.model_validate(result.json())
 
-        async def progress(stage: str, coverage: Coverage, review: Review | None = None, /) -> None:
+        async def progress(
+            stage: str,
+            coverage: Coverage,
+            review: Review | None = None,
+            reading: tuple[InFlight, ...] | None = None,
+            /,
+        ) -> None:
             result: Final = await self.client.post(
                 prefix + "/progress",
-                json=Progress(stage=stage, coverage=coverage, review=review).model_dump(mode="json"),
+                json=Progress(stage=stage, coverage=coverage, review=review, reading=reading).model_dump(mode="json"),
             )
             result.raise_for_status()
 
