@@ -9602,3 +9602,69 @@ async def test_concurrent_async_success_handlers_log_once_when_handler_yields(mo
 
     assert len(counting_logger.logged_results) == 1
     assert counting_logger.logged_results[0] is inner_result
+
+
+@pytest.mark.asyncio
+async def test_concurrent_async_success_handler_logs_when_first_is_cancelled_before_logging(monkeypatch):
+    """
+    The second task on the same logging object waits for the first instead of skipping, so if
+    the first is cancelled (e.g. by the logging worker's per-coroutine timeout) before its
+    callbacks run, the second one still logs the request exactly once.
+    """
+    from litellm.litellm_core_utils import litellm_logging
+
+    class CountingLogger(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+
+    first_entered: Final = asyncio.Event()
+    real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+    calls: list[int] = []
+
+    async def hanging_then_real_truncate(messages):
+        calls.append(1)
+        if len(calls) == 1:
+            first_entered.set()
+            await asyncio.Event().wait()  # the first handler never finishes on its own
+        return await real_truncate(messages)
+
+    monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", hanging_then_real_truncate)
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.6-luna",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="bridge-call-id-cancel",
+        function_id="bridge-fn-id-cancel",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={},
+        optional_params={},
+        model="gpt-5.6-luna",
+        custom_llm_provider="openai",
+        input=messages,
+    )
+    inner_result: Final = ModelResponse(id="inner")
+    outer_result: Final = ModelResponse(id="outer")
+    now: Final = datetime.datetime.now()
+
+    first: Final = asyncio.create_task(logging_obj.async_success_handler(result=inner_result, start_time=now, end_time=now))
+    await first_entered.wait()
+    second: Final = asyncio.create_task(logging_obj.async_success_handler(result=outer_result, start_time=now, end_time=now))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await second
+
+    assert counting_logger.logged_results == [outer_result]

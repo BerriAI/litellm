@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import asyncio
 import copy
 import datetime
 import functools
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import time
 import traceback
+import weakref
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
@@ -289,6 +291,13 @@ if TYPE_CHECKING:
 else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
 _in_memory_loggers: Final[list[CustomLogger]] = []
+
+# Nested @client wrappers (chat over the Responses bridge) run async success logging for one
+# request as two concurrent tasks on the same Logging object. The dedup flag is only set after
+# awaited work, so the tasks are serialised per logging object: the second one waits, then sees
+# the flag and skips, or logs itself if the first one raised or was cancelled before logging.
+# Kept outside the instance so Logging stays copyable and the lock goes away with the object.
+_async_success_dedup_locks: Final["weakref.WeakKeyDictionary[Logging, asyncio.Lock]"] = weakref.WeakKeyDictionary()
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token",))
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
@@ -3214,9 +3223,15 @@ class Logging(LiteLLMLoggingBaseClass):
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
             with post_response_phase():
-                return await self._async_success_handler_body(
-                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
-                )
+                if self.stream is True or self._is_assembled_stream_success(result):
+                    return await self._async_success_handler_body(
+                        result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                    )
+                dedup_lock: Final = _async_success_dedup_locks.setdefault(self, asyncio.Lock())
+                async with dedup_lock:
+                    return await self._async_success_handler_body(
+                        result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                    )
         finally:
             self._restore_correlation_context()
 
@@ -3232,10 +3247,10 @@ class Logging(LiteLLMLoggingBaseClass):
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         print_verbose(f"Logging Details LiteLLM-Async Success Call, cache_hit={cache_hit}")
-        if not self._is_assembled_stream_success(result):
-            if not self.should_run_logging(event_type="async_success"):  # prevent double logging (non-streaming)
-                return
-            self.has_run_logging(event_type="async_success")  # claim before any await so a concurrent task skips
+        if not self._is_assembled_stream_success(result) and not self.should_run_logging(
+            event_type="async_success"
+        ):  # prevent double logging (non-streaming)
+            return
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):
