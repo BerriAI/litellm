@@ -99,17 +99,30 @@ def _message_key_groups(attrs: Mapping[str, AttrValue]) -> Mapping[tuple[str, in
     )
 
 
-def _message_shed_groups(
-    groups: Mapping[tuple[str, int, int], tuple[str, ...]], family: str, message_idx: int
-) -> Iterator[tuple[str, int, int]]:
-    tool_call_groups: Final = tuple(
-        sorted(
-            (group for group in groups if group[:2] == (family, message_idx) and group[2] != _MESSAGE_BASE),
-            key=lambda group: group[2],
-            reverse=True,
-        )
+def _tool_call_groups_by_message(
+    groups: Mapping[tuple[str, int, int], tuple[str, ...]],
+) -> Mapping[tuple[str, int], tuple[tuple[str, int, int], ...]]:
+    """Tool-call groups indexed by ``(family, message index)``, each tuple highest tool index first.
+
+    Indexing once keeps the shed order linear in the group count: rescanning the
+    full group map per message made attribute fitting quadratic on long prompts.
+    """
+    indexed: dict[tuple[str, int], list[tuple[str, int, int]]] = {}
+    for family, message_idx, tool_idx in groups:
+        if tool_idx != _MESSAGE_BASE:
+            indexed.setdefault((family, message_idx), []).append((family, message_idx, tool_idx))
+    return MappingProxyType(
+        {key: tuple(sorted(value, key=lambda group: group[2], reverse=True)) for key, value in indexed.items()}
     )
-    yield from tool_call_groups
+
+
+def _message_shed_groups(
+    groups: Mapping[tuple[str, int, int], tuple[str, ...]],
+    tool_call_groups: Mapping[tuple[str, int], tuple[tuple[str, int, int], ...]],
+    family: str,
+    message_idx: int,
+) -> Iterator[tuple[str, int, int]]:
+    yield from tool_call_groups.get((family, message_idx), ())
     base_group: Final = (family, message_idx, _MESSAGE_BASE)
     if base_group in groups:
         yield base_group
@@ -117,6 +130,7 @@ def _message_shed_groups(
 
 def _shed_order(groups: Mapping[tuple[str, int, int], tuple[str, ...]]) -> tuple[tuple[str, int, int], ...]:
     """Middle inputs, extra choices, pinned inputs, then the first choice, with tool calls before message keys."""
+    tool_call_groups: Final = _tool_call_groups_by_message(groups)
     inputs: Final = sorted(frozenset(idx for family, idx, _ in groups if family == _INPUT_MESSAGES))
     outputs: Final = sorted(frozenset(idx for family, idx, _ in groups if family == _OUTPUT_MESSAGES))
     pinned_inputs: Final = tuple(dict.fromkeys((*inputs[:1], *inputs[-1:])))
@@ -127,24 +141,35 @@ def _shed_order(groups: Mapping[tuple[str, int, int], tuple[str, ...]]) -> tuple
         *((_OUTPUT_MESSAGES, idx) for idx in outputs[:1]),
     )
     return tuple(
-        chain.from_iterable(_message_shed_groups(groups, family, message_idx) for family, message_idx in message_order)
+        chain.from_iterable(
+            _message_shed_groups(groups, tool_call_groups, family, message_idx) for family, message_idx in message_order
+        )
     )
+
+
+_METADATA_KEY: Final = "metadata"
 
 
 def fit_indexed_messages(attrs: Mapping[str, AttrValue], budget: int | None) -> Mapping[str, AttrValue]:
     """``attrs`` with indexed message attributes shed, least valuable first, until at most ``budget`` keys remain.
 
     ``None`` means the span has no attribute count limit. Every message still rides the ``input.value`` and
-    ``output.value`` blobs, so shedding a per-index pair loses no content.
+    ``output.value`` blobs, so shedding a per-index pair loses no content. The ``metadata`` blob sheds only
+    after every indexed message attribute: message attributes are the indexed, queryable view (the blobs
+    carry no per-index keys), so a count-squeezed span keeps them and the single metadata key absorbs only
+    the residual shortfall. Shedding happens here, before ``span.set_attribute``, so the fit is exact and
+    the SDK's dropped-attributes counter never silently masks the choice.
     """
     if budget is None or len(attrs) <= budget:
         return attrs
     groups: Final = _message_key_groups(attrs)
-    order: Final = _shed_order(groups)
-    running: Final = tuple(accumulate(len(groups[group]) for group in order))
+    sheddable: Final = (*(groups[group] for group in _shed_order(groups)),)
+    flex: Final = (_METADATA_KEY,) if _METADATA_KEY in attrs else ()
+    candidates: Final = (*sheddable, flex) if flex else sheddable
+    running: Final = tuple(accumulate(len(candidate) for candidate in candidates))
     excess: Final = len(attrs) - budget
-    shed_count: Final = next((n + 1 for n, total in enumerate(running) if total >= excess), len(order))
-    shed: Final = frozenset(chain.from_iterable(groups[group] for group in order[:shed_count]))
+    shed_count: Final = next((n + 1 for n, total in enumerate(running) if total >= excess), len(candidates))
+    shed: Final = frozenset(chain.from_iterable(candidates[:shed_count]))
     return MappingProxyType({key: value for key, value in attrs.items() if key not in shed})
 
 
