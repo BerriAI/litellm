@@ -12,6 +12,7 @@ from litellm.proxy.lens.models import (
     Lens,
     LensSettings,
     Review,
+    Sample,
     Scope,
     Step,
     Worker,
@@ -198,3 +199,21 @@ def snapshot_finding(lens: Lens, draft: FindingDraft, revision: int, now: dateti
             }
         )
     )
+
+
+def without_attributes(sample: Sample) -> Sample:
+    executions: Final = tuple(e.model_copy(update=MappingProxyType({"metadata": ()})) for e in sample.executions)
+    return sample.model_copy(update=MappingProxyType({"executions": executions}))
+
+
+def summarized_job(job: Job) -> Job:
+    sample: Final = without_attributes(job.sample) if job.sample else None
+    return job.model_copy(update=MappingProxyType({"reviews": (), "sample": sample}))
+
+
+def summarized(lens: Lens) -> Lens:
+    return lens.model_copy(update=MappingProxyType({"jobs": tuple(summarized_job(job) for job in lens.jobs)}))
+
+
+def reviews_after(job: Job, after: datetime | None) -> tuple[Review, ...]:
+    return job.reviews if after is None else tuple(r for r in job.reviews if r.at > after)
