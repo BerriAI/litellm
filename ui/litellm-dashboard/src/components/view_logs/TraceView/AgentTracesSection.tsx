@@ -187,14 +187,7 @@ export function AgentTracesSection({
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
       <TracesReceived received={setup.received} />
-      {live && isActive && (
-        <HeaderActions>
-          <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-            <ActiveDot />
-            Set up tracing
-          </Button>
-        </HeaderActions>
-      )}
+      <TracingSetupAction live={live} isActive={isActive} onClick={() => setShowSetup(true)} />
       <RunDrawer
         trace={openTrace}
         runs={runs}
@@ -249,6 +242,18 @@ export function AgentTracesSection({
         onResetZoom={() => setZoom(null)}
       />
     </div>
+  );
+}
+
+function TracingSetupAction({ live, isActive, onClick }: { live: boolean; isActive: boolean; onClick: () => void }) {
+  if (!live || !isActive) return null;
+  return (
+    <HeaderActions>
+      <Button variant="outline" size="sm" onClick={onClick} className="shrink-0 gap-1.5">
+        <ActiveDot />
+        Set up tracing
+      </Button>
+    </HeaderActions>
   );
 }
 
