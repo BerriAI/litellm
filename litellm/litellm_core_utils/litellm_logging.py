@@ -947,6 +947,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 **additional_params,
             }
         )
+        # Provider params / additional kwargs are caller-influenced; they must not
+        # overwrite the internal litellm_params, or a request body carrying
+        # `litellm_params` could forge logging markers (e.g. batch_parent_id).
+        self.model_call_details["litellm_params"] = self.litellm_params
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
