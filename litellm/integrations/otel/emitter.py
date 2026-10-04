@@ -91,6 +91,15 @@ def span_attribute_limit(span: Span) -> int | None:
     return span._limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
 
 
+def _carried_keys(
+    attributes: Mapping[str, AttrValue] | tuple[tuple[str, AttrValue], ...],
+) -> frozenset[str]:
+    """The keys a span already carries: a live span exposes a ``Mapping``, an ended one a tuple of pairs."""
+    if isinstance(attributes, Mapping):
+        return frozenset(attributes)
+    return frozenset(key for key, _value in attributes)
+
+
 def attribute_budget(span: Span, reserved: int, overwrites: frozenset[str] = frozenset()) -> int | None:
     """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more.
 
@@ -105,9 +114,7 @@ def attribute_budget(span: Span, reserved: int, overwrites: frozenset[str] = fro
         return None
     if not isinstance(span, ReadableSpan):
         return limit - reserved
-    existing: Final = span.attributes or ()
-    # A live span exposes a ``Mapping``; an ended ``ReadableSpan`` a tuple of pairs.
-    existing_keys: Final = existing.keys() if isinstance(existing, Mapping) else frozenset(k for k, _ in existing)
+    existing_keys: Final = _carried_keys(span.attributes or ())
     fresh: Final = len(existing_keys - overwrites) if overwrites else len(existing_keys)
     return limit - fresh - reserved
 
