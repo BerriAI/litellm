@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   analysisModel,
+  briefReasoning,
+  checkLabel,
   conclusions,
+  traceRows,
   decidedReviews,
-  focusedReview,
   grownGroups,
   inGroup,
   share,
@@ -12,7 +14,6 @@ import {
   EMPTY_FEED,
   shortVerdict,
   stripState,
-  tickerLine,
   liveJob,
   liveStats,
   outcome,
@@ -27,7 +28,6 @@ import {
   startPlayback,
   stepDuration,
   tokenLabel,
-  verdictLine,
 } from "./live";
 import type { Job, Review } from "./types";
 
@@ -83,38 +83,39 @@ describe("review outcome", () => {
     expect(outcome(review("a", { cannot_assess: true, verdicts: [issue("i")] }))).toBe("unknown");
   });
 
-  it("names the agent and short trace id in the ticker, falling back to the run name", () => {
-    expect(tickerLine(review("a", { trace_id: "a91f3c02deadbeef" }))).toBe("reading support-bot · a91f3c02");
-    expect(tickerLine(review("a", { agent: "", name: "refund", trace_id: "7d21" }))).toBe("reading refund · 7d21");
-  });
-
-  it("leads the verdict line with the issue summary over patterns", () => {
-    expect(verdictLine(review("a", { verdicts: [pattern("p", "fine"), issue("i", "made it up")] }))).toBe(
-      "made it up",
-    );
-    expect(verdictLine(review("a"))).toBe("No issue observed");
-    expect(verdictLine(review("a", { cannot_assess: true }))).toBe("Not enough evidence to judge");
+  it("keeps the first few sentences of the reasoning", () => {
+    expect(briefReasoning("One. Two? Three! Four. Five.")).toBe("One. Two? Three!");
+    expect(briefReasoning("Saw 1.5 percent drop. Fine")).toBe("Saw 1.5 percent drop. Fine");
+    expect(briefReasoning("  ")).toBe("");
   });
 });
 
 describe("conclusions", () => {
-  it("counts traces per check and kind, ranking issues before patterns, then by count", () => {
+  it("makes one group per check, counting issue traces and noting pattern traces", () => {
     const reviews = [
       review("a", { verdicts: [pattern("calm"), issue("invented", "first")] }),
       review("b", { verdicts: [pattern("calm"), pattern("calm")] }),
       review("c", { verdicts: [issue("unhappy_user")] }),
-      review("d", { verdicts: [issue("invented", "latest"), pattern("invented")] }),
+      review("d", { verdicts: [issue("invented", "latest"), pattern("invented", "fine")] }),
+      review("e", { verdicts: [pattern("invented", "fine")] }),
     ];
     const result = conclusions(reviews, [{ id: "invented", instruction: "Invents answers", enabled: true }]);
-    expect(result.map((c) => [c.checkId, c.count, c.issue])).toEqual([
-      ["invented", 2, true],
-      ["unhappy_user", 1, true],
-      ["calm", 2, false],
-      ["invented", 1, false],
+    expect(result.map((c) => [c.checkId, c.count, c.noted, c.issue])).toEqual([
+      ["invented", 2, 1, true],
+      ["unhappy_user", 1, 0, true],
+      ["calm", 0, 2, false],
     ]);
+    expect(new Set(result.map((c) => c.key)).size).toBe(result.length);
     expect(result[0].label).toBe("Invents answers");
     expect(result[0].latest).toBe("latest");
     expect(result[1].label).toBe("Unhappy user");
+  });
+
+  it("labels a check by its humanized id when the instruction is long", () => {
+    const long = "Agent takes a risky action (refund over limit, prod deploy) without required approval";
+    expect(checkLabel("no_approval", long)).toBe("No approval");
+    expect(checkLabel("expected_behavior", undefined)).toBe("Expected behavior");
+    expect(checkLabel("x", "Invents answers")).toBe("Invents answers");
   });
 
   it("is empty when nothing was flagged", () => {
@@ -124,7 +125,7 @@ describe("conclusions", () => {
   it("filters traces to a group and lets everything through without one", () => {
     const [invented] = conclusions([review("a", { verdicts: [issue("invented")] })]);
     expect(inGroup(review("a", { verdicts: [issue("invented")] }), invented.key)).toBe(true);
-    expect(inGroup(review("b", { verdicts: [pattern("invented")] }), invented.key)).toBe(false);
+    expect(inGroup(review("b", { verdicts: [pattern("other")] }), invented.key)).toBe(false);
     expect(inGroup(review("c"), null)).toBe(true);
   });
 
@@ -134,8 +135,26 @@ describe("conclusions", () => {
       review("a", { verdicts: [issue("x"), pattern("y")] }),
       review("b", { verdicts: [issue("x"), issue("z")] }),
     ]);
-    expect([...grownGroups(before, after)].sort()).toEqual(["issue:x", "issue:z"]);
+    expect([...grownGroups(before, after)].sort()).toEqual(["x", "z"]);
     expect(grownGroups(after, after).size).toBe(0);
+  });
+
+  it("flashes a group that only gained a pattern trace", () => {
+    const before = conclusions([review("a", { verdicts: [pattern("y")] })]);
+    const after = conclusions([review("a", { verdicts: [pattern("y")] }), review("b", { verdicts: [pattern("y")] })]);
+    expect([...grownGroups(before, after)]).toEqual(["y"]);
+  });
+
+  it("lists upcoming traces above the one being read and finished ones below, newest first", () => {
+    const [a, b, c, d] = ["a", "b", "c", "d"].map((id) => review(id));
+    const rows = traceRows({ played: [a], current: b, pending: [c, d] }, 10);
+    expect(rows.map((row) => [row.review.execution_id, row.state])).toEqual([
+      ["d", "queued"],
+      ["c", "queued"],
+      ["b", "reviewing"],
+      ["a", "done"],
+    ]);
+    expect(traceRows({ played: [a], current: b, pending: [c, d] }, 2)).toHaveLength(2);
   });
 
   it("gives a bar share bounded to the total", () => {
@@ -346,19 +365,6 @@ describe("issue count", () => {
       count: 2,
       scope: "in last 3 reviewed",
     });
-  });
-});
-
-describe("drawer focus", () => {
-  const reviews = [review("a"), review("b")];
-
-  it("follows the live review until one is picked", () => {
-    expect(focusedReview(reviews, null, reviews[1])).toEqual({ review: reviews[1], following: true });
-    expect(focusedReview(reviews, reviewKey(reviews[0]), reviews[1])).toEqual({ review: reviews[0], following: false });
-  });
-
-  it("goes back to live when the picked review was dropped by the cap", () => {
-    expect(focusedReview(reviews, "gone@x", reviews[1])).toEqual({ review: reviews[1], following: true });
   });
 });
 

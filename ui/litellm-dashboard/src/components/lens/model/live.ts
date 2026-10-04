@@ -8,6 +8,7 @@ export interface Conclusion {
   label: string;
   latest: string;
   count: number;
+  noted: number;
   issue: boolean;
 }
 
@@ -50,10 +51,6 @@ export function providerOf(model: string): string {
 export function outcome(review: Pick<Review, "cannot_assess" | "verdicts">): Outcome {
   if (review.cannot_assess) return "unknown";
   return review.verdicts.some((v) => v.kind === "issue") ? "issue" : "clear";
-}
-
-export function tickerLine(review: Pick<Review, "agent" | "name" | "trace_id">): string {
-  return `reading ${review.agent || review.name} · ${review.trace_id.slice(0, 8)}`;
 }
 
 export function shortVerdict(review: Pick<Review, "cannot_assess" | "verdicts">): string {
@@ -100,22 +97,6 @@ export function issueCount(job: Pick<Job, "status" | "findings" | "reviews" | "r
   return { count, scope: "" };
 }
 
-export function focusedReview(
-  reviews: readonly Review[],
-  pinned: string | null,
-  live: Review | null,
-): { review: Review | null; following: boolean } {
-  const picked = pinned ? reviews.find((r) => reviewKey(r) === pinned) : undefined;
-  return picked ? { review: picked, following: false } : { review: live, following: true };
-}
-
-export function verdictLine(review: Pick<Review, "cannot_assess" | "verdicts">): string {
-  const issue = review.verdicts.find((v) => v.kind === "issue");
-  if (issue) return issue.summary;
-  if (review.cannot_assess) return "Not enough evidence to judge";
-  return review.verdicts[0]?.summary ?? "No issue observed";
-}
-
 const KEPT_REVIEWS = 200;
 
 export interface ReviewFeed {
@@ -152,45 +133,76 @@ export function playbackPhase(elapsed: number, duration: number, spans: number, 
   return { span, typed: Math.round(typing * chars), verdict: t >= READ_SHARE + TYPE_SHARE };
 }
 
-function checkLabel(checkId: string): string {
+const SHORT_LABEL = 48;
+
+function humanize(checkId: string): string {
   const words = checkId.replace(/[_-]+/g, " ").trim();
   return words ? words[0].toUpperCase() + words.slice(1) : checkId;
 }
 
-function groupKey(verdict: Pick<ReviewVerdict, "check_id" | "kind">): string {
-  return `${verdict.kind}:${verdict.check_id}`;
+export function checkLabel(checkId: string, instruction: string | undefined): string {
+  return instruction && instruction.length <= SHORT_LABEL ? instruction : humanize(checkId);
+}
+
+function verdictsByCheck(review: Pick<Review, "verdicts">): Map<string, ReviewVerdict> {
+  const ranked = [...review.verdicts].sort((a, b) => Number(a.kind === "issue") - Number(b.kind === "issue"));
+  return new Map(ranked.map((verdict) => [verdict.check_id, verdict]));
 }
 
 export function conclusions(reviews: readonly Review[], checks: Settings["checks"] = []): Conclusion[] {
   const instructions = new Map(checks.map((check) => [check.id, check.instruction]));
   const grouped = reviews.reduce((groups, review) => {
-    const perTrace = new Map(review.verdicts.map((verdict) => [groupKey(verdict), verdict]));
-    return [...perTrace].reduce((next, [key, verdict]) => {
-      const prior = next.get(key);
-      return new Map(next).set(key, {
-        key,
+    return [...verdictsByCheck(review).values()].reduce((next, verdict) => {
+      const prior = next.get(verdict.check_id);
+      const issue = verdict.kind === "issue";
+      return new Map(next).set(verdict.check_id, {
+        key: verdict.check_id,
         checkId: verdict.check_id,
-        label: instructions.get(verdict.check_id) ?? checkLabel(verdict.check_id),
-        latest: verdict.summary,
-        count: (prior?.count ?? 0) + 1,
-        issue: verdict.kind === "issue",
+        label: checkLabel(verdict.check_id, instructions.get(verdict.check_id)),
+        latest: issue || !prior ? verdict.summary : prior.latest,
+        count: (prior?.count ?? 0) + Number(issue),
+        noted: (prior?.noted ?? 0) + Number(!issue),
+        issue: (prior?.issue ?? false) || issue,
       });
     }, groups);
   }, new Map<string, Conclusion>());
-  return [...grouped.values()].sort((a, b) => Number(b.issue) - Number(a.issue) || b.count - a.count);
+  return [...grouped.values()].sort((a, b) => b.count - a.count || b.noted - a.noted);
 }
 
 export function share(count: number, total: number): number {
   return total > 0 ? Math.min(1, count / total) : 0;
 }
 
-export function inGroup(review: Pick<Review, "verdicts">, key: string | null): boolean {
-  return key === null || review.verdicts.some((verdict) => groupKey(verdict) === key);
+export function inGroup(review: Pick<Review, "verdicts">, checkId: string | null): boolean {
+  return checkId === null || review.verdicts.some((verdict) => verdict.check_id === checkId);
 }
 
+const BRIEF_SENTENCES = 3;
+
+export function briefReasoning(reasoning: string): string {
+  const sentences = reasoning.trim().split(/(?<=[.!?])\s+/);
+  return sentences.slice(0, BRIEF_SENTENCES).join(" ").trim();
+}
+
+
 export function grownGroups(before: readonly Conclusion[], after: readonly Conclusion[]): Set<string> {
-  const prior = new Map(before.map((group) => [group.key, group.count]));
-  return new Set(after.filter((group) => group.count > (prior.get(group.key) ?? 0)).map((group) => group.key));
+  const prior = new Map(before.map((group) => [group.key, group.count + group.noted]));
+  return new Set(
+    after.filter((group) => group.count + group.noted > (prior.get(group.key) ?? 0)).map((group) => group.key),
+  );
+}
+
+export type TraceRowState = "queued" | "reviewing" | "done";
+
+export function traceRows(
+  playback: Pick<Playback, "played" | "current" | "pending">,
+  limit: number,
+): { review: Review; state: TraceRowState }[] {
+  return [
+    ...[...playback.pending].reverse().map((review) => ({ review, state: "queued" as const })),
+    ...(playback.current ? [{ review: playback.current, state: "reviewing" as const }] : []),
+    ...[...playback.played].reverse().map((review) => ({ review, state: "done" as const })),
+  ].slice(0, limit);
 }
 
 export function decidedReviews(playback: Pick<Playback, "played" | "current">, verdictShown: boolean): Review[] {
