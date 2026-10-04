@@ -3561,6 +3561,8 @@ def _complete_nadir(ctx: _CompletionDispatchContext) -> _CompletionDispatchResul
     ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
 
     return response
+
+
 def _complete_opencode(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
