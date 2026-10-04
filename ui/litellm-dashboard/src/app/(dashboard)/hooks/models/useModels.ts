@@ -247,7 +247,12 @@ export const useModelHub = () => {
 export const useAllProxyModels = () => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AllProxyModelsResponse>({
-    queryKey: allProxyModelsKeys.list({}),
+    queryKey: allProxyModelsKeys.list({
+      filters: {
+        userId: userId ?? "",
+        userRole: userRole ?? "",
+      },
+    }),
     queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true, null, true, false, "expand"),
     enabled: Boolean(accessToken && userId && userRole),
   });
@@ -256,7 +261,12 @@ export const useAllProxyModels = () => {
 export const useUserModels = (): UseQueryResult<string[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<string[]>({
-    queryKey: userModelsKeys.list({}),
+    queryKey: userModelsKeys.list({
+      filters: {
+        userId: userId ?? "",
+        userRole: userRole ?? "",
+      },
+    }),
     queryFn: async () => {
       const response = await modelAvailableCall(accessToken!, userId!, userRole!);
       return response["data"].map((model: { id: string }) => model.id);
@@ -268,7 +278,13 @@ export const useUserModels = (): UseQueryResult<string[]> => {
 export const useSelectedTeamModels = (teamID: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AllProxyModelsResponse>({
-    queryKey: selectedTeamModelsKeys.list({}),
+    queryKey: selectedTeamModelsKeys.list({
+      filters: {
+        teamID: teamID ?? "",
+        userId: userId ?? "",
+        userRole: userRole ?? "",
+      },
+    }),
     queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true, teamID!),
     enabled: Boolean(accessToken && userId && userRole && teamID),
   });

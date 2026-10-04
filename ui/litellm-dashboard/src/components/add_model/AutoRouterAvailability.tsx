@@ -30,7 +30,11 @@ export const useAutoRouterAvailability = (accessToken: string, body: Request, en
     queryFn: ({ signal }) =>
       apiClient.post<Availability>("/auto_router/availability", {
         accessToken,
-        body: { ...body, complexity_router_config: JSON.parse(debounced) },
+        body: {
+          team_id: body.team_id,
+          saved_model_id: body.saved_model_id,
+          complexity_router_config: JSON.parse(debounced),
+        },
         signal,
       }),
     enabled: enabled && Boolean(accessToken),
@@ -53,8 +57,10 @@ export const useAutoRouterAvailability = (accessToken: string, body: Request, en
     return query.data.error ?? null;
   };
   return {
-    ...query,
+    data: query.data,
+    isError: query.isError,
     isPending: query.isPending || (query.isFetching && !query.isFetchedAfterMount),
+    refetch: query.refetch,
     isChecking,
     saveBlockedReason: saveBlockedReason(),
   };

@@ -246,20 +246,19 @@ const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
   const [page, setPage] = useState(1);
   const [selectedLog, setSelectedLog] = useState<LogRow | null>(null);
 
-  const startDate = getStartMoment(timeRange).utc().format("YYYY-MM-DD HH:mm:ss");
-  const endDate = moment().utc().format("YYYY-MM-DD HH:mm:ss");
-
-  const logsCallOptions = {
-    accessToken,
-    start_date: startDate,
-    end_date: endDate,
-    page,
-    page_size: PAGE_SIZE,
-    params: { user_id: userId, sort_by: "startTime", sort_order: "desc" as const },
-  };
   const logsQueryOptions = {
     queryKey: [LOGS_QUERY_KEY, accessToken, userId, timeRange, page],
-    queryFn: () => uiSpendLogsCall(logsCallOptions),
+    queryFn: () => {
+      const logsCallOptions = {
+        accessToken,
+        start_date: getStartMoment(timeRange).utc().format("YYYY-MM-DD HH:mm:ss"),
+        end_date: moment().utc().format("YYYY-MM-DD HH:mm:ss"),
+        page,
+        page_size: PAGE_SIZE,
+        params: { user_id: userId, sort_by: "startTime", sort_order: "desc" as const },
+      };
+      return uiSpendLogsCall(logsCallOptions);
+    },
     enabled: !!accessToken && !!userId,
     placeholderData: keepPreviousData,
   };
@@ -270,10 +269,14 @@ const LogsPanel: React.FC<Props> = ({ accessToken, userId }) => {
   const totalPages = logs?.total_pages ?? 0;
   const total = logs?.total ?? 0;
 
-  const detailStartDate = selectedLog ? moment(selectedLog.startTime).utc().format("YYYY-MM-DD HH:mm:ss") : "";
   const { data: detailData, isLoading: isDetailLoading } = useQuery({
     queryKey: [LOGS_QUERY_KEY, "detail", accessToken, selectedLog?.request_id, selectedLog?.startTime],
-    queryFn: () => uiSpendLogDetailsCall(accessToken, selectedLog!.request_id, detailStartDate),
+    queryFn: () =>
+      uiSpendLogDetailsCall(
+        accessToken,
+        selectedLog!.request_id,
+        moment(selectedLog!.startTime).utc().format("YYYY-MM-DD HH:mm:ss"),
+      ),
     enabled: !!accessToken && !!selectedLog,
   });
   const details = detailData as LogDetails | undefined;

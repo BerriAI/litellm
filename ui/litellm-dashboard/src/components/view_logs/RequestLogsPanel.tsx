@@ -136,7 +136,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const { data: selectedKeyInfo } = useQuery(keyInfoQueryOptions);
 
   const urlLogQueryOptions: UseQueryOptions<LogEntry | null> = {
-    queryKey: ["logs", "byId", urlLogId, accessToken],
+    queryKey: ["logs", "byId", urlLogId, accessToken, startTime, endTime, isCustomDate],
     queryFn: async () => {
       if (urlLogId === null) return null;
       const window = formatLogsWindow(startTime, endTime, isCustomDate);
