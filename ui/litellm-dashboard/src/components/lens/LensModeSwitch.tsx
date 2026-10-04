@@ -82,16 +82,14 @@ export function LensModeSwitch({
   const settingsTitle = connected ? "Worker connected" : "Connect worker";
   const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
   return (
-    <div className={cn("relative z-raised rounded-t-2xl bg-card px-1.5 pt-1.5 pb-[7px]", frameOf(demo).tab)}>
+    <div className={cn("relative z-raised rounded-t-2xl bg-card", frameOf(demo).tab)}>
       <NotchCorner side="left" demo={demo} />
       <NotchCorner side="right" demo={demo} />
-      <TabsPrimitive.List
-        aria-label="Lens"
-        className="relative inline-flex h-9 items-center rounded-full bg-muted/70 p-1"
-      >
-        <TabsPrimitive.Indicator className="absolute top-1 bottom-1 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-background shadow-sm ring-1 ring-border transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none" />
+      <TabsPrimitive.List aria-label="Lens" className="relative inline-flex h-9 items-center p-1">
+        <TabsPrimitive.Indicator className="absolute top-1 bottom-1 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-muted transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none" />
         {tabs.map(([view, label]) => {
           const Icon = MODE_ICONS[view as LensTab];
+          const workerDisconnected = view === "settings" && workers !== null && !connected;
           return (
             <TabsPrimitive.Tab
               key={view}
@@ -107,12 +105,7 @@ export function LensModeSwitch({
             >
               <span className="relative inline-flex">
                 <Icon aria-hidden="true" className="size-4" />
-                {view === "settings" && workers && (
-                  <StatusDot
-                    state={connected ? "ok" : "warn"}
-                    className="absolute -top-0.5 -right-0.5 size-1.5 ring-2 ring-muted"
-                  />
-                )}
+                {workerDisconnected && <StatusDot state="error" className="absolute -top-0.5 -right-0.5 size-1.5" />}
               </span>
               <span className={cn(view === "settings" && "sr-only")}>{label}</span>
               {view === "investigations" && setup && (
