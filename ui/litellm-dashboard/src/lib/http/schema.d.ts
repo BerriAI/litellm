@@ -3808,6 +3808,28 @@ export interface paths {
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
     };
+    "/credentials/{credential_name}/jwks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Credential Internal Issuer Jwks
+         * @description Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
+         *     register it on the Anthropic federation issuer from the UI. Never touches the private signing
+         *     key: only its derived public JWKS leaves this process. 404s for any other credential shape.
+         */
+        get: operations["get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor/chat/completions": {
         parameters: {
             query?: never;
@@ -31454,6 +31476,8 @@ export interface components {
         };
         /** Deployment */
         Deployment: {
+            /** Blocked */
+            blocked?: boolean | null;
             litellm_params: components["schemas"]["LiteLLM_Params"];
             model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
@@ -35010,6 +35034,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -35273,6 +35333,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -48123,6 +48189,8 @@ export interface components {
             credential_values?: {
                 [key: string]: unknown;
             } | null;
+            /** Credential Values To Delete */
+            credential_values_to_delete?: string[] | null;
             /** Model Id */
             model_id?: string | null;
         };
@@ -50386,6 +50454,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -50649,6 +50753,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -56661,6 +56771,38 @@ export interface operations {
                 "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

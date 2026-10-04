@@ -144,6 +144,7 @@ from litellm.types.utils import (
     RawRequestTypedDict,
     StreamingChoices,
 )
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -5489,7 +5490,9 @@ def completion(
             api_base=api_base,
             api_key=api_key,
             litellm_params=(
-                GenericLiteLLMParams(**_supplemental_provider_params) if _supplemental_provider_params else None
+                GenericLiteLLMParams.model_validate(_supplemental_provider_params)
+                if _supplemental_provider_params
+                else None
             ),
         )
 
@@ -5716,7 +5719,12 @@ def completion(
             gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{
                 key: kwargs[key]
-                for key in (*AWS_CREDENTIAL_KWARGS_KEYS, PROVIDER_AFFINITY_HEADER_KWARG_KEY)
+                for key in (
+                    *AWS_CREDENTIAL_KWARGS_KEYS,
+                    *ANTHROPIC_WIF_KWARGS_KEYS,
+                    *OPENAI_WIF_KWARGS_KEYS,
+                    PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                )
                 if key in kwargs
             },
         )
@@ -6553,6 +6561,7 @@ def embedding(
                 aembedding=aembedding,
                 max_retries=max_retries,
                 shared_session=shared_session,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -7802,7 +7811,7 @@ async def amoderation(
 
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-    optional_params: Final = GenericLiteLLMParams(**kwargs)
+    optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
     try:
@@ -8519,7 +8528,7 @@ def speech(
             VertexAITextToSpeechConfig,
         )
 
-        generic_optional_params: Final = GenericLiteLLMParams(**kwargs)
+        generic_optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Handle Gemini models separately (they use speech_to_completion_bridge)
         if "gemini" in model:
