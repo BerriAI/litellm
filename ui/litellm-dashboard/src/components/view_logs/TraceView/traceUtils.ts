@@ -9,6 +9,9 @@ import type { Span, TraceMessage, TraceSummary } from "./traceTypes";
 /*  Formatting                                                         */
 /* ------------------------------------------------------------------ */
 
+export const traceAgentNames = (trace: TraceSummary): readonly string[] =>
+  trace.agent_names ?? (trace.service ? [trace.service] : []);
+
 export const fmtMs = (ms: number): string => {
   if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
   if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
@@ -207,6 +210,27 @@ export function buildTreeRows(spans: readonly Span[], state: SpanTreeState): Tre
   return ctx.rows;
 }
 
+export function findTraceSteps(
+  spans: readonly Span[],
+  query: string,
+  errorsOnly: boolean,
+  hideFramework: boolean,
+): Span[] {
+  const search = query.trim().toLowerCase();
+  return spans
+    .filter((span) => {
+      const visible = !hideFramework || !isFrameworkSpan(span);
+      const matchesStatus = !errorsOnly || span.status === "error";
+      const matchesQuery =
+        !search ||
+        [span.name, span.agent, span.model, span.input_preview, span.span_id].some((value) =>
+          value?.toLowerCase().includes(search),
+        );
+      return visible && matchesStatus && matchesQuery;
+    })
+    .sort(byStart);
+}
+
 /** Tree state with every visible ancestor of `spanId` expanded and any group holding it paged far enough. */
 export function revealSpanInState(spans: readonly Span[], state: SpanTreeState, spanId: string): SpanTreeState {
   const { children } = buildVisibleTree(spans, !state.hideFramework);
@@ -267,14 +291,10 @@ export const parseJson = (value: string): unknown => {
   }
 };
 
-const isMessage = (value: unknown): value is TraceMessage => {
-  const isObject = typeof value === "object" && value !== null;
-  return isObject && "role" in value && typeof (value as TraceMessage).role === "string";
-};
-
 const blockText = (block: unknown): string | null => {
   if (typeof block !== "object" || block === null) return null;
-  const text: unknown = Reflect.get(block, "text");
+  const text: unknown =
+    Reflect.get(block, "text") ?? (Reflect.get(block, "type") === "text" ? Reflect.get(block, "content") : undefined);
   return typeof text === "string" ? text : null;
 };
 
@@ -296,13 +316,19 @@ export function messageText(content: string): string {
     .join("\n\n");
 }
 
-const withText = (message: TraceMessage): TraceMessage => ({ ...message, content: messageText(message.content) });
+const parseMessage = (value: unknown): TraceMessage | null => {
+  if (typeof value !== "object" || value === null) return null;
+  const role: unknown = Reflect.get(value, "role");
+  const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
+  if (typeof role !== "string" || (typeof content !== "string" && !Array.isArray(content))) return null;
+  return { ...value, role, content: messageText(typeof content === "string" ? content : JSON.stringify(content)) };
+};
 
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */
 export function parseMessages(value: string): TraceMessage[] | null {
   const parsed = parseJson(value);
-  if (Array.isArray(parsed)) return parsed.every(isMessage) ? parsed.map(withText) : null;
-  return isMessage(parsed) ? [withText(parsed)] : null;
+  const messages = (Array.isArray(parsed) ? parsed : [parsed]).map(parseMessage);
+  return messages.every((message) => message !== null) ? messages : null;
 }
 
 /** Pretty JSON when the payload is JSON, else the raw string. */

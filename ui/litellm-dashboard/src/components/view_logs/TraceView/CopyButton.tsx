@@ -38,11 +38,7 @@ export function CopyButton({
     <Button
       variant={iconOnly ? "ghost" : "outline"}
       size={iconOnly ? "icon-xs" : "xs"}
-      className={cn(
-        "font-mono text-[10px] text-muted-foreground hover:text-foreground",
-        !iconOnly && "gap-1.5",
-        className,
-      )}
+      className={cn("text-xs text-muted-foreground hover:text-foreground", !iconOnly && "gap-1.5", className)}
       onClick={async () => setCopied(await copyToClipboard(value, copiedLabel))}
       aria-label={label}
     >

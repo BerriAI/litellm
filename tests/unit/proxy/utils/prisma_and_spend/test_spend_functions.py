@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from contextlib import suppress
+from datetime import datetime, timezone
 from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
@@ -221,6 +223,33 @@ async def test_update_spend_logs_job_drains_tool_queue_when_spend_queue_empty(
 
     assert len(flush_stub.await_args.kwargs["transactions"]) == 1
     assert mock_prisma_client.tool_usage_transactions == []
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_drains_the_whole_model_usage_queue_in_one_run(
+    mock_prisma_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm.proxy.db.model_usage_rollup as model_usage_mod
+    import litellm.proxy.db.spend_log_tool_index as tool_mod
+    import litellm.proxy.guardrails.usage_tracking as guard_mod
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    queued = [MagicMock() for _ in range(25_000)]
+    mock_prisma_client.model_usage_transactions = list(queued)
+    monkeypatch.setattr(guard_mod, "process_spend_logs_guardrail_usage", AsyncMock(), raising=False)
+    monkeypatch.setattr(tool_mod, "flush_tool_usage_transactions", AsyncMock(), raising=False)
+    flush_stub = AsyncMock()
+    monkeypatch.setattr(model_usage_mod, "flush_model_usage_transactions", flush_stub, raising=False)
+
+    await update_spend_logs_job(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+    )
+
+    assert flush_stub.await_args.kwargs["transactions"] == queued
+    assert mock_prisma_client.model_usage_transactions == []
 
 
 @pytest.mark.asyncio
@@ -941,3 +970,119 @@ async def test_monitor_spend_logs_queue_pulls_parked_rows_before_each_flush(
         )
 
     assert seen == [["parked"]]
+
+
+def _postgres_out_of_connections() -> Exception:
+    """prisma's shape for Postgres SQLSTATE 53300: a base ``DataError`` whose only
+    hint is the connector message."""
+    from prisma.errors import DataError
+
+    return DataError(
+        data={
+            "user_facing_error": {
+                "is_panic": False,
+                "message": "Error in connector: Error querying the database: FATAL: sorry, too many clients already",
+                "backtrace": None,
+            }
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_job_requeues_whole_batch_when_postgres_is_out_of_connections(
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: Callable[..., dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """53300 is not a poison row: bisecting it would issue one failing statement
+    per row (each a fresh connection attempt against a full server) and drop
+    every row. The batch goes back to the queue head untouched, in one attempt,
+    without the in-job retry loop hammering the server."""
+    sleeps: Final[list[float]] = []
+
+    async def _no_sleep(seconds: float, *_: object, **__: object) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    proxy_logging: Final = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [
+        make_spend_log_row(request_id="r1"),
+        make_spend_log_row(request_id="r2"),
+        make_spend_log_row(request_id="r3"),
+    ]
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_postgres_out_of_connections())
+
+    with pytest.raises(Exception, match="too many clients already"):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+        )
+
+    assert {
+        "create_many_calls": mock_prisma_client.db.litellm_spendlogs.create_many.await_count,
+        "queue_after": [row["request_id"] for row in mock_prisma_client.spend_log_transactions],
+        "backoff_sleeps": sleeps,
+    } == {"create_many_calls": 1, "queue_after": ["r1", "r2", "r3"], "backoff_sleeps": []}
+
+
+def _tool_usage_transaction(request_id: str) -> object:
+    from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+
+    return ToolUsageTransaction(
+        request_id=request_id,
+        date="2026-10-02",
+        start_time=datetime(2026, 10, 2, tzinfo=timezone.utc),
+        tool_names=("get_weather",),
+        spend=0.01,
+        total_tokens=12,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_flush_requeues_when_postgres_is_out_of_connections(
+    mock_prisma_client: MagicMock,
+) -> None:
+    """A tool-usage batch Postgres had no connection for was never sent, so it is
+    safe to keep; dropping it loses the rollup increments for good. The job stops
+    there, like the spend-log write, so a drain loop does not re-hit the full server."""
+    from prisma.errors import DataError
+
+    mock_prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock(side_effect=_postgres_out_of_connections())
+    mock_prisma_client.spend_log_transactions = []
+    first, second = _tool_usage_transaction("r1"), _tool_usage_transaction("r2")
+    mock_prisma_client.tool_usage_transactions = [first, second]
+
+    with pytest.raises(DataError, match="too many clients already"):
+        await update_spend_logs_job(
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert {
+        "index_writes": mock_prisma_client.db.litellm_spendlogtoolindex.create_many.await_count,
+        "queue_after": mock_prisma_client.tool_usage_transactions,
+    } == {"index_writes": 1, "queue_after": [first, second]}
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_flush_still_drops_ambiguous_failures(
+    mock_prisma_client: MagicMock,
+) -> None:
+    """Anything other than a connection refusal may have reached the server, and
+    the rollup increments are not idempotent, so the batch is not replayed."""
+    mock_prisma_client.db.litellm_spendlogtoolindex.create_many = AsyncMock(
+        side_effect=RuntimeError("engine returned a malformed payload")
+    )
+    mock_prisma_client.spend_log_transactions = []
+    mock_prisma_client.tool_usage_transactions = [_tool_usage_transaction("r1")]
+
+    await update_spend_logs_job(
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert mock_prisma_client.tool_usage_transactions == []

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -116,7 +116,12 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    bedrock_route_for_request,
+    without_bedrock_route_prefix,
+)
+from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -139,6 +144,7 @@ from litellm.types.utils import (
     RawRequestTypedDict,
     StreamingChoices,
 )
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
     Choices,
     CustomStreamWrapper,
@@ -2188,7 +2194,7 @@ def _complete_bedrock_mantle(
     api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
     api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
     headers = headers or litellm.headers
-    config: Final = litellm.BedrockMantleChatConfig.get_config()
+    config: Final = bedrock_mantle_chat_config(model).get_config()
     for k, v in _provider_config_items(config):
         if k not in optional_params:
             optional_params[k] = v
@@ -4167,6 +4173,10 @@ def _complete_sagemaker(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
 
+_ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4205,7 +4215,12 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
         if "aws_region_name" not in optional_params or optional_params["aws_region_name"] is None:
             optional_params["aws_region_name"] = aws_bedrock_client.meta.region_name
 
-    bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
+    additional_drop_params: Final = (
+        _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(ctx.kwargs["additional_drop_params"])
+        if ctx.kwargs.get("additional_drop_params") is not None
+        else None
+    )
+    bedrock_route: Final = bedrock_route_for_request(model, ctx.request_params, additional_drop_params)
     if bedrock_route == "claude_platform":
         provider_config = ProviderConfigManager.get_provider_chat_config(
             model=model,
@@ -4232,7 +4247,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             provider_config=provider_config,
         )
     elif bedrock_route == "converse":
-        model = model.replace("converse/", "")
+        model = without_bedrock_route_prefix(model)
         response = bedrock_converse_chat_completion.completion(
             model=model,
             messages=messages,
@@ -5475,7 +5490,9 @@ def completion(
             api_base=api_base,
             api_key=api_key,
             litellm_params=(
-                GenericLiteLLMParams(**_supplemental_provider_params) if _supplemental_provider_params else None
+                GenericLiteLLMParams.model_validate(_supplemental_provider_params)
+                if _supplemental_provider_params
+                else None
             ),
         )
 
@@ -5702,7 +5719,12 @@ def completion(
             gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{
                 key: kwargs[key]
-                for key in (*AWS_CREDENTIAL_KWARGS_KEYS, PROVIDER_AFFINITY_HEADER_KWARG_KEY)
+                for key in (
+                    *AWS_CREDENTIAL_KWARGS_KEYS,
+                    *ANTHROPIC_WIF_KWARGS_KEYS,
+                    *OPENAI_WIF_KWARGS_KEYS,
+                    PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                )
                 if key in kwargs
             },
         )
@@ -5841,6 +5863,9 @@ def completion(
             optional_params=optional_params,
             organization=organization,
             provider_config=provider_config,
+            request_params=MappingProxyType(
+                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **non_default_params})
+            ),
             shared_session=shared_session,
             stream=stream,
             temperature=temperature,
@@ -6536,6 +6561,7 @@ def embedding(
                 aembedding=aembedding,
                 max_retries=max_retries,
                 shared_session=shared_session,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "databricks":
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
@@ -7785,7 +7811,7 @@ async def amoderation(
 
     # only supports open ai for now
     api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-    optional_params: Final = GenericLiteLLMParams(**kwargs)
+    optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
     try:
@@ -8502,7 +8528,7 @@ def speech(
             VertexAITextToSpeechConfig,
         )
 
-        generic_optional_params: Final = GenericLiteLLMParams(**kwargs)
+        generic_optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Handle Gemini models separately (they use speech_to_completion_bridge)
         if "gemini" in model:
@@ -8708,7 +8734,7 @@ def speech(
 
 async def ahealth_check(
     model_params: dict,
-    mode: str | None = "chat",
+    mode: str | None = None,
     prompt: str | None = None,
     input: list | None = None,
 ):
@@ -8723,7 +8749,8 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
-    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
+    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging: Final = get_litellm_logging_class()
@@ -8748,28 +8775,25 @@ async def ahealth_check(
     )
     #########################################################
     try:
-        model: str | None = model_params.get("model", None)
-        if model is None:
+        requested_model: Final = OPTIONAL_STR.validate_python(model_params.get("model", None))
+        if requested_model is None:
             raise Exception("model not set")
-
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
 
         custom_llm_provider_from_params: Final = model_params.get("custom_llm_provider", None)
         api_base_from_params: Final = model_params.get("api_base", None)
         api_key_from_params: Final = model_params.get("api_key", None)
 
         model, custom_llm_provider, _, _ = get_llm_provider(
-            model=model,
+            model=requested_model,
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
         )
-        if model in litellm.model_cost and mode is None:
-            mode = litellm.model_cost[model].get("mode")
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
-        mode = mode or "chat"
+        mode = mode or default_health_check_mode(
+            requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
+        )
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
@@ -8797,12 +8821,6 @@ async def ahealth_check(
         stack_trace = _redact_string(traceback.format_exc())
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
-
-        if mode is None:
-            return {
-                "error": f"error:{e}. Missing `mode`. Set the `mode` for the model - https://docs.litellm.ai/docs/proxy/health#embedding-models  \nstacktrace: {stack_trace}",
-                "exception": e,
-            }
 
         error_to_return: Final = str(e) + "\nstack trace: " + stack_trace
 

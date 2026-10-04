@@ -13,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 from typing_extensions import TypedDict
 
+from litellm._internal_context import service_target
 from litellm.caching.caching import DualCache
 from litellm.constants import PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
@@ -36,6 +37,7 @@ class PromptCachingCacheValue(TypedDict):
 
 
 PROMPT_CACHE_PIN_TTL_SECONDS: Final = 300
+_PROMPT_CACHE_PINS_TARGET: Final = "prompt_cache_pins"
 _TOOL_RUN_BLOCK_TYPES: Final = frozenset({"tool_use", "tool_result"})
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
@@ -291,11 +293,12 @@ class PromptCachingCache:
         if not positions:
             return
 
-        await self.cache.async_set_cache(
-            positions[-1].cache_key,
-            PromptCachingCacheValue(model_id=model_id),
-            ttl=PROMPT_CACHE_PIN_TTL_SECONDS,
-        )
+        with service_target(_PROMPT_CACHE_PINS_TARGET):
+            await self.cache.async_set_cache(
+                positions[-1].cache_key,
+                PromptCachingCacheValue(model_id=model_id),
+                ttl=PROMPT_CACHE_PIN_TTL_SECONDS,
+            )
 
     async def async_get_model_id(
         self,
@@ -311,13 +314,9 @@ class PromptCachingCache:
         if not cache_keys:
             return None
 
-        return _first_pin(
-            _PINS_ADAPTER.validate_python(
-                await self.cache.async_batch_get_cache(
-                    keys=list(cache_keys),
-                )
-            )
-        )
+        with service_target(_PROMPT_CACHE_PINS_TARGET):
+            pins: Final = await self.cache.async_batch_get_cache(keys=list(cache_keys))
+        return _first_pin(_PINS_ADAPTER.validate_python(pins))
 
     def get_model_id(
         self,

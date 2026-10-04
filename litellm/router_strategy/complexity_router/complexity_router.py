@@ -31,8 +31,9 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.affinity_cache import claim_affinity_pin
+from litellm.caching.affinity_cache import ROUTER_SESSION_PINS_TARGET, claim_affinity_pin
 from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -108,7 +109,7 @@ from .config import (
     ComplexityRouterConfig,
     ComplexityTier,
     CustomDimension,
-    JevClassifierConfig,
+    OpenSourceClassifierConfig,
     TierDefinition,
 )
 from .jev_classifier import (
@@ -1308,10 +1309,22 @@ class ComplexityRouter(CustomLogger):
     """
 
     @staticmethod
-    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
+        if config.provider in ("laya", "bespoke"):
+            from litellm.llms.oss_decision import oss_connection
+
+            connection: Final = oss_connection(config.provider, config.api_base, config.api_key)
+            return HttpJevClassifierClient(
+                api_key=connection.api_key,
+                api_base=connection.api_base,
+                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+                provider=config.provider,
+            )
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
-            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
+            raise ValueError(
+                "opensource_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'oss_classifier'"
+            )
         api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
         return HttpJevClassifierClient(
             api_key=api_key,
@@ -1354,12 +1367,12 @@ class ComplexityRouter(CustomLogger):
         if default_model:
             self.config.default_model = default_model
 
-        jev_config: Final = self.config.jev_classifier_config
+        jev_config: Final = self.config.opensource_classifier_config
         self._jev_client: JevClassifierClient | None = (
             jev_client
             if jev_client is not None
             else self._build_jev_client(jev_config)
-            if self.config.classifier_type == "jev" and jev_config is not None
+            if self.config.classifier_type == "oss_classifier" and jev_config is not None
             else None
         )
 
@@ -1459,7 +1472,11 @@ class ComplexityRouter(CustomLogger):
                 and self.config.classifier_llm_config.circuit_breaker_enabled
             )
             else jev_config.circuit_breaker_cooldown_seconds
-            if (self.config.classifier_type == "jev" and jev_config is not None and jev_config.circuit_breaker_enabled)
+            if (
+                self.config.classifier_type == "oss_classifier"
+                and jev_config is not None
+                and jev_config.circuit_breaker_enabled
+            )
             else None
         )
         self._classifier_circuit_breaker: _ClassifierCircuitBreaker | None = (
@@ -1909,7 +1926,7 @@ class ComplexityRouter(CustomLogger):
             return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
-        if self.config.classifier_type == "jev":
+        if self.config.classifier_type == "oss_classifier":
             return await self._jev_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type in ("heuristic_first", "hybrid") and _encrypted_classifier_task(
             request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
@@ -2161,7 +2178,7 @@ class ComplexityRouter(CustomLogger):
         request_kwargs: Mapping[str, object] | None,
         messages: Sequence[Mapping[str, object]] | None,
     ) -> ClassificationOutcome:
-        config: Final = self.config.jev_classifier_config
+        config: Final = self.config.opensource_classifier_config
         client: Final = self._jev_client
         if config is None or client is None:
             return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
@@ -2212,12 +2229,14 @@ class ComplexityRouter(CustomLogger):
             if not self._tier_pools().get(tier_name):
                 raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
             model: Final = response.model or config.model
+            accounting_provider: Final = "typesafe" if config.provider == "jev" else config.provider
             verdict: Final = JevVerdict(
                 label=answer.choice,
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model),
+                cost=jev_classifier_cost(response, config.model, accounting_provider),
+                provider=accounting_provider,
             )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
@@ -2225,8 +2244,8 @@ class ComplexityRouter(CustomLogger):
                 tier=tier,
                 score=None,
                 signals=(
-                    f"jev-classifier:{tier_name}",
-                    f"jev-confidence={answer.confidence:.6f}",
+                    f"{config.provider}-classifier:{tier_name}",
+                    f"{config.provider}-confidence={answer.confidence:.6f}",
                     *(
                         f"tier-probability:{label}={probability:.6f}"
                         for label, probability in answer.probabilities.items()
@@ -2441,7 +2460,7 @@ class ComplexityRouter(CustomLogger):
         self,
         prompt: str,
         system_prompt: str | None = None,
-        request_kwargs: dict[str, Any] | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         messages: Sequence[Mapping[str, object]] | None = None,
     ) -> tuple[ComplexityTier | str, float | None]:
         """
@@ -4162,6 +4181,7 @@ class ComplexityRouter(CustomLogger):
             return response
         return response.model_copy(update={"session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds})
 
+    @with_service_target(ROUTER_SESSION_PINS_TARGET)
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -4757,7 +4777,7 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
-            f"typesafe/{outcome.jev_verdict.model}"
+            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
             if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
             else self.config.classifier_llm_config.model
             if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")

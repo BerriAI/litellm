@@ -12,6 +12,7 @@ from starlette.types import Scope
 from typing_extensions import assert_never
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -60,6 +61,7 @@ from litellm.proxy.auth.user_api_key_auth import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
     get_management_object_ttl,
     user_object_permission_id_cache_key,
@@ -1947,10 +1949,41 @@ class MCPRequestHandler:
         scope, the tool union and billing attribution are all just different reads of this one
         answer — computing it separately per consumer is how they drift (a throttle map scoped by
         roster instead of by grant charged unrelated teams' buckets)."""
-        return [
+        grants: Final = [
             (source, set(await MCPRequestHandler.get_allowed_mcp_servers(source, keyless_source=True)))
             for source in await MCPRequestHandler.admitted_subject_sources(auth, allowed_team_ids=allowed_team_ids)
         ]
+        scope: Final = await MCPRequestHandler._toolset_scope(auth)
+        if scope is None:
+            return grants
+        return [(source, granted & frozenset(scope)) for source, granted in grants]
+
+    @staticmethod
+    async def _toolset_scope(auth: UserAPIKeyAuth) -> dict[str, list[str]] | None:
+        """The ``server_id -> tools`` a namespaced toolset route pinned this subject to via
+        ``mcp_toolset_id``, or None on the aggregate scope. Every source's servers and tools are
+        intersected with it, so the route narrows a team grant exactly as it narrows the user's own."""
+        if auth.mcp_toolset_id is None:
+            return None
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        return await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            toolset_ids=[auth.mcp_toolset_id], requires_fresh_policy=auth.requires_fresh_policy
+        )
+
+    @staticmethod
+    async def _narrow_tools_to_toolset(
+        tools: list[str] | None,
+        server_id: str,
+        auth: UserAPIKeyAuth,
+    ) -> list[str] | None:
+        scope: Final = await MCPRequestHandler._toolset_scope(auth)
+        if scope is None:
+            return tools
+        scoped: Final = frozenset(scope.get(server_id, ()))
+        return sorted(scoped if tools is None else scoped & frozenset(tools))
 
     @staticmethod
     async def resolve_admitted_subject_servers(
@@ -2048,9 +2081,9 @@ class MCPRequestHandler:
                 continue
             tools = await MCPRequestHandler.get_allowed_tools_for_server(server_id, source, keyless_source=True)
             if tools is None:
-                return None
+                return await MCPRequestHandler._narrow_tools_to_toolset(None, server_id, auth)
             allowed.update(tools)
-        return sorted(allowed)
+        return await MCPRequestHandler._narrow_tools_to_toolset(sorted(allowed), server_id, auth)
 
     @staticmethod
     def _get_key_object_permission(
@@ -2066,6 +2099,16 @@ class MCPRequestHandler:
             return None
 
         return user_api_key_auth.object_permission
+
+    @staticmethod
+    async def team_object_permission(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+        return await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+
+    @staticmethod
+    async def key_object_permission_hydrated(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        return await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)
 
     @staticmethod
     async def _get_team_object_permission(
@@ -3050,6 +3093,7 @@ class MCPRequestHandler:
         return object_permission
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _user_object_permission_id(
         user_id: str, prisma_client: "PrismaClient", *, check_db_only: bool = False
     ) -> str | None:
@@ -3354,6 +3398,7 @@ class MCPRequestHandler:
     _AGENT_NO_PERMISSION_SENTINEL = "__agent_no_mcp_permission__"
 
     @staticmethod
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _agent_object_permission_id(agent_id: str, prisma_client: "PrismaClient") -> str | None:
         """The permission row this agent's row links to, or ``None`` when it links none.
 

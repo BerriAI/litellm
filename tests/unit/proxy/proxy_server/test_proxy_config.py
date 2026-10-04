@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -39,53 +40,79 @@ from litellm.proxy.proxy_server import (
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
+from litellm.tracing.config import trace_storage_config
 
 from .conftest import normalize
 
 
 @pytest.mark.asyncio
-async def test_tracing_config_automatically_logs_spend_without_callback_setting():
-    from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-    from litellm.proxy import tracing_endpoints
-    from litellm.proxy.proxy_server import ProxyStartupEvent
-    from litellm.tracing import TraceReceiver
-    from litellm.tracing.store import ClickHouseTraceStore
+async def test_proxy_config_loads_tracing_url_and_retention_from_yaml(tmp_path, monkeypatch) -> None:
+    config_file: Final = tmp_path / "tracing.yaml"
+    config_file.write_text(
+        "model_list: []\ngeneral_settings:\n  tracing:\n    store:\n"
+        "      type: clickhouse\n      url: os.environ/TRACING_TEST_URL\n"
+        "      database: analytics\n      retention_days: 7\n"
+    )
+    monkeypatch.setenv("TRACING_TEST_URL", "http://localhost:8123")
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://unused:8123")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
-    storage = MagicMock()
+    _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+    tracing = trace_storage_config(settings["tracing"])
+    assert (tracing.url, tracing.database, tracing.retention_days) == (
+        "http://localhost:8123",
+        "analytics",
+        7,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shutdown_error", [False, True])
+async def test_tracing_config_automatically_logs_spend_without_callback_setting(shutdown_error: bool) -> None:
+    from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+    from litellm.proxy.tracing_runtime import manage_tracing
+    from litellm.tracing import TraceReceiver
+
+    storage: Final = MagicMock()
     storage.ensure_schema = AsyncMock()
     storage.insert_rows = AsyncMock()
-    receiver = TraceReceiver(ClickHouseTraceStore(storage))
-    prior_receiver = tracing_endpoints.receiver
+    receiver: Final = TraceReceiver(storage)
 
-    try:
-        await ProxyStartupEvent.init_tracing({"tracing": {"store": "clickhouse"}}, receiver=receiver)
-        storage.ensure_schema.assert_awaited_once()
-        logger = next(
-            callback for callback in litellm._async_success_callback if isinstance(callback, ClickHouseSpendLogger)
-        )
-        now = datetime.now()
-        await logger.async_log_success_event(
-            {
-                "standard_logging_object": {
-                    "id": "response-1",
-                    "startTime": now.timestamp(),
-                    "endTime": now.timestamp(),
-                    "response_cost": 0.25,
-                }
-            },
-            None,
-            now,
-            now,
-        )
-        await logger.flush_queue()
-        assert storage.insert_rows.await_args.args[0] == "spend_logs"
-        assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+    outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
+    with outcome:
+        async with manage_tracing(enabled=True, receiver_factory=lambda: receiver):
+            storage.ensure_schema.assert_awaited_once()
+            logger: Final = next(
+                callback
+                for callback in litellm._async_success_callback
+                if isinstance(callback, ClickHouseSpendLogger) and callback.storage is storage
+            )
+            now: Final = datetime.now()
+            await logger.async_log_success_event(
+                {
+                    "standard_logging_object": {
+                        "id": "response-1",
+                        "startTime": now.timestamp(),
+                        "endTime": now.timestamp(),
+                        "response_cost": 0.25,
+                    }
+                },
+                None,
+                now,
+                now,
+            )
+            storage.insert_rows.assert_not_awaited()
 
-        await ProxyStartupEvent.init_tracing({})
-        assert all(not isinstance(callback, ClickHouseSpendLogger) for callback in litellm._async_success_callback)
-    finally:
-        await ProxyStartupEvent.init_tracing({})
-        tracing_endpoints.receiver = prior_receiver
+            if shutdown_error:
+                raise RuntimeError("shutdown failure")
+
+    assert storage.insert_rows.await_args.args[0] == "spend_logs"
+    assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+    assert logger not in litellm._async_success_callback
+    assert logger._flush_task is not None and logger._flush_task.done()
+    assert not logger._flush_task.cancelled()
 
 
 # ---------------------------------------------------------------------------
@@ -2002,6 +2029,61 @@ async def test_ProxyConfig__init_search_tools_in_db_clears_router_when_last_tool
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__init_search_tools_in_db_keeps_loaded_tools_whose_params_do_not_decrypt(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    pc.update_config_state({})
+    loaded_tool = {
+        "search_tool_id": "rotated-id",
+        "search_tool_name": "rotated-search",
+        "litellm_params": {"search_provider": "perplexity", "api_key": "pplx-loaded"},
+    }
+    fake_router = MagicMock()
+    fake_router.search_tools = [
+        loaded_tool,
+        {
+            "search_tool_id": "typo-id",
+            "search_tool_name": "typo-search",
+            "litellm_params": {"search_provider": "tavily"},
+        },
+    ]
+    db_tools = [
+        {
+            "search_tool_id": "rotated-id",
+            "search_tool_name": "rotated-search",
+            "litellm_params": {
+                "search_provider": "zM9FVihBfZj0LRkl6_J4TeIEO8ijpxKov0QnfZa1uM9J1lO7Txy9IQ==",
+                "api_key": "c2VhbGVkLWtleQ",
+            },
+        },
+        {
+            "search_tool_id": "fresh-id",
+            "search_tool_name": "fresh-search",
+            "litellm_params": {"search_provider": "tavily", "api_key": "tvly-fresh"},
+        },
+        {
+            "search_tool_id": "typo-id",
+            "search_tool_name": "typo-search",
+            "litellm_params": {"search_provider": "Tavily", "api_key": "tvly-edited"},
+        },
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(
+        "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+        AsyncMock(return_value=db_tools),
+    )
+
+    await pc._init_search_tools_in_db(prisma_client=MagicMock())
+
+    assert [tool["litellm_params"] for tool in fake_router.search_tools] == [
+        {"search_provider": "perplexity", "api_key": "pplx-loaded"},
+        {"search_provider": "tavily", "api_key": "tvly-fresh"},
+        {"search_provider": "Tavily", "api_key": "tvly-edited"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_reload_search_tools_from_db_refreshes_router(monkeypatch):
     from litellm.proxy import proxy_server
 
@@ -3244,6 +3326,23 @@ async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_se
 # ---------------------------------------------------------------------------
 
 
+def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_empty(monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-decrypt-credentials-test-salt")
+    decrypted = ProxyConfig().decrypt_credentials(
+        {
+            "credential_name": "openai-wif",
+            "credential_values": {
+                "api_base": encrypt_value_helper(""),
+                "openai_service_account_id": encrypt_value_helper("user-1"),
+            },
+            "credential_info": {"custom_llm_provider": "openai"},
+        }
+    )
+    assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
+
+
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
@@ -3497,6 +3596,50 @@ def test_ProxyConfig__decrypt_and_set_db_env_variables_sets_env(monkeypatch):
         "KEY_Y_env": "y-dec",
         "returned_keys": ["KEY_X", "KEY_Y"],
     }
+
+
+@pytest.mark.parametrize("stored_key", ["LITELLM_ENABLE_MCP_STDIO", "litellm_enable_mcp_stdio"])
+def test_ProxyConfig__decrypt_and_set_db_env_variables_cannot_enable_mcp_stdio(monkeypatch, stored_key):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value=False: value,
+    )
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    monkeypatch.delenv(stored_key, raising=False)
+    monkeypatch.delenv("KEY_X", raising=False)
+    pc = ProxyConfig()
+    out = pc._decrypt_and_set_db_env_variables({stored_key: "true", "KEY_X": "x"})
+    assert out == {"KEY_X": "x"}
+    assert os.environ.get("KEY_X") == "x"
+    assert os.environ.get(stored_key) is None
+    assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
+
+
+def test_ProxyConfig__decrypt_and_set_db_env_variables_warns_once_about_the_ignored_mcp_stdio_flag(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value=False: value,
+    )
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    pc = ProxyConfig()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        for _ in range(3):
+            pc._decrypt_and_set_db_env_variables({"LITELLM_ENABLE_MCP_STDIO": "true"})
+    assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
+    assert sum("Ignoring LITELLM_ENABLE_MCP_STDIO stored in the database" in m for m in caplog.messages) == 1
+
+
+@pytest.mark.parametrize("config_key", ["LITELLM_ENABLE_MCP_STDIO", "litellm_enable_mcp_stdio"])
+def test_ProxyConfig__load_environment_variables_cannot_enable_mcp_stdio(monkeypatch, config_key):
+    monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    monkeypatch.delenv(config_key, raising=False)
+    monkeypatch.delenv("KEY_X", raising=False)
+    ProxyConfig()._load_environment_variables({"environment_variables": {config_key: "true", "KEY_X": "x"}})
+    assert os.environ.get("KEY_X") == "x"
+    assert os.environ.get(config_key) is None
+    assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
 
 
 def test_ProxyConfig__decrypt_and_set_db_env_variables_invalid_dict_raises():

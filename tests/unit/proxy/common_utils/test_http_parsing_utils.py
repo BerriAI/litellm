@@ -2,18 +2,19 @@ import gzip
 import io
 import json
 from collections.abc import Mapping
-from typing import Literal, get_type_hints
+from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-from fastapi import Request
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
+from starlette.requests import Request
 
 
 
 import litellm
+import litellm.proxy.common_utils.http_parsing_utils as http_parsing_utils
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import (
     _is_form_content_type,
@@ -33,13 +34,21 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 
 
 def _starlette_request(
-    body: bytes, content_type: str, path: str = "/v1/messages", content_encoding: str = ""
+    body: bytes,
+    content_type: str,
+    path: str = "/v1/messages",
+    content_encoding: str = "",
+    content_length: str = "",
 ) -> Request:
     scope = {
         "type": "http",
         "method": "POST",
         "path": path,
-        "headers": [(b"content-type", content_type.encode()), (b"content-encoding", content_encoding.encode())],
+        "headers": [
+            (b"content-type", content_type.encode()),
+            (b"content-encoding", content_encoding.encode()),
+            (b"content-length", content_length.encode()),
+        ],
         "query_string": b"",
     }
     chunks = iter((body,))
@@ -48,6 +57,46 @@ def _starlette_request(
         return {"type": "http.request", "body": next(chunks, b""), "more_body": False}
 
     return Request(scope, receive)
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_marks_body_received_once_with_its_size(monkeypatch: pytest.MonkeyPatch):
+    events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
+
+    def record(name: str, attributes: dict[str, str | int]) -> None:
+        events.append((name, dict(attributes)))
+
+    monkeypatch.setattr(http_parsing_utils, "phase_event", record)
+    body: Final = orjson.dumps({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "x" * 4096}]})
+    request: Final = _starlette_request(body, "application/json")
+
+    assert await _read_request_body(request) == orjson.loads(body)
+    assert await _read_request_body(request) == orjson.loads(body)
+
+    assert events == [("litellm.request.body_received", {"litellm.request.body_bytes": len(body)})]
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_marks_body_received_for_binary_and_form_bodies(monkeypatch: pytest.MonkeyPatch):
+    events: list[tuple[str, dict[str, str | int] | None]] = []  # mutable-ok: recorder for the phase_event double
+
+    def record(name: str, attributes: dict[str, str | int] | None) -> None:
+        events.append((name, None if attributes is None else dict(attributes)))
+
+    monkeypatch.setattr(http_parsing_utils, "phase_event", record)
+    protobuf: Final = b"\x08\x96\x01" * 50
+    form: Final = b"model=whisper-1&language=en"
+    form_type: Final = "application/x-www-form-urlencoded"
+
+    await _read_request_body(_starlette_request(protobuf, "application/x-protobuf"))
+    await _read_request_body(_starlette_request(form, form_type, content_length=str(len(form))))
+    await _read_request_body(_starlette_request(form, form_type))
+
+    assert events == [
+        ("litellm.request.body_received", {"litellm.request.body_bytes": len(protobuf)}),
+        ("litellm.request.body_received", {"litellm.request.body_bytes": len(form)}),
+        ("litellm.request.body_received", None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1109,7 +1158,7 @@ class TestGetRequestBody:
         mock_request.method = "POST"
         mock_request.body = AsyncMock(return_value=orjson.dumps(payload))
         mock_request.headers = {"content-type": "application/json; charset=utf-8"}
-        mock_request.scope = {}
+        mock_request.scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions"}
 
         result = await get_request_body(mock_request)
         assert result == payload
@@ -1120,7 +1169,7 @@ class TestGetRequestBody:
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
         mock_request.form = AsyncMock(return_value=FormData({"k": "v"}))
-        mock_request.scope = {}
+        mock_request.scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions"}
 
         result = await get_request_body(mock_request)
         assert result == {"k": "v"}
@@ -1273,3 +1322,96 @@ def test_shared_inference_model_selection_preserves_handler_precedence(
     from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
 
     assert resolve_inference_model(body, settings, cli, path, kind=kind) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,path,skip_parse",
+    [
+        ("POST", "/v1/traces", True),
+        ("GET", "/v1/traces", False),
+        ("POST", "/v1/messages", False),
+        ("POST", "/v1/traces/other", False),
+    ],
+)
+@pytest.mark.parametrize("root_path", ["", "/tenant-a"])
+async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_parse: bool, root_path: str) -> None:
+    body: Final = b'{"key":"value"}'
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+    request: Final = Request(
+        {
+            "type": "http", "method": method, "path": root_path + path, "root_path": root_path,
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    parsed: Final = await _read_request_body(request)
+    if skip_parse:
+        assert parsed == {}
+        receive.assert_not_awaited()
+    else:
+        assert parsed == {"key": "value"}
+        receive.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type, encoding", [
+    ("application/json", ""), ("application/x-protobuf", ""), ("application/json", "gzip"),
+])
+async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_limit(content_type, encoding):
+    from litellm.constants import OTLP_MAX_BODY_BYTES
+    from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
+
+    received = []
+    chunk = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
+
+    async def receive():
+        received.append(1)
+        assert len(received) <= 2, "receiver must reject without consuming subsequent chunks"
+        return {"type": "http.request", "body": chunk, "more_body": True}
+
+    request = Request({"type": "http", "method": "POST", "path": "/v1/traces", "headers": [
+        (b"content-type", content_type.encode()), (b"content-encoding", encoding.encode()),
+    ]}, receive)
+    assert await _read_request_body(request) == {}
+    assert received == []
+    storage = MagicMock()
+    storage.ingest = AsyncMock()
+    with pytest.raises(TracingPayloadTooLargeError):
+        await TraceReceiver(storage).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
+    assert len(received) == 2
+    storage.ingest.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit() -> None:
+    from litellm.constants import OTLP_MAX_BODY_BYTES
+    from litellm.proxy import tracing_endpoints
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+    from litellm.tracing import TraceReceiver
+
+    chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
+    receive: Final = AsyncMock(
+        side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
+        receive,
+    )
+    storage: Final = MagicMock()
+    storage.ingest = AsyncMock()
+    context: Final = await tracing_endpoints.provide_trace_access(
+        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(storage), log_team_lookup=AsyncMock()
+    )
+
+    parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
+    assert parsed == {}
+    assert parse_error is None
+    receive.assert_not_awaited()
+
+    response: Final = await tracing_endpoints.ingest_otlp_traces(request, context)
+    assert response.status_code == 413
+    assert receive.await_count == 2
+    storage.ingest.assert_not_awaited()

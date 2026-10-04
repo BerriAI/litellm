@@ -1,7 +1,9 @@
 import inspect
 import os
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
@@ -2128,12 +2130,14 @@ class TestRunServerDbSetup:
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_use_prisma_db_push_flag_behavior(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
@@ -2187,9 +2191,7 @@ class TestRunServerDbSetup:
             # Test 1: Without --use_prisma_db_push flag (default behavior)
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
-            mock_setup_database.assert_called_with(
-                use_migrate=True, use_v2_resolver=True
-            )
+            mock_setup_database.assert_called_with(use_migrate=True, use_v2_resolver=True)
 
             # Reset mocks
             mock_setup_database.reset_mock()
@@ -2202,18 +2204,18 @@ class TestRunServerDbSetup:
                 ["--local", "--skip_server_startup", "--use_prisma_db_push"],
                 standalone_mode=False,
             )
-            mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=True
-            )
+            mock_setup_database.assert_called_with(use_migrate=False, use_v2_resolver=True)
 
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
     def test_migrations_run_when_the_prisma_cli_is_not_on_path(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         tmp_path,
@@ -2262,24 +2264,81 @@ class TestRunServerDbSetup:
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
 
         assert "prisma CLI is neither on PATH" not in capsys.readouterr().out
-        mock_setup_database.assert_called_once_with(
-            use_migrate=True, use_v2_resolver=True
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+
+    @pytest.mark.parametrize(
+        ("database_url", "exits"),
+        (("postgresql://test:test@localhost:5432/test", True), (None, False)),
+        ids=("database-url-set", "no-database-url"),
+    )
+    @patch("atexit.register")
+    def test_startup_exits_when_the_prisma_toolchain_is_missing_only_if_a_database_is_configured(
+        self,
+        mock_atexit_register,
+        database_url,
+        exits,
+        tmp_path,
+        capsys,
+    ):
+        """A DATABASE_URL with no way to run the Prisma CLI is fatal; no DATABASE_URL needs no Prisma at all."""
+        from litellm_proxy_extras import prisma_toolchain
+
+        from litellm.proxy.proxy_cli import run_server
+
+        empty_bin = tmp_path / "emptybin"
+        empty_bin.mkdir()
+        real_find_spec = prisma_toolchain.importlib.util.find_spec
+
+        def hide_prisma(name, package=None):
+            return None if name == "prisma" else real_find_spec(name, package)
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
         )
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env["PATH"] = str(empty_bin)
+        if database_url is not None:
+            clean_env["DATABASE_URL"] = database_url
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch.object(prisma_toolchain.importlib.util, "find_spec", side_effect=hide_prisma),
+            pytest.raises(SystemExit) if exits else nullcontext() as exit_info,
+        ):
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        out = capsys.readouterr().out
+        if exits:
+            assert exit_info.value.code == 1
+            assert "a database URL is set but the prisma CLI is neither on PATH nor importable" in out
+            assert "pip install 'litellm[extra_proxy]'" in out
+        else:
+            assert "prisma CLI" not in out
+            assert "Setup complete" in out
 
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_fails_when_db_setup_fails(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
     ):
-        """Test that proxy exits with code 1 when PrismaManager.setup_database returns False and --enforce_prisma_migration_check is set"""
+        """Test that proxy exits with code 1 when PrismaManager.setup_database returns False, with no opt-in flag"""
         from litellm.proxy.proxy_cli import run_server
 
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -2320,28 +2379,21 @@ class TestRunServerDbSetup:
             }
 
             with pytest.raises(SystemExit) as exc_info:
-                run_server.main(
-                    [
-                        "--local",
-                        "--skip_server_startup",
-                        "--enforce_prisma_migration_check",
-                    ],
-                    standalone_mode=False,
-                )
+                run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
             assert exc_info.value.code == 1
-            mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=True
-            )
+            mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
 
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_exits_on_non_postgres_database_url(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
@@ -2387,12 +2439,14 @@ class TestRunServerDbSetup:
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_v2_migration_resolver_opts_in_via_env_var(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
@@ -2439,10 +2493,100 @@ class TestRunServerDbSetup:
                 ["--local", "--skip_server_startup"], standalone_mode=False
             )
 
-        mock_setup_database.assert_called_once_with(
-            use_migrate=True, use_v2_resolver=True
-        )
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
         assert "--use_v2_migration_resolver is deprecated" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("arguments", "environment", "warned"),
+        (
+            (("--local", "--skip_server_startup", "--enforce_prisma_migration_check"), {}, True),
+            (("--local", "--skip_server_startup"), {"ENFORCE_PRISMA_MIGRATION_CHECK": "true"}, False),
+            (("--local", "--skip_server_startup"), {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}, False),
+        ),
+        ids=("cli-flag", "env-true", "env-false"),
+    )
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes", return_value=True)
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=True)
+    def test_the_retired_enforce_prisma_migration_check_opt_in_still_parses_and_changes_nothing(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_build_indexes,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        arguments,
+        environment,
+        warned,
+        capsys,
+    ):
+        """Deployments still pass the flag or set the env var; the flag is accepted with a
+        deprecation line and the env var is ignored, and a successful setup boots either way."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch.dict(os.environ, {**clean_env, **environment}, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+        ):
+            run_server.main(list(arguments), standalone_mode=False)
+
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+        assert ("--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out) is warned
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    def test_the_retired_enforce_prisma_migration_check_opt_in_warns_without_a_database(
+        self,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        capsys,
+    ):
+        """The deprecation line does not depend on reaching database setup: a deployment that
+        passes the flag with no DATABASE_URL still learns the flag is dead."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+        ):
+            run_server.main(
+                ["--local", "--skip_server_startup", "--enforce_prisma_migration_check"],
+                standalone_mode=False,
+            )
+
+        mock_setup_database.assert_not_called()
+        assert "--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out
 
     @pytest.mark.parametrize(
         "use_legacy_flag, env_value, expected",
@@ -2479,12 +2623,14 @@ class TestRunServerDbSetup:
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_legacy_resolver_flag_reaches_database_setup(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
@@ -2533,9 +2679,76 @@ class TestRunServerDbSetup:
                 standalone_mode=False,
             )
 
-        mock_setup_database.assert_called_once_with(
-            use_migrate=True, use_v2_resolver=False
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=False)
+
+    @pytest.mark.parametrize(
+        ("arguments", "migrated", "exits", "waits_for_the_build"),
+        (
+            (("--local", "--skip_server_startup"), True, True, True),
+            (("--local",), True, False, False),
+            (("--local",), False, True, False),
+        ),
+        ids=("migration-job", "serving-proxy", "serving-proxy-whose-migrations-failed"),
+    )
+    @patch("uvicorn.run")
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes", return_value=False)
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.start_request_log_index_build")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=True)
+    def test_the_migration_job_waits_for_the_index_build_and_a_serving_proxy_starts_it_in_the_background(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_start_build,
+        mock_build_indexes,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        mock_uvicorn_run,
+        arguments,
+        migrated,
+        exits,
+        waits_for_the_build,
+    ):
+        """`--skip_server_startup` is the migration job: it waits for the index build after the
+        migrations and exits 1 when one could not be built. A serving proxy that ran the
+        migrations starts the build in the background and serves whatever the build does; one
+        whose migrations failed exits 1 and starts no build."""
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_setup_database.return_value = migrated
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
         )
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        outcome = pytest.raises(SystemExit) if exits else nullcontext()
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            outcome as exc_info,
+        ):
+            mock_get_args.return_value = {"app": "litellm.proxy.proxy_server:app", "host": "localhost", "port": 8000}
+            run_server.main(list(arguments), standalone_mode=False)
+
+        assert (exc_info is not None and exc_info.value.code == 1) is exits
+        mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
+        assert mock_build_indexes.call_count == int(migrated and waits_for_the_build)
+        assert mock_start_build.call_count == int(migrated and not waits_for_the_build)
 
 
 # --- Module-level helpers for worker startup hook tests ---
@@ -2752,6 +2965,32 @@ class TestPostgresStatementTimeoutOptions:
 
         assert _pg_options_with_timeouts(existing, statement_timeout, lock_timeout) == expected
 
+    @pytest.mark.parametrize(
+        "existing, idle_timeout, expected",
+        [
+            ("", 30, "-c statement_timeout=60000 -c lock_timeout=15000 -c idle_in_transaction_session_timeout=30000"),
+            ("", None, "-c statement_timeout=60000 -c lock_timeout=15000"),
+            (
+                "-c idle_in_transaction_session_timeout=5000",
+                30,
+                "-c idle_in_transaction_session_timeout=5000 -c statement_timeout=60000 -c lock_timeout=15000",
+            ),
+        ],
+        ids=["idle_set", "idle_unset", "pinned_idle_wins"],
+    )
+    def test_pg_options_with_idle_in_transaction_timeout(
+        self,
+        existing: str,
+        idle_timeout: int | None,
+        expected: str,
+    ) -> None:
+        """A transaction that opened and then stalled holds its connection and its
+        locks for as long as the client stays silent; ``idle_in_transaction_session_timeout``
+        is the only server-side bound on that, so it rides the same ``options`` string."""
+        from litellm.proxy.proxy_cli import _pg_options_with_timeouts
+
+        assert _pg_options_with_timeouts(existing, 60, 15, idle_timeout) == expected
+
     def test_timeouts_reach_the_database_url_from_general_settings(self, tmp_path):
         """The whole point of the setting: it has to land on DATABASE_URL."""
         import yaml
@@ -2764,6 +3003,7 @@ class TestPostgresStatementTimeoutOptions:
                     "general_settings": {
                         "database_statement_timeout": 60,
                         "database_lock_timeout": 15,
+                        "database_idle_in_transaction_session_timeout": 30,
                     },
                 }
             )
@@ -2774,6 +3014,7 @@ class TestPostgresStatementTimeoutOptions:
         options = urlparse.parse_qs(urlparse.urlparse(modified_url).query)["options"][0]
         assert "-c statement_timeout=60000" in options
         assert "-c lock_timeout=15000" in options
+        assert "-c idle_in_transaction_session_timeout=30000" in options
 
     def test_no_options_param_when_unset(self, tmp_path):
         """Unset must mean today's behavior, not an empty options string."""
@@ -2854,6 +3095,7 @@ def _run_server_and_capture_urls(
     database_url: str = "postgresql://t:t@localhost:5432/t",
     direct_url: str | None = None,
     read_replica_url: str | None = None,
+    extra_args: tuple[str, ...] = (),
 ) -> dict:
     loaded_config = yaml.safe_load(Path(config_path).read_text())
     mock_proxy_config = MagicMock()
@@ -2886,7 +3128,7 @@ def _run_server_and_capture_urls(
         patch("litellm.proxy.db.check_migration.check_prisma_schema_diff"),
     ):
         run_server.main(
-            ["--config", config_path, "--local", "--skip_server_startup"],
+            ["--config", config_path, "--local", "--skip_server_startup", *extra_args],
             standalone_mode=False,
         )
         return {k: os.environ[k] for k in _CAPTURED_DB_ENV_VARS if k in os.environ}
@@ -2959,6 +3201,47 @@ class TestReadReplicaConnectionParams:
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
         assert query["connection_limit"] == ["50"]
         assert query["pool_timeout"] == ["20"]
+
+    def test_connection_budget_line_counts_the_limits_the_final_urls_carry(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import yaml
+
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}})
+        )
+
+        _run_server_and_capture_urls(
+            str(config_path),
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+
+        assert (
+            "1 worker(s) x (writer connection_limit 3 + reader connection_limit 50) = up to 53 connections"
+            in capsys.readouterr().out
+        )
+
+    def test_connection_budget_line_counts_one_worker_under_hypercorn(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import yaml
+
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}})
+        )
+
+        _run_server_and_capture_urls(
+            str(config_path),
+            extra_args=("--run_hypercorn", "--num_workers", "4"),
+        )
+
+        assert "1 worker(s) x writer connection_limit 3 = up to 3 connections" in capsys.readouterr().out
 
     def test_extra_connection_params_never_carry_a_schema_override_to_the_reader(self, tmp_path):
         """database_extra_connection_params is an untyped passthrough, so it can carry a
