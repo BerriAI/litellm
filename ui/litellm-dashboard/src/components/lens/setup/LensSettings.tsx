@@ -53,7 +53,7 @@ export function LensSettings({
   onOpenTraces: () => void;
 }) {
   return (
-    <div aria-label="Settings" role="region" className="flex w-full max-w-4xl flex-col divide-y divide-border">
+    <div aria-label="Settings" role="region" className="flex w-full flex-col divide-y divide-border">
       <TracingSection enabled={list.tracing_enabled} onOpenTraces={onOpenTraces} />
       <SettingsSection
         title="Analysis worker"
