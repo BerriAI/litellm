@@ -1,8 +1,9 @@
-import type { Job, Review, Settings } from "./types";
+import type { Job, Review, ReviewVerdict, Settings } from "./types";
 
 export type Outcome = "issue" | "clear" | "unknown";
 
 export interface Conclusion {
+  key: string;
   checkId: string;
   label: string;
   latest: string;
@@ -24,10 +25,10 @@ export interface LiveStats {
 }
 
 const PACE_WINDOW_MS = 2400;
-const MIN_STEP_MS = 60;
-const COMPACT_STEP_MS = 500;
-const READ_SHARE = 0.35;
-const TYPE_SHARE = 0.45;
+const MIN_VISIBLE_MS = 1500;
+const CATCH_UP_BACKLOG = 3;
+const READ_SHARE = 0.3;
+const TYPE_SHARE = 0.35;
 const REPLAY_ON_OPEN = 3;
 
 export function liveJob(jobs: readonly Job[]): Job | undefined {
@@ -116,11 +117,7 @@ export function unseen(reviews: readonly Review[], seen: ReadonlySet<string>): R
 }
 
 export function stepDuration(backlog: number): number {
-  return Math.max(MIN_STEP_MS, Math.min(PACE_WINDOW_MS, Math.round(PACE_WINDOW_MS / Math.max(1, backlog))));
-}
-
-export function isCompact(duration: number): boolean {
-  return duration < COMPACT_STEP_MS;
+  return Math.max(MIN_VISIBLE_MS, Math.min(PACE_WINDOW_MS, Math.round(PACE_WINDOW_MS / Math.max(1, backlog))));
 }
 
 export function analysisModel(candidates: readonly string[]): string {
@@ -128,7 +125,7 @@ export function analysisModel(candidates: readonly string[]): string {
 }
 
 export function playbackPhase(elapsed: number, duration: number, spans: number, chars: number): Phase {
-  if (isCompact(duration)) return { span: -1, typed: chars, verdict: true };
+  if (duration <= 0) return { span: -1, typed: chars, verdict: true };
   const t = Math.max(0, elapsed) / duration;
   const reading = t < READ_SHARE;
   const span = reading && spans > 0 ? Math.min(spans - 1, Math.floor((t / READ_SHARE) * spans)) : -1;
@@ -136,23 +133,49 @@ export function playbackPhase(elapsed: number, duration: number, spans: number, 
   return { span, typed: Math.round(typing * chars), verdict: t >= READ_SHARE + TYPE_SHARE };
 }
 
+function checkLabel(checkId: string): string {
+  const words = checkId.replace(/[_-]+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : checkId;
+}
+
+function groupKey(verdict: Pick<ReviewVerdict, "check_id" | "kind">): string {
+  return `${verdict.kind}:${verdict.check_id}`;
+}
+
 export function conclusions(reviews: readonly Review[], checks: Settings["checks"] = []): Conclusion[] {
   const instructions = new Map(checks.map((check) => [check.id, check.instruction]));
-  const verdicts = reviews.flatMap((review) => review.verdicts);
-  const grouped = verdicts.reduce(
-    (groups, verdict) => {
-      const prior = groups.get(verdict.check_id);
-      return new Map(groups).set(verdict.check_id, {
+  const grouped = reviews.reduce((groups, review) => {
+    const perTrace = new Map(review.verdicts.map((verdict) => [groupKey(verdict), verdict]));
+    return [...perTrace].reduce((next, [key, verdict]) => {
+      const prior = next.get(key);
+      return new Map(next).set(key, {
+        key,
         checkId: verdict.check_id,
-        label: instructions.get(verdict.check_id) ?? verdict.summary,
+        label: instructions.get(verdict.check_id) ?? checkLabel(verdict.check_id),
         latest: verdict.summary,
         count: (prior?.count ?? 0) + 1,
-        issue: (prior?.issue ?? false) || verdict.kind === "issue",
+        issue: verdict.kind === "issue",
       });
-    },
-    new Map<string, Conclusion>(),
-  );
+    }, groups);
+  }, new Map<string, Conclusion>());
   return [...grouped.values()].sort((a, b) => Number(b.issue) - Number(a.issue) || b.count - a.count);
+}
+
+export function share(count: number, total: number): number {
+  return total > 0 ? Math.min(1, count / total) : 0;
+}
+
+export function inGroup(review: Pick<Review, "verdicts">, key: string | null): boolean {
+  return key === null || review.verdicts.some((verdict) => groupKey(verdict) === key);
+}
+
+export function grownGroups(before: readonly Conclusion[], after: readonly Conclusion[]): Set<string> {
+  const prior = new Map(before.map((group) => [group.key, group.count]));
+  return new Set(after.filter((group) => group.count > (prior.get(group.key) ?? 0)).map((group) => group.key));
+}
+
+export function decidedReviews(playback: Pick<Playback, "played" | "current">, verdictShown: boolean): Review[] {
+  return [...playback.played, ...(playback.current && verdictShown ? [playback.current] : [])];
 }
 
 export function readingStart(job: Pick<Job, "steps" | "created_at">): string {
@@ -222,16 +245,18 @@ function enqueue(state: Playback, reviews: readonly Review[]): Playback {
 }
 
 function advance(state: Playback, now: number): Playback {
-  const [next, ...rest] = state.pending;
-  if (!next) return state;
+  if (!state.pending.length) return state;
   if (state.current && now - state.startedAt < state.duration) return state;
+  const skip = Math.max(0, state.pending.length - CATCH_UP_BACKLOG);
+  const [next, ...rest] = state.pending.slice(skip);
+  const finished = [...(state.current ? [state.current] : []), ...state.pending.slice(0, skip)];
   return {
     ...state,
-    played: state.current ? [...state.played, state.current].slice(-PLAYED_LIMIT) : state.played,
+    played: [...state.played, ...finished].slice(-PLAYED_LIMIT),
     current: next,
     pending: rest,
     startedAt: now,
-    duration: stepDuration(state.pending.length),
+    duration: stepDuration(rest.length + 1),
   };
 }
 

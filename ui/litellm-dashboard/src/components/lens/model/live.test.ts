@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   analysisModel,
   conclusions,
+  decidedReviews,
   focusedReview,
+  grownGroups,
+  inGroup,
+  share,
   issueCount,
   shortVerdict,
   stripState,
@@ -91,54 +95,84 @@ describe("review outcome", () => {
 });
 
 describe("conclusions", () => {
-  it("groups verdicts by check, counts them and ranks issues before patterns, then by count", () => {
+  it("counts traces per check and kind, ranking issues before patterns, then by count", () => {
     const reviews = [
       review("a", { verdicts: [pattern("calm"), issue("invented", "first")] }),
       review("b", { verdicts: [pattern("calm"), pattern("calm")] }),
-      review("c", { verdicts: [issue("unhappy")] }),
-      review("d", { verdicts: [issue("invented", "latest")] }),
+      review("c", { verdicts: [issue("unhappy_user")] }),
+      review("d", { verdicts: [issue("invented", "latest"), pattern("invented")] }),
     ];
     const result = conclusions(reviews, [{ id: "invented", instruction: "Invents answers", enabled: true }]);
     expect(result.map((c) => [c.checkId, c.count, c.issue])).toEqual([
       ["invented", 2, true],
-      ["unhappy", 1, true],
-      ["calm", 3, false],
+      ["unhappy_user", 1, true],
+      ["calm", 2, false],
+      ["invented", 1, false],
     ]);
     expect(result[0].label).toBe("Invents answers");
     expect(result[0].latest).toBe("latest");
-    expect(result[1].label).toBe("unhappy");
+    expect(result[1].label).toBe("Unhappy user");
   });
 
   it("is empty when nothing was flagged", () => {
     expect(conclusions([review("a"), review("b")])).toEqual([]);
+  });
+
+  it("filters traces to a group and lets everything through without one", () => {
+    const [invented] = conclusions([review("a", { verdicts: [issue("invented")] })]);
+    expect(inGroup(review("a", { verdicts: [issue("invented")] }), invented.key)).toBe(true);
+    expect(inGroup(review("b", { verdicts: [pattern("invented")] }), invented.key)).toBe(false);
+    expect(inGroup(review("c"), null)).toBe(true);
+  });
+
+  it("reports which groups gained a trace so they can flash", () => {
+    const before = conclusions([review("a", { verdicts: [issue("x"), pattern("y")] })]);
+    const after = conclusions([
+      review("a", { verdicts: [issue("x"), pattern("y")] }),
+      review("b", { verdicts: [issue("x"), issue("z")] }),
+    ]);
+    expect([...grownGroups(before, after)].sort()).toEqual(["issue:x", "issue:z"]);
+    expect(grownGroups(after, after).size).toBe(0);
+  });
+
+  it("gives a bar share bounded to the total", () => {
+    expect(share(3, 12)).toBe(0.25);
+    expect(share(5, 0)).toBe(0);
+    expect(share(9, 4)).toBe(1);
+  });
+
+  it("only counts the trace being read once its verdict is on screen", () => {
+    const [a, b] = [review("a"), review("b")];
+    expect(decidedReviews({ played: [a], current: b }, false)).toEqual([a]);
+    expect(decidedReviews({ played: [a], current: b }, true)).toEqual([a, b]);
   });
 });
 
 describe("playback pacing", () => {
   it("slows to a full window for one review and speeds up as the backlog grows", () => {
     expect(stepDuration(1)).toBe(2400);
-    expect(stepDuration(2)).toBe(1200);
-    expect(stepDuration(10)).toBeLessThan(stepDuration(2));
     expect(stepDuration(0)).toBe(2400);
+    expect(stepDuration(2)).toBeLessThan(stepDuration(1));
   });
 
-  it("streams a large backlog at 150ms per review or faster", () => {
-    expect(stepDuration(16)).toBeLessThanOrEqual(150);
-    expect(stepDuration(60)).toBeLessThanOrEqual(150);
-    expect(stepDuration(10_000)).toBe(60);
+  it("keeps every trace on screen long enough to read, however large the backlog", () => {
+    expect(stepDuration(3)).toBeGreaterThanOrEqual(1200);
+    expect(stepDuration(10_000)).toBeGreaterThanOrEqual(1200);
   });
 
-  it("highlights spans one at a time, then types reasoning, then shows the verdict", () => {
+  it("highlights spans one at a time, then types reasoning, then leaves the verdict up", () => {
     const duration = 2000;
     expect(playbackPhase(0, duration, 4, 100)).toEqual({ span: 0, typed: 0, verdict: false });
-    expect(playbackPhase(duration * 0.3, duration, 4, 100).span).toBe(3);
-    const typing = playbackPhase(duration * 0.575, duration, 4, 100);
+    expect(playbackPhase(duration * 0.29, duration, 4, 100).span).toBe(3);
+    const typing = playbackPhase(duration * 0.475, duration, 4, 100);
     expect(typing).toEqual({ span: -1, typed: 50, verdict: false });
-    expect(playbackPhase(duration * 0.85, duration, 4, 100)).toEqual({ span: -1, typed: 100, verdict: true });
+    const done = playbackPhase(duration * 0.65, duration, 4, 100);
+    expect(done).toEqual({ span: -1, typed: 100, verdict: true });
+    expect(playbackPhase(duration * 0.99, duration, 4, 100)).toEqual(done);
   });
 
-  it("skips the animation entirely when the backlog forces short steps", () => {
-    expect(playbackPhase(0, 300, 4, 100)).toEqual({ span: -1, typed: 100, verdict: true });
+  it("shows a settled review whole", () => {
+    expect(playbackPhase(0, 0, 4, 100)).toEqual({ span: -1, typed: 100, verdict: true });
   });
 });
 
@@ -184,13 +218,24 @@ describe("playback queue", () => {
     expect(playbackReducer(second, { type: "tick", now: 1e9 })).toBe(second);
   });
 
-  it("replays a finished run from its first review", () => {
+  it("catches up on a big backlog by skipping to the newest few, never by shortening steps", () => {
+    const many = Array.from({ length: 40 }, (_, n) => review(`r${n}`));
+    const step = playbackReducer(startPlayback([], true), { type: "enqueue", reviews: many });
+    const first = playbackReducer(step, { type: "tick", now: 0 });
+    expect(first.current?.execution_id).toBe("r37");
+    expect(first.pending.map((r) => r.execution_id)).toEqual(["r38", "r39"]);
+    expect(first.played.map((r) => r.execution_id)).toEqual(many.slice(0, 37).map((r) => r.execution_id));
+    expect(first.duration).toBeGreaterThanOrEqual(1200);
+    expect(playbackReducer(first, { type: "tick", now: 1199 })).toBe(first);
+  });
+
+  it("replays a finished run, jumping to the last few", () => {
     const done = startPlayback(reviews, false);
     const again = playbackReducer(done, { type: "replay" });
     expect(again.current).toBeNull();
     expect(again.played).toEqual([]);
     expect(again.pending.map((r) => r.execution_id)).toEqual(["a", "b", "c", "d", "e"]);
-    expect(playbackReducer(again, { type: "tick", now: 0 }).current?.execution_id).toBe("a");
+    expect(playbackReducer(again, { type: "tick", now: 0 }).current?.execution_id).toBe("c");
   });
 
   it("settles everything at once for reduced motion", () => {
