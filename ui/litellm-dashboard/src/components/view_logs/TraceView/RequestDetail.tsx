@@ -30,7 +30,7 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
   const logNotFound = lookupDone && logQuery.data === null;
 
   if (span.type !== "llm") {
-    return <div className="py-16 text-center text-[13px] text-trace-duration">This span is not a model request.</div>;
+    return <div className="py-16 text-center text-sm text-trace-duration">This span is not a model request.</div>;
   }
 
   const usage: KeyValue[] = [
@@ -57,15 +57,15 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
             <Button
               variant="outline"
               size="xs"
-              className="self-start border-trace-border text-[13px] text-trace-text-2 shadow-trace-xs"
+              className="self-start border-trace-border text-sm text-trace-text-2 shadow-trace-xs"
               onClick={() => setDrawerOpen(true)}
             >
               Open request log <ArrowUpRight className="size-3.5" />
             </Button>
-            {logNotFound && <p className="text-[13px] text-trace-duration">No request log found for this call.</p>}
+            {logNotFound && <p className="text-sm text-trace-duration">No request log found for this call.</p>}
           </div>
         ) : (
-          <p className="text-[13px] text-trace-duration">Not linked to a LiteLLM request</p>
+          <p className="text-sm text-trace-duration">Not linked to a LiteLLM request</p>
         )}
       </DetailGroup>
       <LogDetailsDrawer

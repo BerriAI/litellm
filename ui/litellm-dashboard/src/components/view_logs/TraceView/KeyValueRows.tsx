@@ -35,7 +35,7 @@ function KeyValueRow({ entry, mono }: { entry: KeyValue; mono: boolean }) {
   const [key, value] = entry;
   const [open, setOpen] = useState(false);
   const valueClass = cn(
-    "min-w-0 flex-1 break-words text-left text-[13px] leading-5 text-foreground",
+    "min-w-0 flex-1 break-words text-left text-sm leading-5 text-foreground",
     mono || ID_KEY.test(key) ? "font-mono" : "font-sans",
   );
 
@@ -72,7 +72,7 @@ function KeyValueRow({ entry, mono }: { entry: KeyValue; mono: boolean }) {
           <button {...toggle} className="flex shrink-0 cursor-pointer items-baseline gap-2.5 text-left">
             {head}
           </button>
-          <pre className={cn(valueClass, "leading-[1.5] break-words whitespace-pre-wrap")}>{value}</pre>
+          <pre className={cn(valueClass, "leading-normal break-words whitespace-pre-wrap")}>{value}</pre>
         </>
       ) : (
         <button {...toggle} className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-2.5 text-left">

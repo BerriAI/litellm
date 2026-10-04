@@ -9,7 +9,6 @@ import {
 } from "nuqs";
 import { useCallback, useState } from "react";
 
-import { ALL_AGENTS, type RunStatusFilter } from "./RunsToolbar";
 import { RANGE_PRESETS } from "./TimeRangeControls";
 import type { TimeWindow } from "./TracesTimeline";
 import type { TraceSummary } from "./traceTypes";
@@ -20,7 +19,6 @@ export type TraceView = (typeof TRACE_VIEWS)[number];
 export const SPAN_TABS = ["content", "request", "attributes"] as const;
 export type SpanTab = (typeof SPAN_TABS)[number];
 
-const STATUS_FILTERS = ["all", "ok", "error"] as const satisfies readonly RunStatusFilter[];
 const RANGE_HOURS = RANGE_PRESETS.map((preset) => preset.hours);
 type RangeHours = (typeof RANGE_PRESETS)[number]["hours"];
 const isRangeHours = (hours: number): hours is RangeHours => RANGE_HOURS.includes(hours as RangeHours);
@@ -61,8 +59,6 @@ export const OPEN_TRACE_PARSERS = {
 
 export const RUN_FILTER_PARSERS = {
   q: parseAsString.withDefault(""),
-  agent: parseAsString.withDefault(ALL_AGENTS),
-  status: parseAsStringLiteral(STATUS_FILTERS).withDefault("all"),
   hours: parseAsNumberLiteral(RANGE_HOURS).withDefault(DEFAULT_RANGE_HOURS),
   from: parseAsInteger,
   to: parseAsInteger,
@@ -143,25 +139,9 @@ export function useLocalRunSelection(initialSpanId: string | null): RunSelection
   return { spanId, view, spanTab, stepQuery, errorsOnly, selectSpan, setView, setSpanTab, setStepQuery, setErrorsOnly };
 }
 
-export interface RunFilterRouting {
-  query: string;
-  agent: string;
-  status: RunStatusFilter;
-  setQuery: (query: string) => void;
-  setAgent: (agent: string) => void;
-  setStatus: (status: RunStatusFilter) => void;
-}
-
-export function useRunFilterRouting(): RunFilterRouting {
-  const [{ q, agent, status }, setParams] = useQueryStates(RUN_FILTER_PARSERS);
-  return {
-    query: q,
-    agent,
-    status,
-    setQuery: useCallback((q: string) => void setParams({ q }), [setParams]),
-    setAgent: useCallback((agent: string) => void setParams({ agent }), [setParams]),
-    setStatus: useCallback((status: RunStatusFilter) => void setParams({ status }), [setParams]),
-  };
+export function useRunFilterRouting(): { query: string; setQuery: (query: string) => void } {
+  const [query, setQuery] = useQueryState("q", RUN_FILTER_PARSERS.q);
+  return { query, setQuery: useCallback((q: string) => void setQuery(q), [setQuery]) };
 }
 
 export function useRangeHoursRouting(): [number, (hours: number) => void] {

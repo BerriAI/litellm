@@ -14,7 +14,7 @@ interface AttributesDetailProps {
 export function DetailGroup({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section aria-label={title} className="flex flex-col gap-2">
-      <h3 className="py-1 text-[13px] font-medium tracking-[-0.26px] text-trace-text">{title}</h3>
+      <h3 className="py-1 text-sm font-medium text-trace-text">{title}</h3>
       <Card className="px-3 py-2.5">{children}</Card>
     </section>
   );
@@ -38,7 +38,7 @@ export function AttributesDetail({ traceId, span, attributes, isLoading }: Attri
           <KeyValueRows entries={attributeEntries} />
         </DetailGroup>
       )}
-      {isLoading && <div className="text-[13px] text-trace-duration">Loading attributes…</div>}
+      {isLoading && <div className="text-sm text-trace-duration">Loading attributes…</div>}
     </div>
   );
 }

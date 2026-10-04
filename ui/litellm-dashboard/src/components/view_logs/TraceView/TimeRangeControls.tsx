@@ -27,7 +27,7 @@ const RANGE_LABEL_FORMAT = "MMM D, h:mm A";
 export const rangeLabel = (range: TimeWindow): string =>
   `${moment(range.startMs).format(RANGE_LABEL_FORMAT)} to ${moment(range.endMs).format(RANGE_LABEL_FORMAT)}`;
 
-const SEGMENT = "inline-flex h-7 items-center gap-1.5 px-2.5 text-[13px] outline-none focus-visible:bg-accent";
+const SEGMENT = "inline-flex h-7 items-center gap-1.5 px-2.5 text-sm outline-none focus-visible:bg-accent";
 
 interface TimeRangeControlsProps {
   range: TimeWindow;
@@ -79,7 +79,7 @@ export function TimeRangeControls({
               onValueChange={(value: string) => onRangeHoursChange(Number(value))}
             >
               {RANGE_PRESETS.map((preset) => (
-                <DropdownMenuRadioItem key={preset.hours} value={String(preset.hours)} className="text-[13px]">
+                <DropdownMenuRadioItem key={preset.hours} value={String(preset.hours)} className="text-sm">
                   {preset.label}
                 </DropdownMenuRadioItem>
               ))}

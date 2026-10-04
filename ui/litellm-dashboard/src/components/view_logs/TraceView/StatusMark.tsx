@@ -11,7 +11,7 @@ export function StatusMark({ status, count, subtle = false }: StatusMarkProps) {
   if (status === "error") {
     return (
       <span
-        className="inline-flex items-center gap-1 text-[11px] text-destructive"
+        className="inline-flex items-center gap-1 text-xs text-destructive"
         aria-label={`${count ?? 1} error${count === 1 ? "" : "s"}`}
       >
         <AlertCircle className="size-3" />

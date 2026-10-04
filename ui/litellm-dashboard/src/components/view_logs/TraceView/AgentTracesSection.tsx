@@ -3,12 +3,12 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
-import { HeaderActions } from "@/components/lens/HeaderActions";
+import { filterRuns } from "@/components/lens/runSearch/runQuery";
+import { RunsToolbar } from "@/components/lens/runSearch/RunsToolbar";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
-import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
 import {
   type TraceRef,
   traceKey,
@@ -18,31 +18,11 @@ import {
   useZoomRouting,
 } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
-import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
-import { ActiveDot } from "./ActiveDot";
 import { TracingSetupCard } from "./TracingSetupCard";
 import { useTracesLive } from "./tracesApi";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
-
-/** Client-side search (input text or trace id) plus agent / status filters over the loaded runs. */
-export function filterRuns(
-  runs: TraceSummary[],
-  query: string,
-  agent: string,
-  status: RunStatusFilter,
-): TraceSummary[] {
-  const q = query.trim().toLowerCase();
-  return runs.filter((run) => {
-    const haystack = [run.trace_id, previewText(run.input_preview), run.name].map((s) => s.toLowerCase());
-    const matchesQuery = !q || haystack.some((text) => text.includes(q));
-    const matchesAgent = agent === ALL_AGENTS || traceAgentNames(run).includes(agent);
-    const failed = run.error_count > 0;
-    const matchesStatus = status === "all" || (status === "error" ? failed : !failed);
-    return matchesQuery && matchesAgent && matchesStatus;
-  });
-}
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -96,7 +76,7 @@ function TraceHistoryError({ history }: { history: ReturnType<typeof useTraceAva
   );
 }
 
-/** The Runs view: filters, the runs table and footer — or one run, in place, once a row is clicked. */
+/** The Runs view: filters and the runs table — or one run, in place, once a row is clicked. */
 export function AgentTracesSection({
   accessToken,
   isActive,
@@ -110,7 +90,7 @@ export function AgentTracesSection({
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
-  const { query, agent, status, setQuery, setAgent, setStatus } = useRunFilterRouting();
+  const { query, setQuery } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
@@ -125,17 +105,13 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  const agents = useMemo(() => Array.from(new Set(traces.traces.flatMap(traceAgentNames))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
   const range = useMemo(
     () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
     [startTime, endTime, isCustomDate, endMs],
   );
-  const filtered = useMemo(
-    () => filterRuns(traces.traces, query, agent, status),
-    [traces.traces, query, agent, status],
-  );
+  const filtered = useMemo(() => filterRuns(traces.traces, query), [traces.traces, query]);
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
@@ -169,7 +145,7 @@ export function AgentTracesSection({
         <button
           type="button"
           onClick={() => setShowSetup(false)}
-          className="mb-3 text-[13px] text-muted-foreground hover:text-foreground"
+          className="mb-3 text-sm text-muted-foreground hover:text-foreground"
         >
           ← Back to traces
         </button>
@@ -184,10 +160,9 @@ export function AgentTracesSection({
   };
 
   return (
-    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
+    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
       <TracesReceived received={setup.received} />
-      <TracingSetupAction live={live} isActive={isActive} onClick={() => setShowSetup(true)} />
       <RunDrawer
         trace={openTrace}
         runs={runs}
@@ -197,15 +172,7 @@ export function AgentTracesSection({
         fullScreen={fullScreen}
         onFullScreenChange={setFullScreen}
       />
-      <RunsToolbar
-        query={query}
-        agent={agent}
-        status={status}
-        agents={agents}
-        onQueryChange={setQuery}
-        onAgentChange={setAgent}
-        onStatusChange={setStatus}
-      >
+      <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces}>
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}
@@ -233,27 +200,10 @@ export function AgentTracesSection({
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}
         selectedKey={openTrace === null ? null : traceKey(openTrace)}
-      />
-      <RunsFooter
-        count={runs.length}
-        zoom={zoom}
-        isFetching={traces.isFetching}
-        failed={!!traces.error}
-        onResetZoom={() => setZoom(null)}
+        rangeEmpty={traces.traces.length === 0}
+        onSetUpTracing={() => setShowSetup(true)}
       />
     </div>
-  );
-}
-
-function TracingSetupAction({ live, isActive, onClick }: { live: boolean; isActive: boolean; onClick: () => void }) {
-  if (!live || !isActive) return null;
-  return (
-    <HeaderActions>
-      <Button variant="outline" size="sm" onClick={onClick} className="shrink-0 gap-1.5">
-        <ActiveDot />
-        Set up tracing
-      </Button>
-    </HeaderActions>
   );
 }
 
@@ -263,41 +213,5 @@ function TracesReceived({ received }: { received: boolean }) {
     <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
       Traces received. Select a run to inspect it.
     </p>
-  );
-}
-
-function RunsFooter({
-  count,
-  zoom,
-  isFetching,
-  failed,
-  onResetZoom,
-}: {
-  count: number;
-  zoom: TimeWindow | null;
-  isFetching: boolean;
-  failed: boolean;
-  onResetZoom: () => void;
-}) {
-  const settled = failed ? "Update failed" : "Updated just now";
-  const status = isFetching ? "Updating…" : settled;
-  return (
-    <footer
-      data-testid="runs-footer"
-      className="flex h-8 shrink-0 items-center border-t border-border bg-muted/40 px-3 font-mono text-[11px] text-muted-foreground"
-    >
-      {count} {count === 1 ? "run" : "runs"}
-      {zoom && (
-        <button
-          type="button"
-          onClick={() => onResetZoom()}
-          aria-label="Clear time zoom"
-          className="ml-3 rounded border border-info/40 bg-info/10 px-1.5 text-info hover:bg-info/20"
-        >
-          {moment(zoom.startMs).format("MMM DD, HH:mm")} to {moment(zoom.endMs).format("MMM DD, HH:mm")} ×
-        </button>
-      )}
-      <span className="ml-auto">{status}</span>
-    </footer>
   );
 }

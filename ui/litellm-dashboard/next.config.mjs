@@ -12,7 +12,14 @@ const nextConfig = {
     ? {
         async rewrites() {
           return {
-            beforeFiles: [{ source: "/ui/:path*", destination: "/:path*" }],
+            beforeFiles: [
+              {
+                source: "/:path*",
+                has: [{ type: "header", key: "content-type", value: "application/json.*" }],
+                destination: `${devProxyUrl}/:path*`,
+              },
+              { source: "/ui/:path*", destination: "/:path*" },
+            ],
             fallback: [{ source: "/:path*", destination: `${devProxyUrl}/:path*` }],
           };
         },

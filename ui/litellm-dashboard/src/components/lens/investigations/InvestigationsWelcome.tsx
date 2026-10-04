@@ -40,7 +40,7 @@ export function InvestigationsWelcome({
     className: "col-start-2 w-fit sm:col-start-auto",
   });
   return (
-    <section aria-labelledby="lens-welcome" className="max-w-3xl pb-6">
+    <section aria-labelledby="lens-welcome" className="m-auto w-full max-w-2xl py-10">
       {showPreview && <LensPreviewButton />}
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
         Find what needs attention

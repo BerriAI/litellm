@@ -59,9 +59,3 @@ export function agoLabel(thenMs: number, nowMs: number): string {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
 }
-
-export const RECEIVING_WINDOW_MS = 5 * 60 * 1000;
-
-export function isReceiving(lastMs: number | null, nowMs: number): boolean {
-  return lastMs !== null && nowMs - lastMs < RECEIVING_WINDOW_MS;
-}
