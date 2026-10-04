@@ -500,7 +500,7 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				raw["permissions"] = tc.permissions
 			}
 			if tc.generateBudget != nil {
-				raw["model_max_budget"] = ` + '"{"gpt-4o-mini": {"budget_limit": 5, "time_period": "30d"}}"' + `
+				raw["model_max_budget"] = `{"gpt-4o-mini": {"budget_limit": 5, "time_period": "30d"}}`
 			}
 			if tc.suppliedKey != "" {
 				raw["key"] = tc.suppliedKey
@@ -533,6 +533,12 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 			}
 			if generateBody["key_type"] != "llm_api" {
 				t.Errorf("generate payload key_type = %v, want llm_api", generateBody["key_type"])
+			}
+			if tc.generateBudget != nil {
+				want := map[string]interface{}{"gpt-4o-mini": map[string]interface{}{"budget_limit": float64(5), "time_period": "30d"}}
+				if fmt.Sprint(generateBody["model_max_budget"]) != fmt.Sprint(want) {
+					t.Errorf("generate payload model_max_budget = %v, want the declared %v", generateBody["model_max_budget"], want)
+				}
 			}
 			if tc.wantUpdate {
 				if !updateCalled {
