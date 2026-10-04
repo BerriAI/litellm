@@ -33,7 +33,6 @@ describe("Lens interactive demo", () => {
     expect(await screen.findByText("Enable tracing")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Preview sample" }));
     expect(await screen.findByText("Where is order #1042?")).toBeVisible();
-    expect(screen.getByText("You’re viewing demo data")).toBeVisible();
     expect(screen.getByRole("switch", { name: "Demo data" })).toBeChecked();
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
     expect(screen.queryByRole("button", { name: "Set up tracing" })).not.toBeInTheDocument();
@@ -55,7 +54,6 @@ describe("Lens interactive demo", () => {
     expect(network).not.toHaveBeenCalled();
     await user.click(screen.getByRole("switch", { name: "Demo data" }));
     expect(await screen.findByText(/Investigations require proxy administrator access/)).toBeVisible();
-    expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(screen.queryByText("Can I return my headphones?")).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Demo data" })).not.toBeChecked();
     await expectUrl(onUrlUpdate, (url) => expect([...url.entries()]).toEqual([["tab", "investigations"]]));
@@ -68,7 +66,7 @@ describe("Lens interactive demo", () => {
       searchParams: "?demo=true",
       onUrlUpdate,
     });
-    expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
+    expect(await screen.findByRole("switch", { name: "Demo data" })).toBeChecked();
     await user.click(await screen.findByText("Where is order #1042?"));
     const drawer = await screen.findByRole("complementary", { name: "Trace details" });
     await expectUrl(onUrlUpdate, (url) => expect(url.get("trace")).toBeTruthy());

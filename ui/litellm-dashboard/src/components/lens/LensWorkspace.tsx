@@ -3,7 +3,7 @@
 import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
-import { Activity, Aperture, ArrowUpRight, Info, ScanSearch } from "lucide-react";
+import { Activity, Aperture, ArrowUpRight, ScanSearch } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -37,15 +37,9 @@ function SampleSession() {
 function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolean) => void }) {
   const id = useId();
   return (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-      {demo && (
-        <p role="status" className="flex items-center gap-1.5 font-medium text-info">
-          <Info aria-hidden="true" className="size-3.5 shrink-0" />
-          You’re viewing demo data
-        </p>
-      )}
+    <div className={cn("flex items-center gap-2 text-xs", demo ? "font-medium text-info" : "text-muted-foreground")}>
       <label htmlFor={id}>Demo data</label>
-      <Switch id={id} size="sm" checked={demo} onCheckedChange={onChange} />
+      <Switch id={id} size="sm" checked={demo} onCheckedChange={onChange} className="data-checked:bg-info" />
     </div>
   );
 }
@@ -53,7 +47,7 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
 const MODE_ICONS = { traces: Activity, investigations: ScanSearch } as const;
 
 const ACTIVITY_DOT: Record<Exclude<InvestigationActivity, "idle">, { className: string; label: string }> = {
-  running: { className: "bg-[#3b5bfd] motion-safe:animate-pulse", label: "An investigation is running" },
+  running: { className: "bg-info motion-safe:animate-pulse", label: "An investigation is running" },
   queued: { className: "bg-muted-foreground/60", label: "An investigation is queued" },
 };
 
@@ -70,7 +64,9 @@ function ActivityDot({ activity }: { activity: InvestigationActivity }) {
   );
 }
 
-function NotchCorner({ side }: { side: "left" | "right" }) {
+const frameBorder = (demo: boolean): string => (demo ? "border-info" : "border-foreground/15");
+
+function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) {
   return (
     <svg
       aria-hidden="true"
@@ -83,16 +79,24 @@ function NotchCorner({ side }: { side: "left" | "right" }) {
       )}
     >
       <path d="M0 11.5 A11.5 11.5 0 0 0 11.5 0 H13 V12 H0 Z" className="fill-card" />
-      <path d="M0 11.5 A11.5 11.5 0 0 0 11.5 0" className="fill-none stroke-foreground/15" />
+      <path
+        d="M0 11.5 A11.5 11.5 0 0 0 11.5 0"
+        className={cn("fill-none", demo ? "stroke-info" : "stroke-foreground/15")}
+      />
     </svg>
   );
 }
 
-function LensModeSwitch({ activity }: { activity: InvestigationActivity }) {
+function LensModeSwitch({ activity, demo }: { activity: InvestigationActivity; demo: boolean }) {
   return (
-    <div className="relative z-raised -mb-px rounded-t-2xl border-x border-t border-foreground/15 bg-card px-1.5 pt-1.5 pb-[7px]">
-      <NotchCorner side="left" />
-      <NotchCorner side="right" />
+    <div
+      className={cn(
+        "relative z-raised -mb-px rounded-t-2xl border-x border-t bg-card px-1.5 pt-1.5 pb-[7px]",
+        frameBorder(demo),
+      )}
+    >
+      <NotchCorner side="left" demo={demo} />
+      <NotchCorner side="right" demo={demo} />
       <TabsPrimitive.List
         aria-label="Lens"
         className="relative inline-flex h-9 items-center rounded-full bg-muted/70 p-1"
@@ -161,13 +165,15 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               </a>
             </p>
           </div>
-          <LensModeSwitch activity={activity} />
+          <LensModeSwitch activity={activity} demo={demo} />
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
             <div ref={setPreviewTarget} />
             <DemoToggle demo={demo} onChange={setDemo} />
           </div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-foreground/15 bg-card">
+        <div
+          className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card", frameBorder(demo))}
+        >
           <TabsContent value="traces" keepMounted className={PANEL}>
             <LensPreviewContext.Provider value={preview("traces")}>
               <AgentTracesPage
