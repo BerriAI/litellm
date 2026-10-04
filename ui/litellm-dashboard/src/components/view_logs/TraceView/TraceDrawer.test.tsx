@@ -7,6 +7,7 @@ import { renderWithProviders, testQueryClient } from "../../../../tests/test-uti
 import researchTrace from "./__fixtures__/research_trace.json";
 import swarmTrace from "./__fixtures__/swarm_trace.json";
 import type { ComponentProps } from "react";
+import { ShortcutHints } from "@/components/shared/ShortcutHints";
 import { initialRunSelection, RunView } from "./TraceDrawer";
 import { useOpenTraceRouting } from "./traceRouting";
 import { agentHandoffText } from "./tracesApi";
@@ -42,7 +43,12 @@ const research = researchTrace as Trace;
 
 function RoutedRunView(props: Omit<ComponentProps<typeof RunView>, "selection">) {
   const { selection } = useOpenTraceRouting();
-  return <RunView {...props} selection={selection} />;
+  return (
+    <>
+      <RunView {...props} selection={selection} />
+      <ShortcutHints />
+    </>
+  );
 }
 
 const renderRun = (trace: Trace) => {
@@ -131,6 +137,7 @@ describe("RunView", () => {
     await user.keyboard("{ArrowDown}");
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     expect(screen.queryByRole("button", { name: "Back to runs" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldEsc close");
   });
 
   it("keeps the current run on screen, inert, while an unvisited run loads in the drawer", async () => {
@@ -176,8 +183,10 @@ describe("RunView", () => {
     expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     await user.keyboard("k");
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+    expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldJ/K moveEsc close");
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldJ/K move");
   });
 
   it.each(["button", "Escape"])("reopens the selected step after closing details with %s", async (method) => {
@@ -404,7 +413,8 @@ describe("initialRunSelection", () => {
   it("folds other agent branches while revealing the failed step", () => {
     const first = child({ span_id: "first", type: "agent" });
     const second = child({ span_id: "second", type: "agent" });
-    const failure = child({ span_id: "failed", parent_span_id: "second", type: "tool", status: "error" });
+    const failureFields: Partial<Span> = { span_id: "failed", parent_span_id: "second", type: "tool", status: "error" };
+    const failure = child(failureFields);
     const { selectedId, state } = initialRunSelection({ ...research, spans: [base, first, second, failure] });
     expect(selectedId).toBe("failed");
     expect(state.collapsedSpanIds.has("first")).toBe(true);

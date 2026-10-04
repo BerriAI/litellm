@@ -7,9 +7,9 @@ import { ApiError } from "@/lib/http/client";
 
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
-import { LensPreviewContext } from "@/components/lens/LensPreviewButton";
+import { LensPreviewContext } from "./LensPreviewButton";
 import AgentTracesPage from "./AgentTracesPage";
-import { filterRuns } from "@/components/lens/runSearch/runQuery";
+import { filterRuns } from "./runSearch/runQuery";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
@@ -384,7 +384,7 @@ describe("AgentTracesSection", () => {
     const agentCell = (row: HTMLElement) => within(row).getAllByRole("cell")[1];
 
     expect(agentCell(sdkRun)).toHaveTextContent(/^research-bot$/);
-    expect(agentCell(sdkRun)).toHaveAttribute("title", "research-bot · Claude Agent SDK");
+    expect(within(agentCell(sdkRun)).getByTitle("research-bot · Claude Agent SDK")).toBeInTheDocument();
     expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toHaveAttribute(
       "src",
       expect.stringContaining("anthropic.svg"),
@@ -423,7 +423,7 @@ describe("AgentTracesSection", () => {
     expect(rows[0]).toHaveAttribute("aria-selected", "false");
 
     fireEvent.click(rows[1]);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(rows[1]).toHaveAttribute("aria-selected", "false");
   });
 
@@ -433,13 +433,34 @@ describe("AgentTracesSection", () => {
     const rows = await screen.findAllByTestId("agent-trace-row");
 
     fireEvent.click(rows[0]);
-    fireEvent.keyDown(window, { key: "j" });
+    fireEvent.keyDown(document.body, { key: "j" });
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
-    fireEvent.keyDown(window, { key: "k" });
+    fireEvent.keyDown(document.body, { key: "k" });
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[0].trace_id}`);
     expect(screen.getByRole("button", { name: "Previous trace (K)" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
+  });
+
+  it("opens full screen from a shared link and drops it from the URL on close", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail={false}
+      />,
+      { searchParams: `?trace=${runs[0].trace_id}&fullscreen=true`, onUrlUpdate },
+    );
+    const drawer = await screen.findByRole("complementary", { name: "Trace details" });
+    expect(drawer).toHaveStyle({ width: "100%" });
+    fireEvent.click(screen.getByRole("button", { name: "Close trace (Esc)" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
+    expect(lastUrl(onUrlUpdate).has("fullscreen")).toBe(false);
   });
 
   it("narrows the list to the zoom window named in the URL and clears it on request", async () => {
@@ -490,7 +511,7 @@ describe("AgentTracesSection", () => {
     expect(lastUrl(onUrlUpdate).get("trace_ref")).toBe(runs[1].trace_ref ?? null);
     expect(onUrlUpdate.mock.lastCall?.[0].options.history).toBe("push");
 
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
     expect(rows[1]).toHaveAttribute("aria-selected", "false");
   });
@@ -568,25 +589,6 @@ describe("AgentTracesSection", () => {
     expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
     expect(rowCount()).toBe(runs.length);
   });
-
-  it("clears timeline zoom when refreshed", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
-    renderWindowed({ rangeHours: 24, onRangeHoursChange: () => {}, onLiveChange: () => {} });
-    await screen.findAllByTestId("agent-trace-row");
-    const area = screen.getByTestId("timeline-area");
-    const x = (bucket: number) => bucket * 10 + 5;
-
-    fireEvent.pointerDown(area, { clientX: x(0), pointerId: 1 });
-    fireEvent.pointerMove(area, { clientX: x(1), pointerId: 1 });
-    fireEvent.pointerUp(area, { clientX: x(1), pointerId: 1 });
-    expect(screen.getByTestId("timeline-selection")).toBeInTheDocument();
-    expect(screen.queryAllByTestId("agent-trace-row")).toHaveLength(0);
-
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
-  });
 });
 
 describe("AgentTracesPage", () => {
@@ -596,37 +598,36 @@ describe("AgentTracesPage", () => {
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
   });
 
-  it("shows the actual range, switches presets from the popover, and toggles Live", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("names the rolling preset while Live and pins the actual range once paused", async () => {
+    const pausedAt = Date.parse("2026-10-03T12:00:00.500");
+    vi.useFakeTimers({ toFake: ["Date"], now: pausedAt });
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
     await screen.findByTestId("runs-table");
 
     const trigger = screen.getByRole("button", { name: "Time range" });
-    expect(trigger).toHaveTextContent(/ to /);
+    const live = screen.getByRole("button", { name: "Live" });
+    expect(live).toHaveAttribute("aria-pressed", "true");
+    expect(trigger).toHaveTextContent("Last 24 hours");
 
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last 7 days" }));
+    expect(trigger).toHaveTextContent("Last 7 days");
     await waitFor(() => {
       const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
       expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
     });
 
-    const live = screen.getByRole("button", { name: "Live" });
-    expect(live).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(live);
     expect(live).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
-  });
+    expect(trigger).toHaveTextContent(/ to /);
+    expect(trigger).not.toHaveTextContent("Last 7 days");
 
-  it("refreshes the trace list", async () => {
-    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
-    renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
-    await screen.findByTestId("runs-table");
-
-    const callsBeforeRefresh = vi.mocked(agentTraceListCall).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-
-    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.length).toBeGreaterThan(callsBeforeRefresh));
+    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0].endMs).toBe(pausedAt - 500));
   });
 
   it("keeps the time controls on an empty range the user picked, instead of showing onboarding", async () => {

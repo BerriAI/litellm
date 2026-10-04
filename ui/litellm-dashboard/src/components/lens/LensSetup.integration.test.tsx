@@ -2,8 +2,11 @@ import { act, fireEvent, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { dismissLensIntro } from "@/../tests/lens-test-utils";
+import { readStorage } from "@/lib/storage";
+import { LENS_INTRO_DISMISSED, LENS_INTRO_SEEN } from "./storage";
 import { LensWorkspace } from "./LensWorkspace";
-import { createLensDemoData } from "./demo/createLensDemo";
+import { createLensDemoData } from "./data/demo/fixtures";
 import type { LensList } from "./model/types";
 
 const network = vi.fn<typeof fetch>();
@@ -50,6 +53,8 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
 
 beforeEach(() => {
   testQueryClient.clear();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
   network.mockReset();
   list.mockReset();
   vi.stubGlobal("fetch", network);
@@ -57,10 +62,95 @@ beforeEach(() => {
   serve();
 });
 
+const renderWorkspace = (options?: Parameters<typeof renderWithProviders>[1], userRole = "Admin") =>
+  renderWithProviders(<LensWorkspace accessToken="setup-token" userRole={userRole} readOnly={false} />, options);
+
+const setupParam = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
+  new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? "")).get("setup");
+
+async function connectWorkerFromSettings(user: ReturnType<typeof userEvent.setup>) {
+  const settings = within(await screen.findByRole("region", { name: "Settings" }));
+  expect(settings.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
+  await user.click(settings.getByRole("combobox", { name: "Analysis model" }));
+  await user.click(await screen.findByRole("option", { name: "analysis" }));
+  await user.click(settings.getByRole("button", { name: "Get install command" }));
+  expect(await settings.findByRole("heading", { name: "Worker connected" })).toBeVisible();
+  await user.click(settings.getByRole("button", { name: "New investigation" }));
+  expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+}
+
+describe("Lens introduction", () => {
+  it("opens on the first visit, rests for the session on close, and stays away after don't show again", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    const first = renderWorkspace({ onUrlUpdate });
+    const intro = within(await screen.findByRole("dialog"));
+    expect(await intro.findByRole("heading", { name: "The gateway that helps your agents improve" })).toBeVisible();
+    expect(intro.getByRole("heading", { name: "Before you start" })).toBeVisible();
+    await user.click(intro.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(readStorage(LENS_INTRO_SEEN)).toBe(true);
+    expect(readStorage(LENS_INTRO_DISMISSED)).toBe(false);
+    first.unmount();
+
+    const second = renderWorkspace();
+    expect(await screen.findByRole("tablist", { name: "Lens" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    second.unmount();
+
+    window.sessionStorage.clear();
+    const third = renderWorkspace();
+    const reopened = within(await screen.findByRole("dialog"));
+    await user.click(reopened.getByRole("checkbox", { name: "Don’t show this again" }));
+    await user.click(reopened.getByRole("button", { name: "Close" }));
+    expect(readStorage(LENS_INTRO_DISMISSED)).toBe(true);
+    third.unmount();
+
+    window.sessionStorage.clear();
+    const fourth = renderWorkspace();
+    expect(await screen.findByRole("tablist", { name: "Lens" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fourth.unmount();
+
+    renderWorkspace({ searchParams: "?setup=lens" });
+    expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
+  it("lets settings bring back an introduction hidden with don't show again", async () => {
+    const user = userEvent.setup();
+    const first = renderWorkspace();
+    const intro = within(await screen.findByRole("dialog"));
+    await user.click(intro.getByRole("checkbox", { name: "Don’t show this again" }));
+    await user.click(intro.getByRole("button", { name: "Close" }));
+    first.unmount();
+
+    const settings = renderWorkspace({ searchParams: "?tab=settings" });
+    const toggle = within(await screen.findByRole("region", { name: "Introduction" })).getByRole("switch", {
+      name: "Show the introduction on each new session",
+    });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
+    settings.unmount();
+
+    window.sessionStorage.clear();
+    renderWorkspace();
+    expect(await screen.findByRole("dialog")).toBeVisible();
+  });
+
+  it("never opens on its own inside the sample session", async () => {
+    renderWorkspace({ searchParams: "?demo=true" });
+    expect(await screen.findByText("Where is order #1042?")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
 describe("Lens setup journey", () => {
   it.each(["/lens", "/lens/activity/available"])(
     "keeps recorded traces visible while %s is pending",
     async (pendingPath) => {
+      dismissLensIntro();
       serve({ enabled: true, traces: true });
       const normal = network.getMockImplementation()!;
       network.mockImplementation((input, init) =>
@@ -68,7 +158,7 @@ describe("Lens setup journey", () => {
           ? new Promise<Response>(() => {})
           : normal(input, init),
       );
-      renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />);
+      renderWorkspace();
       expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
     },
   );
@@ -76,6 +166,7 @@ describe("Lens setup journey", () => {
   it.each(["/v1/traces", "/lens/activity/available"])(
     "opens a saved investigation while %s is pending",
     async (pendingPath) => {
+      dismissLensIntro();
       serve();
       list.mockResolvedValue({ lenses: data.lenses, workers: [worker()], tracing_enabled: false });
       const normal = network.getMockImplementation()!;
@@ -84,116 +175,97 @@ describe("Lens setup journey", () => {
           ? new Promise<Response>(() => {})
           : normal(input, init),
       );
-      renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, {
-        searchParams: `?lens=${data.lenses[0].id}`,
-      });
+      renderWorkspace({ searchParams: `?lens=${data.lenses[0].id}` });
       expect(await screen.findByRole("heading", { name: data.lenses[0].settings.name })).toBeVisible();
     },
   );
 
-  it("shares the introduction across tabs and stays in setup after the first trace", async () => {
+  it("walks a first visit from the introduction through tracing into the Settings tab and the first investigation", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
-    renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, { onUrlUpdate });
-    expect(await screen.findByRole("heading", { name: "Before you start" })).toBeVisible();
-    await user.click(screen.getByRole("tab", { name: "Investigations" }));
-    expect(screen.getByRole("heading", { name: "Before you start" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Set up Lens" }));
-    await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("setup")).toBe("lens"));
+    renderWorkspace({ onUrlUpdate });
+    const intro = within(await screen.findByRole("dialog"));
+    await user.click(await intro.findByRole("button", { name: "Set up Lens" }));
+    await waitFor(() => expect(setupParam(onUrlUpdate)).toBe("lens"));
     serve({ enabled: true });
-    await user.click(screen.getByRole("button", { name: "Check setup" }));
-    expect(await screen.findByText("Trace storage is connected")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Continue to your agent" }));
-    expect(screen.getByRole("button", { name: "Check for traces" })).toBeVisible();
+    await user.click(intro.getByRole("button", { name: "Check setup" }));
+    expect(await intro.findByText("Trace storage is connected")).toBeVisible();
+    await user.click(intro.getByRole("button", { name: "Continue to your agent" }));
+    expect(intro.getByRole("button", { name: "Check for traces" })).toBeVisible();
     serve({ enabled: true, traces: true });
-    await user.click(screen.getByRole("button", { name: "Check for traces" }));
-    expect(await screen.findByText(/Your first trace is ready/)).toBeVisible();
-    expect(screen.queryByRole("table", { name: "Agent runs" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Continue to worker" }));
-    const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));
-    await user.click(connection.getByRole("combobox", { name: "Analysis model" }));
-    await user.click(await screen.findByRole("option", { name: "analysis" }));
-    await user.click(connection.getByRole("button", { name: "Get install command" }));
-    const connected = within(await screen.findByRole("dialog", { name: "Worker connected" }));
-    await user.click(connected.getByRole("button", { name: "New investigation" }));
-    expect(await screen.findByRole("dialog", { name: "Which activity should we investigate?" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "Get Lens running", hidden: true })).toBeInTheDocument();
+    await user.click(intro.getByRole("button", { name: "Check for traces" }));
+    expect(await intro.findByText(/Your first trace is ready/)).toBeVisible();
+    expect(screen.getByRole("dialog")).toBeVisible();
+    await user.click(intro.getByRole("button", { name: "Continue to worker" }));
+    await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
+    await connectWorkerFromSettings(user);
   });
 
-  it("resumes setup after a reload and leaves only when the user chooses traces", async () => {
+  it("resumes setup from the URL and leaves only when the user chooses traces", async () => {
     serve({ enabled: true, traces: true });
     const user = userEvent.setup();
-    renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, {
-      searchParams: "?tab=investigations&setup=lens",
-    });
-    expect(await screen.findByRole("button", { name: "Connect worker" })).toBeVisible();
-    await user.click(screen.getByRole("tab", { name: "Traces" }));
-    expect(screen.getByRole("heading", { name: "Get Lens running" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "View traces" }));
+    const onUrlUpdate = vi.fn();
+    renderWorkspace({ searchParams: "?tab=investigations&setup=lens", onUrlUpdate });
+    const intro = within(await screen.findByRole("dialog"));
+    expect(await intro.findByRole("button", { name: "Connect worker" })).toBeVisible();
+    expect(intro.getByRole("heading", { name: "Get Lens running" })).toBeVisible();
+    await user.click(intro.getByRole("button", { name: "View traces" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
+    await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
-    expect(await screen.findByRole("heading", { name: "Run your first investigation" })).toBeVisible();
-    expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Get Lens running" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Set up Lens" }));
-    expect(await screen.findByRole("heading", { name: "Get Lens running" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Connect worker" })).toBeVisible();
+    const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
+    expect(guide.getByRole("button", { name: /Connect a worker/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("allows request-only investigations without forcing agent instrumentation", async () => {
+    dismissLensIntro();
     serve({ requests: true });
     const user = userEvent.setup();
-    renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, {
-      searchParams: "?tab=investigations",
-    });
-    expect(await screen.findByText("Request logs received")).toBeVisible();
+    const welcome = renderWorkspace({ searchParams: "?tab=investigations" });
+    expect(await screen.findByRole("region", { name: "Get Lens running" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Connect worker" })).toBeEnabled();
-    expect(screen.queryByRole("heading", { name: "Before you start" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Set up Lens" }));
-    expect(await screen.findByRole("heading", { name: "Before you start" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Connect worker" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: /Enable tracing on the gateway/ }));
-    expect(screen.getByRole("button", { name: "Continue with request logs" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: /Send your first trace/ }));
-    await user.click(screen.getByRole("button", { name: "Continue with request logs" }));
-    const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));
-    await user.click(connection.getByRole("combobox", { name: "Analysis model" }));
-    await user.click(await screen.findByRole("option", { name: "analysis" }));
-    await user.click(connection.getByRole("button", { name: "Get install command" }));
-    const connected = within(await screen.findByRole("dialog", { name: "Worker connected" }));
-    await user.click(connected.getByRole("button", { name: "New investigation" }));
-    expect(await screen.findByRole("dialog", { name: "Which activity should we investigate?" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    welcome.unmount();
+    renderWorkspace({ searchParams: "?tab=investigations&setup=lens" });
+    const intro = within(await screen.findByRole("dialog"));
+    expect(await intro.findByRole("heading", { name: "Before you start" })).toBeVisible();
+    expect(intro.getByRole("button", { name: "Connect worker" })).toBeEnabled();
+    await user.click(intro.getByRole("button", { name: /Enable tracing on the gateway/ }));
+    expect(intro.getByRole("button", { name: "Continue with request logs" })).toBeEnabled();
+    await user.click(intro.getByRole("button", { name: /Send your first trace/ }));
+    await user.click(intro.getByRole("button", { name: "Continue with request logs" }));
+    await connectWorkerFromSettings(user);
   });
 
   it("keeps setup recoverable when checking for a first trace fails", async () => {
     serve({ enabled: true });
     const user = userEvent.setup();
-    renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, {
-      searchParams: "?setup=lens",
-    });
-    await screen.findByRole("button", { name: "Check for traces" });
+    renderWorkspace({ searchParams: "?setup=lens" });
+    const intro = within(await screen.findByRole("dialog"));
+    await intro.findByRole("button", { name: "Check for traces" });
     const normal = network.getMockImplementation()!;
     network.mockImplementation(async (input, init) => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (path === "/v1/traces") return Response.json({ detail: "Trace storage unavailable" }, { status: 503 });
       return normal(input, init);
     });
-    await user.click(screen.getByRole("button", { name: "Check for traces" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check setup");
-    expect(screen.queryByRole("button", { name: "Continue to worker" })).not.toBeInTheDocument();
+    await user.click(intro.getByRole("button", { name: "Check for traces" }));
+    expect(await intro.findByRole("alert")).toHaveTextContent("Could not check setup");
+    expect(intro.queryByRole("button", { name: "Continue to worker" })).not.toBeInTheDocument();
     serve({ enabled: true, traces: true });
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByRole("button", { name: "Continue to worker" })).toBeEnabled();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.click(intro.getByRole("button", { name: "Retry" }));
+    expect(await intro.findByRole("button", { name: "Continue to worker" })).toBeEnabled();
+    expect(intro.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps request-only users in investigations when an activity refresh fails", async () => {
+    dismissLensIntro();
     serve({ requests: true, connected: true });
     const user = userEvent.setup();
-    renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, {
-      searchParams: "?tab=investigations",
-    });
-    expect(await screen.findByText("Request logs received")).toBeVisible();
+    renderWorkspace({ searchParams: "?tab=investigations" });
+    expect(await screen.findByRole("button", { name: "New investigation" })).toBeEnabled();
     const normal = network.getMockImplementation()!;
     network.mockImplementation((input, init) =>
       new URL(String(input), "http://localhost").pathname === "/lens/activity/available"
@@ -201,25 +273,21 @@ describe("Lens setup journey", () => {
         : normal(input, init),
     );
     await act(() => testQueryClient.refetchQueries());
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check recorded activity");
-    expect(screen.queryByRole("heading", { name: "Get Lens running" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check setup. Activity unavailable");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
     network.mockImplementation(normal);
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("Request logs received")).toBeVisible();
-    expect(screen.getByRole("button", { name: "New investigation" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "New investigation" })).toBeEnabled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps administrator-only setup unavailable to trace viewers", async () => {
     serve({ enabled: true, traces: true });
-    const user = userEvent.setup();
-    renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Internal User" readOnly={false} />, {
-      searchParams: "?setup=lens",
-    });
-    expect(await screen.findByText(/A gateway administrator can connect a worker/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Connect worker" })).toBeDisabled();
-    await user.click(screen.getByRole("tab", { name: "Investigations" }));
-    expect(screen.getByRole("button", { name: "Connect worker" })).toBeDisabled();
+    renderWorkspace({ searchParams: "?setup=lens" }, "Internal User");
+    const intro = within(await screen.findByRole("dialog"));
+    expect(await intro.findByText(/A gateway administrator can connect a worker/)).toBeVisible();
+    expect(intro.getByRole("button", { name: "Connect worker" })).toBeDisabled();
     expect(network.mock.calls.some(([input]) => new URL(String(input), "http://localhost").pathname === "/lens")).toBe(
       false,
     );
@@ -243,25 +311,23 @@ describe("Lens setup journey", () => {
       });
       const user = userEvent.setup();
       const onUrlUpdate = vi.fn();
-      renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, {
-        searchParams: "?setup=lens",
-        onUrlUpdate,
-      });
-      await user.click(await screen.findByRole("button", { name: "New investigation" }));
-      const dialog = within(screen.getByRole("dialog"));
-      fireEvent.change(dialog.getByRole("textbox", { name: "Investigation name" }), {
+      renderWorkspace({ searchParams: "?setup=lens", onUrlUpdate });
+      const intro = within(await screen.findByRole("dialog"));
+      await user.click(await intro.findByRole("button", { name: "New investigation" }));
+      const editor = within(await screen.findByRole("region", { name: "New investigation" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      fireEvent.change(editor.getByRole("textbox", { name: "Investigation name" }), {
         target: { value: "My first review" },
       });
-      await user.click(dialog.getByRole("button", { name: "Continue" }));
-      await user.click(dialog.getByRole("button", { name: "Continue" }));
-      await waitFor(() => expect(dialog.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
-      await user.click(dialog.getByRole("button", { name: "Run and monitor" }));
+      await user.click(editor.getByRole("button", { name: "Continue" }));
+      await user.click(editor.getByRole("button", { name: "Continue" }));
+      await waitFor(() => expect(editor.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
+      await user.click(editor.getByRole("button", { name: "Run and monitor" }));
       expect(await screen.findByRole("heading", { name: "My first review" })).toBeVisible();
-      expect(screen.queryByRole("heading", { name: "Get Lens running" })).not.toBeInTheDocument();
       expect(
         within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" }),
       ).toHaveAttribute("aria-selected", "true");
-      await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("setup")).toBeNull());
+      await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
       const create = network.mock.calls.find(
         ([input, init]) => new URL(String(input), "http://localhost").pathname === "/lens" && init?.method === "POST",
       );

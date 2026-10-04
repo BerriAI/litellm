@@ -34,8 +34,6 @@ interface SpanTreeProps {
   onToggleGroup: (id: string) => void;
   onLoadMore: (groupId: string) => void;
   onOpenDetails?: () => void;
-  /** Inside the side drawer J/K switch runs, so spans move with the arrow keys. */
-  embedded?: boolean;
   query: string;
   onQueryChange: (query: string) => void;
   errorsOnly: boolean;
@@ -275,7 +273,6 @@ export function SpanTree({
   onToggleGroup,
   onLoadMore,
   onOpenDetails,
-  embedded = false,
   query,
   onQueryChange,
   errorsOnly,
@@ -413,36 +410,6 @@ export function SpanTree({
           })}
         </div>
       </div>
-      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
-        {embedded ? (
-          <>
-            <span className="whitespace-nowrap">
-              <Kbd>↑</Kbd>/<Kbd>↓</Kbd> step
-            </span>
-            <span className="whitespace-nowrap">
-              <Kbd>J</Kbd>/<Kbd>K</Kbd> trace
-            </span>
-          </>
-        ) : (
-          <span className="whitespace-nowrap">
-            <Kbd>J</Kbd>/<Kbd>K</Kbd> move
-          </span>
-        )}
-        <span className="whitespace-nowrap">
-          <Kbd>←</Kbd>/<Kbd>→</Kbd> fold
-        </span>
-        <span className="whitespace-nowrap">
-          <Kbd>Esc</Kbd> close
-        </span>
-      </div>
     </section>
-  );
-}
-
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="rounded-sm border border-border border-b-2 bg-muted px-[3px] font-mono text-muted-foreground">
-      {children}
-    </kbd>
   );
 }

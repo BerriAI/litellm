@@ -38,7 +38,12 @@ export function openFindings(lens: Lens): Finding[] {
 
 export const findingKey = (lens: Lens, finding: Finding) => `${lens.id}:${finding.id}`;
 
-export function findFinding(lenses: readonly Lens[], key: string) {
+export interface OwnedFinding {
+  readonly lens: Lens;
+  readonly finding: Finding;
+}
+
+export function findFinding(lenses: readonly Lens[], key: string): OwnedFinding | undefined {
   return lenses
     .flatMap((lens) => lens.findings.map((finding) => ({ lens, finding })))
     .find(({ lens, finding }) => findingKey(lens, finding) === key);
