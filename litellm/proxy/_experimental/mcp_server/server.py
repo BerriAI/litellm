@@ -1679,9 +1679,6 @@ if MCP_AVAILABLE:
             )
             server = granted if granted is not None else registry_pick
             granted_single = granted is not None
-            obo_without_subject = (
-                server is not None and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers
-            )
             if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
                 # Caller's narrowed scope excludes this server — skip the
                 # preemptive challenge and let downstream authorization
@@ -1782,7 +1779,9 @@ if MCP_AVAILABLE:
             # guardrail-only gates fire only on a single-server connect the key's grant admits, so a
             # key without access gets the grant's 403 instead of a sign-in it could not use. The one
             # admission lookup above serves the challenge, the sign-in preflight and the exchange.
-            sign_in = caller_sign_in_for(server, user_api_key_auth) if server is not None else None
+            guardrail_sign_in = (
+                caller_sign_in_for(server, user_api_key_auth, include_obo=False) if server is not None else None
+            )
             resource_metadata = get_passthrough_resource_metadata_url(scope, server_name)
             subject_token = (
                 operations.global_mcp_server_manager._caller_sign_in_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
@@ -1791,7 +1790,35 @@ if MCP_AVAILABLE:
                 if server is not None
                 else None
             )
-            if server and sign_in is not None and subject_token is None and (obo_without_subject or granted_single):
+            # The strict single-space ``Bearer`` rule gates only the sign-in providers (guardrails).
+            # The OBO server's own requirement keeps the legacy rule: challenge when there is no
+            # credential the legacy parser would exchange — no Authorization at all, or a withheld
+            # LiteLLM key — while a bearer it would have exchanged (scheme-less value, tab separator)
+            # still reaches the IdP, as before this change.
+            obo_gated: Final = server is not None and server.auth_type == MCPAuth.oauth2_token_exchange
+            inbound_bearer: Final = (
+                operations.global_mcp_server_manager._extract_bearer_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the legacy parse the exchange consumes
+                    oauth2_headers, raw_headers
+                )
+                if server is not None
+                else None
+            )
+            exchangeable_subject: Final = (
+                operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # withholds the LiteLLM credentials the exchange must never see
+                    oauth2_headers, raw_headers, user_api_key_auth
+                )
+                if server is not None
+                else None
+            )
+            if (
+                server
+                and subject_token is None
+                and (
+                    (guardrail_sign_in is not None and granted_single)
+                    or (obo_gated and inbound_bearer is None)
+                    or (obo_gated and granted_single and exchangeable_subject is None)
+                )
+            ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
@@ -1802,7 +1829,7 @@ if MCP_AVAILABLE:
                 raise_token_exchange_challenge(
                     server, root_path=get_request_root_path(), resource_metadata=resource_metadata
                 )
-            if server and sign_in is not None and subject_token is not None and granted_single:
+            if server and guardrail_sign_in is not None and subject_token is not None and granted_single:
                 from litellm.proxy._experimental.mcp_server.caller_sign_in import (  # noqa: PLC0415  # lazy: provider discovery pulls the guardrail registry
                     preflight_caller_sign_in,
                 )

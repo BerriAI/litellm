@@ -132,16 +132,26 @@ def jwt_auth_issuers() -> tuple[str, ...]:
     return tuple(dict.fromkeys((*env, *configured)))
 
 
-def caller_sign_in_for(server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> CallerSignIn | None:
+def caller_sign_in_for(
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    *,
+    include_obo: bool = True,
+) -> CallerSignIn | None:
     """The merged sign-in requirement for ``server``: the OBO server's own issuer/scopes plus every
     registered provider's contribution. ``None`` when nothing requires sign-in, which is also the gate the
-    connect-time challenge branches on."""
+    connect-time challenge branches on.
+
+    ``include_obo=False`` answers only what registered providers (guardrails) require. The connect gate's
+    strict single-space ``Bearer`` rule is the sign-in providers' contract; the OBO server's own
+    requirement keeps the legacy trigger — no ``Authorization``-derived headers at all — and the legacy
+    lenient subject parsing downstream, so a plain OBO server's behavior does not change."""
     contributions: Final = tuple(
         contribution
         for contribution in (
             *(
                 (CallerSignIn(issuers=jwt_auth_issuers(), scopes=tuple(server.scopes or ())),)
-                if server.auth_type == MCPAuth.oauth2_token_exchange
+                if include_obo and server.auth_type == MCPAuth.oauth2_token_exchange
                 else ()
             ),
             *(provider.caller_sign_in(server, user_api_key_auth) for provider in _providers()),

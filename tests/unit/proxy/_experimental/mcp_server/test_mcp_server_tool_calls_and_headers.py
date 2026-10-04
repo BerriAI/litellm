@@ -8003,7 +8003,6 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
     tools/list with ``upstream_tools`` and a managed dispatch that records what reaches it."""
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     mcp_operations.global_mcp_server_manager.registry[server.server_id] = server
     dispatched: dict[str, object] = {}
@@ -8037,7 +8036,6 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
 async def test_execute_mcp_tool_lists_never_listed_passthrough_server_with_caller_token_first():
     """A prefixed tools/call on a worker that has not served tools/list must list that server once
     with the caller's own credentials and then dispatch, instead of answering 404."""
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
@@ -8058,7 +8056,6 @@ async def test_execute_mcp_tool_lists_never_listed_passthrough_server_with_calle
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_server_id_lists_never_listed_server_first():
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
@@ -8078,7 +8075,6 @@ async def test_execute_mcp_tool_rest_server_id_lists_never_listed_server_first()
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_unknown_tool_on_never_listed_server_lists_once_then_404s():
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with (
@@ -8102,7 +8098,6 @@ async def test_execute_mcp_tool_unknown_tool_on_never_listed_server_lists_once_t
 async def test_execute_mcp_tool_does_not_relist_a_server_this_worker_already_listed():
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
@@ -8125,7 +8120,6 @@ async def test_execute_mcp_tool_lists_a_tool_this_worker_has_not_yet_seen_on_a_l
     for a different tool it has not cached, so callers with wider upstream catalogs are not 404ed."""
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add", "multiply")) as worker:
@@ -8145,7 +8139,6 @@ async def test_execute_mcp_tool_lists_a_tool_this_worker_has_not_yet_seen_on_a_l
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_never_lists_a_server_the_caller_cannot_access():
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     server = _never_listed_passthrough_server()
     other_server = MCPServer(server_id="other-1", name="other", transport=MCPTransport.http)
@@ -8518,7 +8511,6 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
     import uuid
     from datetime import timezone
 
-    from litellm.proxy._experimental.mcp_server import server as mcp_module
     from litellm.proxy._types import LitellmUserRoles
     from litellm.utils import Rules, function_setup
 
@@ -11114,7 +11106,6 @@ class TestPreemptive401ModeAware:
 
     @pytest.mark.asyncio
     async def test_deferred_discovery_runs_before_delegate_challenge(self):
-        from litellm.proxy._experimental.mcp_server import server as server_module
 
         manager = mcp_operations.global_mcp_server_manager
         server = _make_oauth2_server(
@@ -11146,7 +11137,6 @@ class TestPreemptive401ModeAware:
 
     @pytest.mark.asyncio
     async def test_stamped_m2m_challenge_skips_deferred_discovery(self):
-        from litellm.proxy._experimental.mcp_server import server as server_module
 
         manager = mcp_operations.global_mcp_server_manager
         server = _make_oauth2_server("stamped_m2m", oauth2_flow="client_credentials")
@@ -11525,6 +11515,48 @@ class TestOboChallengeGateKeepsBaseConnectRules:
         with pytest.raises(HTTPException) as exc:
             await self._run([_make_obo_server("obo")], ["obo"])
         assert exc.value.status_code == 401
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authorization",
+        ["eyJ.schemeless.x.y", "Bearer\teyj.tab.x.y"],
+        ids=["scheme-less-value", "tab-separated-bearer"],
+    )
+    async def test_single_obo_connect_with_a_legacy_parseable_bearer_is_not_challenged(
+        self, authorization: str
+    ):
+        """r12: the legacy parser exchanged a scheme-less value and a tab-separated Bearer with the
+        IdP; the sign-in providers' strict single-space rule must not gate the OBO server's own
+        requirement, or a working client stops at a 401 the IdP never judged."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        preflight = AsyncMock()
+        with (
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
+                mcp_operations.global_mcp_server_manager,
+                "get_mcp_server_answering_to",
+                return_value=_make_obo_server("obo"),
+            ),
+            patch.object(  # test-quality-ok: allowed-set resolution needs the DB; the granted key exercises the lenient leg
+                mcp_operations,
+                "_get_allowed_mcp_servers",
+                AsyncMock(return_value=[_make_obo_server("obo")]),
+            ),
+            patch.object(  # test-quality-ok: the preflight exchange is the observable; a real one would call an IdP
+                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", preflight
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/obo", "headers": []},
+                mcp_servers=["obo"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1"),
+                client_ip=None,
+                raw_headers={"x-litellm-api-key": "sk-1234", "authorization": authorization},
+                connecting=_connecting,
+            )
 
 
 @pytest.mark.asyncio
