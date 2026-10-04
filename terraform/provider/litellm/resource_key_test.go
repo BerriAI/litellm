@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
@@ -257,6 +259,178 @@ func TestKeyTypePresetRoutesDoNotDrift(t *testing.T) {
 				t.Fatalf("server-derived allowed_routes must not drift, diff = %+v", diff)
 			}
 		})
+	}
+}
+
+// A config that omits allowed_routes must stay KNOWN at plan time: marking it
+// computed makes it "known after apply", which fails any plan that consumes
+// the attribute (e.g. for_each = toset(coalesce(..., []))) before the key
+// exists.
+func TestAllowedRoutesOmittedIsKnownAtPlan(t *testing.T) {
+	res := resourceKey()
+	prior := &terraform.InstanceState{}
+	prior.RawConfig = keyRawConfig(t, nil)
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_alias": "example"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	for k, attr := range diff.Attributes {
+		if !strings.HasPrefix(k, "allowed_routes") {
+			continue
+		}
+		if attr.NewComputed {
+			t.Fatalf("omitted allowed_routes is computed (unknown) at plan time: %+v", attr)
+		}
+		t.Errorf("omitted allowed_routes produced a plan diff %q = %+v, want none", k, attr)
+	}
+}
+
+// Suppressing unconfigured routes must not swallow real config changes: a
+// config that shrinks the declared list still has to diff.
+func TestAllowedRoutesConfiguredShrinkStillDiffs(t *testing.T) {
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"allowed_routes": []interface{}{"/a", "/b", "/c"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	prior.RawConfig = keyRawConfig(t, []string{"/a", "/b"})
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"allowed_routes": []interface{}{"/a", "/b"},
+	})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff == nil || diff.Attributes["allowed_routes.#"] == nil {
+		t.Fatalf("config shrinking allowed_routes must still diff, diff = %+v", diff)
+	}
+}
+
+// The diff for server-derived routes in state is suppressed via the raw
+// config, the same signal real terraform runs carry.
+func TestAllowedRoutesUnconfiguredDoesNotDriftWithRawConfig(t *testing.T) {
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":      "old",
+		"allowed_routes": []interface{}{"/v1/models"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	prior.RawConfig = keyRawConfig(t, nil)
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_alias": "old"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	for k := range diff.Attributes {
+		if strings.HasPrefix(k, "allowed_routes") {
+			t.Fatalf("unconfigured allowed_routes drifted at plan: %q = %+v", k, diff.Attributes[k])
+		}
+	}
+}
+
+func keyRawConfig(t *testing.T, routes []string) cty.Value {
+	t.Helper()
+	routesVal := cty.NullVal(cty.List(cty.String))
+	if routes != nil {
+		vals := make([]cty.Value, len(routes))
+		for i, r := range routes {
+			vals[i] = cty.StringVal(r)
+		}
+		routesVal = cty.ListVal(vals)
+	}
+	return cty.ObjectVal(map[string]cty.Value{
+		"key_alias":      cty.StringVal("example"),
+		"allowed_routes": routesVal,
+	})
+}
+
+// An update must never POST allowed_routes the config does not declare: the
+// value d.Get returns is whatever the last refresh stored (stale with
+// -refresh=false), and /key/update would overwrite externally managed routes
+// with it. The alias-only rename below must leave the field out.
+func TestResourceKeyUpdateOmitsUnconfiguredAllowedRoutes(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/update" {
+			w.Write([]byte(`{"key": "hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"renamed","allowed_routes":["/v1/models"]}}`))
+	}))
+	defer srv.Close()
+
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":      "old",
+		"allowed_routes": []interface{}{"/chat/completions"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_alias": "renamed"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	diff.RawConfig = keyRawConfig(t, nil)
+
+	_, diags := res.Apply(context.Background(), prior, diff, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("apply failed: %+v", diags)
+	}
+	if _, present := captured["allowed_routes"]; present {
+		t.Fatalf("update POSTed allowed_routes %v although the config does not declare it", captured["allowed_routes"])
+	}
+	if captured["key_alias"] != "renamed" {
+		t.Errorf("update payload key_alias = %v, want renamed", captured["key_alias"])
+	}
+}
+
+// Declaring allowed_routes keeps owning them: an update still re-asserts the
+// configured routes, matching the pre-key_type behavior.
+func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/update" {
+			w.Write([]byte(`{"key": "hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"renamed","allowed_routes":["/v1/models"]}}`))
+	}))
+	defer srv.Close()
+
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":      "old",
+		"allowed_routes": []interface{}{"/v1/models"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"key_alias":      "renamed",
+		"allowed_routes": []interface{}{"/v1/models"},
+	})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	diff.RawConfig = keyRawConfig(t, []string{"/v1/models"})
+
+	_, diags := res.Apply(context.Background(), prior, diff, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("apply failed: %+v", diags)
+	}
+	routes, ok := captured["allowed_routes"].([]interface{})
+	if !ok || len(routes) != 1 || routes[0] != "/v1/models" {
+		t.Fatalf("update payload allowed_routes = %v, want [/v1/models]", captured["allowed_routes"])
 	}
 }
 

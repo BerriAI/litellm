@@ -170,10 +170,10 @@ func resourceKey() *schema.Resource {
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 			"allowed_routes": {
-				Type:     schema.TypeList,
-				Optional: true,
-				Computed: true,
-				Elem:     &schema.Schema{Type: schema.TypeString},
+				Type:             schema.TypeList,
+				Optional:         true,
+				Elem:             &schema.Schema{Type: schema.TypeString},
+				DiffSuppressFunc: suppressUnconfiguredAllowedRoutes,
 			},
 			"allowed_passthrough_routes": {
 				Type:     schema.TypeList,
@@ -332,6 +332,9 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{Key: d.Id()}
 	mapResourceDataToKey(d, key)
+	if allowedRoutesNotConfigured(d) {
+		key.AllowedRoutes = nil
+	}
 	if !d.HasChange("duration") {
 		key.Duration = ""
 	}
@@ -381,6 +384,36 @@ func changedMap(d *schema.ResourceData, name string) map[string]interface{} {
 		return nil
 	}
 	return d.Get(name).(map[string]interface{})
+}
+
+// allowedRoutesNotConfigured reports whether the raw configuration leaves
+// allowed_routes unset. d.Get cannot answer this: it merges state into
+// unconfigured attributes, so once a refresh has materialized the server's
+// routes into state (or left a stale copy behind with -refresh=false), the
+// configured and unconfigured cases read identically.
+func allowedRoutesNotConfigured(d *schema.ResourceData) bool {
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath("allowed_routes"))
+	return !diags.HasError() && raw.IsNull()
+}
+
+// Reads copy the server's routes into state so drift on them stays visible,
+// and /key/update keeps the stored routes whenever allowed_routes is absent
+// from the payload. Suppressing the diff for a config that never declares the
+// attribute therefore matches the wire behavior: without suppression the plan
+// would show a perpetual removal diff against server-derived routes (the
+// presets a key_type implies, or routes granted directly on the proxy) that
+// no apply can ever clear. When the raw config is unavailable (helpers that
+// diff without one), only a whole-list removal shape is suppressed so a
+// config that shrinks the list still diffs.
+func suppressUnconfiguredAllowedRoutes(k, old, new string, d *schema.ResourceData) bool {
+	if new != "" && new != "0" {
+		return false
+	}
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath("allowed_routes"))
+	if !diags.HasError() {
+		return raw.IsNull()
+	}
+	return true
 }
 
 var errKeyGone = errors.New("no longer exists")
