@@ -53,7 +53,7 @@ describe("Worker setup", () => {
   it("generates a complete command using one worker credential and the configured proxy address", async () => {
     vi.mocked(apiClient.post).mockResolvedValue(created);
     const user = userEvent.setup();
-    renderWithLens(<WorkerSettings workers={[]} />, { accessToken: "admin" });
+    const { rerender } = renderWithLens(<WorkerSettings workers={[]} />, { accessToken: "admin" });
     await user.click(screen.getByText("Advanced options"));
     await user.click(screen.getByRole("switch", { name: "Use an existing virtual key" }));
     expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL" })).toHaveValue("https://gateway.example/proxy");
@@ -76,7 +76,13 @@ describe("Worker setup", () => {
     await user.click(screen.getByText("Using Docker Compose or Helm?"));
     await user.click(screen.getByRole("button", { name: "Copy worker token" }));
     expect(await navigator.clipboard.readText()).toBe(created.token);
-    expect(screen.getByRole("button", { name: "Token copied" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Token copied" })).toBeVisible();
+    rerender(<WorkerSettings workers={[{ ...created.worker, last_seen: new Date().toISOString() }]} />);
+    expect(screen.getByRole("heading", { name: "Worker connected" })).toBeVisible();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("heading", { name: created.worker.name })).toBeVisible();
+    expect(screen.getByText("Connected")).toBeVisible();
   });
   it("assigns billing to an existing worker without replacing its access token", async () => {
     const user = userEvent.setup();
