@@ -25,7 +25,7 @@ import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
 import { HeaderActions } from "../HeaderActions";
-import { RunNowDialog } from "./detail/RunNowDialog";
+import { RunNowDialog, type RunWindow } from "./detail/RunNowDialog";
 import { findFinding, findingAgents, findingKey, sampledExecutions } from "../model/inbox";
 import { WatchAllBanner } from "./WatchAllBanner";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
@@ -139,6 +139,11 @@ export function InvestigationsView({
     refresh();
   };
   const openFinding = (owner: Lens, picked: Finding) => setIssueKey(findingKey(owner, picked));
+  const runNow = async (id: string, request: RunWindow) => {
+    await update((api) => api.startRun(id, request));
+    closeDialog();
+    selectLens(id);
+  };
   const closeFinding = () => {
     setFindingId(null);
     setIssueKey(null);
@@ -278,11 +283,7 @@ export function InvestigationsView({
           agents={Array.isArray(agents.data) ? agents.data : []}
           busy={busy}
           onClose={closeDialog}
-          onRun={async (request) => {
-            await update((api) => api.startRun(targetLens.id, request));
-            closeDialog();
-            selectLens(targetLens.id);
-          }}
+          onRun={(request) => runNow(targetLens.id, request)}
         />
       )}
       {workerSetup && (
