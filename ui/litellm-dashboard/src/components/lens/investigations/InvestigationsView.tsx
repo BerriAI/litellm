@@ -139,7 +139,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
       case "list":
         return (
           <InvestigationList
-            lenses={[...current.lenses]}
+            lenses={current.lenses}
             connected={connected}
             readOnly={readOnly}
             selected={selectedRow(current.lens)}

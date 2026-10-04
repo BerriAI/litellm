@@ -1,11 +1,11 @@
 "use client";
 
+import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { ArrowDown, ChevronRight } from "lucide-react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useInView } from "react-intersection-observer";
 
-import { Inspector } from "@/components/shared/Inspector";
+import { InspectorTable, useInspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 
@@ -37,27 +37,113 @@ export const formatCost = (cost: number): string => {
 const firstLine = (text: string): string => text.split("\n")[0] ?? text;
 const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
-const TH = "px-3 font-medium";
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
 const PLACEHOLDER_ROWS = [0, 1, 2];
 const ROW_HEIGHT = 36;
-const OVERSCAN_ROWS = 12;
-const TH_NUM = "px-3 text-right font-medium";
-const TD_NUM = "px-3 text-right font-mono tabular-nums text-muted-foreground";
+const MUTED_NUM = "font-mono text-muted-foreground";
+const NUM = "font-mono text-foreground";
 
 function AgentCell({ run }: { run: TraceSummary }) {
   const framework = traceFramework(run);
   const agents = traceAgentNames(run).join(", ");
   const title = [agents, framework?.label].filter(Boolean).join(" · ");
   return (
-    <td className="px-3 text-muted-foreground" title={title}>
-      <div className="flex min-w-0 items-center gap-1.5">
-        {framework ? <FrameworkLogo framework={framework} /> : <SpanIcon type="agent" size="sm" />}
-        <span className="truncate">{agents || framework?.label || "—"}</span>
-      </div>
-    </td>
+    <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground" title={title}>
+      {framework ? <FrameworkLogo framework={framework} /> : <SpanIcon type="agent" size="sm" />}
+      <span className="truncate">{agents || framework?.label || "—"}</span>
+    </div>
   );
 }
+
+function InputCell({ run }: { run: TraceSummary }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
+      <span className="truncate text-foreground">
+        {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
+      </span>
+      {run.resolution_limited && (
+        <span
+          className="shrink-0 text-xs text-muted-foreground"
+          title="This run is too large to calculate all totals in this view"
+        >
+          Partial totals
+        </span>
+      )}
+      <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline">{run.trace_id}</span>
+    </div>
+  );
+}
+
+const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
+  {
+    id: "time",
+    size: 170,
+    header: () => (
+      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+        Time <ArrowDown className="size-2.5" />
+        <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
+          {localTimeZoneAbbreviation()}
+        </span>
+      </span>
+    ),
+    cell: ({ row }) => (
+      <span title={formatActivityTimestamp(row.original.start_time)}>
+        {formatRunTimestamp(row.original.start_time)}
+      </span>
+    ),
+    meta: { className: "font-mono tabular-nums text-muted-foreground" },
+  },
+  { id: "agent", size: 160, header: "Agent", cell: ({ row }) => <AgentCell run={row.original} /> },
+  { id: "input", header: "Input", cell: ({ row }) => <InputCell run={row.original} /> },
+  {
+    id: "agents",
+    size: 72,
+    header: "Agents",
+    cell: ({ row }) => row.original.agent_count.toLocaleString(),
+    meta: { numeric: true, className: MUTED_NUM },
+  },
+  {
+    id: "steps",
+    size: 74,
+    header: "Steps",
+    cell: ({ row }) => row.original.span_count.toLocaleString(),
+    meta: { numeric: true, className: MUTED_NUM },
+  },
+  {
+    id: "duration",
+    size: 86,
+    header: "Duration",
+    cell: ({ row }) => fmtMs(row.original.duration_ms),
+    meta: { numeric: true, className: NUM },
+  },
+  {
+    id: "cost",
+    size: 80,
+    header: "Cost",
+    cell: ({ row }) => (row.original.spend == null ? "—" : formatCost(row.original.spend)),
+    meta: { numeric: true, className: NUM },
+  },
+  {
+    id: "failed",
+    size: 72,
+    header: "Failed",
+    cell: ({ row }) =>
+      row.original.error_count > 0 ? (
+        <StatusMark status="error" count={row.original.error_count} />
+      ) : (
+        <span className="font-mono text-muted-foreground/60">0</span>
+      ),
+    meta: { numeric: true },
+  },
+  {
+    id: "open",
+    size: 32,
+    header: "",
+    cell: () => <ChevronRight className="size-3 text-muted-foreground/60" />,
+    meta: { className: "px-0" },
+  },
+];
 
 function PlaceholderRow({ rowRef }: { rowRef?: (node: Element | null) => void }) {
   return (
@@ -73,6 +159,15 @@ function PlaceholderRow({ rowRef }: { rowRef?: (node: Element | null) => void })
       </td>
     </tr>
   );
+}
+
+function LoadMoreRows({ isFetching, onLoadMore }: { isFetching: boolean; onLoadMore: () => void }) {
+  const { scroller } = useInspectorTable();
+  const { ref: tailRef, inView: nearTail } = useInView({ root: scroller, rootMargin: PREFETCH_MARGIN });
+  useEffect(() => {
+    if (nearTail && !isFetching) onLoadMore();
+  }, [nearTail, isFetching, onLoadMore]);
+  return PLACEHOLDER_ROWS.map((row) => <PlaceholderRow key={row} rowRef={row === 0 ? tailRef : undefined} />);
 }
 
 function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetUpTracing: () => void }) {
@@ -96,76 +191,6 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
   );
 }
 
-function RunRow({ run }: { run: TraceSummary }) {
-  return (
-    <Inspector.Row
-      item={traceRefOf(run)}
-      render={
-        <tr
-          data-testid="agent-trace-row"
-          className="h-9 cursor-pointer border-b border-border/60 text-xs transition-colors duration-150 hover:bg-trace-row-hover data-[state=selected]:bg-trace-row-selected data-[state=selected]:shadow-[inset_2px_0_0_var(--trace-brand)] data-[state=selected]:hover:bg-trace-row-selected motion-reduce:transition-none"
-        />
-      }
-    >
-      <td
-        className="px-3 font-mono text-xs whitespace-nowrap tabular-nums text-muted-foreground"
-        title={formatActivityTimestamp(run.start_time)}
-      >
-        {formatRunTimestamp(run.start_time)}
-      </td>
-      <AgentCell run={run} />
-      <td className="px-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
-          <span className="truncate text-foreground">
-            {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
-          </span>
-          {run.resolution_limited && (
-            <span
-              className="shrink-0 text-xs text-muted-foreground"
-              title="This run is too large to calculate all totals in this view"
-            >
-              Partial totals
-            </span>
-          )}
-          <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline">{run.trace_id}</span>
-        </div>
-      </td>
-      <td className={TD_NUM}>{run.agent_count.toLocaleString()}</td>
-      <td className={TD_NUM}>{run.span_count.toLocaleString()}</td>
-      <td className="px-3 text-right font-mono tabular-nums text-foreground">{fmtMs(run.duration_ms)}</td>
-      <td className="px-3 text-right font-mono tabular-nums text-foreground">
-        {run.spend == null ? "—" : formatCost(run.spend)}
-      </td>
-      <td className="px-3 text-right">
-        {run.error_count > 0 ? (
-          <StatusMark status="error" count={run.error_count} />
-        ) : (
-          <span className="font-mono text-xs text-muted-foreground/60">0</span>
-        )}
-      </td>
-      <td>
-        <ChevronRight className="size-3 text-muted-foreground/60" />
-      </td>
-    </Inspector.Row>
-  );
-}
-
-function useVirtualRows(traces: TraceSummary[], scroller: HTMLDivElement | null) {
-  const options = {
-    count: traces.length,
-    getScrollElement: () => scroller,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: OVERSCAN_ROWS,
-    getItemKey: (index: number) => runKey(traces[index]),
-  };
-  const virtualizer = useVirtualizer(options);
-  const rows = virtualizer.getVirtualItems();
-  const padTop = rows[0]?.start ?? 0;
-  const padBottom = virtualizer.getTotalSize() - (rows.at(-1)?.end ?? 0);
-  return { rows, padTop, padBottom };
-}
-
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
@@ -182,49 +207,31 @@ export function AgentTracesTable({
   const isEmpty = settled && !hasMore && traces.length === 0;
   const canContinue = settled && hasMore;
   const autoContinue = canContinue && traces.length > 0;
-  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
-  const { ref: tailRef, inView: nearTail } = useInView({ root: scroller, rootMargin: PREFETCH_MARGIN });
-  useEffect(() => {
-    if (nearTail && autoContinue && !isFetching) onLoadMore();
-  }, [nearTail, autoContinue, isFetching, onLoadMore]);
-  const { rows, padTop, padBottom } = useVirtualRows(traces, scroller);
+  const table = useReactTable({
+    data: traces,
+    columns: RUN_COLUMNS,
+    getRowId: runKey,
+    autoResetAll: false,
+    getCoreRowModel: getCoreRowModel(),
+  });
   return (
-    <div ref={setScroller} className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
-      <table
-        aria-label="Agent runs"
-        aria-busy={isFetching}
-        className="w-full min-w-[900px] table-fixed border-collapse text-left"
-      >
-        <thead className="sticky top-0 z-sticky bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))]">
-          <tr className="h-8 border-b border-border text-xs tracking-wider text-muted-foreground uppercase">
-            <th className={`w-[170px] ${TH}`}>
-              <span className="inline-flex items-center gap-1 whitespace-nowrap">
-                Time <ArrowDown className="size-2.5" />
-                <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
-                  {localTimeZoneAbbreviation()}
-                </span>
-              </span>
-            </th>
-            <th className={`w-[160px] ${TH}`}>Agent</th>
-            <th className={TH}>Input</th>
-            <th className={`w-[72px] ${TH_NUM}`}>Agents</th>
-            <th className={`w-[74px] ${TH_NUM}`}>Steps</th>
-            <th className={`w-[86px] ${TH_NUM}`}>Duration</th>
-            <th className={`w-[80px] ${TH_NUM}`}>Cost</th>
-            <th className={`w-[72px] ${TH_NUM}`}>Failed</th>
-            <th className="w-8" />
-          </tr>
-        </thead>
-        <tbody>
-          {padTop > 0 && <tr aria-hidden style={{ height: padTop }} />}
-          {rows.map(({ index, key }) => (
-            <RunRow key={key} run={traces[index]} />
-          ))}
-          {padBottom > 0 && <tr aria-hidden style={{ height: padBottom }} />}
-          {autoContinue &&
-            PLACEHOLDER_ROWS.map((row) => <PlaceholderRow key={row} rowRef={row === 0 ? tailRef : undefined} />)}
-        </tbody>
-      </table>
+    <InspectorTable.Root table={table} data-testid="runs-table">
+      <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
+        <InspectorTable.Header />
+        <InspectorTable.Body<TraceSummary>
+          rowHeight={() => ROW_HEIGHT}
+          after={autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
+        >
+          {(row) => (
+            <InspectorTable.Row
+              row={row}
+              item={traceRefOf(row.original)}
+              data-testid="agent-trace-row"
+              className="h-9"
+            />
+          )}
+        </InspectorTable.Body>
+      </InspectorTable.Grid>
       {isLoading && <div className="py-16 text-center text-xs text-muted-foreground">Loading runs…</div>}
       {error && (
         <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
@@ -247,6 +254,6 @@ export function AgentTracesTable({
         </div>
       )}
       {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
-    </div>
+    </InspectorTable.Root>
   );
 }

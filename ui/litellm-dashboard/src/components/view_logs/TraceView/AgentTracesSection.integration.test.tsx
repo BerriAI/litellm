@@ -384,7 +384,7 @@ describe("AgentTracesSection", () => {
     const agentCell = (row: HTMLElement) => within(row).getAllByRole("cell")[1];
 
     expect(agentCell(sdkRun)).toHaveTextContent(/^research-bot$/);
-    expect(agentCell(sdkRun)).toHaveAttribute("title", "research-bot · Claude Agent SDK");
+    expect(within(agentCell(sdkRun)).getByTitle("research-bot · Claude Agent SDK")).toBeInTheDocument();
     expect(within(sdkRun).getByRole("img", { name: "Claude Agent SDK logo", hidden: true })).toHaveAttribute(
       "src",
       expect.stringContaining("anthropic.svg"),
