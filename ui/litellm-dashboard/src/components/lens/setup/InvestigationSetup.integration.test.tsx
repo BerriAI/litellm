@@ -77,8 +77,16 @@ beforeEach(() => {
   vi.mocked(apiClient.post).mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
 });
 describe("Investigation setup", () => {
-  it("preserves saved manual run selections when editing an investigation", async () => {
+  it("preserves saved manual run selections when editing and lets the preview footer clear them", async () => {
     const user = userEvent.setup();
+    vi.mocked(apiClient.post).mockResolvedValue({
+      eligible: 2,
+      selected: 2,
+      executions: [
+        { id: "saved-run", name: "Saved run", trace_id: "t1", source: "traces", start_time: "2026-10-01T12:00:00Z" },
+        { id: "other-run", name: "Other run", trace_id: "t2", source: "traces", start_time: "2026-10-01T12:00:00Z" },
+      ],
+    });
     renderWithProviders(
       <InvestigationSetup
         mode="edit"
@@ -90,7 +98,15 @@ describe("Investigation setup", () => {
     );
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("button", { name: "Clear 1 selected runs" })).toBeInTheDocument();
+    const preview = within(screen.getByRole("region", { name: "Matching activity" }));
+    expect(await preview.findByRole("checkbox", { name: "Select Saved run" })).toBeChecked();
+    expect(preview.getByText("1 selected for analysis")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
+    await user.click(preview.getByRole("button", { name: "Clear 1 selected runs" }));
+    expect(preview.getByRole("checkbox", { name: "Select Saved run" })).not.toBeChecked();
+    expect(preview.queryByRole("button", { name: /Clear/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose at least one run or turn off individual selection");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
   it("preserves check identity and disabled state when a check is edited", async () => {
@@ -482,6 +498,29 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
     await vi.advanceTimersByTimeAsync(15000);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
     expect(await screen.findByRole("option", { name: "support-agent" })).toBeVisible();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("fetches one preview for two keystrokes inside the debounce window", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
+    await user.click(screen.getByText("Advanced filters"));
+    const previewsFor = (teamId: string) =>
+      vi
+        .mocked(apiClient.post)
+        .mock.calls.filter(([, options]) => (options?.body as { settings: Settings }).settings.team_id === teamId);
+    await user.type(screen.getByRole("textbox", { name: "Team ID (optional)" }), "ab");
+    expect(previewsFor("a")).toHaveLength(0);
+    expect(previewsFor("ab")).toHaveLength(0);
+    expect(screen.getByRole("status")).toHaveTextContent("Finding matching activity…");
+    await vi.advanceTimersByTimeAsync(350);
+    await waitFor(() => expect(previewsFor("ab")).toHaveLength(1));
+    expect(previewsFor("a")).toHaveLength(0);
+    expect(await screen.findByText("1 matching run")).toBeVisible();
   } finally {
     vi.useRealTimers();
   }
