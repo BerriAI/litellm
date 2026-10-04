@@ -3821,6 +3821,43 @@ async def test_virtual_key_soft_budget_check_scenarios(spend, soft_budget, expec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("thresholds,spend,expected", (([70, 95], 69, 0), ([70, 95], 70, 1), ([], 85, 0)))
+async def test_common_email_threshold_auth_gate(thresholds, spend: int, expected: int, monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+    import httpx
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
+
+    monkeypatch.setenv("SENDGRID_API_KEY", "synthetic-not-a-secret")
+    transport: Final = AsyncMock()
+    transport.post.return_value = httpx.Response(202)
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    proxy_logging.alerting = ["email"]
+    proxy_logging.slack_alerting_instance = SlackAlerting(
+        alerting=["email"], alerting_args={"budget_alert_thresholds": thresholds}
+    )
+    email_logger: Final = SendGridEmailLogger()
+    email_logger.async_httpx_client = transport
+    proxy_logging.email_logging_instance = email_logger
+    await _virtual_key_max_budget_alert_check(
+        valid_token=UserAPIKeyAuth(token="synthetic", spend=spend, max_budget=100),
+        proxy_logging_obj=proxy_logging,
+        user_obj=LiteLLM_UserTable(user_id="owner", user_email="owner@example.test"),
+        budget_alert_thresholds=tuple(thresholds),
+    )
+    pending: Final = tuple(
+        task
+        for task in asyncio.all_tasks()
+        if task is not asyncio.current_task() and task.get_coro().__qualname__ == "ProxyLogging.budget_alerts"
+    )
+    if pending:
+        await asyncio.gather(*pending)
+    assert transport.post.await_count == expected
+
+
+@pytest.mark.asyncio
 async def test_virtual_key_max_budget_alert_check_with_user_obj():
     """Test _virtual_key_max_budget_alert_check includes user_email when user_obj is provided"""
     alert_triggered = False
@@ -10151,7 +10188,9 @@ async def test_authoritative_access_group_reads_writer_despite_stale_allow_cache
     from litellm.proxy._types import LiteLLM_AccessGroupTable
     from litellm.proxy.auth.auth_checks import get_access_object
 
-    stale: Final = LiteLLM_AccessGroupTable(access_group_id="group", access_group_name="Policy", access_model_names=["old"])
+    stale: Final = LiteLLM_AccessGroupTable(
+        access_group_id="group", access_group_name="Policy", access_model_names=["old"]
+    )
     current: Final = stale.model_copy(update={"access_model_names": ["new"] if allowed else []})
     client: Final = MagicMock()
     client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=current)
@@ -10303,9 +10342,12 @@ async def test_authoritative_key_cannot_keep_grants_when_permission_is_unavailab
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     database: Final = MagicMock()
-    database.get_data = AsyncMock(return_value=UserAPIKeyAuth(
-        object_permission_id="grant", object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["allowed"])
-    ))
+    database.get_data = AsyncMock(
+        return_value=UserAPIKeyAuth(
+            object_permission_id="grant",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["allowed"]),
+        )
+    )
     database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
         return_value=None, side_effect=None if missing else RuntimeError("writer unavailable")
     )
@@ -10328,7 +10370,9 @@ async def test_authoritative_group_grants_propagate_policy_outages(
 
     database: Final = MagicMock()
     database.db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
-    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(
+        side_effect=RuntimeError("database unavailable")
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     if strict:

@@ -26,6 +26,128 @@ from litellm.types.integrations.slack_alerting import (
 )
 
 
+@pytest.mark.parametrize("thresholds", ([0], [100], [70, 70], [True], [70.0], ["70"], "70", (70,), {}))
+def test_budget_alert_thresholds_reject_invalid_configuration(thresholds: object) -> None:
+    with pytest.raises(ValidationError):
+        SlackAlertingArgs.model_validate({"budget_alert_thresholds": thresholds})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("digest", (False, True))
+async def test_configured_budget_thresholds_notify_each_level_and_destination(digest: bool, monkeypatch) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    monkeypatch.setenv("WEBHOOK_URL", "https://example.test/budget")
+    monkeypatch.setenv("MS_TEAMS_WEBHOOK_URL", "https://example.test/teams")
+    alerts: Final = SlackAlerting(
+        alerting=["slack", "webhook", "ms_teams"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [95, 70, 85]},
+        alert_type_config={"budget_alerts": {"digest": digest, "digest_interval": 0}},
+        async_http_handler=http_handler,
+    )
+    for spend, expected_posts in ((69, 0), (70, 3), (70, 3), (85, 6), (96, 9), (96, 9), (100, 12)):
+        await alerts.budget_alerts(
+            type="token_budget",
+            user_info=CallInfo(
+                spend=spend,
+                max_budget=100,
+                token="synthetic",
+                key_alias="example-api",
+                event_group=Litellm_EntityType.KEY,
+            ),
+        )
+        await alerts._flush_digest_buckets()
+        await alerts.flush_queue()
+        assert http_handler.post.await_count == expected_posts
+    webhook_events: Final = tuple(
+        json.loads(call.kwargs["data"])
+        for call in http_handler.post.await_args_list
+        if call.kwargs["url"] == "https://example.test/budget"
+    )
+    assert tuple(event["event"] for event in webhook_events) == (
+        "threshold_crossed",
+        "threshold_crossed",
+        "threshold_crossed",
+        "budget_crossed",
+    )
+    assert tuple(event["event_message"] for event in webhook_events[:3]) == tuple(
+        f"Key Budget: {pct}% of budget consumed" for pct in (70, 85, 95)
+    )
+
+
+@pytest.mark.asyncio
+async def test_budget_threshold_jump_empty_reload_and_soft_budget() -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    alerts: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [70, 85, 95]},
+        async_http_handler=http_handler,
+    )
+    info: Final = CallInfo(spend=96, max_budget=100, token="synthetic", event_group=Litellm_EntityType.KEY)
+    await alerts.budget_alerts(type="token_budget", user_info=info)
+    await alerts.flush_queue()
+    assert len(_posted_slack_bodies(http_handler)) == 1
+    assert "95% of budget consumed" in _posted_slack_bodies(http_handler)[0]["text"]
+    alerts.update_values(alerting_args={"budget_alert_thresholds": []})
+    await alerts.budget_alerts(type="token_budget", user_info=info.model_copy(update={"spend": 99}))
+    await alerts.flush_queue()
+    assert http_handler.post.await_count == 1
+    await alerts.budget_alerts(type="soft_budget", user_info=info.model_copy(update={"spend": 60, "soft_budget": 50}))
+    await alerts.budget_alerts(type="token_budget", user_info=info.model_copy(update={"spend": 100}))
+    await alerts.flush_queue()
+    assert http_handler.post.await_count == 3
+    alerts.update_values(alerting_args={"budget_alert_thresholds": [50]})
+    await alerts.budget_alerts(type="token_budget", user_info=info.model_copy(update={"spend": 50}))
+    await alerts.flush_queue()
+    assert "50% of budget consumed" in _posted_slack_bodies(http_handler)[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_configured_thresholds_preserve_soft_and_projected_events() -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    alerts: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [70, 95]},
+        async_http_handler=http_handler,
+    )
+    info: Final = CallInfo(
+        spend=70, max_budget=100, soft_budget=50, token="synthetic", event_group=Litellm_EntityType.KEY
+    )
+    await alerts.budget_alerts(type="soft_budget", user_info=info, send_threshold_email=False)
+    await alerts.budget_alerts(type="token_budget", user_info=info, send_threshold_email=False)
+    await alerts.budget_alerts(
+        type="projected_limit_exceeded",
+        user_info=info.model_copy(update={"soft_budget": 90}),
+        send_threshold_email=False,
+    )
+    await alerts.flush_queue()
+    assert http_handler.post.await_count == 2
+    assert "Soft Budget Crossed" in _posted_slack_bodies(http_handler)[0]["text"]
+    assert "Projected Limit Exceeded" in _posted_slack_bodies(http_handler)[1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_configured_threshold_respects_pre_upgrade_sent_marker() -> None:
+    cache: Final = DualCache()
+    await cache.async_set_cache("budget_alerts:threshold_crossed:synthetic", "SENT", ttl=86400)
+    http_handler: Final = _webhook_accepting_posts()
+    alerts: Final = SlackAlerting(
+        alerting=["slack"],
+        internal_usage_cache=cache,
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [70]},
+        async_http_handler=http_handler,
+    )
+    await alerts.budget_alerts(
+        type="token_budget",
+        user_info=CallInfo(spend=70, max_budget=100, token="synthetic", event_group=Litellm_EntityType.KEY),
+    )
+    await alerts.flush_queue()
+    http_handler.post.assert_not_awaited()
+
+
 class TestSlackAlerting(unittest.TestCase):
     def setUp(self):
         self.slack_alerting = SlackAlerting()

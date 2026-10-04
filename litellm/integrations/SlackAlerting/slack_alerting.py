@@ -25,7 +25,7 @@ from litellm.constants import (
     SLACK_MODEL_DEPRECATION_LOCK_ID,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
+from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_threshold, get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
@@ -536,6 +536,7 @@ class SlackAlerting(CustomBatchLogger):
             "project_budget",
         ],
         user_info: CallInfo,
+        send_threshold_email: bool = True,
     ):
         """
         Send a budget alert on slack or webhook
@@ -586,9 +587,19 @@ class SlackAlerting(CustomBatchLogger):
 
         # send alert
         if event is not None and user_info.event_group is not None:
-            _cache_key: Final = f"budget_alerts:{event}:{_id}"
+            threshold: Final = (
+                get_budget_alert_threshold(
+                    user_info.spend, user_info.max_budget, self.alerting_args.budget_alert_thresholds
+                )
+                if event == "threshold_crossed" and self.alerting_args.budget_alert_thresholds is not None
+                else None
+            )
+            cache_id: Final = f"{_id}:{threshold}" if threshold is not None else _id
+            _cache_key: Final = f"budget_alerts:{event}:{cache_id}"
+            if threshold is not None and await _cache.async_get_cache(key=f"budget_alerts:{event}:{_id}") == "SENT":
+                return
             result: Final = await _cache.async_get_cache(key=_cache_key)
-            slack_cache_key: Final = f"budget_alerts:slack:{event}:{_id}"
+            slack_cache_key: Final = f"budget_alerts:slack:{event}:{cache_id}"
             slack_due: Final[bool] = (
                 "slack" in self.alerting
                 and self._slack_budget_alert_allowed(user_info)
@@ -623,6 +634,7 @@ class SlackAlerting(CustomBatchLogger):
                     user_info=webhook_event,
                     alerting_metadata={},
                     budget_alert_destination=("slack" if result is not None else "all") if slack_due else "non_slack",
+                    budget_alert_email=send_threshold_email or event != "threshold_crossed",
                 )
                 if slack_accepted:
                     await _cache.async_set_cache(
@@ -678,6 +690,14 @@ class SlackAlerting(CustomBatchLogger):
             if user_info.spend >= user_info.max_budget:
                 event = "budget_crossed"
                 event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
+            elif self.alerting_args.budget_alert_thresholds is not None:
+                if event in ("soft_budget_crossed", "projected_limit_exceeded"):
+                    return event, event_message
+                threshold: Final = get_budget_alert_threshold(
+                    user_info.spend, user_info.max_budget, self.alerting_args.budget_alert_thresholds
+                )
+                if threshold is not None:
+                    return "threshold_crossed", event_message + f"{threshold}% of budget consumed"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
                 event_message += "5% or less of budget remaining"
@@ -1464,6 +1484,7 @@ Model Info:
         request_model: str | None = None,
         api_base: str | None = None,
         budget_alert_destination: Literal["all", "slack", "non_slack"] = "all",
+        budget_alert_email: bool = True,
         **kwargs: object,
     ) -> bool:
         """
@@ -1499,6 +1520,7 @@ Model Info:
 
         if (
             budget_alert_destination != "slack"
+            and budget_alert_email
             and "email" in self.alerting
             and alert_type == "budget_alerts"
             and user_info is not None

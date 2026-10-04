@@ -156,6 +156,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    Litellm_EntityType,
     LiteLLM_VerificationTokenView,
     Member,
     UserAPIKeyAuth,
@@ -1314,7 +1315,7 @@ class ProxyLogging:
         if alert_to_webhook_url is not None:
             self.alert_to_webhook_url = alert_to_webhook_url
             updated_slack_alerting = True
-        if alert_type_config is not None:
+        if alert_type_config is not None or alerting_args is not None:
             updated_slack_alerting = True
 
         if updated_slack_alerting is True:
@@ -3070,14 +3071,22 @@ class ProxyLogging:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
+        configured_thresholds: Final = self.slack_alerting_instance.alerting_args.budget_alert_thresholds
         if self.alerting is not None and (
             "slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting
         ):
             if self.slack_alerting_instance is not None:
-                await self.slack_alerting_instance.budget_alerts(
-                    type=type,
-                    user_info=user_info,
-                )
+                if configured_thresholds is None:
+                    await self.slack_alerting_instance.budget_alerts(type=type, user_info=user_info)
+                else:
+                    await self.slack_alerting_instance.budget_alerts(
+                        type=type,
+                        user_info=user_info,
+                        send_threshold_email=(
+                            self.email_logging_instance is None
+                            or user_info.event_group not in (Litellm_EntityType.KEY, Litellm_EntityType.TEAM_MEMBER)
+                        ),
+                    )
 
         # Call email_logging_instance if:
         # 1. "email" is in alerting config, OR
@@ -3088,6 +3097,7 @@ class ProxyLogging:
             await self.email_logging_instance.budget_alerts(
                 type=type,
                 user_info=user_info,
+                budget_alert_thresholds=(tuple(configured_thresholds) if configured_thresholds is not None else None),
             )
 
     async def alerting_handler(

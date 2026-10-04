@@ -6,7 +6,7 @@ Base class for sending emails to user after creating keys or invite links
 import html
 import json
 import os
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
@@ -38,6 +38,7 @@ from litellm.integrations.email_templates.templates import (
 from litellm.integrations.email_templates.user_invitation_email import (
     USER_INVITATION_EMAIL_TEMPLATE,
 )
+from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_threshold
 from litellm.proxy._types import (
     CallInfo,
     InvitationNew,
@@ -450,6 +451,7 @@ class BaseEmailLogger(CustomLogger):
             "projected_limit_exceeded",
         ],
         user_info: CallInfo,
+        budget_alert_thresholds: tuple[int, ...] | None = None,
     ):
         """
         Send a budget alert via email
@@ -551,8 +553,17 @@ class BaseEmailLogger(CustomLogger):
                     )
                     return
 
-                alert_threshold = (
-                    user_info.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+                configured_threshold: Final = (
+                    get_budget_alert_threshold(user_info.spend, user_info.max_budget, budget_alert_thresholds)
+                    if budget_alert_thresholds is not None
+                    else None
+                )
+                if budget_alert_thresholds is not None and configured_threshold is None:
+                    return
+                alert_threshold = user_info.max_budget * (
+                    configured_threshold / 100
+                    if configured_threshold is not None
+                    else EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
                 )
 
                 # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
@@ -562,7 +573,12 @@ class BaseEmailLogger(CustomLogger):
                 ):
                     # Generate cache key based on event type and identifier
                     _id = user_info.token or user_info.user_id or "default_id"
-                    _cache_key = f"email_budget_alerts:max_budget_alert:{_id}"
+                    cache_id: Final = f"{_id}:{configured_threshold}" if configured_threshold is not None else _id
+                    _cache_key = f"email_budget_alerts:max_budget_alert:{cache_id}"
+                    if configured_threshold is not None and await _cache.async_get_cache(
+                        key=f"email_budget_alerts:max_budget_alert:{_id}"
+                    ) is not None:
+                        return
 
                     send_count = await _cache.async_increment_cache(
                         key=_cache_key,
@@ -571,8 +587,10 @@ class BaseEmailLogger(CustomLogger):
                     )
                     if send_count is None or send_count <= 1:
                         # Calculate percentage
-                        percentage = int(
-                            EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100
+                        percentage = (
+                            configured_threshold
+                            if configured_threshold is not None
+                            else int(EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE * 100)
                         )
 
                         # Create WebhookEvent for max budget alert
@@ -597,7 +615,10 @@ class BaseEmailLogger(CustomLogger):
                         )
 
                         try:
-                            await self.send_max_budget_alert_email(webhook_event)
+                            if configured_threshold is None:
+                                await self.send_max_budget_alert_email(webhook_event)
+                            else:
+                                await self.send_max_budget_alert_email(webhook_event, threshold_pct=configured_threshold)
                         except Exception as e:
                             verbose_proxy_logger.error(
                                 f"Error sending max budget alert email: {e}",

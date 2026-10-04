@@ -1,7 +1,15 @@
+import math
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import Final, Literal
 
 from litellm.proxy._types import CallInfo, Litellm_EntityType
+
+
+def get_budget_alert_threshold(spend: float, max_budget: float | None, thresholds: Sequence[int]) -> int | None:
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0 or not math.isfinite(spend):
+        return None
+    return max((threshold for threshold in thresholds if spend >= max_budget * (threshold / 100)), default=None)
 
 
 class BaseBudgetAlertType(ABC):

@@ -5,7 +5,7 @@ from datetime import datetime as dt
 from enum import Enum
 from typing import Annotated, Final
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
@@ -74,6 +74,22 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=None,
         description="Case-sensitive key alias glob patterns for Slack budget alerts. Null allows all budget alerts; an empty list disables them.",
     )
+    budget_alert_thresholds: (  # mutable-ok: public configuration accepts and serializes a list
+        Annotated[list[Annotated[int, Field(strict=True, ge=1, le=99)]], Field(strict=True)] | None
+    ) = Field(
+        default=None,
+        description="Consumed budget percentages for enabled alert destinations. Null preserves legacy thresholds; an empty list disables percentage warnings.",
+    )
+
+    @field_validator("budget_alert_thresholds")
+    @classmethod
+    def validate_budget_alert_thresholds(
+        cls, thresholds: list[int] | None
+    ) -> list[int] | None:  # mutable-ok: preserve Pydantic's validated list and JSON schema
+        if thresholds is not None and len(thresholds) != len(set(thresholds)):
+            raise ValueError("Budget alert thresholds must be unique")
+        return thresholds
+
     outage_alert_ttl: int = Field(
         default=SlackAlertingArgsEnum.outage_alert_ttl.value,
         description="Cache ttl for model outage alerts. Sets time-window for errors. Default is 1 minute. Value is in seconds.",
