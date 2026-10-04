@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 import { AttributesDetail } from "./AttributesDetail";
-import { CopyButton } from "../ui/CopyButton";
+import CopyButton from "@/components/shared/CopyButton";
 import { DetailContent, errorHeadline, useSpanDetail } from "./DetailContent";
 import { IdChip } from "../ui/IdChip";
 import { PaneBar } from "../ui/PaneBar";
@@ -144,7 +144,7 @@ function SpanPane({
         </TabsContent>
       </Tabs>
       <PaneFooter>
-        <CopyButton value={handoff.text} label="Copy step" copiedLabel={handoff.copied} />
+        <CopyButton variant="action" value={handoff.text} label="Copy step" copiedLabel={handoff.copied} />
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
           <Meta label="time" value={fmtMs(span.duration_ms)} />
           {tokens > 0 && <Meta label="tokens" value={fmtTok(tokens)} />}
@@ -209,7 +209,7 @@ function GroupPane({
         )}
       </div>
       <PaneFooter>
-        <CopyButton value={handoff.text} label="Copy group sample" copiedLabel={handoff.copied} />
+        <CopyButton variant="action" value={handoff.text} label="Copy group sample" copiedLabel={handoff.copied} />
       </PaneFooter>
     </aside>
   );

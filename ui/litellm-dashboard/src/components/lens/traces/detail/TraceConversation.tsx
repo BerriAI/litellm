@@ -4,7 +4,7 @@ import { useQueries } from "@tanstack/react-query";
 import { useState } from "react";
 import { ChevronRight, Wrench } from "lucide-react";
 import { cn } from "@/lib/cva.config";
-import { CopyButton } from "../ui/CopyButton";
+import CopyButton from "@/components/shared/CopyButton";
 import { useTracesApi } from "../api";
 import { Button } from "@/components/ui/button";
 import { buildConversation, conversationSteps, CONVERSATION_PAGE_SIZE, type ConversationItem } from "./conversation";
@@ -144,7 +144,12 @@ function ConversationTool({ item }: { item: ConversationItem }) {
           )}
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>Result</span>
-            <CopyButton value={item.toolResult ?? ""} label={`Copy ${item.span.name} result`} iconOnly />
+            <CopyButton
+              variant="action"
+              value={item.toolResult ?? ""}
+              label={`Copy ${item.span.name} result`}
+              iconOnly
+            />
           </div>
           <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs leading-5">
             {item.toolResult || "No output recorded"}

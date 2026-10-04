@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { LogDetailsDrawer } from "../../../logs/detail";
 import { formatCost } from "../list/AgentTracesTable";
 import { DetailGroup } from "./AttributesDetail";
-import { CopyButton } from "../ui/CopyButton";
+import CopyButton from "@/components/shared/CopyButton";
 import { type KeyValue, KeyValueRows } from "./KeyValueRows";
 import type { Span } from "../types";
 import { fmtMs, fmtTok } from "../utils";
@@ -52,7 +52,7 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
           <div className="flex flex-col gap-2.5">
             <div className="flex min-w-0 items-center gap-1">
               <KeyValueRows entries={[["request_id", span.litellm_request_id]]} mono className="min-w-0 flex-1" />
-              <CopyButton value={span.litellm_request_id} label="Copy request ID" iconOnly />
+              <CopyButton variant="action" value={span.litellm_request_id} label="Copy request ID" iconOnly />
             </div>
             <Button
               variant="outline"
