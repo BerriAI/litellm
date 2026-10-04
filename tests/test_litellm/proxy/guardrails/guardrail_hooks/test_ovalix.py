@@ -21,6 +21,7 @@ from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix import (
     OvalixGuardrailMissingSecrets,
     ResolvedRouting,
 )
+from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix_extraction import FilePart
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -992,6 +993,26 @@ async def test_file_checkpoint_call_routes_to_litellm_file_endpoint():
             "FILE", {"name": "f.txt", "content": "x"}, "file-1", "a", "s", CheckpointTarget("app-1", "request")
         )
     assert seen["url"] == "https://t/tracking/beta/file_checkpoint"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("oversize", [True, False])
+async def test_file_checkpoint_flags_oversize_parts(oversize):
+    g = _static_guardrail()
+    part = FilePart(name="huge.bin", data=None, mime_hint=None, inline=oversize, oversize=oversize, message_index=0)
+    seen = {}
+
+    async def _post(url, headers=None, json=None):
+        seen["last"] = json
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g._check_files_for_block([part], "file-1", "a", "s", CheckpointTarget("app-1", "request"))
+    assert seen["last"]["data"]["content"] is None
+    assert seen["last"].get("oversize", False) is oversize
 
 
 @pytest.mark.asyncio

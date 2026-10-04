@@ -289,6 +289,7 @@ class OvalixGuardrail(CustomGuardrail):
         actor: str,
         session_id: str,
         target: CheckpointTarget,
+        oversize: bool = False,
     ) -> Mapping[str, object]:
         """Call the Ovalix Tracker checkpoint API and return the JSON response.
 
@@ -313,6 +314,7 @@ class OvalixGuardrail(CustomGuardrail):
             "data": data,
             "tool": "LiteLLM",
             **routing,
+            **(MappingProxyType({"oversize": True}) if oversize else _NO_METADATA),
         }
         response: Final = await self._async_handler.post(
             f"{self._tracker_api_base}/tracking/beta/{route}", headers=self._tracker_headers, json=payload
@@ -332,9 +334,12 @@ class OvalixGuardrail(CustomGuardrail):
         session_id: str,
         target: CheckpointTarget,
         escalation_reason: str,
+        oversize: bool = False,
     ) -> str | None:
         try:
-            resp: Final = await self._call_checkpoint(data_type, data, checkpoint_id, actor, session_id, target)
+            resp: Final = await self._call_checkpoint(
+                data_type, data, checkpoint_id, actor, session_id, target, oversize=oversize
+            )
         except Exception as e:
             verbose_proxy_logger.exception("Ovalix checkpoint call failed: %s", e)
             raise GuardrailRaisedException(
@@ -377,7 +382,14 @@ class OvalixGuardrail(CustomGuardrail):
         for part in sorted(file_parts, key=lambda p: p.message_index, reverse=True):
             data = await self._file_part_to_data(part)
             reason = await self._block_reason_for_item(
-                "FILE", data, checkpoint_id, actor, session_id, target, _FILE_BLOCK_ESCALATION_REASON
+                "FILE",
+                data,
+                checkpoint_id,
+                actor,
+                session_id,
+                target,
+                _FILE_BLOCK_ESCALATION_REASON,
+                oversize=part.oversize,
             )
             if reason is not None:
                 return reason
