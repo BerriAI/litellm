@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { RunWindow } from "../investigations/detail/RunNowDialog";
 import type { ApiClient } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
-import type { ActivitySelection, Job, Lens, LensList, Sample, Settings, WorkerCreated } from "../model/types";
+import type { ActivitySelection, Job, Lens, LensList, Review, Sample, Settings, WorkerCreated } from "../model/types";
 import type { AnalysisModelInfo } from "../setup/fields/analysisModels";
 
 export type ExecutionContent = components["schemas"]["ExecutionContent"];
@@ -25,6 +25,11 @@ export type Key = z.infer<typeof keySchema>;
 export type KeyPage = z.infer<typeof keyPageSchema>;
 export type KeyInfo = z.infer<typeof keyInfoSchema>["info"];
 
+export interface ReviewPage {
+  readonly reviews: readonly Review[];
+  readonly reviewed: number;
+}
+
 export interface AnalysisKeyRequest {
   readonly model: string;
   readonly budget: number;
@@ -37,6 +42,7 @@ export interface LensApi {
   activity(): Promise<{ traces: boolean; requests: boolean }>;
   runs(lensId: string, offset: number): Promise<Job[]>;
   run(lensId: string, jobId: string): Promise<Job>;
+  reviews(lensId: string, jobId: string, after: number): Promise<ReviewPage>;
   execution(lensId: string, executionId: string, offset: number): Promise<ExecutionContent>;
   sample(selection: ActivitySelection, offset: number, asOf: string): Promise<Sample>;
   agents(): Promise<string[]>;
@@ -64,6 +70,8 @@ export function liveLensApi(apiClient: ApiClient, accessToken: string): LensApi 
     activity: () => apiClient.get("/lens/activity/available", { accessToken }),
     runs: (lensId, offset) => apiClient.get<Job[]>(`/lens/${lensId}/runs`, { accessToken, query: { offset } }),
     run: (lensId, jobId) => apiClient.get<Job>(`/lens/${lensId}/runs/${jobId}`, { accessToken }),
+    reviews: (lensId, jobId, after) =>
+      apiClient.get<ReviewPage>(`/lens/${lensId}/runs/${jobId}/reviews`, { accessToken, query: { after } }),
     execution: (lensId, executionId, offset) =>
       apiClient.get<ExecutionContent>(`/lens/${lensId}/executions/${encode(executionId)}`, {
         accessToken,

@@ -8,6 +8,8 @@ import {
   inGroup,
   share,
   issueCount,
+  appendPage,
+  EMPTY_FEED,
   shortVerdict,
   stripState,
   tickerLine,
@@ -262,7 +264,8 @@ describe("playback queue", () => {
 });
 
 describe("which job the live run shows", () => {
-  const job = (id: string, status: Job["status"], reviews: Review[]) => ({ id, status, reviews }) as unknown as Job;
+  const job = (id: string, status: Job["status"], reviews: Review[]) =>
+    ({ id, status, reviews: [], reviewed: reviews.length }) as unknown as Job;
 
   it("shows the active job once it has reviews", () => {
     expect(liveJob([job("new", "running", [review("a")]), job("old", "completed", [review("b")])])?.id).toBe("new");
@@ -356,6 +359,32 @@ describe("drawer focus", () => {
 
   it("goes back to live when the picked review was dropped by the cap", () => {
     expect(focusedReview(reviews, "gone@x", reviews[1])).toEqual({ review: reviews[1], following: true });
+  });
+});
+
+describe("incremental reviews", () => {
+  const at = (id: string, minute: number) => review(id, { at: `2026-10-03T16:${String(minute).padStart(2, "0")}:00Z` });
+
+  it("appends pages in arrival order, not by time, and advances the cursor to the reviewed count", () => {
+    const first = appendPage(EMPTY_FEED, { reviews: [at("a", 5), at("b", 2)], reviewed: 2 });
+    expect(first).toEqual({ reviews: [at("a", 5), at("b", 2)], cursor: 2 });
+    const second = appendPage(first, { reviews: [at("c", 1)], reviewed: 3 });
+    expect(second.reviews.map((r) => r.execution_id)).toEqual(["a", "b", "c"]);
+    expect(second.cursor).toBe(3);
+  });
+
+  it("keeps the same feed for an empty page and never duplicates a re-sent review", () => {
+    const feed = appendPage(EMPTY_FEED, { reviews: [at("a", 1)], reviewed: 1 });
+    expect(appendPage(feed, { reviews: [], reviewed: 1 })).toBe(feed);
+    expect(appendPage(feed, { reviews: [at("a", 1)], reviewed: 1 }).reviews).toHaveLength(1);
+  });
+
+  it("caps how many reviews are kept, dropping the oldest", () => {
+    const many = Array.from({ length: 250 }, (_, n) => review(`r${n}`));
+    const feed = appendPage(EMPTY_FEED, { reviews: many, reviewed: 250 });
+    expect(feed.reviews).toHaveLength(200);
+    expect(feed.reviews[0].execution_id).toBe("r50");
+    expect(feed.cursor).toBe(250);
   });
 });
 

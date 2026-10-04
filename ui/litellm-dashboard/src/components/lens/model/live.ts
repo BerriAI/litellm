@@ -35,7 +35,7 @@ export function liveJob(jobs: readonly Job[]): Job | undefined {
   const active = jobs.find((job) => job.status === "queued" || job.status === "running");
   if (active) return active;
   const latest = jobs[0];
-  return latest?.reviews.length ? latest : undefined;
+  return latest && latest.reviewed > 0 ? latest : undefined;
 }
 
 export function reviewKey(review: Pick<Review, "execution_id" | "at">): string {
@@ -114,6 +114,21 @@ export function verdictLine(review: Pick<Review, "cannot_assess" | "verdicts">):
   if (issue) return issue.summary;
   if (review.cannot_assess) return "Not enough evidence to judge";
   return review.verdicts[0]?.summary ?? "No issue observed";
+}
+
+const KEPT_REVIEWS = 200;
+
+export interface ReviewFeed {
+  reviews: readonly Review[];
+  cursor: number;
+}
+
+export const EMPTY_FEED: ReviewFeed = { reviews: [], cursor: 0 };
+
+export function appendPage(feed: ReviewFeed, page: { reviews: readonly Review[]; reviewed: number }): ReviewFeed {
+  if (page.reviewed === feed.cursor && !page.reviews.length) return feed;
+  const added = unseen(page.reviews, new Set(feed.reviews.map(reviewKey)));
+  return { reviews: [...feed.reviews, ...added].slice(-KEPT_REVIEWS), cursor: page.reviewed };
 }
 
 export function unseen(reviews: readonly Review[], seen: ReadonlySet<string>): Review[] {
