@@ -128,7 +128,11 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
         else:
-            stringified_response = TranscriptionResponse(text=response).model_dump()
+            duration: Final = extract_duration_from_srt_or_vtt(response)
+            stringified_response = {
+                **TranscriptionResponse(text=response).model_dump(),
+                **({"_audio_transcription_duration": duration} if duration is not None else {}),
+            }
 
         ## LOGGING
         logging_obj.post_call(
