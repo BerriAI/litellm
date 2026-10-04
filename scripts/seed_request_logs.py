@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from scripts.seed_tracing_fixtures import JSON_OBJECT, spend_fixtures
 
 if TYPE_CHECKING:
-    from prisma import Prisma
     from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 
 REQUEST_ID_PREFIX: Final = "seed-logs-"
