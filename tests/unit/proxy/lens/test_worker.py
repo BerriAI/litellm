@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from litellm.constants import LENS_MODEL_RETRIES, LENS_MODEL_RETRY_MAX_SECONDS
 from litellm.proxy.lens.models import (
     Claim,
     Execution,
@@ -18,7 +19,7 @@ from litellm.proxy.lens.models import (
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from litellm.proxy.lens.worker import LensWorker, failure_message
+from litellm.proxy.lens.worker import LensWorker, failure_message, retry_delay
 from tests.unit.proxy.lens.test_state import NOW, lens
 
 
@@ -70,8 +71,44 @@ async def test_transient_retries_are_bounded() -> None:
             await LensWorker(client, sleep=sleep).model_request(
                 "/model", ModelRequest(purpose="extract", prompt="review")
             )
-    assert attempts.qsize() == 3
-    assert tuple(delays.get_nowait() for _ in range(delays.qsize())) == (1, 2)
+    assert attempts.qsize() == LENS_MODEL_RETRIES + 1
+    assert tuple(delays.get_nowait() for _ in range(delays.qsize())) == tuple(
+        float(min(2**n, LENS_MODEL_RETRY_MAX_SECONDS)) for n in range(LENS_MODEL_RETRIES)
+    )
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_model_waits_as_long_as_the_provider_asks_then_completes() -> None:
+    attempts: Final = SimpleQueue[str]()
+    delays: Final = SimpleQueue[float]()
+    expected: Final = ModelResult(content='{"observations":[]}', cost=0.01)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        attempts.put(request.url.path)
+        if attempts.qsize() <= 3:
+            return httpx.Response(429, headers={"retry-after": "30"})
+        return httpx.Response(200, json=expected.model_dump())
+
+    async def sleep(delay: float) -> None:
+        delays.put(delay)
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        result: Final = await LensWorker(client, sleep=sleep).model_request(
+            "/model", ModelRequest(purpose="extract", prompt="review")
+        )
+    assert result == expected
+    assert tuple(delays.get_nowait() for _ in range(delays.qsize())) == (30, 30, 30)
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "attempt", "expected"),
+    (("", 1, 2), ("5", 0, 5), ("1", 3, 8), ("9999", 0, LENS_MODEL_RETRY_MAX_SECONDS), ("soon", 2, 4)),
+)
+def test_retry_delay_prefers_the_providers_wait_within_bounds(retry_after: str, attempt: int, expected: float) -> None:
+    request: Final = httpx.Request("POST", "https://proxy.test/model")
+    headers: Final = {"retry-after": retry_after} if retry_after else {}
+    error: Final = httpx.HTTPStatusError("limited", request=request, response=httpx.Response(429, headers=headers))
+    assert retry_delay(error, attempt) == expected
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,8 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from litellm.constants import LENS_MODEL_RETRIES, LENS_MODEL_RETRY_MAX_SECONDS
+
 from .analysis import AnalysisResponseError, analyze_sample, validation_details
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Review, Sample
 
@@ -34,6 +36,17 @@ class PublicModelError(BaseModel):
 class ModelErrorEnvelope(BaseModel):
     model_config = ConfigDict(extra="ignore")
     detail: PublicModelError
+
+
+def retry_delay(error: httpx.TransportError | httpx.HTTPStatusError, attempt: int) -> float:
+    backoff: Final = float(min(2**attempt, LENS_MODEL_RETRY_MAX_SECONDS))
+    if not isinstance(error, httpx.HTTPStatusError):
+        return backoff
+    requested: Final = error.response.headers.get("retry-after", "")
+    try:
+        return min(max(float(requested), backoff), LENS_MODEL_RETRY_MAX_SECONDS)
+    except ValueError:
+        return backoff
 
 
 def failure_message(error: Exception) -> str:
@@ -115,9 +128,9 @@ class LensWorker:
                 503,
                 504,
             )
-            if not retryable or attempt >= 2:
+            if not retryable or attempt >= LENS_MODEL_RETRIES:
                 raise
-            await self.sleep(2**attempt)
+            await self.sleep(retry_delay(exc, attempt))
             return await self.model_request(path, body, attempt + 1)
 
     async def run_once(self) -> bool:
