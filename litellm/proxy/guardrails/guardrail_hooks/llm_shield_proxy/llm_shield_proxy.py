@@ -1128,23 +1128,30 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         placeholder gives the caller the answer they would have had without this
         guardrail, and an agent that reads a file and quotes an address from it needs
         that address back.
+
+        `extra_body` is walked the same way as the request itself. LiteLLM merges it over
+        the transformed request just before sending, so a field there -- `input`,
+        `messages`, `system` -- replaces the redacted one on the wire.
         """
         slots: Final[_SlotSink] = []
         privileged: Final[_SlotSink] = []
-        for entry in _read_list(data, "messages"):
-            message = _as_object(entry)
-            if message is not None:
-                sink = privileged if message.get("role") in _PRIVILEGED_ROLES else slots
-                _collect_content(message, sink)
-                _collect_participant_name(message, sink)
-                _collect_tool_arguments(message, sink)
-        _collect_responses_fields(data, slots, privileged)
-        _collect_prompt(data, slots)
-        _collect_system(data, privileged)
-        _collect_tool_definitions(data, slots, privileged)
-        _collect_output_contracts(data, slots, privileged)
-        _collect_user_locations(data, privileged)
-        _collect_end_user_ids(data, privileged)
+        for payload in (data, _as_object(data.get("extra_body"))):
+            if payload is None:
+                continue
+            for entry in _read_list(payload, "messages"):
+                message = _as_object(entry)
+                if message is not None:
+                    sink = privileged if message.get("role") in _PRIVILEGED_ROLES else slots
+                    _collect_content(message, sink)
+                    _collect_participant_name(message, sink)
+                    _collect_tool_arguments(message, sink)
+            _collect_responses_fields(payload, slots, privileged)
+            _collect_prompt(payload, slots)
+            _collect_system(payload, privileged)
+            _collect_tool_definitions(payload, slots, privileged)
+            _collect_output_contracts(payload, slots, privileged)
+            _collect_user_locations(payload, privileged)
+            _collect_end_user_ids(payload, privileged)
         return tuple(slots), tuple(privileged)
 
     # --- hooks --------------------------------------------------------------------

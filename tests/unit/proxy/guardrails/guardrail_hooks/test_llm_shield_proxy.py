@@ -433,6 +433,37 @@ class TestRequestCoverage:
         assert data["input"][0]["name"] == "mail"
 
     @pytest.mark.asyncio
+    async def test_extra_body_overrides_are_redacted(self):
+        """LiteLLM merges `extra_body` over the request just before sending, so its fields win on the wire."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["safe", "Mail [EMAIL_1]", "[EMAIL_1]"]})
+
+        data = {
+            "model": "gpt-4o",
+            "input": "safe",
+            "extra_body": {
+                "input": "alice@example.com",
+                "messages": [{"role": "user", "content": "Mail alice@example.com"}],
+                "service_tier": "flex",
+            },
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["safe", "Mail alice@example.com", "alice@example.com"]
+        assert data["extra_body"]["input"] == "[EMAIL_1]"
+        assert data["extra_body"]["messages"][0]["content"] == "Mail [EMAIL_1]"
+        assert data["extra_body"]["service_tier"] == "flex"
+
+    def test_extra_body_system_text_is_privileged(self) -> None:
+        """An application-authored override is no more restorable than the field it replaces."""
+        data = {"messages": [{"role": "user", "content": "U"}], "extra_body": {"system": "S", "instructions": "I"}}
+
+        caller, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
+
+        assert [text for text, _ in caller] == ["U"]
+        assert sorted(text for text, _ in privileged) == ["I", "S"]
+
+    @pytest.mark.asyncio
     async def test_anthropic_text_documents_are_redacted(self):
         """A document block carries text inline, as `source.data` or as `source.content`."""
         guardrail = _guardrail()
