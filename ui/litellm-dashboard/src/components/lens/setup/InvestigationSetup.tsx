@@ -23,10 +23,10 @@ import { RunFields } from "./fields/RunFields";
 import { MatchingActivityPreview } from "./MatchingActivityPreview";
 import { useMatchingActivity } from "./useMatchingActivity";
 import { useAnalysisModels } from "./fields/useAnalysisModels";
+import { modelGate } from "./fields/analysisModels";
 import { TraceSheet } from "../investigations/TraceSheet";
 import { durationLabel } from "../model/format";
 import { type Settings } from "../model/types";
-import { type AnalysisModelInfo } from "../model/types";
 
 type SetupMode = "new" | "edit" | "duplicate";
 
@@ -35,32 +35,6 @@ const TITLES: Record<SetupMode, string> = {
   edit: "Edit investigation",
   duplicate: "Duplicate investigation",
 };
-
-interface ModelGate {
-  readonly modelValid: boolean;
-  readonly unavailable: boolean;
-  readonly unsupported: boolean;
-}
-
-/** An edit may keep its saved model while the model list is loading or failing; a new run needs a verified one. */
-function modelGate(input: {
-  model: string;
-  models: string[];
-  modelDetails: AnalysisModelInfo[];
-  modelsLoading: boolean;
-  modelsError?: string;
-  savedModel?: string;
-  mode: SetupMode;
-}): ModelGate {
-  const { model, models, modelDetails, modelsLoading, modelsError, savedModel, mode } = input;
-  const unsupported = modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
-  const modelsReady = !modelsLoading && !modelsError;
-  const unavailable = !!model && modelsReady && !models.includes(model);
-  const preservingSavedModel = mode === "edit" && model === savedModel;
-  const supported = !unsupported && !unavailable;
-  const modelReady = modelsReady || preservingSavedModel;
-  return { modelValid: !!model && supported && modelReady, unavailable, unsupported };
-}
 
 function saveLabelFor(mode: SetupMode, repeat: boolean): string {
   if (mode === "edit") return "Save changes";
@@ -113,7 +87,7 @@ function SetupEditor({
   onSave,
   form,
 }: SetupProps & { form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
-  const { models, modelDetails, modelsLoading, modelsError, defaultModel } = useAnalysisModels();
+  const analysis = useAnalysisModels();
   const [step, setStep] = useState<SetupStepId>("activity");
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
@@ -123,7 +97,7 @@ function SetupEditor({
     name: ["selectedModel", "repeat", "selection", "context", "watching", "questions"],
   });
   const activity = useMatchingActivity();
-  const model = selectedModel ?? defaultModel ?? "";
+  const model = selectedModel ?? analysis.defaultModel ?? "";
   useEffect(
     () =>
       subscribe({
@@ -154,8 +128,7 @@ function SetupEditor({
       setError(cause instanceof Error ? cause.message : "Could not save investigation");
     }
   });
-  const gateInput = { model, models, modelDetails, modelsLoading, modelsError, savedModel: initial?.model, mode };
-  const gate = modelGate(gateInput);
+  const gate = modelGate(analysis, model, mode === "edit" && model === initial?.model);
   const runReady = mode === "edit" || (ready && activity.canReview);
   const formReady = formState.isValid && !formState.isSubmitting;
   const canSave = formReady && gate.modelValid && runReady;
@@ -221,15 +194,7 @@ function SetupEditor({
             </div>
           </SetupStep>
           <SetupStep id="run" heading="Run" description="Schedule, analysis model, and budget" summary="">
-            <RunFields
-              modelValid={gate.modelValid}
-              models={models}
-              modelDetails={modelDetails}
-              modelsLoading={modelsLoading}
-              modelsError={modelsError}
-              unavailable={gate.unavailable}
-              unsupported={gate.unsupported}
-            />
+            <RunFields models={analysis} gate={gate} />
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
@@ -242,17 +207,11 @@ function SetupEditor({
             </div>
           </SetupStep>
         </SetupSteps>
-        <div className="min-w-0 space-y-3 lg:sticky lg:top-0 lg:self-start">
-          <MatchingActivityPreview
-            {...activity.preview}
-            onOpen={(run) => setTrace({ id: run.trace_id, ref: run.trace_ref })}
-          />
-          {activity.manualSelection && activity.selectedRunCount > 0 && (
-            <Button variant="outline" size="sm" onClick={activity.clearSelection}>
-              Clear {activity.selectedRunCount} selected runs
-            </Button>
-          )}
-        </div>
+        <MatchingActivityPreview
+          {...activity.preview}
+          className="min-w-0 lg:sticky lg:top-0"
+          onOpen={(run) => setTrace({ id: run.trace_id, ref: run.trace_ref })}
+        />
       </div>
       {trace && (
         <TraceSheet

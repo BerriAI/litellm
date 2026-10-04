@@ -1,122 +1,134 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import { ChevronRight, RotateCw } from "lucide-react";
 import { useInView } from "react-intersection-observer";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 
-import { type Sample } from "../model/types";
 import { runTime } from "../model/format";
+import type { Execution, MatchingPreview } from "./useMatchingActivity";
 
 const PREFETCH_MARGIN = "0px 0px 240px 0px";
 
-type Execution = Sample["executions"][number];
+type RunRowProps = ComponentProps<"div"> & { run: Execution };
 
-export function RunList({ executions }: { executions: Execution[] }) {
+function RunRow({ run, className, ...props }: RunRowProps) {
+  const steps = `${run.span_count} ${run.span_count === 1 ? "step" : "steps"}`;
   return (
-    <div className="divide-y">
-      {executions.map((run) => (
-        <div key={run.id} className="py-3">
-          <p className="text-sm font-medium">{run.name}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {runTime(run.start_time)} ·{" "}
-            {run.source === "traces" ? `${run.span_count} ${run.span_count === 1 ? "step" : "steps"}` : "LLM request"}
-          </p>
-        </div>
-      ))}
+    <div data-slot="run-row" className={cn("min-w-0 py-3", className)} {...props}>
+      <p className="text-sm font-medium">{run.name}</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        {runTime(run.start_time)} · {run.source === "traces" ? steps : "LLM request"}
+      </p>
     </div>
   );
 }
 
+type PreviewFooterProps = ComponentProps<"div"> & Pick<MatchingPreview, "page" | "selection">;
+
+/** Selection count and a way to undo manual picks; hidden while every match is simply going to be analyzed. */
+function PreviewFooter({ page, selection, className, ...props }: PreviewFooterProps) {
+  const partial = page.eligible != null && page.executions.length < page.eligible;
+  const count = selection?.count ?? page.selected;
+  const picked = selection?.ids.length ?? 0;
+  const everything = count === page.eligible && !partial && picked === 0;
+  if (page.eligible == null || everything) return null;
+  return (
+    <div
+      data-slot="preview-footer"
+      className={cn("flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3", className)}
+      {...props}
+    >
+      <p className="text-xs text-muted-foreground">
+        {count} selected for analysis
+        {partial && (
+          <>
+            {" "}
+            · Showing {page.executions.length} of {page.eligible}
+          </>
+        )}
+      </p>
+      {selection && picked > 0 && (
+        <Button variant="outline" size="sm" onClick={selection.clear}>
+          Clear {picked} selected runs
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export type MatchingActivityPreviewProps = ComponentProps<"section"> &
+  MatchingPreview & {
+    onOpen: (run: Execution) => void;
+  };
+
 export function MatchingActivityPreview({
-  onSelect,
-  selectedIds,
-  manualSelection,
-  selectedCount,
-  title,
-  windowLabel,
-  ready,
-  error,
-  eligible,
-  executions,
-  hasMore,
-  loadingMore,
-  onLoadMore,
+  status,
+  page,
+  selection,
   onOpen,
-  onRetry,
-}: {
-  onSelect: (id: string, checked: boolean) => void;
-  selectedIds: string[];
-  manualSelection: boolean;
-  selectedCount: number;
-  title: string;
-  windowLabel: string;
-  ready: boolean;
-  error: Error | null;
-  eligible: number | undefined;
-  executions: Execution[];
-  hasMore: boolean;
-  loadingMore: boolean;
-  onLoadMore: () => void;
-  onRetry: () => void;
-  onOpen: (run: Execution) => void;
-}) {
+  className,
+  ...props
+}: MatchingActivityPreviewProps) {
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const { ref: tailRef, inView: nearTail } = useInView({ root: scroller, rootMargin: PREFETCH_MARGIN });
-  const canContinue = ready && hasMore && executions.length > 0;
+  const { loadMore, loadingMore } = page;
+  const canContinue = status.ready && page.hasMore && page.executions.length > 0;
   useEffect(() => {
-    if (nearTail && canContinue && !loadingMore) onLoadMore();
-  }, [nearTail, canContinue, loadingMore, onLoadMore]);
-  const partial = eligible != null && executions.length < eligible;
-  const showSelection = ready && eligible != null && (selectedCount !== eligible || partial);
+    if (nearTail && canContinue && !loadingMore) loadMore();
+  }, [nearTail, canContinue, loadingMore, loadMore]);
   return (
-    <section aria-label="Matching activity" className="self-start rounded-lg border">
+    <section
+      aria-label="Matching activity"
+      data-slot="matching-activity-preview"
+      className={cn("self-start rounded-lg border", className)}
+      {...props}
+    >
       <div className="border-b px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-medium" role="status">
-            {title}
+            {status.title}
           </p>
           <Button
             variant="ghost"
             size="icon-xs"
             aria-label="Refresh matching activity"
-            onClick={onRetry}
-            disabled={!ready}
+            onClick={status.refresh}
+            disabled={!status.ready}
           >
             <RotateCw className="size-3" />
           </Button>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">{windowLabel} · No analysis cost</p>
+        <p className="mt-1 text-xs text-muted-foreground">{status.windowLabel} · No analysis cost</p>
       </div>
       <div ref={setScroller} aria-busy={loadingMore} className="max-h-[60dvh] overflow-y-auto px-4">
-        {ready && error && (
+        {status.ready && status.error && (
           <p role="alert" className="py-3 text-sm text-destructive">
-            {error.message}{" "}
-            <Button variant="link" onClick={onRetry}>
+            {status.error.message}{" "}
+            <Button variant="link" onClick={status.refresh}>
               Retry preview
             </Button>
           </p>
         )}
-        {ready && eligible === 0 && (
+        {status.ready && page.eligible === 0 && (
           <p className="py-4 text-sm text-muted-foreground">
             No matches. Try removing a condition or check that your agent records this metadata. Recent trace updates
             need two minutes to settle.
           </p>
         )}
-        {ready &&
-          executions.map((run) => (
+        {status.ready &&
+          page.executions.map((run) => (
             <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
-              {manualSelection && (
+              {selection && (
                 <input
                   type="checkbox"
                   aria-label={`Select ${run.name}`}
-                  checked={selectedIds.includes(run.id)}
-                  onChange={(e) => onSelect(run.id, e.target.checked)}
+                  checked={selection.ids.includes(run.id)}
+                  onChange={(e) => selection.toggle(run.id, e.target.checked)}
                 />
               )}
-              <div className="min-w-0">
-                <RunList executions={[run]} />
-              </div>
+              <RunRow run={run} />
               {run.source === "traces" && (
                 <Button variant="ghost" size="icon-sm" aria-label={`Open ${run.name}`} onClick={() => onOpen(run)}>
                   <ChevronRight className="size-4" />
@@ -130,19 +142,7 @@ export function MatchingActivityPreview({
           </p>
         )}
       </div>
-      {showSelection && (
-        <div className="border-t px-4 py-3">
-          <p className="text-xs text-muted-foreground">
-            {selectedCount} selected for analysis
-            {partial && (
-              <>
-                {" "}
-                · Showing {executions.length} of {eligible}
-              </>
-            )}
-          </p>
-        </div>
-      )}
+      {status.ready && <PreviewFooter page={page} selection={selection} />}
     </section>
   );
 }
