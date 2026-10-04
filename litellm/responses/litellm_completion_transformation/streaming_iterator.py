@@ -1,9 +1,11 @@
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from itertools import accumulate
 from typing import Any, Final, cast
 
 from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch, ResponseReasoningItem
+from pydantic import BaseModel
 
 import litellm
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
@@ -162,6 +164,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._message_start_chunk_index: int = 0
         self._closed_message_text_length: int = 0
         self._completed_message_items: tuple[tuple[int, GenericResponseOutputItem], ...] = ()
+        self._final_message_events_queued: bool = False
         self._pending_annotation_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._accumulated_reasoning_content_parts: list[str] = []
         self._accumulated_provider_specific_fields: dict[str, object] = {}
@@ -876,49 +879,126 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
 
     def _message_annotations(
-        self, annotations: list[GenericResponseOutputItemContentAnnotation]
+        self,
+        annotations: list[GenericResponseOutputItemContentAnnotation],
+        *,
+        start: int | None = None,
+        end: int | None = None,
     ) -> list[GenericResponseOutputItemContentAnnotation]:
+        offset: Final = self._closed_message_text_length if start is None else start
         return [
             annotation.model_copy(
                 update={
-                    key: value - self._closed_message_text_length
+                    key: value - offset
                     for key, value in (("start_index", annotation.start_index), ("end_index", annotation.end_index))
                     if value is not None
                 }
             )
             for annotation in annotations
-            if annotation.start_index is None or annotation.start_index >= self._closed_message_text_length
+            if (annotation.start_index is None and end is None)
+            or (
+                annotation.start_index is not None
+                and annotation.start_index >= offset
+                and (end is None or annotation.start_index < end)
+            )
         ]
 
-    def _queue_message_done_events(self) -> None:
+    def _store_message_segment(self) -> None:
         snapshot: Final = self.create_litellm_model_response(chunk_start=self._message_start_chunk_index)
         if snapshot is None:
             return
-        self._sequence_number += 1
-        text_done: Final = self.create_output_text_done_event(snapshot).model_copy(
-            update={"sequence_number": self._sequence_number}
-        )
-        self._sequence_number += 1
-        part_done: Final = self.create_output_content_part_done_event(snapshot).model_copy(
-            update={"sequence_number": self._sequence_number}
-        )
-        self._sequence_number += 1
-        item_done: Final = self.create_output_item_done_event(snapshot).model_copy(
-            update={"sequence_number": self._sequence_number}
-        )
+        item_done: Final = self.create_output_item_done_event(snapshot)
         self._completed_message_items += (
             (self._message_output_index, GenericResponseOutputItem.model_validate(item_done.item.model_dump())),
         )
-        self._pending_response_events.extend(self._pending_annotation_events)
-        self._pending_annotation_events.clear()
-        self._pending_response_events.extend((text_done, part_done, item_done))
-        self._closed_message_text_length += len(text_done.text)
+        self._closed_message_text_length += len(snapshot.choices[0].message.content or "")
         self._message_start_chunk_index = len(self.collected_chat_completion_chunks)
         self._message_active = False
         self.sent_annotation_events = False
         self.sent_output_text_done_event = True
         self.sent_output_content_part_done_event = True
         self.sent_output_item_done_event = True
+
+    def _messages_with_final_annotations(
+        self, response: ModelResponse
+    ) -> tuple[tuple[int, GenericResponseOutputItem], ...]:
+        annotations: Final = (
+            LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+                annotations=getattr(response.choices[0].message, "annotations", None)
+            )
+        )
+        offsets: Final = tuple(
+            accumulate((len(item.content[0].text or "") for _, item in self._completed_message_items), initial=0)
+        )
+        return tuple(
+            (
+                index,
+                item.model_copy(
+                    update={
+                        "content": [
+                            item.content[0].model_copy(
+                                update={
+                                    "annotations": self._message_annotations(
+                                        annotations,
+                                        start=offsets[position],
+                                        end=offsets[position + 1]
+                                        if position + 1 < len(self._completed_message_items)
+                                        else None,
+                                    )
+                                }
+                            )
+                        ]
+                    }
+                ),
+            )
+            for position, (index, item) in enumerate(self._completed_message_items)
+        )
+
+    def _queue_final_message_done_events(self, response: ModelResponse) -> None:
+        if self._final_message_events_queued:
+            return
+        self._final_message_events_queued = True
+        self._completed_message_items = self._messages_with_final_annotations(response)
+        for index, item in self._completed_message_items:
+            for annotation_index, annotation in enumerate(item.content[0].annotations or ()):
+                self._sequence_number += 1
+                self._pending_response_events.append(
+                    OutputTextAnnotationAddedEvent(
+                        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+                        item_id=item.id,
+                        output_index=index,
+                        content_index=0,
+                        annotation_index=annotation_index,
+                        annotation=annotation.model_dump(),
+                    ).model_copy(update={"sequence_number": self._sequence_number})
+                )
+            self._sequence_number += 3
+            self._pending_response_events.extend(
+                (
+                    OutputTextDoneEvent(
+                        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+                        item_id=item.id,
+                        output_index=index,
+                        content_index=0,
+                        text=item.content[0].text or "",
+                    ).model_copy(update={"sequence_number": self._sequence_number - 2}),
+                    ContentPartDoneEvent(
+                        type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                        item_id=item.id,
+                        output_index=index,
+                        content_index=0,
+                        part=ContentPartDonePartOutputText.model_validate(
+                            {**item.content[0].model_dump(), "logprobs": None}
+                        ),
+                    ).model_copy(update={"sequence_number": self._sequence_number - 1}),
+                    OutputItemDoneEvent(
+                        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                        output_index=index,
+                        item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+                        sequence_number=self._sequence_number,
+                    ),
+                )
+            )
 
     def create_reasoning_output_item_done_event(
         self,
@@ -991,11 +1071,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self, litellm_complete_object: ModelResponse, *, store_message: bool = False
     ) -> BaseLiteLLMOpenAIResponseObject | None:
         if store_message and self._message_active:
-            self._queue_message_done_events()
-            if self._pending_response_events:
-                return self._pending_response_events.pop(0)
+            self._store_message_segment()
         if store_message and self._completed_message_items:
-            return None
+            self._queue_final_message_done_events(litellm_complete_object)
+            return self._pending_response_events.pop(0) if self._pending_response_events else None
         if self.sent_message_item_added_event is False:
             final_content: Final = litellm_complete_object.choices[0].message.content or ""
             if not final_content:
@@ -1187,7 +1266,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 or _delta_has_thinking_block(chunk.choices[0].delta)
                             )
                         ):
-                            self._queue_message_done_events()
+                            self._store_message_segment()
                         if (
                             not self.sent_output_item_added_event
                             and chunk.choices
@@ -1320,7 +1399,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # This ensures we detect and queue annotation events from the annotation chunk
         if chunk.choices and hasattr(chunk.choices[0].delta, "annotations"):
             annotations: Final = chunk.choices[0].delta.annotations
-            if annotations and self.sent_annotation_events is False:
+            if annotations and self.sent_annotation_events is False and not allow_reasoning_resumption:
                 # Store annotation events to emit them one by one
                 response_annotations = self._message_annotations(
                     LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
@@ -1514,6 +1593,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return self._tool_output_index_by_call_id.get(item.call_id or "", self._next_tool_output_index)
         if isinstance(item, ResponseFunctionWebSearch):
             return self._tool_output_index_by_call_id.get(item.id.removeprefix("ws_"), self._next_tool_output_index)
+        if isinstance(item, BaseModel):
+            item_id: Final[object] = item.model_dump(include={"id"}).get("id")
+            if isinstance(item_id, str):
+                return self._tool_output_index_by_call_id.get(item_id, self._next_tool_output_index)
         return self._next_tool_output_index
 
     def _emit_terminal_response_event(

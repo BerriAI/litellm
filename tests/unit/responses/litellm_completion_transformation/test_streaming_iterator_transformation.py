@@ -31,7 +31,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.responses.main import build_web_search_call
+from litellm.types.responses.main import OutputCodeInterpreterCall, build_web_search_call
 from litellm.types.utils import (
     Delta,
     ModelResponse,
@@ -1611,8 +1611,9 @@ async def test_mixed_reasoning_and_text_chunk_preserves_both_segments() -> None:
     assert [item["content"][0]["text"] for item in output if item["type"] == "message"] == ["interim", "answer"]
 
 
+@pytest.mark.parametrize("late_annotations", [False, True])
 @pytest.mark.asyncio
-async def test_message_annotations_are_relative_to_each_segment() -> None:
+async def test_message_annotations_are_relative_to_each_segment(late_annotations: bool) -> None:
     intro: Final = ModelResponseStream(
         id=CHAT_COMPLETION_ID,
         model="test-model",
@@ -1660,11 +1661,22 @@ async def test_message_annotations_are_relative_to_each_segment() -> None:
             )
         ],
     )
+    delayed: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(annotations=[*intro.choices[0].delta.annotations, *answer.choices[0].delta.annotations]),
+                finish_reason="stop",
+            )
+        ],
+    )
     iterator: Final = _build_iterator(
         [
-            intro,
+            _chunk("intro") if late_annotations else intro,
             _reasoning_block_chunk(ChatCompletionThinkingBlock(type="thinking", thinking="analysis", signature="sig")),
-            answer,
+            *([_chunk("answer"), delayed] if late_annotations else [answer]),
         ]
     )
     events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
@@ -1672,3 +1684,66 @@ async def test_message_annotations_are_relative_to_each_segment() -> None:
     assert [item["content"][0]["text"] for item in messages] == ["intro", "answer"]
     assert [item["content"][0]["annotations"][0]["start_index"] for item in messages] == [0, 0]
     assert [item["content"][0]["annotations"][0]["end_index"] for item in messages] == [5, 6]
+    done_by_id: Final = {event["item"]["id"]: event for event in events if event["type"] == "response.output_item.done"}
+    annotation_by_id: Final = {
+        event["item_id"]: event for event in events if event["type"] == "response.output_text.annotation.added"
+    }
+    for message in messages:
+        assert done_by_id[message["id"]]["item"]["content"] == message["content"]
+        assert annotation_by_id[message["id"]]["annotation"] == message["content"][0]["annotations"][0]
+        assert events.index(annotation_by_id[message["id"]]) < events.index(done_by_id[message["id"]])
+
+
+@pytest.mark.asyncio
+async def test_converted_code_tool_keeps_its_streamed_output_index() -> None:
+    call_id: Final = "srvtoolu_code"
+    code_result: Final = OutputCodeInterpreterCall(
+        type="code_interpreter_call",
+        id=call_id,
+        code="print(1)",
+        container_id="container_test",
+        status="completed",
+        outputs=[],
+    )
+    tool: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "index": 0,
+                            "function": {"name": "bash_code_execution", "arguments": '{"command":"print(1)"}'},
+                        }
+                    ],
+                    provider_specific_fields={"code_interpreter_results": [code_result]},
+                ),
+            )
+        ],
+    )
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_block_chunk(
+                ChatCompletionThinkingBlock(type="thinking", thinking="first", signature="first-sig")
+            ),
+            tool,
+            _reasoning_block_chunk(
+                ChatCompletionThinkingBlock(type="thinking", thinking="second", signature="second-sig")
+            ),
+            _chunk("answer", finish_reason="stop"),
+        ]
+    )
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    tool_added: Final = next(
+        event
+        for event in events
+        if event["type"] == "response.output_item.added" and event["item"].get("call_id") == call_id
+    )
+    output: Final = events[-1]["response"]["output"]
+    assert [item["type"] for item in output] == ["reasoning", "code_interpreter_call", "reasoning", "message"]
+    assert output[tool_added["output_index"]]["id"] == call_id
+    assert output[tool_added["output_index"]]["code"] == "print(1)"
