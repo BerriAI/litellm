@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, CalendarDays, ChevronDown, ChevronRight, Link2, Search, Users } from "lucide-react";
 import { Page, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle } from "@/components/shared/PageHeader";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import ObservedAccounts from "./ObservedAccounts";
+import { MatchedPeopleToggle } from "./MatchedPeopleToggle";
 import { BranchSpend, PersonDetails, PullList } from "./ObservedDetails";
 import {
   change,
@@ -20,9 +21,11 @@ import {
   money,
   number,
   visiblePeople,
+  reportPeople,
+  filterObservedPulls,
   weeklyMerges,
   type Comparison,
-  type ObservedPerson,
+  type ReportPerson,
   type ObservedSnapshot,
   type PeopleSort,
 } from "./observedData";
@@ -83,7 +86,7 @@ function ShippingTrend({ snapshot, comparison }: { snapshot: ObservedSnapshot; c
   return (
     <div className="rounded-xl border p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-medium">Shipping activity</h2>
+        <h2 className="text-sm font-medium">Repository shipping activity</h2>
         <div className="flex gap-4 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <span className="size-2 rounded-sm bg-blue-500" />
@@ -128,18 +131,25 @@ function ShippingTrend({ snapshot, comparison }: { snapshot: ObservedSnapshot; c
 }
 
 function PeopleTable({
-  snapshot,
+  rows,
+  provider,
+  matchedOnly,
   comparison,
   onSelect,
 }: {
-  snapshot: ObservedSnapshot;
+  rows: ReportPerson[];
+  provider: ObservedSnapshot["source_provider"];
+  matchedOnly: boolean;
   comparison: Comparison;
-  onSelect: (person: ObservedPerson) => void;
+  onSelect: (person: ReportPerson) => void;
 }) {
-  const terms = changeTerms(snapshot.source_provider);
+  const terms = changeTerms(provider);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<PeopleSort>("merged");
-  const people = visiblePeople(snapshot.people, query, sort);
+  const people = visiblePeople(rows, query, sort);
+  const emptyMessage = matchedOnly
+    ? "No matched people. Link accounts or turn off the filter to see all contributors"
+    : "No contributors in these periods";
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -204,7 +214,7 @@ function PeopleTable({
               const current = person.periods.current;
               const baseline = person.periods[comparison];
               return (
-                <TableRow key={person.email}>
+                <TableRow key={person.id}>
                   <TableCell className="py-3 pl-5">
                     <button
                       className="flex items-center gap-3 rounded text-left hover:underline"
@@ -215,7 +225,9 @@ function PeopleTable({
                       </span>
                       <span>
                         <span className="block font-medium">{person.name}</span>
-                        <span className="text-xs text-muted-foreground">{person.email}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {person.email || `Not linked · ${person.host}`}
+                        </span>
                       </span>
                     </button>
                   </TableCell>
@@ -269,7 +281,7 @@ function PeopleTable({
         </Table>
         {people.length === 0 && (
           <div className="p-10 text-center text-sm text-muted-foreground">
-            {query ? `No engineers match “${query}”` : "Link accounts to see your engineers"}
+            {query ? `No engineers match “${query}”` : emptyMessage}
           </div>
         )}
       </div>
@@ -380,8 +392,11 @@ export default function ObservedReport({
     snapshot.people.length && snapshot.periods.current.merged_prs > 0 ? "people" : "pulls",
   );
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
-  const [personEmail, setPersonEmail] = useState<string | null>(null);
-  const person = snapshot.people.find((entry) => entry.email === personEmail) ?? null;
+  const [matchedOnly, setMatchedOnly] = useState(true);
+  const people = useMemo(() => reportPeople(snapshot, matchedOnly), [snapshot, matchedOnly]);
+  const pulls = useMemo(() => filterObservedPulls(snapshot, "current", matchedOnly), [snapshot, matchedOnly]);
+  const [personId, setPersonId] = useState<string | null>(null);
+  const person = people.find((entry) => entry.id === personId) ?? null;
   const terms = changeTerms(snapshot.source_provider);
   const current = snapshot.periods.current;
   const baseline = snapshot.periods[comparison];
@@ -499,12 +514,13 @@ export default function ObservedReport({
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b">
           <PageTabsList className="min-w-0 flex-1 gap-4 border-0">
             <PageTabsTrigger value="people">
-              Engineers <span className="ml-1.5 text-muted-foreground">{snapshot.people.length}</span>
+              Engineers <span className="ml-1.5 text-muted-foreground">{people.length}</span>
             </PageTabsTrigger>
             <PageTabsTrigger value="pulls">{terms.requests}</PageTabsTrigger>
             <PageTabsTrigger value="quality">Quality</PageTabsTrigger>
             <PageTabsTrigger value="branches">Branch spend</PageTabsTrigger>
           </PageTabsList>
+          {activeTab !== "quality" && <MatchedPeopleToggle checked={matchedOnly} onChange={setMatchedOnly} />}
           {!readOnly && (
             <Button
               size="sm"
@@ -520,9 +536,11 @@ export default function ObservedReport({
         </div>
         <TabsContent value="people">
           <PeopleTable
-            snapshot={snapshot}
+            rows={people}
+            provider={snapshot.source_provider}
+            matchedOnly={matchedOnly}
             comparison={comparison}
-            onSelect={(selected) => setPersonEmail(selected.email)}
+            onSelect={(selected) => setPersonId(selected.id)}
           />
         </TabsContent>
         <TabsContent value="pulls" className="space-y-5">
@@ -561,15 +579,17 @@ export default function ObservedReport({
           )}
 
           <p className="mb-4 text-xs text-muted-foreground">
-            All repository {terms.plural}, including agent work without a known requester
+            {matchedOnly
+              ? "Changes from people linked to internal accounts"
+              : `All repository ${terms.plural}, including agent work without a known requester`}
           </p>
-          <PullList pulls={snapshot.pulls.current} provider={snapshot.source_provider} />
+          <PullList pulls={pulls} provider={snapshot.source_provider} matchedOnly={matchedOnly} />
         </TabsContent>
         <TabsContent value="quality">
           <Quality snapshot={snapshot} comparison={comparison} />
         </TabsContent>
         <TabsContent value="branches">
-          <BranchSpend snapshot={snapshot} />
+          <BranchSpend snapshot={snapshot} matchedOnly={matchedOnly} />
         </TabsContent>
       </Tabs>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
@@ -591,17 +611,17 @@ export default function ObservedReport({
       )}
       {person && (
         <PersonDetails
-          key={person.email}
+          key={person.id}
           person={person}
           snapshot={snapshot}
           comparison={comparison}
-          onClose={() => setPersonEmail(null)}
+          onClose={() => setPersonId(null)}
           onEdit={
-            readOnly
+            readOnly || !person.matched
               ? undefined
               : () => {
                   setAccountEmail(person.email);
-                  setPersonEmail(null);
+                  setPersonId(null);
                 }
           }
         />

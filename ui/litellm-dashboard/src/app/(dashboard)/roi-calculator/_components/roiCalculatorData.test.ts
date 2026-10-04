@@ -10,9 +10,11 @@ import {
   formatNumber,
   formatSyncedAt,
   highestCostPulls,
+  isMatchedPerson,
+  isMatchedPull,
   peopleCsv,
 } from "./roiCalculatorData";
-import type { ROIPull } from "./roiCalculatorData";
+import type { ROIPerson, ROIPull } from "./roiCalculatorData";
 
 const pull = (overrides: Partial<ROIPull>): ROIPull => ({
   source_repo: "github.com/org/repo",
@@ -43,6 +45,35 @@ const summary = {
 };
 
 describe("ROI calculator display helpers", () => {
+  it("keeps linked identities without spend or estimates and excludes unrelated tagged spend", () => {
+    const manual = pull({ match_method: "manual", matched: false });
+    const external = pull({
+      email: "",
+      match_method: "no gateway match",
+      branch_cost: { repo: "org/repo", branch: "external", spend: 10, requests: 2, status: "matched" },
+    });
+    expect(isMatchedPull(manual)).toBe(true);
+    expect(filterPulls([manual, external], "", true)).toEqual([manual]);
+    expect(filterPulls([manual, external], "", false)).toEqual([manual, external]);
+    expect(filterPulls([manual, external], "missing", true)).toEqual([]);
+    const person: ROIPerson = {
+      id: "linked",
+      email: "linked@example.test",
+      logins: ["linked"],
+      spend: null,
+      hours: 0,
+      prs: 1,
+      estimated_prs: 0,
+      pending_prs: 1,
+      match_methods: ["manual"],
+      eligible: false,
+      cost_per_hour: null,
+    };
+    expect(isMatchedPerson(person)).toBe(true);
+    expect(isMatchedPerson({ ...person, match_methods: ["no gateway match"] })).toBe(false);
+    expect(isMatchedPerson({ ...person, email: "" })).toBe(false);
+  });
+
   it("ranks only attributed PR costs, limits the overview to five and preserves report order", () => {
     const pulls = [2, 6, 1, 4, 3, 5].map((spend) =>
       pull({

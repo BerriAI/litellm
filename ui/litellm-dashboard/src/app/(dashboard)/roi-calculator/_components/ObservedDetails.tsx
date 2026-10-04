@@ -24,11 +24,16 @@ import {
 export function PullList({
   pulls,
   provider,
+  matchedOnly = false,
 }: {
+  matchedOnly?: boolean;
   pulls: ObservedPull[];
   provider: ObservedSnapshot["source_provider"];
 }) {
   const terms = changeTerms(provider);
+  const emptyMessage = matchedOnly
+    ? "No merged changes from matched people in this period"
+    : `No ${terms.lower} in this period`;
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(20);
   const filtered = pulls.filter((pull) =>
@@ -104,7 +109,7 @@ export function PullList({
       </p>
       {filtered.length === 0 && (
         <p className="py-8 text-center text-sm text-muted-foreground">
-          {query ? `No ${terms.lower} match this search` : `No ${terms.lower} in this period`}
+          {query ? `No ${terms.lower} match this search` : emptyMessage}
         </p>
       )}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -150,9 +155,7 @@ export function PersonDetails({
       <SheetContent className="overflow-y-auto p-6 data-[side=right]:w-full data-[side=right]:sm:max-w-3xl">
         <SheetHeader className="p-0 pr-8">
           <SheetTitle className="text-xl">{person.name}</SheetTitle>
-          <SheetDescription>
-            {person.email} · {person.logins.join(", ")}
-          </SheetDescription>
+          <SheetDescription>{[person.email, person.logins.join(", ")].filter(Boolean).join(" · ")}</SheetDescription>
         </SheetHeader>
         {onEdit && (
           <Button variant="outline" className="w-fit" onClick={onEdit}>
@@ -200,8 +203,8 @@ export function PersonDetails({
   );
 }
 
-export function BranchSpend({ snapshot }: { snapshot: ObservedSnapshot }) {
-  const rows = recordedBranches(snapshot);
+export function BranchSpend({ snapshot, matchedOnly = true }: { snapshot: ObservedSnapshot; matchedOnly?: boolean }) {
+  const rows = recordedBranches(snapshot, matchedOnly);
   return (
     <div className="rounded-xl border">
       <Table>
@@ -225,7 +228,11 @@ export function BranchSpend({ snapshot }: { snapshot: ObservedSnapshot }) {
         </TableBody>
       </Table>
       {rows.length === 0 && (
-        <p className="p-8 text-center text-sm text-muted-foreground">No tagged branch spend in this period</p>
+        <p className="p-8 text-center text-sm text-muted-foreground">
+          {matchedOnly
+            ? "No tagged branch spend for matched people in this period"
+            : "No tagged branch spend in this period"}
+        </p>
       )}
     </div>
   );
