@@ -94,6 +94,44 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     assert circle_invocation == ()
 
 
+def test_circleci_postgres_suites_count_their_test_path_as_invoked() -> None:
+    config: Final = {
+        "workflows": {
+            "integration": {
+                "jobs": [
+                    {"postgres_suite": {"name": "proxy-behavior", "test_path": "tests/proxy_behavior", "seed": True}},
+                    {
+                        "postgres_suite": {
+                            "name": "roi-database",
+                            "test_path": "tests/integration/database/test_roi_observed.py",
+                            "seed": False,
+                        }
+                    },
+                ]
+            }
+        }
+    }
+    assert coverage._invoked_test_tokens(coverage._scalars(config, "config.yml")) == frozenset(
+        {"tests/proxy_behavior", "tests/integration/database/test_roi_observed.py"}
+    )
+
+
+def test_every_circleci_postgres_suite_is_credited_on_the_repo_as_it_stands() -> None:
+    circle: Final = yaml.safe_load(coverage.CIRCLECI_CONFIG.read_text())
+    paths: Final = tuple(
+        job["postgres_suite"]["test_path"]
+        for job in circle["workflows"]["integration"]["jobs"]
+        if isinstance(job, dict) and "postgres_suite" in job
+    )
+    assert paths == (
+        "tests/proxy_behavior",
+        "tests/proxy_security_tests",
+        "tests/proxy_migration_tests",
+        "tests/integration/database/test_roi_observed.py",
+    )
+    assert set(paths) <= coverage._invoked_test_tokens(coverage._all_scalars())
+
+
 def test_an_ancestor_directory_covers_a_file_but_does_not_name_it():
     # The whole point of the split: `tests/x` answers "does it run?" but not
     # "which shard owns it?" — accepting it for the latter is how a new child

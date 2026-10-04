@@ -3460,7 +3460,8 @@ jobs:
           name: Run Redis compatibility tests
           command: |
             mkdir -p test-results
-            timeout --signal=TERM 15m uv run --no-sync pytest \
+            env -u CASSETTE_REDIS_URL -u AZURE_CLIENT_ID -u AZURE_CLIENT_SECRET -u AZURE_TENANT_ID \
+              timeout --signal=TERM 15m uv run --no-sync pytest \
               tests/unit/test_redis.py tests/unit/caching/test_redis_connection_pool.py \
               tests/unit/caching/test_redis_cluster_cache.py tests/unit/caching/test_evicted_client_closer.py \
               tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_azure_credentials \
