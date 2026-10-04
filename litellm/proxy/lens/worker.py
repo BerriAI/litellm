@@ -9,13 +9,6 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from litellm.constants import (
-    LENS_MODEL_RETRIES,
-    LENS_MODEL_RETRY_MAX_SECONDS,
-    LENS_WORKER_POLL_SECONDS,
-    LENS_WORKER_SLOTS,
-)
-
 from .analysis import AnalysisResponseError, analyze_sample, validation_details
 from .models import (
     Claim,
@@ -32,6 +25,10 @@ from .models import (
 from .release import PROTOCOL_VERSION, release_tag
 
 logger: Final = logging.getLogger("litellm.lens.worker")
+MODEL_RETRIES: Final = 4
+MODEL_RETRY_MAX_SECONDS: Final = 60.0
+SLOTS: Final = 3
+POLL_SECONDS: Final = 2.0
 
 
 class ClaimedJobIdentity(BaseModel):
@@ -56,12 +53,12 @@ class ModelErrorEnvelope(BaseModel):
 
 
 def retry_delay(error: httpx.TransportError | httpx.HTTPStatusError, attempt: int) -> float:
-    backoff: Final = float(min(2**attempt, LENS_MODEL_RETRY_MAX_SECONDS))
+    backoff: Final = float(min(2**attempt, MODEL_RETRY_MAX_SECONDS))
     if not isinstance(error, httpx.HTTPStatusError):
         return backoff
     requested: Final = error.response.headers.get("retry-after", "")
     try:
-        return min(max(float(requested), backoff), LENS_MODEL_RETRY_MAX_SECONDS)
+        return min(max(float(requested), backoff), MODEL_RETRY_MAX_SECONDS)
     except ValueError:
         return backoff
 
@@ -145,7 +142,7 @@ class LensWorker:
                 503,
                 504,
             )
-            if not retryable or attempt >= LENS_MODEL_RETRIES:
+            if not retryable or attempt >= MODEL_RETRIES:
                 raise
             await self.sleep(retry_delay(exc, attempt))
             return await self.model_request(path, body, attempt + 1)
@@ -270,7 +267,7 @@ async def main() -> None:
     async with httpx.AsyncClient(
         base_url=url, headers=MappingProxyType({"Authorization": f"Bearer {token}"}), timeout=180
     ) as client:
-        await LensWorker(client).serve(LENS_WORKER_SLOTS, LENS_WORKER_POLL_SECONDS)
+        await LensWorker(client).serve(SLOTS, POLL_SECONDS)
 
 
 if __name__ == "__main__":
