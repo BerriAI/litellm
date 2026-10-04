@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { mockAllIsIntersecting, setupIntersectionMocking } from "react-intersection-observer/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/http/client";
@@ -82,9 +83,26 @@ describe("AgentTracesSection", () => {
       y: 0,
       toJSON: () => ({}),
     } as DOMRect);
+    setupIntersectionMocking(vi.fn);
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+  });
+
+  it("loads the next page only once the list scrolls near its end, then stops at the last page", async () => {
+    vi.mocked(agentTraceListCall)
+      .mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" })
+      .mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: null });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+    act(() => mockAllIsIntersecting(false));
+    expect(agentTraceListCall).toHaveBeenCalledOnce();
+    act(() => mockAllIsIntersecting(true));
+    await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
+    expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toMatchObject({ cursor: "next" });
+    expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the original time window and loaded rows when another page fails", async () => {
@@ -96,9 +114,11 @@ describe("AgentTracesSection", () => {
     const first = vi.mocked(agentTraceListCall).mock.calls[0][0];
     now.mockReturnValue(Date.parse("2026-10-01T01:00Z"));
     vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Please try again", 403, {}));
-    await user.click(screen.getByRole("button", { name: "Load more" }));
+    act(() => mockAllIsIntersecting(true));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load more runs");
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
+    expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+    expect(agentTraceListCall).toHaveBeenCalledTimes(2);
     expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toEqual({ ...first, cursor: "next" });
     vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: null });
     await user.click(screen.getByRole("button", { name: "Retry" }));

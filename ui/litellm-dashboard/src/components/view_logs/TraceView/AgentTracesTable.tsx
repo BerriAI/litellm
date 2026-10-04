@@ -1,6 +1,8 @@
 "use client";
 
 import { ArrowDown, ChevronRight } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useInView } from "react-intersection-observer";
 
 import { Button } from "@/components/ui/button";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
@@ -33,6 +35,8 @@ export const formatCost = (cost: number): string => {
 const firstLine = (text: string): string => text.split("\n")[0] ?? text;
 
 const TH = "px-3 font-medium";
+const PREFETCH_MARGIN = "0px 0px 480px 0px";
+const PLACEHOLDER_ROWS = [0, 1, 2];
 const TH_NUM = "px-3 text-right font-medium";
 const TD_NUM = "px-3 text-right font-mono tabular-nums text-muted-foreground";
 
@@ -50,6 +54,22 @@ function AgentCell({ run }: { run: TraceSummary }) {
   );
 }
 
+function PlaceholderRow({ rowRef }: { rowRef?: (node: Element | null) => void }) {
+  return (
+    <tr ref={rowRef} aria-hidden data-testid="runs-placeholder" className="h-9 border-b border-border/60">
+      <td className="px-3">
+        <div className="h-2.5 w-28 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+      </td>
+      <td className="px-3">
+        <div className="h-2.5 w-24 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+      </td>
+      <td className="px-3" colSpan={7}>
+        <div className="h-2.5 w-2/5 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+      </td>
+    </tr>
+  );
+}
+
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
@@ -62,10 +82,21 @@ export function AgentTracesTable({
   onOpenTrace,
   selectedKey = null,
 }: AgentTracesTableProps) {
-  const isEmpty = !isLoading && !error && traces.length === 0;
+  const settled = !isLoading && !error;
+  const isEmpty = settled && !hasMore && traces.length === 0;
+  const canContinue = settled && hasMore;
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const { ref: tailRef, inView: nearTail } = useInView({ root: scroller, rootMargin: PREFETCH_MARGIN });
+  useEffect(() => {
+    if (nearTail && canContinue && !isFetching) onLoadMore();
+  }, [nearTail, canContinue, isFetching, onLoadMore]);
   return (
-    <div className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
-      <table aria-label="Agent runs" className="w-full min-w-[900px] table-fixed border-collapse text-left">
+    <div ref={setScroller} className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
+      <table
+        aria-label="Agent runs"
+        aria-busy={isFetching}
+        className="w-full min-w-[900px] table-fixed border-collapse text-left"
+      >
         <thead className="sticky top-0 z-sticky bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))]">
           <tr className="h-8 border-b border-border text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
             <th className={`w-[170px] ${TH}`}>
@@ -144,6 +175,8 @@ export function AgentTracesTable({
               </td>
             </tr>
           ))}
+          {canContinue &&
+            PLACEHOLDER_ROWS.map((row) => <PlaceholderRow key={row} rowRef={row === 0 ? tailRef : undefined} />)}
         </tbody>
       </table>
       {isLoading && <div className="py-16 text-center text-[12px] text-muted-foreground">Loading runs…</div>}
@@ -161,13 +194,6 @@ export function AgentTracesTable({
       )}
       {isEmpty && (
         <div className="py-16 text-center text-[12px] text-muted-foreground">No runs match these filters.</div>
-      )}
-      {hasMore && (
-        <div className="border-t border-border/60 px-3 py-2">
-          <Button size="xs" variant="ghost" disabled={isFetching} onClick={onLoadMore}>
-            {isFetching ? "Loading…" : "Load more"}
-          </Button>
-        </div>
       )}
     </div>
   );

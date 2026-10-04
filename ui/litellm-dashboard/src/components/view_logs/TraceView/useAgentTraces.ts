@@ -59,7 +59,7 @@ export const traceWindowStartMs = (startTime: string, endTime: string, isCustomD
   isCustomDate ? moment(startTime).valueOf() : nowMs - (moment(endTime).valueOf() - moment(startTime).valueOf());
 
 /**
- * GET /v1/traces for the Logs page time range, cursor-paginated ("Load more").
+ * GET /v1/traces for the Logs page time range, cursor-paginated as the runs list scrolls.
  * Preset ranges roll on refresh; subsequent pages keep the first page's window.
  */
 export function useAgentTraces({
@@ -106,7 +106,7 @@ export function useAgentTraces({
     error: notEnabled ? null : displayError(query.error),
     hasMore: query.hasNextPage,
     loadMore: () => {
-      if (!query.isFetching) void query.fetchNextPage();
+      if (query.hasNextPage && !query.isFetching) void query.fetchNextPage({ cancelRefetch: false });
     },
     refetch: () => void query.refetch(),
   };
