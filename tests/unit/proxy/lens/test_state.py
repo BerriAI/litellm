@@ -10,11 +10,15 @@ from litellm.proxy.lens.models import (
     AgentTestCase,
     Check,
     Evidence,
+    Execution,
     FindingDraft,
     IssueBrief,
+    Job,
     Lens,
     LensSettings,
+    MetadataFilter,
     Review,
+    Sample,
     Scope,
     Step,
     Worker,
@@ -29,6 +33,8 @@ from litellm.proxy.lens.state import (
     next_scan_start,
     queue_job,
     renew_budget,
+    reviews_after,
+    summarized,
 )
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
@@ -368,3 +374,45 @@ def test_reviews_keep_the_newest_window_while_counting_every_review() -> None:
 def test_progress_without_a_review_leaves_the_review_history_alone() -> None:
     job: Final = add_review(queue_job(lens(), NOW, "job").jobs[0], review(0))
     assert add_review(job, None) == job
+
+
+def reviewed_job() -> Job:
+    execution: Final = Execution(
+        id="run-0",
+        source="traces",
+        trace_id="t",
+        team_id="alpha",
+        name="task",
+        start_time="2026-01-15 00:00:00",
+        span_count=3,
+        service="support",
+        metadata=(MetadataFilter(key="gen_ai.agent.name", value="support"),),
+    )
+    job: Final = (
+        queue_job(lens(), NOW, "job")
+        .jobs[0]
+        .model_copy(update={"sample": Sample(executions=(execution,), eligible=4, selected=1)})
+    )
+    timed: Final = tuple(review(i).model_copy(update={"at": NOW + timedelta(seconds=i)}) for i in range(3))
+    return reduce(add_review, timed, job)
+
+
+def test_summary_drops_reviews_and_run_attributes_but_keeps_counts_and_run_identity() -> None:
+    job: Final = reviewed_job()
+    listed: Final = summarized(lens().model_copy(update={"jobs": (job,)})).jobs[0]
+    assert listed.reviews == ()
+    assert listed.reviewed == job.reviewed == 3
+    assert listed.sample is not None and job.sample is not None
+    assert listed.sample.executions[0].metadata == ()
+    assert (
+        listed.sample.executions[0].model_copy(update={"metadata": job.sample.executions[0].metadata})
+        == (job.sample.executions[0])
+    )
+    assert listed.model_copy(update={"reviews": job.reviews, "sample": job.sample}) == job
+
+
+def test_review_polling_returns_only_reviews_newer_than_the_cursor() -> None:
+    job: Final = reviewed_job()
+    assert reviews_after(job, None) == job.reviews
+    assert [r.execution_id for r in reviews_after(job, NOW)] == ["run-1", "run-2"]
+    assert reviews_after(job, job.reviews[-1].at) == ()
