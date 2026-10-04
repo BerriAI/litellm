@@ -27,9 +27,7 @@ FAKE_API_KEY = "sk-ant-test-key-1234"
 FAKE_API_BASE = "https://api.anthropic.com"
 
 
-def _make_mock_response(
-    json_data: dict, status_code: int = 200, method: str = "POST"
-) -> httpx.Response:
+def _make_mock_response(json_data: dict, status_code: int = 200, method: str = "POST") -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
         json=json_data,
@@ -111,9 +109,7 @@ class TestAnthropicSkillsConfigHeaderValidation:
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo.get_api_key",
             return_value=FAKE_API_KEY,
         ):
-            headers = self.config.validate_environment(
-                headers={}, litellm_params=self._make_litellm_params()
-            )
+            headers = self.config.validate_environment(headers={}, litellm_params=self._make_litellm_params())
         assert headers["x-api-key"] == FAKE_API_KEY
 
     def test_sets_anthropic_version_header(self):
@@ -121,9 +117,7 @@ class TestAnthropicSkillsConfigHeaderValidation:
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo.get_api_key",
             return_value=FAKE_API_KEY,
         ):
-            headers = self.config.validate_environment(
-                headers={}, litellm_params=self._make_litellm_params()
-            )
+            headers = self.config.validate_environment(headers={}, litellm_params=self._make_litellm_params())
         assert headers["anthropic-version"] == "2023-06-01"
 
     def test_sets_skills_beta_header(self):
@@ -131,12 +125,12 @@ class TestAnthropicSkillsConfigHeaderValidation:
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo.get_api_key",
             return_value=FAKE_API_KEY,
         ):
-            headers = self.config.validate_environment(
-                headers={}, litellm_params=self._make_litellm_params()
-            )
+            headers = self.config.validate_environment(headers={}, litellm_params=self._make_litellm_params())
         assert headers["anthropic-beta"] == ANTHROPIC_SKILLS_API_BETA_VERSION
 
-    def test_merges_existing_beta_header_string(self):
+    def test_merges_existing_beta_header_into_string(self):
+        """The merged value must stay a comma-separated string: a list value makes
+        httpx.Headers raise TypeError when the request is built."""
         with patch(
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo.get_api_key",
             return_value=FAKE_API_KEY,
@@ -145,21 +139,26 @@ class TestAnthropicSkillsConfigHeaderValidation:
                 headers={"anthropic-beta": "other-beta-2024-01-01"},
                 litellm_params=self._make_litellm_params(),
             )
-        assert isinstance(headers["anthropic-beta"], list)
-        assert "other-beta-2024-01-01" in headers["anthropic-beta"]
-        assert ANTHROPIC_SKILLS_API_BETA_VERSION in headers["anthropic-beta"]
+        assert isinstance(headers["anthropic-beta"], str)
+        betas = set(headers["anthropic-beta"].split(","))
+        assert {"other-beta-2024-01-01", ANTHROPIC_SKILLS_API_BETA_VERSION} <= betas
+        httpx.Headers(headers)
 
-    def test_merges_existing_beta_header_list(self):
+    def test_oauth_key_beta_merges_without_crashing_httpx(self):
+        """Regression: an sk-ant-oat/WIF auth header carries its own anthropic-beta;
+        the old list-building merge produced a Python list that crashed httpx."""
         with patch(
             "litellm.llms.anthropic.common_utils.AnthropicModelInfo.get_api_key",
-            return_value=FAKE_API_KEY,
+            return_value="sk-ant-oat01-fake-skills-token",
         ):
             headers = self.config.validate_environment(
-                headers={"anthropic-beta": ["other-beta-2024-01-01"]},
-                litellm_params=self._make_litellm_params(),
+                headers={}, litellm_params=self._make_litellm_params(api_key=None)
             )
-        assert ANTHROPIC_SKILLS_API_BETA_VERSION in headers["anthropic-beta"]
-        assert "other-beta-2024-01-01" in headers["anthropic-beta"]
+        assert headers["authorization"] == "Bearer sk-ant-oat01-fake-skills-token"
+        assert isinstance(headers["anthropic-beta"], str)
+        betas = set(headers["anthropic-beta"].split(","))
+        assert {"oauth-2025-04-20", ANTHROPIC_SKILLS_API_BETA_VERSION} <= betas
+        httpx.Headers(headers)
 
     def test_does_not_duplicate_beta_header(self):
         with patch(
@@ -170,11 +169,7 @@ class TestAnthropicSkillsConfigHeaderValidation:
                 headers={"anthropic-beta": ANTHROPIC_SKILLS_API_BETA_VERSION},
                 litellm_params=self._make_litellm_params(),
             )
-        beta = headers["anthropic-beta"]
-        if isinstance(beta, list):
-            assert beta.count(ANTHROPIC_SKILLS_API_BETA_VERSION) == 1
-        else:
-            assert beta == ANTHROPIC_SKILLS_API_BETA_VERSION
+        assert headers["anthropic-beta"] == ANTHROPIC_SKILLS_API_BETA_VERSION
 
     def test_raises_without_api_key(self):
         with patch(
@@ -182,9 +177,7 @@ class TestAnthropicSkillsConfigHeaderValidation:
             return_value=None,
         ):
             with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
-                self.config.validate_environment(
-                    headers={}, litellm_params=self._make_litellm_params(api_key=None)
-                )
+                self.config.validate_environment(headers={}, litellm_params=self._make_litellm_params(api_key=None))
 
 
 class TestAnthropicSkillsConfigCreateRequestTransformation:
@@ -275,9 +268,7 @@ class TestAnthropicSkillsConfigResponseTransformation:
     def test_create_skill_response_parses_skill(self):
         payload = _make_skill_payload()
         raw = _make_mock_response(payload)
-        skill = self.config.transform_create_skill_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        skill = self.config.transform_create_skill_response(raw_response=raw, logging_obj=self.logging_obj)
         assert isinstance(skill, Skill)
         assert skill.id == "skill_abc123"
         assert skill.source == "custom"
@@ -286,9 +277,7 @@ class TestAnthropicSkillsConfigResponseTransformation:
     def test_get_skill_response_parses_skill(self):
         payload = _make_skill_payload(id="skill_xyz", display_title="Another")
         raw = _make_mock_response(payload, method="GET")
-        skill = self.config.transform_get_skill_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        skill = self.config.transform_get_skill_response(raw_response=raw, logging_obj=self.logging_obj)
         assert isinstance(skill, Skill)
         assert skill.id == "skill_xyz"
         assert skill.display_title == "Another"
@@ -300,9 +289,7 @@ class TestAnthropicSkillsConfigResponseTransformation:
             "next_page": None,
         }
         raw = _make_mock_response(payload, method="GET")
-        result = self.config.transform_list_skills_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        result = self.config.transform_list_skills_response(raw_response=raw, logging_obj=self.logging_obj)
         assert isinstance(result, ListSkillsResponse)
         assert len(result.data) == 2
         assert result.data[0].id == "skill_abc123"
@@ -316,18 +303,14 @@ class TestAnthropicSkillsConfigResponseTransformation:
             "next_page": "page_token_xyz",
         }
         raw = _make_mock_response(payload, method="GET")
-        result = self.config.transform_list_skills_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        result = self.config.transform_list_skills_response(raw_response=raw, logging_obj=self.logging_obj)
         assert result.has_more is True
         assert result.next_page == "page_token_xyz"
 
     def test_delete_skill_response_parses_correctly(self):
         payload = {"id": "skill_abc123", "type": "skill_deleted"}
         raw = _make_mock_response(payload, method="DELETE")
-        result = self.config.transform_delete_skill_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        result = self.config.transform_delete_skill_response(raw_response=raw, logging_obj=self.logging_obj)
         assert isinstance(result, DeleteSkillResponse)
         assert result.id == "skill_abc123"
         assert result.type == "skill_deleted"
@@ -341,8 +324,6 @@ class TestAnthropicSkillsConfigResponseTransformation:
             "type": "skill",
         }
         raw = _make_mock_response(payload)
-        skill = self.config.transform_create_skill_response(
-            raw_response=raw, logging_obj=self.logging_obj
-        )
+        skill = self.config.transform_create_skill_response(raw_response=raw, logging_obj=self.logging_obj)
         assert skill.display_title is None
         assert skill.latest_version is None

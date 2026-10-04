@@ -42,6 +42,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+    reject_server_owned_wif_params,
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -956,9 +957,9 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with provider routing fields
-    (``ADMIN_ONLY_HEALTH_DISPLAY_PARAMS``) removed from each healthy/unhealthy
-    endpoint entry. Used to hide those fields from non-admin callers while
+    Return a copy of the /health response with the admin-only fields (provider routing plus the
+    workload identity federation params naming the identity a deployment mints as) removed from
+    each healthy/unhealthy endpoint entry. Used to hide those fields from non-admin callers while
     still showing them which deployments they own and whether each one is
     healthy. Proxy admins receive the unmodified result.
     """
@@ -2203,6 +2204,7 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
+        reject_server_owned_wif_params(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
@@ -2228,12 +2230,16 @@ async def test_model_connection(
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
-                litellm_params=LiteLLM_Params(**litellm_params),
+                litellm_params=LiteLLM_Params.model_validate(litellm_params),
                 model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            # The probe is a write of the caller's own params onto the stored deployment, so the
+            # caller's params are the incoming side: a probe that redirects a federated
+            # deployment's api_base is an admin's action, an unmodified probe of it is not.
+            incoming_params=request_litellm_params,
         )
         raw_params_mode: Final[object] = litellm_params.pop("mode", None)
         probe_mode: Final = (
@@ -2260,7 +2266,7 @@ async def test_model_connection(
             "result": cleaned_result,
         }
 
-    except HTTPException as e:
+    except (HTTPException, ProxyException) as e:
         raise e
     except Exception as e:
         verbose_proxy_logger.debug("litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - %s", e)

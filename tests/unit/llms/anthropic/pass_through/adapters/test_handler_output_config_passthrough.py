@@ -34,9 +34,7 @@ import pytest
 # Anchor sys.path to this file's location — not the working-directory-relative
 # pattern Greptile flagged on PR #23706. Resolves correctly regardless of
 # where pytest is invoked from.
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     ANTHROPIC_ONLY_REQUEST_KEYS,
@@ -187,9 +185,7 @@ class TestOutputConfigStrippedFromCompletionKwargs:
         result = _call_prepare(
             extra_kwargs={
                 "custom_llm_provider": "azure",
-                "output_config": {
-                    "format": {"type": "json_schema", "schema": losing_schema}
-                },
+                "output_config": {"format": {"type": "json_schema", "schema": losing_schema}},
             },
             output_format={"type": "json_schema", "schema": winning_schema},
         )

@@ -32,11 +32,17 @@ from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
-# Provider routing fields. Allowed for proxy admins so they can see which
-# region/version a deployment is checking; gated at the endpoint layer for
-# non-admin callers (see _strip_admin_only_fields_from_health_result).
-ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version", "aws_bedrock_runtime_endpoint")
+# Provider routing and workload identity federation fields. Allowed for proxy admins so they can
+# see which region/version a deployment is checking and which identity it federates as; gated at
+# the endpoint layer for non-admin callers (see _strip_admin_only_fields_from_health_result).
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = (
+    "api_base",
+    "api_version",
+    "aws_bedrock_runtime_endpoint",
+    *(name for name in server_owned_wif_litellm_params if name not in secret_bearing_wif_litellm_params),
+)
 
 MINIMAL_DISPLAY_PARAMS: Final = frozenset({"model", "mode_error"})
 

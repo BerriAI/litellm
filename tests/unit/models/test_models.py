@@ -3,6 +3,7 @@ Tests for backend domain models.
 """
 
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -601,6 +602,43 @@ class TestManagedTables:
         )
         assert table.vector_store_id == "vs1"
         assert table.custom_llm_provider == "openai"
+
+
+class TestProxyModelTableResponseSerialization:
+    """FastAPI validates an endpoint's return value against its response model with
+    ``from_attributes``, so an endpoint that returns an already-built row reaches the
+    ``mode="before"`` validator as the object itself rather than as a mapping."""
+
+    def test_validates_from_an_existing_instance(self):
+        from pydantic import TypeAdapter
+
+        built: Final = LiteLLM_ProxyModelTable(
+            model_id="m-1",
+            model_name="claude-sonnet-5-provider",
+            litellm_params={"model": "anthropic/claude-sonnet-5"},
+            blocked=True,
+        )
+
+        serialized = TypeAdapter(LiteLLM_ProxyModelTable | None).validate_python(built, from_attributes=True)
+
+        assert serialized is not None
+        assert serialized.model_id == "m-1"
+        assert serialized.blocked is True
+        assert serialized.litellm_params == {"model": "anthropic/claude-sonnet-5"}
+
+    def test_still_parses_json_string_columns(self):
+        """The DB stores these columns as JSON strings, which is why the validator exists."""
+        parsed: Final = LiteLLM_ProxyModelTable.model_validate(
+            {
+                "model_id": "m-2",
+                "model_name": "n",
+                "litellm_params": '{"model": "anthropic/claude-haiku-4-5"}',
+                "model_info": '{"id": "m-2"}',
+            }
+        )
+
+        assert parsed.litellm_params == {"model": "anthropic/claude-haiku-4-5"}
+        assert parsed.model_info == {"id": "m-2"}
 
 
 class TestAutoRouterSession:
