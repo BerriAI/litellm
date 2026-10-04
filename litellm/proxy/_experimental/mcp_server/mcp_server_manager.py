@@ -5292,6 +5292,8 @@ class MCPServerManager:
         Returns:
             List of tools with prefixed names
         """
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
         prefixed_tools: Final = []
         prefix: Final = get_server_prefix(server)
 
@@ -5304,6 +5306,11 @@ class MCPServerManager:
             # short ID) so call_tool can resolve regardless of which form a
             # caller / cached client is using.
             for spelling in iter_known_tool_name_spellings(original_name, server):
+                namespace_owner = self.server_owning_tool_name_prefix(spelling)
+                if namespace_owner is not None and namespace_owner.server_id != server.server_id:
+                    continue
+                if namespace_owner is None and global_mcp_tool_registry.get_tool(spelling) is not None:
+                    continue
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
@@ -6466,6 +6473,13 @@ class MCPServerManager:
         Returns:
             MCPServer if found, None otherwise
         """
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        # Local handlers belong to their registered namespace, even if a native
+        # discovery result or an older cached route claims the same spelling.
+        if global_mcp_tool_registry.get_tool(tool_name) is not None:
+            return self.server_owning_tool_name_prefix(tool_name)
+
         registry_servers: Final = list(self.get_registry().values())
         prefix_to_server: Final = self._known_prefix_to_server()
 

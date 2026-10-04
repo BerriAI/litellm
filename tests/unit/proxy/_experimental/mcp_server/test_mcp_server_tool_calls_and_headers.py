@@ -8632,6 +8632,7 @@ async def test_stateful_mcp_tool_call_uses_current_requests_otel_destinations(_m
     server = MCPServer(
         server_id="otel-context-test",
         name="otelcontext",
+        server_name="otelcontext",
         transport=MCPTransport.http,
         allow_all_keys=True,
     )
