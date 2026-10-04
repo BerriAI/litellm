@@ -1,12 +1,14 @@
 "use client";
 
-import { ChevronDown, ChevronsRight, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronsRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { cn } from "@/lib/cva.config";
 
 import { RunView } from "./TraceDrawer";
+import { type RunSelection, type TraceRef, traceKey, traceRefOf } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
+import { ignoresLetterShortcut } from "../letterShortcut";
 
 const WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 const MIN_WIDTH = 700;
@@ -42,10 +44,6 @@ const storeWidth = (width: number): void => {
     return;
   }
 };
-
-const isTypingTarget = (target: EventTarget | null): boolean =>
-  target instanceof HTMLElement &&
-  target.matches("input, textarea, select, [contenteditable='true'], [role='combobox']");
 
 function useDrawerWidth() {
   const [width, setWidth] = useState(() =>
@@ -100,7 +98,7 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (width: nu
     >
       <span
         className={cn(
-          "h-full w-[0.67px] bg-trace-line transition-[width,background-color] duration-150 group-hover/handle:w-0.5 group-focus-visible/handle:w-0.5 group-focus-visible/handle:bg-trace-brand motion-reduce:transition-none",
+          "h-full w-[0.67px] bg-border transition-[width,background-color] duration-150 group-hover/handle:w-0.5 group-focus-visible/handle:w-0.5 group-focus-visible/handle:bg-trace-brand motion-reduce:transition-none",
           dragging && "w-0.5 bg-trace-brand",
         )}
       />
@@ -126,38 +124,55 @@ function HeaderButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className="grid size-7 place-items-center rounded-[4px] text-trace-key transition-colors duration-150 hover:bg-trace-row-hover hover:text-trace-text disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none"
+      className="grid size-7 place-items-center rounded-[4px] text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none"
     >
       {children}
     </button>
   );
 }
 
-interface RunDrawerProps {
-  trace: TraceSummary | null;
-  runs: readonly TraceSummary[];
-  accessToken: string;
-  onSelect: (trace: TraceSummary | null) => void;
+function FullScreenButton({ fullScreen, onToggle }: { fullScreen: boolean; onToggle: () => void }) {
+  return (
+    <HeaderButton label={fullScreen ? "Exit full screen" : "Enter full screen"} onClick={onToggle}>
+      {fullScreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+    </HeaderButton>
+  );
 }
 
-const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
+interface RunDrawerProps {
+  trace: TraceRef | null;
+  runs: readonly TraceSummary[];
+  accessToken: string;
+  selection: RunSelection;
+  onSelect: (trace: TraceRef | null) => void;
+  fullScreen: boolean;
+  onFullScreenChange: (fullScreen: boolean) => void;
+}
 
 /** Right-side drawer over the runs list: resizable, keeps the list clickable, swaps runs in place. */
-export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps) {
+export function RunDrawer({
+  trace,
+  runs,
+  accessToken,
+  selection,
+  onSelect,
+  fullScreen,
+  onFullScreenChange,
+}: RunDrawerProps) {
   const [width, setWidth] = useDrawerWidth();
-  const [lastShown, setLastShown] = useState<TraceSummary | null>(trace);
+  const [lastShown, setLastShown] = useState<TraceRef | null>(trace);
   const [exitedKey, setExitedKey] = useState<string | null>(null);
   if (trace !== null && trace !== lastShown) setLastShown(trace);
   const shown = trace ?? lastShown;
   const closing = trace === null && shown !== null;
   if (trace !== null && exitedKey !== null) setExitedKey(null);
-  if (closing && exitedKey !== runKey(shown) && prefersReducedMotion()) setExitedKey(runKey(shown));
+  if (closing && exitedKey !== traceKey(shown) && prefersReducedMotion()) setExitedKey(traceKey(shown));
 
-  const index = trace === null ? -1 : runs.findIndex((run) => runKey(run) === runKey(trace));
+  const index = trace === null ? -1 : runs.findIndex((run) => traceKey(traceRefOf(run)) === traceKey(trace));
   const step = useCallback(
     (delta: number) => {
       const next = runs[index + delta];
-      if (next) onSelect(next);
+      if (next) onSelect(traceRefOf(next));
     },
     [runs, index, onSelect],
   );
@@ -165,8 +180,7 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
   useEffect(() => {
     if (trace === null) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const modified = event.metaKey || event.ctrlKey || event.altKey;
-      if (modified || isTypingTarget(event.target)) return;
+      if (ignoresLetterShortcut(event)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onSelect(null);
@@ -182,26 +196,26 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [trace, step, onSelect]);
 
-  if (shown === null || (closing && exitedKey === runKey(shown))) return null;
+  if (shown === null || (closing && exitedKey === traceKey(shown))) return null;
   return (
     <aside
       aria-label="Trace details"
       data-testid="run-drawer"
-      style={{ width }}
+      style={{ width: fullScreen ? "100%" : width }}
       onAnimationEnd={(event) => {
-        if (closing && event.target === event.currentTarget) setExitedKey(runKey(shown));
+        if (closing && event.target === event.currentTarget) setExitedKey(traceKey(shown));
       }}
       className={cn(
-        "fixed inset-y-0 right-0 z-overlay flex origin-right flex-col bg-trace-surface shadow-[0_10px_15px_-3px_rgba(16,24,40,0.1),0_4px_6px_-4px_rgba(16,24,40,0.1)] motion-reduce:animate-none",
+        "fixed inset-y-0 right-0 z-overlay flex origin-right flex-col bg-background shadow-[0_10px_15px_-3px_rgba(16,24,40,0.1),0_4px_6px_-4px_rgba(16,24,40,0.1)] motion-reduce:animate-none",
         closing ? "animate-trace-drawer-out" : "animate-trace-drawer-in",
       )}
     >
-      <ResizeHandle width={width} onResize={setWidth} />
-      <div className="flex h-[37px] shrink-0 items-center gap-1 border-b border-trace-line px-2">
+      {!fullScreen && <ResizeHandle width={width} onResize={setWidth} />}
+      <div className="flex h-[37px] shrink-0 items-center gap-1 border-b border-border px-2">
         <HeaderButton label="Close (Esc)" onClick={() => onSelect(null)}>
           <ChevronsRight className="size-4" />
         </HeaderButton>
-        <span className="mx-1 h-4 w-px bg-trace-line" />
+        <span className="mx-1 h-4 w-px bg-border" />
         <HeaderButton label="Next trace (J)" disabled={index < 0 || index >= runs.length - 1} onClick={() => step(1)}>
           <ChevronDown className="size-4" />
         </HeaderButton>
@@ -209,16 +223,23 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
           <ChevronUp className="size-4" />
         </HeaderButton>
         {index >= 0 && (
-          <span className="ml-1 font-mono text-[11px] text-trace-key tabular-nums">
+          <span className="ml-1 font-mono text-[11px] text-muted-foreground tabular-nums">
             {index + 1} / {runs.length}
           </span>
         )}
+        <div className="ml-auto flex items-center gap-1">
+          <FullScreenButton fullScreen={fullScreen} onToggle={() => onFullScreenChange(!fullScreen)} />
+          <HeaderButton label="Close trace (Esc)" onClick={() => onSelect(null)}>
+            <X className="size-4" />
+          </HeaderButton>
+        </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <RunView
-          key={runKey(shown)}
-          traceId={shown.trace_id}
-          traceRef={shown.trace_ref}
+          key={traceKey(shown)}
+          traceId={shown.traceId}
+          traceRef={shown.traceRef}
+          selection={selection}
           accessToken={accessToken}
           onBack={() => onSelect(null)}
           embedded

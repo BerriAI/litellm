@@ -16,6 +16,7 @@ from pydantic import (
     JsonValue,
     PositiveInt,
     PrivateAttr,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
@@ -28,6 +29,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.proxy._experimental.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
@@ -45,6 +47,8 @@ from litellm.types.mcp import (
     MCPCredentials,
     MCPTransport,
     MCPTransportType,
+    MCPUpstreamProtocol,
+    validate_mcp_protocol_transport,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
@@ -474,6 +478,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search",
         "/search/{search_tool_name}",
         "/v1/search/{search_tool_name}",
+        "/decisions",
+        "/v1/decisions",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -506,6 +512,8 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/typesafe",
+        "/laya",
+        "/bespoke",
         "/openrouter",
         "/milvus",
         "/gigachat",
@@ -541,6 +549,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
+        "/v1/traces/{trace_id}/spans/{span_id}/error",
     ]
 
     anthropic_routes = [
@@ -1583,6 +1592,30 @@ def _reject_unsupported_per_server_oauth_discovery(values: object, require_auth_
     raise _per_server_oauth_discovery_error()
 
 
+def _validate_mcp_transport_fields(values: object) -> None:
+    if not isinstance(values, dict):
+        return
+    transport: Final = values.get("transport")
+    if transport in (MCPTransport.http, MCPTransport.sse):
+        if not values.get("url") and not values.get("spec_path"):
+            raise ValueError("url or spec_path is required for HTTP/SSE transport")
+        return
+    if transport != MCPTransport.stdio:
+        return
+    if not is_mcp_stdio_enabled():
+        raise ValueError(MCP_STDIO_DISABLED_MESSAGE)
+    command: Final = values.get("command")
+    if not command:
+        raise ValueError("command is required for stdio transport")
+    if not values.get("args"):
+        raise ValueError("args is required for stdio transport")
+    if os.path.basename(str(command)) not in MCP_STDIO_ALLOWED_COMMANDS:
+        raise ValueError(
+            f"Command '{command}' is not in the allowed commands list "
+            f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
+        )
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str | None = None
     server_name: str | None = None
@@ -1646,26 +1679,20 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
+    @model_validator(mode="after")
+    def validate_protocol_transport(self) -> "NewMCPServerRequest":
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (self.mcp_info or {}).get("protocol_version", "auto")
+            ),
+            self.transport,
+        )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
-        if isinstance(values, dict):
-            transport: Final = values.get("transport")
-            if transport == MCPTransport.stdio:
-                if not values.get("command"):
-                    raise ValueError("command is required for stdio transport")
-                if not values.get("args"):
-                    raise ValueError("args is required for stdio transport")
-                # Validate command against allowlist to prevent arbitrary execution
-                base_command: Final = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
-                    raise ValueError(
-                        f"Command '{values['command']}' is not in the allowed commands list "
-                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
-                    )
-            elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+        _validate_mcp_transport_fields(values)
         return values
 
     @model_validator(mode="before")
@@ -1745,26 +1772,22 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
 
+    @model_validator(mode="after")
+    def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
+        if not {"transport", "mcp_info"}.issubset(self.model_fields_set):
+            return self
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (self.mcp_info or {}).get("protocol_version", "auto")
+            ),
+            self.transport,
+        )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
-        if isinstance(values, dict):
-            transport: Final = values.get("transport")
-            if transport == MCPTransport.stdio:
-                if not values.get("command"):
-                    raise ValueError("command is required for stdio transport")
-                if not values.get("args"):
-                    raise ValueError("args is required for stdio transport")
-                # Validate command against allowlist to prevent arbitrary execution
-                base_command: Final = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
-                    raise ValueError(
-                        f"Command '{values['command']}' is not in the allowed commands list "
-                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
-                    )
-            elif transport in [MCPTransport.http, MCPTransport.sse]:
-                if not values.get("url") and not values.get("spec_path"):
-                    raise ValueError("url or spec_path is required for HTTP/SSE transport")
+        _validate_mcp_transport_fields(values)
         return values
 
     @model_validator(mode="before")
@@ -4193,6 +4216,7 @@ class SpendLogsMetadata(TypedDict):
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
     internal_call_origin: InternalCallOrigin | None
+    litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
     status: StandardLoggingPayloadStatus
@@ -5470,6 +5494,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "'auto_register': auto-create a virtual key and mapping on first encounter."
         ),
     )
+    auto_register_map_existing_key: bool = Field(
+        default=False,
+        description=(
+            "Only used with unregistered_jwt_client_behavior='auto_register'. When True and the virtual key claim "
+            "field is the user_id_jwt_field or user_email_jwt_field, the JWT claim is mapped to a virtual key the "
+            "JWT-resolved user already owns instead of minting a new one. If the user owns several, the most recently created key in the "
+            "JWT-resolved team (or with no team when the JWT resolves none) is chosen among keys that never "
+            "expire, are not blocked, are not Admin UI session keys, were not minted by auto_register, and "
+            "have no allowed_routes or include llm_api_routes. Otherwise a new key is minted as usual."
+        ),
+    )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
@@ -5569,6 +5604,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         if issuer_config is not None and issuer_config.virtual_key_claim_field is not None:
             return issuer_config.virtual_key_claim_field
         return self.virtual_key_claim_field
+
+    def is_user_identity_claim(self, claim_field: str, issuer: str | None) -> bool:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is None:
+            return claim_field in (self.user_id_jwt_field, self.user_email_jwt_field)
+        return claim_field in (
+            issuer_config.user_id_jwt_field or self.user_id_jwt_field,
+            issuer_config.user_email_jwt_field or self.user_email_jwt_field,
+        )
 
     def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
         issuer_config: Final = self.get_issuer_config(issuer)

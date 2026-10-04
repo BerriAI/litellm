@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
+from litellm._internal_context import current_service_target
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
@@ -598,6 +599,13 @@ def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     assert '<div class="deprecation-banner">' not in html
     assert "Deprecated:" not in html
     assert "<form" in html
+
+
+def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_auth):
+    response = client_no_auth.post("/v1/completions", json={"model": "vllm_embed_model"})
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["param"] == "prompt", response.text
 
 
 @pytest.mark.parametrize(
@@ -14851,6 +14859,57 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     assert router.fallback_access_check is router_fallback_access_check
 
 
+def test_resolve_db_litellm_param_keeps_wif_secret_pointers(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    proxy_config = ProxyConfig()
+
+    pointer = proxy_config._resolve_db_litellm_param(
+        "anthropic_keycloak_client_secret_ref", "os.environ/WIF_TEST_KC_SECRET"
+    )
+    dereferenced = proxy_config._resolve_db_litellm_param("api_key", "os.environ/WIF_TEST_KC_SECRET")
+
+    assert pointer == "os.environ/WIF_TEST_KC_SECRET"
+    assert dereferenced == "kc-secret"
+
+
+@pytest.mark.asyncio
+async def test_load_config_keeps_wif_secret_pointers_on_config_models(tmp_path, monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("WIF_TEST_SIGNING_KEY", "-----BEGIN PRIVATE KEY-----")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [
+                    {
+                        "model_name": "claude-wif",
+                        "litellm_params": {
+                            "model": "anthropic/claude-haiku-4-5",
+                            "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                            "anthropic_identity_source": "internal_issuer",
+                            "anthropic_issuer_url": "https://litellm.example",
+                            "anthropic_issuer_audience": "https://api.anthropic.com",
+                            "anthropic_issuer_signing_key_ref": "os.environ/WIF_TEST_SIGNING_KEY",
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    _router, model_list, _general_settings = await ProxyConfig().load_config(
+        router=None, config_file_path=str(config_file)
+    )
+
+    litellm_params = model_list[0]["litellm_params"]
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_issuer_signing_key_ref"] == "os.environ/WIF_TEST_SIGNING_KEY"
+
+
 @pytest.mark.asyncio
 async def test_load_config_router_budget_checks_fallback_targets_against_the_calling_key(tmp_path, monkeypatch):
     """A config-loaded router refuses a paid fallback target for an over-budget caller."""
@@ -15482,3 +15541,47 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=0.97),
         call(api_provider="openai", capture_rate=None),
     ]
+
+
+@pytest.mark.asyncio
+async def test_update_cache_reads_and_writes_declare_the_auth_objects_key_family():
+    """The post-call spend write-back reads and rewrites the cached auth objects, so its
+    Redis spans must read ``redis.mget auth_objects`` / ``redis.set auth_objects`` (the key
+    family the auth phase declares) and the global spend scalar ``redis.set spend_counters``,
+    never a bare ``redis.mget`` with no owner."""
+    from litellm.caching.caching import DualCache
+
+    original_cache = litellm.proxy.proxy_server.user_api_key_cache
+    cache = DualCache()
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    seen: list[tuple[str, str | None]] = []
+
+    async def _mget(keys, **_kwargs):
+        seen.append(("mget", current_service_target()))
+        return [{"user_id": "u1", "spend": 1.0} for _ in keys]
+
+    async def _set_pipeline(**_kwargs):
+        seen.append(("set", current_service_target()))
+
+    try:
+        with (
+            patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=_mget)),
+            patch.object(cache, "async_set_cache_pipeline", new=AsyncMock(side_effect=_set_pipeline)),
+        ):
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id="u1",
+                end_user_id=None,
+                team_id=None,
+                response_cost=2.0,
+                parent_otel_span=None,
+            )
+            pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            if pending:
+                await asyncio.wait(pending, timeout=5)
+    finally:
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+
+    assert seen, "update_cache must touch the cache for a priced user request"
+    assert {target for _, target in seen} == {"auth_objects"}
+    assert current_service_target() is None

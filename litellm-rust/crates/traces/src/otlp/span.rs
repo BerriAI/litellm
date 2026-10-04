@@ -8,12 +8,18 @@ use opentelemetry_proto::tonic::{
 use super::{
     DecodedEvent, DecodedSpan,
     attributes::attributes,
-    limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
+    limits::{Budget, DecodeLimits},
 };
-use crate::{DecodeError, Shared, normalize::normalize};
+use crate::{
+    Error, Shared,
+    normalize::{SpanContext, normalize},
+};
 
-pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
-    let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
+pub(super) fn flatten(
+    request: ExportTraceServiceRequest,
+    limits: DecodeLimits,
+) -> Result<Vec<DecodedSpan>, Error> {
+    let mut budget = Budget::new(limits);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
         append_resource(resource, &mut budget, &mut spans)?;
@@ -25,7 +31,7 @@ fn append_resource(
     resource: ResourceSpans,
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
-) -> Result<(), DecodeError> {
+) -> Result<(), Error> {
     let attributes = Shared::new(attributes(
         resource
             .resource
@@ -44,19 +50,19 @@ fn append_scope(
     resource: &Shared<BTreeMap<String, String>>,
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
-) -> Result<(), DecodeError> {
+) -> Result<(), Error> {
     let scope = scope_spans.scope.unwrap_or_default();
-    if scope.attributes.len() > MAX_ATTRIBUTES {
-        return Err(DecodeError::TooLarge);
+    if scope.attributes.len() > budget.limits.attributes {
+        return Err(Error::TooLarge);
     }
     budget.consume(scope.name.len() + scope.version.len())?;
     let scope_name: Shared<String> = scope.name.into();
     let scope_version: Shared<String> = scope.version.into();
     for span in scope_spans.spans {
-        if spans.len() >= MAX_SPANS {
-            return Err(DecodeError::TooLarge);
+        if spans.len() >= budget.limits.spans {
+            return Err(Error::TooLarge);
         }
-        validate_span(&span)?;
+        validate_span(&span, &budget.limits)?;
         budget.consume(
             span.name.len()
                 + span.trace_state.len()
@@ -82,7 +88,7 @@ fn valid_id(value: &[u8], length: usize) -> bool {
     value.len() == length && value.iter().any(|byte| *byte != 0)
 }
 
-fn validate_span(span: &Span) -> Result<(), DecodeError> {
+fn validate_span(span: &Span, limits: &DecodeLimits) -> Result<(), Error> {
     if !valid_id(&span.trace_id, 16)
         || !valid_id(&span.span_id, 8)
         || (!span.parent_span_id.is_empty() && !valid_id(&span.parent_span_id, 8))
@@ -94,21 +100,21 @@ fn validate_span(span: &Span) -> Result<(), DecodeError> {
             .iter()
             .any(|link| !valid_id(&link.trace_id, 16) || !valid_id(&link.span_id, 8))
     {
-        return Err(DecodeError::InvalidPayload);
+        return Err(Error::InvalidPayload);
     }
-    if span.events.len() > MAX_EVENTS
-        || span.links.len() > MAX_EVENTS
-        || span.attributes.len() > MAX_ATTRIBUTES
+    if span.events.len() > limits.events
+        || span.links.len() > limits.links
+        || span.attributes.len() > limits.attributes
         || span
             .links
             .iter()
-            .any(|link| link.attributes.len() > MAX_ATTRIBUTES)
+            .any(|link| link.attributes.len() > limits.attributes)
         || span
             .events
             .iter()
-            .any(|event| event.attributes.len() > MAX_ATTRIBUTES)
+            .any(|event| event.attributes.len() > limits.attributes)
     {
-        return Err(DecodeError::TooLarge);
+        return Err(Error::TooLarge);
     }
     Ok(())
 }
@@ -123,30 +129,65 @@ fn decoded_span(
     scope_name: &Shared<String>,
     scope_version: &Shared<String>,
     budget: &mut Budget,
-) -> Result<DecodedSpan, DecodeError> {
+) -> Result<DecodedSpan, Error> {
     let status = span.status.unwrap_or_default();
     let parent_span_id = hex_bytes(&span.parent_span_id);
     let span_attributes = attributes(span.attributes, budget)?;
-    let normalization = normalize(
-        scope_name.as_ref(),
-        &span.name,
-        &parent_span_id,
-        &span_attributes,
-    )?;
+    let events = span
+        .events
+        .into_iter()
+        .map(|event| {
+            budget.consume(event.name.len() + 96)?;
+            Ok(DecodedEvent {
+                name: event.name,
+                attributes: attributes(event.attributes, budget)?,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let normalization = normalize(&SpanContext {
+        scope: scope_name.as_ref(),
+        name: &span.name,
+        parent_span_id: &parent_span_id,
+        attributes: &span_attributes,
+        events: &events,
+        resource_attributes: resource_attributes.as_ref(),
+    })?;
     let normalized = normalization.span;
     budget.consume(
         normalized.input.len()
             + normalized.output.len()
-            + normalized.agent_name.len()
-            + normalized.litellm_request_id.len()
-            + normalized.model.len(),
+            + normalized.agent_name.as_ref().map_or(0, String::len)
+            + normalized
+                .framework
+                .as_ref()
+                .map_or(0, |integration| match integration {
+                    crate::Integration::Other(name) => name.len(),
+                    _ => 0,
+                })
+            + normalized.agent_metadata.byte_len()
+            + normalized
+                .calls
+                .key_set()
+                .into_iter()
+                .flatten()
+                .map(|key| match key {
+                    crate::CallKey::LiteLlmRequest(id) | crate::CallKey::ProviderResponse(id) => {
+                        id.len() + size_of::<crate::CallKey>()
+                    }
+                    crate::CallKey::Transport | crate::CallKey::GatewayAttempt => {
+                        size_of::<crate::CallKey>()
+                    }
+                })
+                .sum::<usize>()
+            + normalized.model.as_ref().map_or(0, String::len)
+            + normalization.display_name.as_ref().map_or(0, String::len),
     )?;
     Ok(DecodedSpan {
         trace_id: hex_bytes(&span.trace_id),
         span_id: hex_bytes(&span.span_id),
         parent_span_id,
         trace_state: span.trace_state,
-        name: span.name,
+        name: normalization.display_name.unwrap_or(span.name),
         kind: SpanKind::try_from(span.kind)
             .unwrap_or(SpanKind::Unspecified)
             .as_str_name()
@@ -167,17 +208,7 @@ fn decoded_span(
             .as_str_name()
             .to_owned(),
         status_message: status.message,
-        events: span
-            .events
-            .into_iter()
-            .map(|event| {
-                budget.consume(event.name.len() + 96)?;
-                Ok(DecodedEvent {
-                    name: event.name,
-                    attributes: attributes(event.attributes, budget)?,
-                })
-            })
-            .collect::<Result<Vec<_>, DecodeError>>()?,
+        events,
         normalized,
         consumed_attributes: normalization.consumed_attributes,
     })

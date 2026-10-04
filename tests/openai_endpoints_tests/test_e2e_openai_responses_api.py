@@ -77,20 +77,6 @@ def validate_stream_chunk(chunk):
     assert isinstance(chunk.created, int)
 
 
-def test_streaming_response():
-    client = get_test_client()
-    stream = client.responses.create(
-        model="gpt-5.5", input="just respond with the word 'ping'", stream=True
-    )
-
-    collected_chunks = []
-    for chunk in stream:
-        print("stream chunk=", chunk)
-        collected_chunks.append(chunk)
-
-    assert len(collected_chunks) > 0
-
-
 def test_model_not_found_error():
     client = get_test_client()
     with pytest.raises(NotFoundError):

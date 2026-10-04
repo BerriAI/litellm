@@ -3,17 +3,27 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
+import { HeaderActions } from "@/components/lens/HeaderActions";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
 import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
+import {
+  type TraceRef,
+  traceKey,
+  traceRefOf,
+  useOpenTraceRouting,
+  useRunFilterRouting,
+  useZoomRouting,
+} from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
-import { previewText } from "./traceUtils";
+import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { ActiveDot } from "./ActiveDot";
 import { TracingSetupCard } from "./TracingSetupCard";
+import { useTracesLive } from "./tracesApi";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
 /** Client-side search (input text or trace id) plus agent / status filters over the loaded runs. */
@@ -27,14 +37,12 @@ export function filterRuns(
   return runs.filter((run) => {
     const haystack = [run.trace_id, previewText(run.input_preview), run.name].map((s) => s.toLowerCase());
     const matchesQuery = !q || haystack.some((text) => text.includes(q));
-    const matchesAgent = agent === ALL_AGENTS || run.service === agent;
+    const matchesAgent = agent === ALL_AGENTS || traceAgentNames(run).includes(agent);
     const failed = run.error_count > 0;
     const matchesStatus = status === "all" || (status === "error" ? failed : !failed);
     return matchesQuery && matchesAgent && matchesStatus;
   });
 }
-
-const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -57,8 +65,6 @@ interface AgentTracesSectionProps {
   isLiveTail: boolean;
   /** Page-owned time range + live state; when given, the toolbar shows the range / Live control group. */
   timeControls?: TimeControls;
-  /** Called when a run opens / closes, so the page can hide its own header while a run fills the view. */
-  onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
 }
@@ -99,16 +105,14 @@ export function AgentTracesSection({
   isCustomDate,
   isLiveTail,
   timeControls,
-  onRunOpenChange,
   readOnly = false,
   canMintTracingKey = false,
 }: AgentTracesSectionProps) {
-  const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
-  const [query, setQuery] = useState("");
-  const [agent, setAgent] = useState(ALL_AGENTS);
-  const [status, setStatus] = useState<RunStatusFilter>("all");
+  const live = useTracesLive();
+  const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
+  const { query, agent, status, setQuery, setAgent, setStatus } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
-  const [zoom, setZoom] = useState<TimeWindow | null>(null);
+  const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
   const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive };
   const traces = useAgentTraces(traceQuery);
@@ -121,7 +125,7 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  const agents = useMemo(() => Array.from(new Set(traces.traces.map((t) => t.service))).sort(), [traces.traces]);
+  const agents = useMemo(() => Array.from(new Set(traces.traces.flatMap(traceAgentNames))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
   const range = useMemo(
@@ -140,16 +144,11 @@ export function AgentTracesSection({
     apply(hours);
   };
 
-  const openRun = (trace: TraceSummary | null) => {
-    setOpenTrace(trace);
-    onRunOpenChange?.(trace !== null);
-  };
-
   const openSentTrace = (trace: TraceSummary) => {
     setShowSetup(false);
     setRangeChanged(true);
     checkTraces();
-    openRun(trace);
+    openRun(traceRefOf(trace));
   };
   const setupProps = {
     accessToken,
@@ -179,18 +178,25 @@ export function AgentTracesSection({
     );
   }
 
-  const toggleRun = (trace: TraceSummary | null) =>
-    openRun(trace !== null && openTrace !== null && runKey(trace) === runKey(openTrace) ? null : trace);
+  const toggleRun = (trace: TraceSummary | null) => {
+    const ref: TraceRef | null = trace && traceRefOf(trace);
+    openRun(ref !== null && openTrace !== null && traceKey(ref) === traceKey(openTrace) ? null : ref);
+  };
 
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
-      {setup.received && (
-        <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
-          Traces received. Select a run to inspect it.
-        </p>
-      )}
-      <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
+      <TracesReceived received={setup.received} />
+      <TracingSetupAction live={live} isActive={isActive} onClick={() => setShowSetup(true)} />
+      <RunDrawer
+        trace={openTrace}
+        runs={runs}
+        accessToken={accessToken}
+        selection={selection}
+        onSelect={openRun}
+        fullScreen={fullScreen}
+        onFullScreenChange={setFullScreen}
+      />
       <RunsToolbar
         query={query}
         agent={agent}
@@ -200,19 +206,19 @@ export function AgentTracesSection({
         onAgentChange={setAgent}
         onStatusChange={setStatus}
       >
-        <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-          <ActiveDot />
-          Set up tracing
-        </Button>
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}
             rangeHours={timeControls.rangeHours}
             onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
             live={isLiveTail}
+            showLive={live}
             onLiveChange={timeControls.onLiveChange}
-            zoomed={zoom !== null}
-            onResetZoom={() => setZoom(null)}
+            onRefresh={() => {
+              setZoom(null);
+              checkTraces();
+            }}
+            refreshing={traces.isFetching}
           />
         )}
       </RunsToolbar>
@@ -222,9 +228,11 @@ export function AgentTracesSection({
         isLoading={traces.isLoading || (checkHistory && history.isLoading)}
         error={traces.error}
         hasMore={traces.hasMore}
+        isFetching={traces.isFetching}
+        onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}
-        selectedKey={openTrace === null ? null : runKey(openTrace)}
+        selectedKey={openTrace === null ? null : traceKey(openTrace)}
       />
       <RunsFooter
         count={runs.length}
@@ -234,6 +242,27 @@ export function AgentTracesSection({
         onResetZoom={() => setZoom(null)}
       />
     </div>
+  );
+}
+
+function TracingSetupAction({ live, isActive, onClick }: { live: boolean; isActive: boolean; onClick: () => void }) {
+  if (!live || !isActive) return null;
+  return (
+    <HeaderActions>
+      <Button variant="outline" size="sm" onClick={onClick} className="shrink-0 gap-1.5">
+        <ActiveDot />
+        Set up tracing
+      </Button>
+    </HeaderActions>
+  );
+}
+
+function TracesReceived({ received }: { received: boolean }) {
+  if (!received) return null;
+  return (
+    <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
+      Traces received. Select a run to inspect it.
+    </p>
   );
 }
 

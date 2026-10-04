@@ -45,8 +45,7 @@ mod _native {
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
     use crate::routes::traces::{
-        NativeTraceStorage, trace_decode_otlp, trace_encode_error,
-        trace_normalized_field_definitions,
+        NativeTraceConfig, NativeTraceStorage, trace_encode_error, trace_span_rows,
     };
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
@@ -112,10 +111,10 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "NativeTraceConfig",
                 "NativeTraceStorage",
-                "trace_decode_otlp",
                 "trace_encode_error",
-                "trace_normalized_field_definitions",
+                "trace_span_rows",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

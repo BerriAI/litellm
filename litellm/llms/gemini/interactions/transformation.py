@@ -313,6 +313,12 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
+        if not 200 <= raw_response.status_code < 300:
+            raise GeminiError(
+                message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),
+            )
         try:
             raw_json: Final = _interaction_body(raw_response)
         except Exception:

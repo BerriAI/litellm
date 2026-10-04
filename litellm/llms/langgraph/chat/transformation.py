@@ -288,6 +288,7 @@ class LangGraphConfig(BaseConfig):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for synchronous streaming.
@@ -349,6 +350,7 @@ class LangGraphConfig(BaseConfig):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for asynchronous streaming.

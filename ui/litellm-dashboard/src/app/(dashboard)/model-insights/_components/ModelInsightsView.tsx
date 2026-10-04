@@ -1,5 +1,6 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
 import React from "react";
 import { Bar, BarChart, CartesianGrid, Treemap, XAxis, YAxis } from "recharts";
 import { ArrowDownRight, ArrowUpRight, BarChart3, Layers, Minus } from "lucide-react";
@@ -7,7 +8,7 @@ import { ArrowDownRight, ArrowUpRight, BarChart3, Layers, Minus } from "lucide-r
 import { apiClient } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
@@ -210,12 +211,16 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   ) satisfies ChartConfig;
 
   return (
-    <main className="w-full space-y-6 p-8">
-      <PageHeader
-        icon={<BarChart3 />}
-        title="Model Leaderboard"
-        subtitle={`See which models your gateway used from ${data.start_date} through ${data.end_date}`}
-      />
+    <Page>
+      <PageHeader>
+        <PageHeaderTitle>
+          <BarChart3 />
+          Model Leaderboard
+        </PageHeaderTitle>
+        <PageHeaderDescription>
+          See which models your gateway used from {data.start_date} through {data.end_date}
+        </PageHeaderDescription>
+      </PageHeader>
 
       <Card aria-busy={isStale} className={isStale ? "opacity-60 transition-opacity" : "transition-opacity"}>
         <CardHeader className="flex-row items-start justify-between space-y-0">
@@ -257,7 +262,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
         </CardHeader>
         <CardContent>
           <ChartContainer config={chartConfig} className="h-[380px] w-full aspect-auto">
-            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap={2}>
+            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap="15%" maxBarSize={64}>
               <CartesianGrid vertical={false} />
               <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
               <YAxis
@@ -375,6 +380,6 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           </p>
         </CardContent>
       </Card>
-    </main>
+    </Page>
   );
 }
