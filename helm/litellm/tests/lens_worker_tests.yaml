@@ -6,6 +6,35 @@ templates:
 values:
   - ./values/required.yaml
 tests:
+  - it: pins the worker to its approved digest even when its tag changes
+    template: lens/deployment.yaml
+    set:
+      lensWorker.enabled: true
+      lensWorker.tokenSecret.name: lens-credential
+      lensWorker.image.tag: replaced-release
+      lensWorker.image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-lens-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - it: advertises the approved digest to standalone installers
+    template: backend/deployment.yaml
+    set:
+      lensWorker.image.tag: replaced-release
+      lensWorker.image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LENS_WORKER_IMAGE
+            value: ghcr.io/berriai/litellm-lens-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - it: refuses a malformed digest instead of falling back to the tag
+    template: backend/deployment.yaml
+    set:
+      lensWorker.image.digest: sha256:invalid
+    asserts:
+      - failedTemplate:
+          errorMessage: lensWorker.image.digest must be sha256 followed by 64 lowercase hex characters
   - it: keeps the worker opt in
     template: lens/deployment.yaml
     asserts:
