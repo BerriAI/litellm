@@ -252,7 +252,18 @@ export function reportPeople(snapshot: ObservedSnapshot, matchedOnly: boolean): 
   const unmatchedGroups = (period: Period) => {
     const urls = new Set(snapshot.people.flatMap((person) => person.periods[period].pr_urls));
     const pulls = snapshot.pulls[period].filter((pull) => !urls.has(pull.url) && ownerLogin(pull));
-    return Map.groupBy(pulls, accountKey);
+    const sorted = pulls
+      .map((pull) => ({ key: accountKey(pull), pull }))
+      .toSorted((a, b) => a.key.localeCompare(b.key));
+    const starts = sorted.flatMap((entry, index) =>
+      index === 0 || entry.key !== sorted[index - 1].key ? [index] : [],
+    );
+    return new Map(
+      starts.map((start, index) => [
+        sorted[start].key,
+        sorted.slice(start, starts[index + 1]).map((entry) => entry.pull),
+      ]),
+    );
   };
   const groups = {
     current: unmatchedGroups("current"),

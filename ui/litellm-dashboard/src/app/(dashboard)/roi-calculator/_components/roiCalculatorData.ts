@@ -62,7 +62,7 @@ export const estimateLabel = (estimate: ROIEstimate): string => {
 
 const matchedMethods = new Set(["manual", "commit email", "profile email"]);
 export const isMatchedPerson = (person: ROIPerson) =>
-  Boolean(person.email) && person.match_methods.some((method) => matchedMethods.has(method));
+  Boolean(person.email) && (person.spend !== null || person.match_methods.some((method) => matchedMethods.has(method)));
 export const isMatchedPull = (pull: ROIPull) => Boolean(pull.email) && matchedMethods.has(pull.match_method);
 
 export const filterPulls = (pulls: ROIPull[], query: string, matchedOnly = false): ROIPull[] => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   change,
   duration,
@@ -32,6 +32,20 @@ const person = (name: string, merged: number, spend: number | null): ObservedPer
 });
 
 describe("observed ROI metrics", () => {
+  it("shows the same contributors when the browser has no Map.groupBy", () => {
+    const sample = { ...createObservedDemo(7), people: [] };
+    const expected = reportPeople(sample, false);
+    const legacyMap = new Proxy(Map, {
+      get: (target, key, receiver) => (key === "groupBy" ? undefined : Reflect.get(target, key, receiver)),
+    });
+    vi.stubGlobal("Map", legacyMap);
+    try {
+      expect(reportPeople(sample, false)).toEqual(expected);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("filters by attributed changes across providers, independently of spend or author names", () => {
     const sample = createObservedDemo(7);
     const external = {

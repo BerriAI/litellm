@@ -45,6 +45,28 @@ const summary = {
 };
 
 describe("ROI calculator display helpers", () => {
+  it.each([0, 8.5])("retains internal accounts with %s recorded spend and no changes in the filtered CSV", (spend) => {
+    const internal: ROIPerson = {
+      id: "internal@example.test",
+      email: "internal@example.test",
+      logins: [],
+      spend,
+      hours: 0,
+      prs: 0,
+      estimated_prs: 0,
+      pending_prs: 0,
+      match_methods: [],
+      eligible: false,
+      cost_per_hour: null,
+    };
+    const external = { ...internal, id: "outside", email: "", spend: null, logins: ["outside"] };
+    const people = [internal, external].filter(isMatchedPerson);
+    expect(people).toEqual([internal]);
+    const report = { start: "2026-09-01", end: "2026-09-30", effort_basis: "without_ai", people };
+    expect(peopleCsv(report)).toContain(`"internal@example.test","","${spend}","0","0"`);
+    expect(peopleCsv(report)).not.toContain("outside");
+  });
+
   it("keeps linked identities without spend or estimates and excludes unrelated tagged spend", () => {
     const manual = pull({ match_method: "manual", matched: false });
     const external = pull({

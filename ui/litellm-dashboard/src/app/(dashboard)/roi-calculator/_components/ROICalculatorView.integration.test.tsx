@@ -156,11 +156,24 @@ describe("ROICalculatorView", () => {
       matched: false,
     };
     const linkedPerson = { ...summary.people[0], spend: null, match_methods: ["manual"], eligible: false };
+    const spendOnlyPerson = {
+      ...summary.people[0],
+      id: "internal@example.test",
+      email: "internal@example.test",
+      logins: [],
+      spend: 8.5,
+      prs: 0,
+      match_methods: [],
+      estimated_prs: 0,
+      hours: 0,
+      eligible: false,
+      cost_per_hour: null,
+    };
     const linkedPull = { ...summary.pulls[0], matched: false, match_method: "manual" };
     const report = {
       ...summary,
       source_provider: provider,
-      people: [linkedPerson, outsidePerson],
+      people: [linkedPerson, spendOnlyPerson, outsidePerson],
       pulls: [linkedPull, outsidePull],
     };
     vi.mocked(apiClient.get).mockImplementation((path: string) => {
@@ -173,6 +186,7 @@ describe("ROICalculatorView", () => {
     await user.click(await screen.findByRole("tab", { name: "People" }));
     expect(screen.getByRole("switch", { name: "Matched people only" })).toBeChecked();
     expect(screen.getByRole("button", { name: "alice" })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /internal@example.test/ })).toHaveTextContent("$8.50");
     expect(screen.queryByRole("button", { name: "outside" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("switch", { name: "Matched people only" }));
     expect(screen.getByRole("button", { name: "outside" })).toBeInTheDocument();
