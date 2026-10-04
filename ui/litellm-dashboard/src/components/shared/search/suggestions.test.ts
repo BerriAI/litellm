@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type Note, note, NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
+import { EXACT_NOTE_QUERY, type Note, note, NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
 import { fieldValues } from "./evaluate";
 import { completingField, completingPrefix, suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
 import type { FieldValues } from "./valueSource";
@@ -84,6 +84,16 @@ describe("suggest", () => {
     expect(menu?.groups).toEqual([]);
     expect(menu?.showOperators).toBe(true);
     expect(atEnd("body:x")).toBeNull();
+  });
+
+  it("skips the operator help and the negated key for an equality-only language", () => {
+    const exact = (text: string) => suggest(EXACT_NOTE_QUERY, text, text.length, lookupIn(notes));
+    expect(exact("tag:")?.showOperators).toBe(false);
+    expect(labels(exact("tag:"))).toEqual(["billing", "cron", "researcher", "triage"]);
+    expect(exact("-ta")).toBeNull();
+    expect(completingPrefix(EXACT_NOTE_QUERY, "tag:a*", 6)).toBe("a*");
+    expect(completingPrefix(NOTE_QUERY, "tag:a*", 6)).toBe("a");
+    expect(labels(exact("tag:*"))).toEqual([]);
   });
 
   it("offers fields in the gap between tokens, but nothing mid-token", () => {

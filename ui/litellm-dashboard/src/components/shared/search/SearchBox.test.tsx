@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
+import type { QueryLanguage } from "./language";
 import { SearchBox } from "./SearchBox";
 import type { SearchQuery } from "./searchQuery";
 import { itemValues, type ValueSource } from "./valueSource";
@@ -35,13 +36,15 @@ function NoteSearch({
   value,
   onChange,
   values = itemValues(NOTE_INDEX, notes),
+  language = NOTE_QUERY,
 }: {
   value: string;
   onChange: (value: string) => void;
   values?: ValueSource<NoteField>;
+  language?: QueryLanguage<NoteField>;
 }) {
   return (
-    <SearchBox.Root language={NOTE_QUERY} values={values} value={value} onValueChange={onChange} label="Search notes">
+    <SearchBox.Root language={language} values={values} value={value} onValueChange={onChange} label="Search notes">
       <SearchBox.Input placeholder="Search notes" />
       <SearchBox.Suggestions />
     </SearchBox.Root>
@@ -114,6 +117,18 @@ describe("SearchBox", () => {
     });
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(box()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("explains only the operators the language honors", async () => {
+    const user = userEvent.setup();
+    const negationOnly = { ...NOTE_QUERY, ops: { negation: true, wildcard: false } };
+    render(<NoteSearch value="" onChange={vi.fn()} language={negationOnly} />);
+    await user.click(box());
+    await user.keyboard("tag:");
+    expect(within(listbox()).getByText("Comparison operators")).toBeVisible();
+    expect(within(listbox()).getByText("not equals")).toBeVisible();
+    expect(within(listbox()).queryByText("wildcard match")).not.toBeInTheDocument();
+    expect(within(listbox()).queryByText("does not contain")).not.toBeInTheDocument();
   });
 
   it("wraps arrow navigation and picks with Tab", async () => {

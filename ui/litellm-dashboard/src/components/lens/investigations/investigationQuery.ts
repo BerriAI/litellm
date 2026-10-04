@@ -1,7 +1,7 @@
 import { Bot, CalendarClock, CircleDashed, SquareChevronRight } from "lucide-react";
 
 import { type ClientIndex, filterItems } from "@/components/shared/search/evaluate";
-import type { FieldSpec, QueryLanguage } from "@/components/shared/search/language";
+import { ALL_OPERATORS, type FieldSpec, type QueryLanguage } from "@/components/shared/search/language";
 import { scopeLabel } from "../model/format";
 import type { Lens } from "../model/types";
 
@@ -14,7 +14,10 @@ const INVESTIGATION_FIELDS = {
 
 export type InvestigationField = keyof typeof INVESTIGATION_FIELDS;
 
-export const INVESTIGATION_QUERY: QueryLanguage<InvestigationField> = { fields: INVESTIGATION_FIELDS };
+export const INVESTIGATION_QUERY: QueryLanguage<InvestigationField> = {
+  fields: INVESTIGATION_FIELDS,
+  ops: ALL_OPERATORS,
+};
 
 export const INVESTIGATION_INDEX: ClientIndex<Lens, InvestigationField> = {
   read: {
