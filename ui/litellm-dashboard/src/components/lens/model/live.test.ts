@@ -222,8 +222,8 @@ describe("which job the live run shows", () => {
     expect(liveJob([job("new", "running", [review("a")]), job("old", "completed", [review("b")])])?.id).toBe("new");
   });
 
-  it("shows nothing for an active job with no reviews yet, even if an older job has some", () => {
-    expect(liveJob([job("new", "queued", []), job("old", "completed", [review("b")])])).toBeUndefined();
+  it("shows an active job before its first review so the wait is explained", () => {
+    expect(liveJob([job("new", "queued", []), job("old", "completed", [review("b")])])?.id).toBe("new");
   });
 
   it("keeps the latest finished job viewable only when it has reviews", () => {

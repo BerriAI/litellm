@@ -32,7 +32,7 @@ const REPLAY_ON_OPEN = 3;
 
 export function liveJob(jobs: readonly Job[]): Job | undefined {
   const active = jobs.find((job) => job.status === "queued" || job.status === "running");
-  if (active) return active.reviews.length ? active : undefined;
+  if (active) return active;
   const latest = jobs[0];
   return latest?.reviews.length ? latest : undefined;
 }
