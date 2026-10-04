@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Aperture } from "lucide-react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { DemoNotice } from "@/components/shared/DemoNotice";
@@ -28,21 +27,10 @@ export function LensWorkspace(props: WorkspaceProps) {
 
 function DemoSession({ initialTab, onExit }: { initialTab: Tab; onExit: () => void }) {
   const [demo] = useState(createLensDemo);
-  const [client] = useState(
-    () => new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } }),
-  );
-  useEffect(
-    () => () => {
-      client.clear();
-    },
-    [client],
-  );
   return (
     <LensServicesContext.Provider value={demo.services}>
       <LensDemoContext.Provider value={demo}>
-        <QueryClientProvider client={client}>
-          <LensContent accessToken="lens-demo" userRole="" readOnly initialTab={initialTab} onExit={onExit} />
-        </QueryClientProvider>
+        <LensContent accessToken="lens-demo" userRole="" readOnly initialTab={initialTab} onExit={onExit} />
       </LensDemoContext.Provider>
     </LensServicesContext.Provider>
   );
