@@ -66,6 +66,8 @@ describe("bulkMemberLimitsSchema", () => {
     ["a non-numeric budget", { max_budget_in_team: { change: true, value: "12e" } }],
     ["a fractional TPM limit", { tpm_limit: { change: true, value: "1.5" } }],
     ["a negative RPM limit", { rpm_limit: { change: true, value: "-3" } }],
+    ["an RPM limit too large to send exactly", { rpm_limit: { change: true, value: "9007199254740993" } }],
+    ["a TPM limit that overflows to Infinity", { tpm_limit: { change: true, value: "9".repeat(400) } }],
   ] as const)("rejects %s", (_, fields) => {
     expect(bulkMemberLimitsSchema.safeParse(withFields(fields)).success).toBe(false);
   });

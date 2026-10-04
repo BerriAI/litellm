@@ -193,6 +193,7 @@ describe("TeamMembersComponent", () => {
       handleMemberDelete: mockHandleMemberDelete,
       onMemberSpendReset: mockOnMemberSpendReset,
       onMemberBudgetReset: mockOnMemberBudgetReset,
+      onMembersBulkUpdated: mockOnMembersBulkUpdated,
       setSelectedEditMember: mockSetSelectedEditMember,
       setIsEditMemberModalVisible: mockSetIsEditMemberModalVisible,
       setIsAddMemberModalVisible: mockSetIsAddMemberModalVisible,
@@ -740,9 +741,28 @@ describe("TeamMembersComponent", () => {
       );
 
       const row = screen.getByRole("row", { name: /user2@test\.com/ });
-      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Custom");
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Team default");
+      expect(within(row).queryByTestId("reset-member-budget")).not.toBeInTheDocument();
       expect(row).toHaveTextContent("$20.00");
       expect(row).not.toHaveTextContent("Unlimited");
+    });
+
+    it("shows no budget source for a member whose private row has no budget limit when the team has no default", () => {
+      const base = createMockTeamData();
+      renderTab(
+        createMockTeamData({
+          team_memberships: [
+            {
+              ...base.team_memberships[0],
+              litellm_budget_table: { ...base.team_memberships[0].litellm_budget_table, max_budget: null },
+            },
+          ],
+        }),
+      );
+
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      expect(within(row).queryByTestId("member-budget-source")).not.toBeInTheDocument();
+      expect(row).toHaveTextContent("Unlimited");
     });
 
     it("shows no source label for a member with neither a custom nor a team budget", () => {
@@ -867,7 +887,9 @@ describe("TeamMembersComponent", () => {
       expect(submit).toBeDisabled();
 
       await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member Budget (USD)" }));
-      await user.type(within(dialog).getByRole("textbox", { name: /Team Member Budget/ }), "50");
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member Budget/ }), {
+        target: { value: "50" },
+      });
       await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member TPM Limit" }));
       await user.click(submit);
 
@@ -900,7 +922,9 @@ describe("TeamMembersComponent", () => {
 
       const dialog = await openBulkEditForBothMembers(user);
       await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member RPM Limit" }));
-      await user.type(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), "10");
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), {
+        target: { value: "10" },
+      });
       await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
 
       await waitFor(() => expect(mockOnMembersBulkUpdated).toHaveBeenCalledTimes(1));
@@ -919,7 +943,9 @@ describe("TeamMembersComponent", () => {
 
       const dialog = await openBulkEditForBothMembers(user);
       await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member TPM Limit" }));
-      await user.type(within(dialog).getByRole("textbox", { name: /Team Member TPM Limit/ }), "1.5");
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member TPM Limit/ }), {
+        target: { value: "1.5" },
+      });
       await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
 
       expect(await within(dialog).findByText(/Enter a whole number/)).toBeVisible();
@@ -934,7 +960,9 @@ describe("TeamMembersComponent", () => {
 
       const dialog = await openBulkEditForBothMembers(user);
       await user.click(within(dialog).getByRole("checkbox", { name: "Change Team Member RPM Limit" }));
-      await user.type(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), "10");
+      fireEvent.change(within(dialog).getByRole("textbox", { name: /Team Member RPM Limit/ }), {
+        target: { value: "10" },
+      });
       await user.click(within(dialog).getByRole("button", { name: "Update 2 members" }));
 
       await waitFor(() => expect(toast.fromError).toHaveBeenCalledWith("Only team admins can update member budgets"));

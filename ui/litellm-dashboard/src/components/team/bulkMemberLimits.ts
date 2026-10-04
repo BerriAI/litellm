@@ -5,8 +5,6 @@ import type { components } from "@/lib/http/schema";
 export type TeamMemberBudgetPatch = components["schemas"]["TeamMemberBudgetPatch"];
 export type MemberLimitsPatch = Omit<TeamMemberBudgetPatch, "user_id" | "user_email">;
 
-export const MAX_BULK_MEMBER_UPDATES = 500;
-
 const blankToNull = (value: string): string | null => (value === "" ? null : value);
 
 const amount = z
@@ -20,7 +18,7 @@ const amount = z
 const count = z
   .string()
   .trim()
-  .refine((value) => value === "" || /^\d+$/.test(value), {
+  .refine((value) => value === "" || (/^\d+$/.test(value) && Number.isSafeInteger(Number(value))), {
     message: "Enter a whole number of 0 or more, or leave blank to clear",
   })
   .transform((value) => (value === "" ? null : Number(value)));

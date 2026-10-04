@@ -19,6 +19,7 @@ import { CircleHelp, Pencil } from "lucide-react";
 import { useState, type ComponentProps } from "react";
 import BulkEditMembersDialog from "./BulkEditMembersDialog";
 import { buildBulkMemberPatches, type MemberLimitsPatch } from "./bulkMemberLimits";
+import { hasCustomMaxBudget } from "./memberBudgetReset";
 import { TeamData, TeamMemberBudgetSource, TeamMembership } from "./TeamInfo";
 
 const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, string> = {
@@ -115,7 +116,9 @@ export default function TeamMemberTab({
   const getUserBudgetSource = (userId: string | null): TeamMemberBudgetSource => {
     if (!userId) return "none";
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.budget_source ?? "none";
+    if (membership === undefined) return "none";
+    if (membership.budget_source !== "custom" || hasCustomMaxBudget(membership)) return membership.budget_source;
+    return teamData.team_info.team_member_budget_table ? "team_default" : "none";
   };
 
   const getUserBudget = (userId: string | null): number | null => {

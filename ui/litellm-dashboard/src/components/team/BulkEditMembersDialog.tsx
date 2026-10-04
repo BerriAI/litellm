@@ -17,11 +17,11 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import {
   bulkMemberLimitsSchema,
   EMPTY_BULK_MEMBER_LIMITS,
-  MAX_BULK_MEMBER_UPDATES,
   type BulkMemberLimitField,
   type BulkMemberLimitsFormValues,
   type MemberLimitsPatch,
 } from "./bulkMemberLimits";
+import { MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES } from "./memberBudgetReset";
 
 const PREVIEW_COUNT = 3;
 
@@ -88,7 +88,7 @@ function BulkEditMembersForm({
   const form = useZodForm(bulkMemberLimitsSchema, { defaultValues: EMPTY_BULK_MEMBER_LIMITS });
   const values = useWatch({ control: form.control });
   const anyChange = Object.values(values).some((field) => field?.change === true);
-  const tooMany = members.length > MAX_BULK_MEMBER_UPDATES;
+  const tooMany = members.length > MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES;
   const clearHint = (enabled: boolean, what: string) => (enabled ? `Leave blank to clear ${what}` : undefined);
   const modelOptions = teamModels.map((model) => ({ label: model, value: model }));
   const preview = members.slice(0, PREVIEW_COUNT).map(memberName).join(", ");
@@ -189,7 +189,7 @@ function BulkEditMembersForm({
       </FieldGroup>
       {tooMany && (
         <p className="mt-4 text-sm text-destructive" role="alert">
-          Select at most {MAX_BULK_MEMBER_UPDATES} members at a time. {members.length} are selected.
+          Select at most {MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES} members at a time. {members.length} are selected.
         </p>
       )}
       <div className="mt-6 flex justify-end gap-2">
