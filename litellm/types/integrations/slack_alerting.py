@@ -1,6 +1,6 @@
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime as dt
 from enum import Enum
 from typing import Annotated, Final
@@ -83,9 +83,7 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
 
     @field_validator("budget_alert_thresholds")
     @classmethod
-    def validate_budget_alert_thresholds(
-        cls, thresholds: list[int] | None
-    ) -> list[int] | None:  # mutable-ok: preserve Pydantic's validated list and JSON schema
+    def validate_budget_alert_thresholds(cls, thresholds: Sequence[int] | None) -> Sequence[int] | None:
         if thresholds is not None and len(thresholds) != len(set(thresholds)):
             raise ValueError("Budget alert thresholds must be unique")
         return thresholds

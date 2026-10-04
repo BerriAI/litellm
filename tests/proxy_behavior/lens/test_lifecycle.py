@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import TypeAdapter
 
@@ -29,13 +29,15 @@ from litellm.proxy.lens.models import (
     Scope,
     Worker,
 )
+from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag
 from litellm.proxy.lens.repository import Database, LensRepository, Row
 from litellm.proxy.lens.state import can_access
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
 @pytest_asyncio.fixture(loop_scope="function")
-async def lens_database() -> AsyncIterator[PrismaClient]:
+async def lens_database(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[PrismaClient]:
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v0.0.0-lens-lifecycle")
     original_db: Final = proxy_server.prisma_client
     original_router: Final = proxy_server.llm_router
     original_settings: Final = proxy_server.general_settings
@@ -57,6 +59,18 @@ async def lens_database() -> AsyncIterator[PrismaClient]:
                     "model": "openai/lens-test-analysis",
                     "api_key": "test-only",
                     "mock_response": '{"observations":[]}',
+                    "max_tokens": 16384,
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+            },
+            {
+                "model_name": "lens-failing-analysis",
+                "litellm_params": {
+                    "model": "openai/lens-failing-analysis",
+                    "api_key": "test-only",
+                    "mock_response": "litellm.RateLimitError",
+                    "max_tokens": 16384,
                     "input_cost_per_token": 0.000001,
                     "output_cost_per_token": 0.000002,
                 },
@@ -273,6 +287,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
                     "client": ("127.0.0.1", 1234),
                 }
             ),
+            response=Response(),
         )
         assert '"observations"' in response.content
         with pytest.raises(HTTPException) as denied_ip:
@@ -290,6 +305,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
                         "client": ("192.0.2.1", 1234),
                     }
                 ),
+                response=Response(),
             )
         assert denied_ip.value.status_code == 403
         forwarded: Final = await endpoints.model(
@@ -306,6 +322,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
                     "client": ("192.0.2.100", 1234),
                 }
             ),
+            response=Response(),
         )
         assert '"observations"' in forwarded.content
         with pytest.raises(HTTPException) as spoofed_chain:
@@ -323,6 +340,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
                         "client": ("192.0.2.100", 1234),
                     }
                 ),
+                response=Response(),
             )
         assert spoofed_chain.value.status_code == 403
         charged: Final = await endpoints.get_lens(lens.id, worker.scope)
@@ -333,8 +351,9 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         authenticated_legacy: Final = await endpoints.worker_auth(credentials)
         assert authenticated_legacy.analysis_key_id is None
         with pytest.raises(HTTPException) as needs_billing:
-            await endpoints.claim(authenticated_legacy, protocol_version=2)
+            await endpoints.claim(authenticated_legacy, protocol_version=PROTOCOL_VERSION, worker_release=release_tag())
         assert needs_billing.value.status_code == 409
+        assert "Assign an analysis key" in needs_billing.value.detail
         assert await endpoints.heartbeat(lens.id, claimed.job.id, authenticated_legacy)
         finished: Final = await endpoints.result(
             lens.id, claimed.job.id, Result(coverage=Coverage(screened=2)), authenticated_legacy, storage=None
@@ -382,6 +401,50 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         with pytest.raises(HTTPException) as foreign:
             await endpoints.get_lens(lens.id, endpoints.Scope(team_id="other"))
         assert foreign.value.status_code == 404
+    finally:
+        await lens_database.db.execute_raw('DELETE FROM "LiteLLM_LensRun" WHERE lens_id=$1', lens.id)
+        await lens_database.db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)
+        await lens_database.db.execute_raw('DELETE FROM "LiteLLM_LensWorker" WHERE id=$1', worker.id)
+        await lens_database.db.execute_raw('DELETE FROM "LiteLLM_VerificationToken" WHERE token=$1', key_id)
+
+
+@pytest.mark.asyncio
+async def test_failed_model_requests_release_lens_budget_reservations(lens_database: PrismaClient) -> None:
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    settings: Final = LensSettings(
+        name="Failed billing regression", model="lens-failing-analysis", context="Verify outcomes", enabled=False
+    )
+    lens: Final = await endpoints.create_lens(settings, admin)
+    key_id: Final = hashlib.sha256(uuid4().bytes).hexdigest()
+    await lens_database.db.litellm_verificationtoken.create(data={"token": key_id, "models": [settings.model]})
+    registration: Final = await endpoints.register_worker(endpoints.WorkerName(analysis_key_id=key_id), admin)
+    worker: Final = registration.worker
+    try:
+        claimed: Final = await endpoints.claim_candidate(lens, worker, datetime.now(timezone.utc))
+        assert claimed is not None
+        for _ in range(3):
+            with pytest.raises(HTTPException) as failed:
+                await endpoints.model(
+                    lens.id,
+                    claimed.job.id,
+                    ModelRequest(prompt="Return JSON", purpose="extract"),
+                    worker,
+                    Request(
+                        {
+                            "type": "http",
+                            "scheme": "http",
+                            "path": "/lens/worker/model",
+                            "headers": [],
+                            "client": ("127.0.0.1", 1234),
+                        }
+                    ),
+                    response=Response(),
+                )
+            assert failed.value.status_code == 429
+        stored: Final = await endpoints.get_lens(lens.id, worker.scope)
+        assert stored.spent == 0
+        assert stored.jobs[0].cost == 0
+        assert not any(step.kind == "model" for step in stored.jobs[0].steps)
     finally:
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_LensRun" WHERE lens_id=$1', lens.id)
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)

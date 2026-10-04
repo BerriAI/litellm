@@ -2234,3 +2234,5 @@ HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
         ".ruff_cache",
     }
 )
+
+DEFAULT_TOOL_LOOP_MAX_ROUNDS: Final = 20

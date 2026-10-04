@@ -21,7 +21,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
-    log_db_metrics,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -289,7 +288,6 @@ class _ProxyDBLogger(CustomLogger):
             project_id=user_api_key_dict.project_id,
         )
 
-    @log_db_metrics
     async def _PROXY_track_cost_callback(
         self,
         kwargs,  # kwargs to completion

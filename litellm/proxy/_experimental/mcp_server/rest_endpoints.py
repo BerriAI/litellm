@@ -223,6 +223,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
+        ListedToolsCaller,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -555,7 +556,7 @@ if MCP_AVAILABLE:
             verbose_logger.warning("_prefetch_user_oauth_creds: failed to prefetch for user=%s: %s", user_id, e)
             return {}
 
-    def _create_tool_response_objects(tools, server: MCPServer):
+    def _create_tool_response_objects(tools: Sequence[MCPTool], server: MCPServer):
         """Helper function to create tool response objects.
 
         Enriches the server's ``mcp_info`` with ``server_id`` and ``alias`` so
@@ -569,9 +570,7 @@ if MCP_AVAILABLE:
         }
         return [
             ListMCPToolsRestAPIResponseObject(
-                name=tool.name,
-                description=tool.description,
-                inputSchema=tool.input_schema,
+                **tool.model_dump(by_alias=True, exclude={"mcp_info"}),
                 mcp_info=enriched_mcp_info,
             )
             for tool in tools
@@ -703,6 +702,8 @@ if MCP_AVAILABLE:
         extra_headers: dict[str, str] | None,
         client_ip: str | None,
         proxy_logging_obj: "ProxyLogging | None",
+        *,
+        record_listing: bool,
     ) -> list[MCPTool]:
         return await global_mcp_server_manager._get_tools_from_server(
             server=server,
@@ -713,11 +714,12 @@ if MCP_AVAILABLE:
             client_ip=client_ip,
             user_api_key_auth=user_api_key_auth,
             proxy_logging_obj=proxy_logging_obj,
+            record_listing=record_listing,
         )
 
     async def _get_tools_for_single_server(
-        server,
-        server_auth_header,
+        server: MCPServer,
+        server_auth_header: dict[str, str] | str | None,
         raw_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -733,31 +735,44 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        tools = await _list_server_tools(
-            server, server_auth_header, raw_headers, user_api_key_auth, extra_headers, client_ip, proxy_logging_obj
+        listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
+        tools: Final = await _list_server_tools(
+            server,
+            server_auth_header,
+            raw_headers,
+            user_api_key_auth,
+            extra_headers,
+            client_ip,
+            proxy_logging_obj,
+            record_listing=False,
         )
 
-        if not apply_tool_filters:
-            return _create_tool_response_objects(tools, server)
-
-        # Always apply allowed_tools/disallowed_tools so the blacklist is
-        # enforced even when no allowlist is set (matches the SSE/HTTP path).
-        tools = filter_tools_by_allowed_tools(tools, server)
-
-        # Filter by the key's effective tool permissions through the same
-        # function the MCP protocol path uses (direct grants, toolset grants,
-        # and team/agent/org ceilings), so REST listing cannot drift from it.
-        # Entries here are tool names on one server, written bare by every
-        # writer, and dispatch compares them bare; matching a wider set of
-        # spellings would advertise a tool that tools/call then refuses
-        if user_api_key_auth:
-            tools = await filter_tools_by_key_team_permissions(
-                tools=tools,
+        server_filtered: Final = filter_tools_by_allowed_tools(tools, server) if apply_tool_filters else tools
+        served_tools: Final = (
+            await filter_tools_by_key_team_permissions(
+                tools=server_filtered,
                 server_id=server.server_id,
                 user_api_key_auth=user_api_key_auth,
             )
+            if apply_tool_filters and user_api_key_auth
+            else server_filtered
+        )
+        if apply_tool_filters:
+            # Only a listing shaped for the caller's runtime view may set their
+            # listed-tools slot; the admin-only unfiltered configuration view
+            # must not warm it.
+            global_mcp_server_manager.record_listed_tools(
+                server,
+                served_tools,
+                ListedToolsCaller(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=server_auth_header,
+                    raw_headers=raw_headers,
+                ),
+                listed_generation,
+            )
 
-        return _create_tool_response_objects(tools, server)
+        return _create_tool_response_objects(served_tools, server)
 
     async def fetch_pinnable_tool_catalog(
         server: MCPServer, request: Request, user_api_key_dict: UserAPIKeyAuth
@@ -776,6 +791,7 @@ if MCP_AVAILABLE:
             await _get_user_oauth_extra_headers(server, user_api_key_dict),
             IPAddressUtils.get_mcp_client_ip(request),
             None,
+            record_listing=False,
         )
         scan: Final = await scan_tool_descriptions(
             apply_description_overrides(upstream, server), server, proxy_logging_obj, user_api_key_dict, raw_headers

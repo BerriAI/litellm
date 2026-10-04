@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
 )
 from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
 
 
@@ -543,6 +544,9 @@ def _extract_file_access_credentials(litellm_params: dict | None) -> dict:
             "max_retries",
             "_litellm_internal_model_credentials",
             *AWS_CREDENTIAL_KWARGS_KEYS,
+            # A federated deployment holds no api_key, so without these the fetch that reads a
+            # finished batch's output has nothing to authenticate with and its cost is never billed.
+            *sorted(ANTHROPIC_WIF_KWARGS_KEYS),
         )
         for key in credential_keys:
             if key in litellm_params:

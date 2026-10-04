@@ -60,10 +60,16 @@ export const estimateLabel = (estimate: ROIEstimate): string => {
   return "Needs review";
 };
 
-export const filterPulls = (pulls: ROIPull[], query: string): ROIPull[] => {
+const matchedMethods = new Set(["manual", "commit email", "profile email"]);
+export const isMatchedPerson = (person: ROIPerson) =>
+  Boolean(person.email) && (person.spend !== null || person.match_methods.some((method) => matchedMethods.has(method)));
+export const isMatchedPull = (pull: ROIPull) => Boolean(pull.email) && matchedMethods.has(pull.match_method);
+
+export const filterPulls = (pulls: ROIPull[], query: string, matchedOnly = false): ROIPull[] => {
   const normalized = query.trim().toLocaleLowerCase();
-  if (!normalized) return pulls;
-  return pulls.filter((pull) =>
+  const visible = matchedOnly ? pulls.filter(isMatchedPull) : pulls;
+  if (!normalized) return visible;
+  return visible.filter((pull) =>
     `${pull.title} ${pull.repo} ${pull.number} ${pull.login} ${pull.source_branch ?? ""}`
       .toLocaleLowerCase()
       .includes(normalized),
@@ -120,4 +126,26 @@ export const branchCostLabel = (pull: ROIPull): string => {
   if (pull.branch_cost.status === "ambiguous") return "Ambiguous branch";
   if (pull.branch_cost.status === "unattributed") return "No tagged requests";
   return formatMoney(pull.branch_cost.spend);
+};
+
+export const estimatorModelOptions = (settings: Pick<ROISettings, "available_models" | "estimator_models">) => {
+  const details = new Map(settings.estimator_models?.map((model) => [model.model_name, model]));
+  const isLuna = (name: string) => /(?:^|\/)gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?$/i.test(name);
+  return settings.available_models
+    .map((name) => {
+      const models = details.get(name)?.provider_models ?? [];
+      const recommended = models.length > 0 && models.every(isLuna);
+      const label = [...new Set(models.map((model) => (isLuna(model) ? "GPT-6 Luna" : model)))].join(", ") || name;
+      return {
+        value: name,
+        label,
+        sublabel: [recommended ? "Recommended" : "", label !== name ? `Gateway name: ${name}` : ""]
+          .filter(Boolean)
+          .join(" · "),
+        recommended,
+      };
+    })
+    .sort(
+      (left, right) => Number(right.recommended) - Number(left.recommended) || left.label.localeCompare(right.label),
+    );
 };

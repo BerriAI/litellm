@@ -74,12 +74,11 @@ async def test_tracing_config_automatically_logs_spend_without_callback_setting(
     from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
     from litellm.proxy.tracing_runtime import manage_tracing
     from litellm.tracing import TraceReceiver
-    from litellm.tracing.store import TraceStore
 
     storage: Final = MagicMock()
     storage.ensure_schema = AsyncMock()
     storage.insert_rows = AsyncMock()
-    receiver: Final = TraceReceiver(TraceStore(storage))
+    receiver: Final = TraceReceiver(storage)
 
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
@@ -3325,6 +3324,23 @@ async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_se
 # ---------------------------------------------------------------------------
 # ProxyConfig.decrypt_model_list_from_db
 # ---------------------------------------------------------------------------
+
+
+def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_empty(monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-decrypt-credentials-test-salt")
+    decrypted = ProxyConfig().decrypt_credentials(
+        {
+            "credential_name": "openai-wif",
+            "credential_values": {
+                "api_base": encrypt_value_helper(""),
+                "openai_service_account_id": encrypt_value_helper("user-1"),
+            },
+            "credential_info": {"custom_llm_provider": "openai"},
+        }
+    )
+    assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):

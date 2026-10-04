@@ -3,7 +3,7 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
-import type { LogEntry as SpendLogEntry } from "@/components/view_logs/columns";
+import type { LogEntry as SpendLogEntry } from "@/components/logs/types";
 import { LogViewer } from "./LogViewer";
 
 vi.mock("@/components/networking", async (importOriginal) => {
@@ -11,7 +11,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
   return { ...actual, uiSpendLogsCall: vi.fn() };
 });
 
-vi.mock("@/components/view_logs/LogDetailsDrawer", () => ({
+vi.mock("@/components/logs/detail", () => ({
   LogDetailsDrawer: function LogDetailsDrawerMock({
     open,
     logEntry,

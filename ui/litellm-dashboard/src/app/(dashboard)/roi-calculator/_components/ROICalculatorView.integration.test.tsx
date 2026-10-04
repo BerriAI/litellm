@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -134,6 +135,68 @@ describe("ROICalculatorView", () => {
       return Promise.resolve(idleStatus);
     });
     vi.mocked(apiClient.put).mockResolvedValue({ report: summary, identity_map: { alice: "alice@example.com" } });
+  });
+
+  it.each(["github", "gitlab"])("filters people and branches by linked accounts for %s", async (provider) => {
+    const outsidePerson = {
+      ...summary.people[0],
+      id: "outside",
+      email: "",
+      logins: ["outside"],
+      match_methods: ["no gateway match"],
+      spend: null,
+    };
+    const outsidePull = {
+      ...summary.pulls[0],
+      number: 43,
+      title: "External contribution",
+      login: "outside",
+      email: "",
+      match_method: "no gateway match",
+      matched: false,
+    };
+    const linkedPerson = { ...summary.people[0], spend: null, match_methods: ["manual"], eligible: false };
+    const spendOnlyPerson = {
+      ...summary.people[0],
+      id: "internal@example.test",
+      email: "internal@example.test",
+      logins: [],
+      spend: 8.5,
+      prs: 0,
+      match_methods: [],
+      estimated_prs: 0,
+      hours: 0,
+      eligible: false,
+      cost_per_hour: null,
+    };
+    const linkedPull = { ...summary.pulls[0], matched: false, match_method: "manual" };
+    const report = {
+      ...summary,
+      source_provider: provider,
+      people: [linkedPerson, spendOnlyPerson, outsidePerson],
+      pulls: [linkedPull, outsidePull],
+    };
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path.endsWith("/settings")) return Promise.resolve(settings);
+      if (path.endsWith("/report")) return Promise.resolve({ report });
+      return Promise.resolve(idleStatus);
+    });
+    const user = userEvent.setup();
+    render(<ROICalculatorView accessToken="token" />);
+    await user.click(await screen.findByRole("tab", { name: "People" }));
+    expect(screen.getByRole("switch", { name: "Matched people only" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "alice" })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /internal@example.test/ })).toHaveTextContent("$8.50");
+    expect(screen.queryByRole("button", { name: "outside" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    expect(screen.getByRole("button", { name: "outside" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Branches" }));
+    expect(screen.getByRole("switch", { name: "Matched people only" })).not.toBeChecked();
+    expect(screen.getByText("External contribution")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    expect(screen.queryByText("External contribution")).not.toBeInTheDocument();
+    expect(screen.getByText("Improve request routing")).toBeInTheDocument();
+    expect(apiClient.put).not.toHaveBeenCalled();
   });
 
   it("shows the spend summary and opens an accessible pull reasoning dialog", async () => {
@@ -281,6 +344,39 @@ describe("ROICalculatorView", () => {
     if (provider === "github") expect(load).toBeDisabled();
     else expect(load).toBeEnabled();
     expect(screen.getByRole("textbox", { name: "Repository name" })).toBeEnabled();
+  });
+
+  it("searches by the real model name and saves the selected gateway alias", async () => {
+    const user = userEvent.setup();
+    const modelSettings = {
+      ...settings,
+      available_models: ["estimator", "fast-estimator"],
+      estimator_models: [
+        { model_name: "estimator", provider_models: ["custom-model"] },
+        { model_name: "fast-estimator", provider_models: ["openai/gpt-6-luna"] },
+      ],
+    };
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(modelSettings);
+      if (path === "/roi-calculator/report") return Promise.resolve({ report: summary });
+      return Promise.resolve(idleStatus);
+    });
+    vi.mocked(apiClient.put).mockResolvedValue({ ...modelSettings, estimator_model: "fast-estimator" });
+    render(<ROICalculatorView accessToken="token" />);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    const search = screen.getByRole("combobox", { name: "Estimator model" });
+    await user.clear(search);
+    await user.type(search, "Luna");
+    expect(screen.queryByRole("option", { name: /custom-model/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: /GPT-6 Luna.*Recommended/ }));
+    expect(search).toHaveValue("GPT-6 Luna");
+    await user.click(screen.getByRole("button", { name: "Save settings" }));
+    expect(apiClient.put).toHaveBeenCalledWith(
+      "/roi-calculator/settings",
+      expect.objectContaining({
+        body: expect.objectContaining({ estimator_model: "fast-estimator" }),
+      }),
+    );
   });
 
   it("closes the old settings dialog when saving a different source", async () => {

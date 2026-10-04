@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -24,7 +25,12 @@ def normalize_source_login(value: str, provider: str = "github") -> str:
 class ROISettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    report_mode: Literal["legacy", "observed"] = "legacy"
     source_provider: Literal["github", "gitlab"] = "github"
+    connection_type: Literal["token", "app"] = "token"
+    oauth_refresh_token: SecretStr = SecretStr("")
+    oauth_expires_at: datetime | None = None
+    ignored_logins: tuple[str, ...] = ()
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     gitlab_token: SecretStr = SecretStr("")
     github_api_url: str = "https://api.github.com"
@@ -74,8 +80,13 @@ class ROISettings(BaseModel):
         import re
 
         normalized_values: Final = tuple(repo.strip().rstrip("/").removesuffix(".git") for repo in values)
+        repository_keys: Final = tuple(
+            repo.casefold() if info.data.get("source_provider") != "gitlab" else repo for repo in normalized_values
+        )
         normalized: Final = tuple(
-            repo for index, repo in enumerate(normalized_values) if repo not in normalized_values[:index]
+            repo
+            for index, repo in enumerate(normalized_values)
+            if repository_keys[index] not in repository_keys[:index]
         )
         pattern: Final = (
             r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+"
@@ -121,6 +132,7 @@ class ROISettings(BaseModel):
 class ROISettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    report_mode: Literal["legacy", "observed"] | None = None
     source_provider: Literal["github", "gitlab"] | None = None
     gitlab_api_url: str | None = None
     gitlab_token: str | None = None
@@ -134,7 +146,13 @@ class ROISettingsUpdate(BaseModel):
     update_interval_minutes: float | None = Field(default=None, ge=0, le=43200, allow_inf_nan=False)
 
 
+class ROIEstimatorModel(BaseModel):
+    model_name: str
+    provider_models: tuple[str, ...]
+
+
 class ROISettingsResponse(BaseModel):
+    report_mode: Literal["legacy", "observed"] = "legacy"
     source_provider: Literal["github", "gitlab"] = "github"
     gitlab_api_url: str = "https://gitlab.com/api/v4"
     has_gitlab_token: bool = False
@@ -149,6 +167,7 @@ class ROISettingsResponse(BaseModel):
     has_github_token: bool
     default_prompt: str
     available_models: tuple[str, ...]
+    estimator_models: tuple[ROIEstimatorModel, ...] = ()
     ready: bool
 
 

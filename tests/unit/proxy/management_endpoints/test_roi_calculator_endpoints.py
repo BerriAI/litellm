@@ -17,6 +17,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
+    _estimator_choices_from_deployments,
     _estimator_models_from_deployments,
     _gateway_transport,
     _next_update,
@@ -118,6 +119,15 @@ class _ConfigRepository:
         _assert_json_round_trip(param_value)
         self.values = MappingProxyType({**self.values, param_name: param_value})
         return self.values[param_name]
+
+    async def set_param_if_revision(self, param_name: str, param_value: object, revision: int) -> bool:
+        from litellm.proxy.roi_calculator.settings import StoredROISettings
+
+        stored: Final = StoredROISettings.model_validate(self.values.get(param_name, {}))
+        if stored.revision != revision:
+            return False
+        await self.set_param(param_name, param_value)
+        return True
 
 
 def _client(
@@ -321,8 +331,14 @@ def test_schedule_rejects_intervals_under_five_minutes(interval: float) -> None:
 
 
 @pytest.mark.parametrize("anchor", ("2026-09-30T12:00:00", "2026-09-30T12:00:00Z", "2026-09-30T14:00:00+02:00"))
-def test_schedule_normalizes_legacy_and_offset_timestamps(anchor: str) -> None:
-    settings: Final = ROISettings(repos=("example/repo",), estimator_model="estimator", update_interval_minutes=60)
+@pytest.mark.parametrize("observed", (False, True))
+def test_schedule_normalizes_timestamps_and_respects_report_mode(anchor: str, observed: bool) -> None:
+    settings: Final = ROISettings(
+        repos=("example/repo",),
+        estimator_model="estimator",
+        update_interval_minutes=60,
+        report_mode="observed" if observed else "legacy",
+    )
     status: Final = ROISyncStatus(
         running=False,
         phase="error",
@@ -336,7 +352,8 @@ def test_schedule_normalizes_legacy_and_offset_timestamps(anchor: str) -> None:
         finished_at=anchor,
     )
     report: Final = sample_report(datetime(2026, 9, 30, tzinfo=timezone.utc))
-    assert _next_update(settings, status, report) == datetime(2026, 9, 30, 13, tzinfo=timezone.utc)
+    expected: Final = None if observed else datetime(2026, 9, 30, 13, tzinfo=timezone.utc)
+    assert _next_update(settings, status, report) == expected
 
 
 def test_manual_match_recalculates_saved_report_and_removal_restores_cohort() -> None:
@@ -411,3 +428,66 @@ def test_old_source_report_is_not_returned_when_matching_new_source_identity() -
     assert matched.status_code == 200
     assert matched.json()["report"] is None
     assert matched.json()["identity_map"] == {"dev.name": "dev@example.test"}
+
+
+def test_estimator_choices_show_underlying_models_and_exclude_non_chat_routes() -> None:
+    deployments: Final = (
+        {
+            "model_name": "estimator",
+            "litellm_params": {"model": "deployment-name"},
+            "model_info": {"base_model": "gpt-6-luna", "mode": "chat"},
+        },
+        {
+            "model_name": "estimator",
+            "litellm_params": {"model": "second-deployment"},
+            "model_info": {"base_model": "gpt-6-luna", "mode": "chat"},
+        },
+        {
+            "model_name": "embeddings",
+            "litellm_params": {"model": "custom-embedding"},
+            "model_info": {"mode": "embedding"},
+        },
+        {
+            "model_name": "image",
+            "litellm_params": {"model": "custom-image"},
+            "model_info": {"mode": "image_generation"},
+        },
+        {"model_name": "*", "litellm_params": {"model": "openai/*"}},
+        {"model_name": "missing", "litellm_params": {}},
+        {"model_name": "custom-chat", "litellm_params": {"model": "openai/private-model"}},
+    )
+    choices: Final = _estimator_choices_from_deployments(deployments)
+    assert tuple((choice.model_name, choice.provider_models) for choice in choices) == (
+        ("custom-chat", ("openai/private-model",)),
+        ("estimator", ("gpt-6-luna",)),
+    )
+
+
+def test_estimator_picker_keeps_callable_aliases_and_routing_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.router import Router
+
+    configured_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "concrete",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "test"},
+            },
+            {
+                "model_name": "team-only",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "test"},
+                "model_info": {"team_id": "other-team", "team_public_model_name": "private-estimator"},
+            },
+        ],
+        model_group_alias={"friendly": "concrete"},
+        routing_groups=[{"group_name": "balanced", "models": ["concrete"], "routing_strategy": "simple-shuffle"}],
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", configured_router)
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, _ConfigRepository())
+    for name in ("friendly", "balanced"):
+        response: Final = client.put("/roi-calculator/settings", json={"repos": ["org/repo"], "estimator_model": name})
+        assert response.status_code == 200, response.text
+        settings: Final = response.json()
+        assert settings["ready"] is True
+        assert set(settings["available_models"]) == {"concrete", "friendly", "balanced"}
+        assert {"model_name": name, "provider_models": ["openai/gpt-6-luna"]} in settings["estimator_models"]
