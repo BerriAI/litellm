@@ -32,4 +32,5 @@ def worker_image() -> str:
     override: Final = os.environ.get("LENS_WORKER_IMAGE", "")
     if override:
         return override
-    return f"ghcr.io/berriai/litellm-lens-worker:{tag}"
+    package: Final = "litellm-lens-worker-dev" if tag.startswith("sha-") else "litellm-lens-worker"
+    return f"ghcr.io/berriai/{package}:{tag}"
