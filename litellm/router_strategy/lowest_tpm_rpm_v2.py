@@ -14,7 +14,7 @@ from litellm import token_counter
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs, is_batch_line_item_event
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
@@ -250,7 +250,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
             return
         try:
             """
@@ -292,7 +292,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
             return
         try:
             """
