@@ -844,6 +844,7 @@ from litellm.proxy.utils import (
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    rewrite_ui_content,
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
@@ -2352,20 +2353,15 @@ try:
                         with open(file_path, "r", encoding="utf-8") as f:
                             content = f.read()
 
-                        # Replace the asset prefix with the server root path
-                        modified_content = content.replace(
-                            f"{litellm_asset_prefix}",
-                            f"{server_root_path}",
+                        modified_content = rewrite_ui_content(
+                            content=content,
+                            server_root_path=server_root_path,
+                            litellm_asset_prefix=litellm_asset_prefix,
                         )
 
-                        # Replace the /.well-known/litellm-ui-config with the server root path
-                        modified_content = modified_content.replace(
-                            "/litellm/.well-known/litellm-ui-config",
-                            f"{server_root_path}/.well-known/litellm-ui-config",
-                        )
-
-                        with open(file_path, "w", encoding="utf-8") as f:
-                            f.write(modified_content)
+                        if modified_content != content:
+                            with open(file_path, "w", encoding="utf-8") as f:
+                                f.write(modified_content)
                     except (UnicodeDecodeError, PermissionError, OSError):
                         # Skip binary files or files we can't write to
                         continue
