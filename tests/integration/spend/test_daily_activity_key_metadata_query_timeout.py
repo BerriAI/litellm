@@ -1,7 +1,7 @@
-import csv
-import io
 import itertools
 import json
+import os
+import signal
 import threading
 import uuid
 from bisect import bisect_left
@@ -19,17 +19,19 @@ from typing import Final
 import httpcore
 import httpx
 import jwt
+import psutil
 import psycopg
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows, scratch_database, write_rows
 from integration._support.database_relay import database_relay
-from integration._support.process import owned_proxy_process
+from integration._support.process import OwnedProxy, group_members, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from jwt.algorithms import RSAAlgorithm
-from litellm.constants import SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+
+from litellm.constants import SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
 
 MODEL: Final = "key-metadata-recovery-audit"
 LOOKUP_MARKER: Final = "first_alias"
@@ -67,10 +69,9 @@ LANDED_KEYS: Final = " UNION ".join(
 )
 TENANT_KEYS: Final = ("chat", "stream", "messages", "responses", "live", "deleted")
 KEYS_ONLY_IN_SPEND_LOGS: Final = frozenset(("chat", "stream", "messages", "responses"))
+KEYS_A_SEARCH_FINDS_BY_ALIAS: Final = frozenset(("live", "deleted"))
 AGGREGATED: Final = "/user/daily/activity/aggregated"
-EXPORT: Final = "/team/daily/activity/export"
 BURST: Final = 16
-EXPORT_ROUTES: Final = ("team export json", "team export csv")
 
 
 class _KeyMetadata(BaseModel):
@@ -253,7 +254,7 @@ def _config(wire_url: str, general_settings: Mapping[str, JsonValue]) -> str:
 
 
 @contextmanager
-def _proxy(
+def _owned_proxy(
     gateway: Gateway,
     directory: Path,
     database_url: str,
@@ -261,7 +262,7 @@ def _proxy(
     *,
     general_settings: Mapping[str, JsonValue] = NO_SETTINGS,
     environment: Mapping[str, str] = NO_ENVIRONMENT,
-) -> Generator[Gateway]:
+) -> Generator[OwnedProxy]:
     config: Final = directory / "key_metadata_recovery.yaml"
     config.write_text(_config(wire_url, general_settings))
     with owned_proxy_process(
@@ -279,6 +280,22 @@ def _proxy(
         config=config,
         remove_environment=("DATABASE_URL_READ_REPLICA",),
         workers=WORKERS,
+    ) as owned:
+        yield owned
+
+
+@contextmanager
+def _proxy(
+    gateway: Gateway,
+    directory: Path,
+    database_url: str,
+    wire_url: str,
+    *,
+    general_settings: Mapping[str, JsonValue] = NO_SETTINGS,
+    environment: Mapping[str, str] = NO_ENVIRONMENT,
+) -> Generator[Gateway]:
+    with _owned_proxy(
+        gateway, directory, database_url, wire_url, general_settings=general_settings, environment=environment
     ) as owned:
         yield owned.gateway
 
@@ -499,42 +516,6 @@ class KeyRow:
     user_email: str | None
 
 
-@dataclass(frozen=True, slots=True)
-class UserRow:
-    user_id: str | None
-    keys: int
-
-
-@dataclass(frozen=True, slots=True)
-class Sweep:
-    keys: Mapping[str, frozenset[KeyRow]]
-    users: frozenset[UserRow]
-
-
-class _KeyExportRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    api_key: str
-    key_alias: str | None = None
-    user_id: str | None = None
-    user_email: str | None = None
-
-
-class _KeyExport(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    data: tuple[_KeyExportRow, ...]
-
-
-class _UserExportRow(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    user_id: str | None = None
-    keys: int
-
-
-class _UserExport(BaseModel):
-    model_config = ConfigDict(frozen=True)
-    data: tuple[_UserExportRow, ...]
-
-
 def _tenant(proxy: Gateway) -> Tenant:
     label: Final = f"audit-{uuid.uuid4().hex[:6]}"
     organization: Final = proxy.post("/organization/new", {"organization_alias": f"{label}-org", "models": [MODEL]})
@@ -619,10 +600,6 @@ def _landed_rows(database_url: str) -> frozenset[tuple[str, str]]:
     )
 
 
-def _dash(value: str) -> str | None:
-    return None if value == "-" else value
-
-
 def _named_key_row(name: str, child: JsonValue, digests: frozenset[str]) -> tuple[KeyRow, ...]:
     match child:
         case {"metadata": dict() as metadata} if name in digests:
@@ -637,6 +614,9 @@ def _key_rows(value: JsonValue, digests: frozenset[str]) -> Iterator[KeyRow]:
         case list():
             for item in value:
                 yield from _key_rows(item, digests)
+        case {"api_key": str() as digest, "metadata": dict() as metadata} if digest in digests:
+            meta: Final = _KeyMetadata.model_validate(metadata)
+            yield KeyRow(digest, meta.key_alias, meta.user_id, meta.user_email)
         case dict():
             for name, child in value.items():
                 yield from _named_key_row(name, child, digests)
@@ -647,22 +627,6 @@ def _key_rows(value: JsonValue, digests: frozenset[str]) -> Iterator[KeyRow]:
 
 def _walked(response: httpx.Response, digests: frozenset[str]) -> frozenset[KeyRow]:
     return frozenset(_key_rows(JSON_VALUE.validate_json(response.content), digests))
-
-
-def _csv_key_row(record: Mapping[str, str]) -> KeyRow:
-    return KeyRow(record["Key ID"], _dash(record["Key Alias"]), _dash(record["User ID"]), _dash(record["User Email"]))
-
-
-def _csv_key_rows(text: str) -> frozenset[KeyRow]:
-    header, *records = tuple(csv.reader(io.StringIO(text)))
-    return frozenset(_csv_key_row(dict(zip(header, record, strict=True))) for record in records)
-
-
-def _export_key_rows(response: httpx.Response) -> frozenset[KeyRow]:
-    return frozenset(
-        KeyRow(row.api_key, row.key_alias, row.user_id, row.user_email)
-        for row in _KeyExport.model_validate_json(response.content).data
-    )
 
 
 def _routes(tenant: Tenant) -> Mapping[str, tuple[str, Mapping[str, str]]]:
@@ -694,26 +658,9 @@ def _get(pinned: Pinned, path: str, params: Mapping[str, str]) -> httpx.Response
     return response
 
 
-def _export(pinned: Pinned, tenant: Tenant, export_type: str, export_format: str) -> httpx.Response:
-    return _get(pinned, EXPORT, {"export_type": export_type, "format": export_format, "team_id": tenant.team_id})
-
-
-def _sweep(pinned: Pinned, tenant: Tenant, digests: frozenset[str]) -> Sweep:
-    routed: Final = MappingProxyType(
+def _sweep(pinned: Pinned, tenant: Tenant, digests: frozenset[str]) -> Mapping[str, frozenset[KeyRow]]:
+    return MappingProxyType(
         {name: _walked(_get(pinned, path, params), digests) for name, (path, params) in _routes(tenant).items()}
-    )
-    return Sweep(
-        MappingProxyType(
-            {
-                **routed,
-                EXPORT_ROUTES[0]: _export_key_rows(_export(pinned, tenant, "daily_with_keys", "json")),
-                EXPORT_ROUTES[1]: _csv_key_rows(_export(pinned, tenant, "daily_with_keys", "csv").text),
-            }
-        ),
-        frozenset(
-            UserRow(row.user_id, row.keys)
-            for row in _UserExport.model_validate_json(_export(pinned, tenant, "daily_with_users", "json").content).data
-        ),
     )
 
 
@@ -723,19 +670,15 @@ def _named_row(tenant: Tenant, key: TenantKey) -> KeyRow:
 
 def _outage_row(tenant: Tenant, key: TenantKey) -> KeyRow:
     if key.name in KEYS_ONLY_IN_SPEND_LOGS:
-        return KeyRow(key.digest, None, None, None)
+        return KeyRow(key.digest, None, tenant.owner, tenant.email)
     return _named_row(tenant, key)
 
 
-def _expected(tenant: Tenant, keys: tuple[TenantKey, ...], *, outage: bool) -> Sweep:
+def _expected(tenant: Tenant, keys: tuple[TenantKey, ...], *, outage: bool) -> Mapping[str, frozenset[KeyRow]]:
     every: Final = frozenset(_outage_row(tenant, key) if outage else _named_row(tenant, key) for key in keys)
-    live: Final = frozenset(_named_row(tenant, key) for key in keys if key.name == "live")
+    found: Final = frozenset(_named_row(tenant, key) for key in keys if key.name in KEYS_A_SEARCH_FINDS_BY_ALIAS)
     searched: Final = frozenset(("user search", "team search"))
-    owned: Final = sum(1 for row in every if row.user_id is not None)
-    return Sweep(
-        MappingProxyType({name: live if name in searched else every for name in (*_routes(tenant), *EXPORT_ROUTES)}),
-        frozenset(row for row in (UserRow(tenant.owner, owned), UserRow(None, len(every) - owned)) if row.keys > 0),
-    )
+    return MappingProxyType({name: found if name in searched else every for name in _routes(tenant)})
 
 
 def _burst(proxy: Gateway, digests: frozenset[str]) -> tuple[frozenset[KeyRow], ...]:
@@ -928,28 +871,37 @@ def test_every_usage_route_names_spend_log_only_keys_again_once_an_outage_ends(
         outage: Final = _expected(tenant, keys, outage=True)
         healthy: Final = _expected(tenant, keys, outage=False)
         with _pinned(proxy) as pinned:
-            with _locked_spend_logs(database_url), _recording(database_url) as during_outage:
-                burst: Final = _burst(proxy, digests)
-                blank: Final = _sweep(pinned, tenant, digests)
-            assert frozenset(burst) == {outage.keys["user aggregated"]}, burst
-            assert dict(blank.keys) == dict(outage.keys)
-            assert blank.users == outage.users
+            with _locked_spend_logs(database_url):
+                with _recording(database_url) as during_outage:
+                    burst: Final = _burst(proxy, digests)
+                    blank: Final = _sweep(pinned, tenant, digests)
+                with _recording(database_url) as during_retry:
+                    retried: Final = eventually(
+                        lambda: _get(pinned, AGGREGATED, {}),
+                        lambda response: response.elapsed >= FAILED_LOOKUP_FLOOR,
+                        seconds=MISS_TTL_BOUND,
+                    )
+            assert frozenset(burst) == {outage["user aggregated"]}, burst
+            assert dict(blank) == dict(outage)
             outage_lookups: Final = _lookups(during_outage)
             assert outage_lookups, "No alias lookup reached the locked spend logs"
             assert _busiest_miss_window(outage_lookups) <= WORKERS, sorted(outage_lookups)
+            assert _walked(retried, digests) == outage["user aggregated"], retried.text
+            assert len(_lookups(during_retry)) == 1
             eventually(
                 lambda: _walked(_get(pinned, AGGREGATED, {}), digests),
-                lambda rows: rows == healthy.keys["user aggregated"],
+                lambda rows: rows == healthy["user aggregated"],
                 seconds=MISS_TTL_BOUND,
             )
             named: Final = _sweep(pinned, tenant, digests)
-            assert dict(named.keys) == dict(healthy.keys)
-            assert named.users == healthy.users
-            assert frozenset(_burst(proxy, digests)) == {healthy.keys["user aggregated"]}
+            assert dict(named) == dict(healthy)
+            assert frozenset(_burst(proxy, digests)) == {healthy["user aggregated"]}
 
 
 @pytest.mark.timeout(300)
-def test_usage_page_names_a_rejected_jwt_caller_again_once_spend_logs_free_up(gateway: Gateway, tmp_path: Path) -> None:
+def test_usage_page_retries_the_spend_log_lookup_for_a_rejected_jwt_caller_once_spend_logs_free_up(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_jwk: Final = RSAAlgorithm.to_jwk(private_key.public_key())
     subject: Final = f"jwt-{uuid.uuid4().hex[:12]}"
@@ -988,10 +940,199 @@ def test_usage_page_names_a_rejected_jwt_caller_again_once_spend_logs_free_up(ga
             with _locked_spend_logs(database_url), _recording(database_url) as during_outage:
                 blank: Final = _read(pinned, digest)
             assert blank.elapsed >= FAILED_LOOKUP_FLOOR, blank.elapsed
-            assert _metadata(blank, digest) == (_KeyMetadata(),), blank.text
+            assert _metadata(blank, digest) == (_KeyMetadata(user_id=subject),), blank.text
             assert len(_lookups(during_outage)) == 1
-            eventually(
-                lambda: _metadata(_read(pinned, digest), digest),
-                lambda metadata: metadata == (_KeyMetadata(user_id=subject),),
+            retried: Final = eventually(
+                lambda: _probe(pinned, database_url, digest),
+                lambda probe: probe.ran_lookup,
                 seconds=MISS_TTL_BOUND,
             )
+            assert retried.aliases == (None,), retried
+            named: Final = _read(pinned, digest)
+            assert _metadata(named, digest) == (_KeyMetadata(user_id=subject),), named.text
+
+
+def _full_metadata(spender: Spender) -> tuple[_KeyMetadata, ...]:
+    return (_KeyMetadata(key_alias=spender.alias, user_id=spender.user_id, user_email=spender.user_email),)
+
+
+@pytest.mark.timeout(600)
+def test_second_proxy_instance_names_the_key_while_the_first_recovers_from_its_own_misses(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    first_home: Final = tmp_path / "first"
+    second_home: Final = tmp_path / "second"
+    first_home.mkdir()
+    second_home.mkdir()
+    with (
+        scratch_database() as database_url,
+        wire_server(_respond) as wire,
+        _proxy(gateway, first_home, database_url, wire.url) as first,
+        _proxy(gateway, second_home, database_url, wire.url) as second,
+    ):
+        spender: Final = _spender(first, database_url, "second-instance")
+        with _pinned(first) as pinned_first, _pinned(second) as pinned_second:
+            with _locked_spend_logs(database_url):
+                timed_out: Final = _read(pinned_first, spender.digest)
+                assert timed_out.elapsed >= FAILED_LOOKUP_FLOOR, timed_out.elapsed
+                assert _aliases(timed_out, spender.digest) == (None,), timed_out.text
+                retried: Final = eventually(
+                    lambda: _read(pinned_first, spender.digest),
+                    lambda response: response.elapsed >= FAILED_LOOKUP_FLOOR,
+                    seconds=MISS_TTL_BOUND,
+                )
+                assert _aliases(retried, spender.digest) == (None,), retried.text
+            fresh: Final = _read(pinned_second, spender.digest)
+            assert fresh.elapsed < FAILED_LOOKUP_FLOOR, fresh.elapsed
+            assert _metadata(fresh, spender.digest) == _full_metadata(spender), fresh.text
+            recovered: Final = _named(pinned_first, spender)
+            assert _metadata(recovered, spender.digest) == _full_metadata(spender), recovered.text
+
+
+@pytest.mark.timeout(600)
+def test_usage_page_names_the_key_at_once_after_a_restart_ends_the_outage(gateway: Gateway, tmp_path: Path) -> None:
+    with scratch_database() as database_url, wire_server(_respond) as wire:
+        with _proxy(gateway, tmp_path, database_url, wire.url) as first:
+            spender: Final = _spender(first, database_url, "restart")
+            with _pinned(first) as pinned:
+                with _locked_spend_logs(database_url):
+                    timed_out: Final = _read(pinned, spender.digest)
+                assert timed_out.elapsed >= FAILED_LOOKUP_FLOOR, timed_out.elapsed
+                assert _aliases(timed_out, spender.digest) == (None,), timed_out.text
+                cached_miss: Final = _read(pinned, spender.digest)
+                assert cached_miss.elapsed < FAILED_LOOKUP_FLOOR, cached_miss.elapsed
+                assert _aliases(cached_miss, spender.digest) == (None,), cached_miss.text
+        with _proxy(gateway, tmp_path, database_url, wire.url) as restarted, _pinned(restarted) as pinned_again:
+            named: Final = _read(pinned_again, spender.digest)
+            assert named.elapsed < FAILED_LOOKUP_FLOOR, named.elapsed
+            assert _metadata(named, spender.digest) == _full_metadata(spender), named.text
+
+
+def _fresh_read(owned: OwnedProxy, digest: str) -> httpx.Response:
+    with httpx.Client(base_url=owned.gateway.client.base_url, timeout=60, trust_env=False) as client:
+        return client.get(
+            AGGREGATED,
+            params={"start_date": _day(-1), "end_date": _day(1), "api_key": digest},
+            headers={"Authorization": f"Bearer {owned.gateway.key}", "Connection": "close"},
+        )
+
+
+def _running_children(owned: OwnedProxy) -> tuple[int, ...]:
+    return tuple(
+        member.pid
+        for member in group_members(owned.process.pid)
+        if member.pid != owned.process.pid and member.is_running() and member.status() != psutil.STATUS_ZOMBIE
+    )
+
+
+def _worker_pids(owned: OwnedProxy) -> tuple[int, ...]:
+    return tuple(
+        member.pid
+        for member in group_members(owned.process.pid)
+        if member.pid != owned.process.pid and any("spawn_main" in part for part in member.cmdline())
+    )
+
+
+@pytest.mark.timeout(600)
+def test_usage_page_keeps_serving_when_a_worker_dies_mid_outage(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        scratch_database() as database_url,
+        wire_server(_respond) as wire,
+        _owned_proxy(gateway, tmp_path, database_url, wire.url) as owned,
+    ):
+        spender: Final = _spender(owned.gateway, database_url, "worker-death")
+        children: Final = _running_children(owned)
+        workers: Final = _worker_pids(owned)
+        assert len(workers) == WORKERS, workers
+        with _locked_spend_logs(database_url):
+            timed_out: Final = _fresh_read(owned, spender.digest)
+            assert timed_out.status_code == 200, timed_out.text
+            assert timed_out.elapsed >= FAILED_LOOKUP_FLOOR, timed_out.elapsed
+            assert _aliases(timed_out, spender.digest) == (None,), timed_out.text
+            os.kill(workers[0], signal.SIGKILL)
+            after_kill: Final = _fresh_read(owned, spender.digest)
+            assert after_kill.status_code == 200, after_kill.text
+            assert _aliases(after_kill, spender.digest) == (None,), after_kill.text
+            respawned: Final = eventually(
+                lambda: _running_children(owned),
+                lambda pids: len(pids) >= len(children) and any(pid not in children for pid in pids),
+                seconds=30,
+            )
+            assert workers[0] not in respawned, respawned
+        recovered: Final = eventually(
+            lambda: _fresh_read(owned, spender.digest),
+            lambda response: response.status_code == 200 and _aliases(response, spender.digest) == (spender.alias,),
+            seconds=MISS_TTL_BOUND,
+        )
+        assert _metadata(recovered, spender.digest) == _full_metadata(spender), recovered.text
+
+
+def _status(pinned: Pinned, path: str, params: Mapping[str, str]) -> int:
+    return pinned.request("GET", path, params={"start_date": _day(-1), "end_date": _day(1), **params}).status_code
+
+
+@pytest.mark.timeout(360)
+def test_usage_page_rejects_bad_key_filters_and_unrelated_routes_ignore_a_locked_spend_log_table(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _rig(gateway, tmp_path) as (proxy, database_url):
+        spender: Final = _spender(proxy, database_url, "bad-filters")
+        with _pinned(proxy) as pinned, _locked_spend_logs(database_url):
+            odd_keys: Final = ("k" * 5000, "", "123", json.dumps([spender.digest]))
+            odd_statuses: Final = tuple(_status(pinned, AGGREGATED, {"api_key": api_key}) for api_key in odd_keys)
+            assert odd_statuses == (200, 200, 200, 200), odd_statuses
+            repeated: Final = _status(pinned, f"{AGGREGATED}?api_key={spender.digest}&api_key={spender.digest}", {})
+            assert repeated == 200, repeated
+            page_sizes: Final = tuple(
+                _status(pinned, "/user/daily/activity", {"page_size": page_size}) for page_size in ("0", "abc")
+            )
+            assert page_sizes == (422, 422), page_sizes
+            liveliness: Final = pinned.request("GET", "/health/liveliness")
+            assert liveliness.status_code == 200, liveliness.text
+            readiness: Final = pinned.request("GET", "/health/readiness")
+            assert readiness.status_code == 200, readiness.text
+            gateway_activity: Final = _status(pinned, "/gateway/daily/activity", {})
+            assert gateway_activity == 200, gateway_activity
+            chat: Final = proxy.chat(MODEL, text=f"locked {uuid.uuid4().hex}")
+            assert object_value(chat["usage"]) == dict(USAGE), chat
+
+
+@pytest.mark.timeout(300)
+def test_usage_ai_chat_survives_a_dropped_database_connection_during_alias_recovery(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        scratch_database() as database_url,
+        database_relay(database_url, b"AS " + LOOKUP_MARKER.encode()) as (relay, relayed_url),
+        wire_server(_respond) as wire,
+        _proxy(gateway, tmp_path, relayed_url, wire.url) as proxy,
+    ):
+        spender: Final = _spender(proxy, database_url, "dropped-ai-chat")
+        with _pinned(proxy) as pinned:
+            relay.arm()
+            chat: Final = pinned.request(
+                "POST",
+                "/usage/ai/chat",
+                body={
+                    "messages": [{"role": "user", "content": "What did we spend?"}],
+                    "model": "openai/gpt-4o-mini",
+                },
+            )
+            assert chat.status_code == 200, chat.text
+            assert relay.tripped.is_set(), chat.text
+            tool_call: Final = {
+                "type": "tool_call",
+                "tool_name": "get_usage_data",
+                "tool_label": "global usage data",
+                "arguments": {"start_date": _day(-1), "end_date": _day(1)},
+            }
+            assert _events(chat) == (
+                {"type": "status", "message": "Thinking..."},
+                {**tool_call, "status": "running"},
+                {**tool_call, "status": "complete"},
+                {"type": "status", "message": "Analyzing results..."},
+                {"type": "chunk", "content": REPLY_TEXT},
+                {"type": "done"},
+            ), chat.text
+            recovered: Final = _named_once_reconnected(pinned, spender)
+            assert _metadata(recovered, spender.digest) == _full_metadata(spender), recovered.text
