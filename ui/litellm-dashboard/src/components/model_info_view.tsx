@@ -491,9 +491,7 @@ export default function ModelInfoView({
           // backend silently falls back to deployments[0] and probes
           // the wrong endpoint.
           id: localModelData.model_info?.id,
-          mode: localModelData.model_info?.mode,
         },
-        localModelData.model_info?.mode,
       );
 
       if (response.status === "success") {

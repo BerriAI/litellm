@@ -1,13 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   change,
   duration,
   money,
   visiblePeople,
   weeklyMerges,
+  filterObservedPulls,
+  reportPeople,
+  recordedBranches,
   type ObservedPerson,
   type ObservedSnapshot,
 } from "./observedData";
+import { createObservedDemo } from "./observedDemo";
 
 const period = (merged: number, spend: number | null) => ({
   merged_prs: merged,
@@ -28,6 +32,126 @@ const person = (name: string, merged: number, spend: number | null): ObservedPer
 });
 
 describe("observed ROI metrics", () => {
+  it("shows the same contributors when the browser has no Map.groupBy", () => {
+    const sample = { ...createObservedDemo(7), people: [] };
+    const expected = reportPeople(sample, false);
+    const legacyMap = new Proxy(Map, {
+      get: (target, key, receiver) => (key === "groupBy" ? undefined : Reflect.get(target, key, receiver)),
+    });
+    vi.stubGlobal("Map", legacyMap);
+    try {
+      expect(reportPeople(sample, false)).toEqual(expected);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("filters by attributed changes across providers, independently of spend or author names", () => {
+    const sample = createObservedDemo(7);
+    const external = {
+      ...sample.pulls.current[0],
+      url: "https://gitlab.com/demo/api/-/merge_requests/999",
+      author: "alex-demo",
+      agent: false,
+      connection_id: "demo-gitlab",
+    };
+    const report = { ...sample, pulls: { ...sample.pulls, current: [...sample.pulls.current, external] } };
+    const noSpend = {
+      ...report,
+      people: report.people.map((row) => ({
+        ...row,
+        periods: {
+          ...row.periods,
+          current: { ...row.periods.current, gateway_recorded_spend: 0, spend_observation: "no_records" as const },
+        },
+      })),
+    };
+    expect(filterObservedPulls(noSpend, "current", true)).toEqual(sample.pulls.current);
+    expect(filterObservedPulls(noSpend, "current", false)).toEqual(report.pulls.current);
+    expect(filterObservedPulls(noSpend, "current", true).some((pull) => pull.agent)).toBe(true);
+    expect(reportPeople(noSpend, true).map((row) => row.email)).toEqual(sample.people.map((row) => row.email));
+  });
+
+  it("keeps unmatched identities separate by host, with unknown spend and accurate periods", () => {
+    const sample = createObservedDemo(7);
+    const external = {
+      ...sample.pulls.current[0],
+      author: "contributor",
+      agent: false,
+      connection_id: "gitlab-public",
+      url: "https://gitlab.com/demo/api/-/merge_requests/999",
+      merge_hours: 4,
+    };
+    const otherHost = {
+      ...external,
+      connection_id: "gitlab-private",
+      url: "https://git.example.test/demo/api/-/merge_requests/999",
+      merge_hours: null,
+    };
+    const requested = {
+      ...external,
+      url: "https://gitlab.com/demo/api/-/merge_requests/1000",
+      author: "devin-ai",
+      agent: true,
+      requester: "contributor",
+      merge_hours: 8,
+    };
+    const unassigned = { ...requested, url: "https://gitlab.com/demo/api/-/merge_requests/1001", requester: "" };
+    const report = {
+      ...sample,
+      pulls: {
+        ...sample.pulls,
+        current: [...sample.pulls.current, external, otherHost, requested, unassigned],
+        previous: [external],
+      },
+    };
+    const outsiders = reportPeople(report, false).filter((row) => !row.matched);
+    expect(outsiders).toHaveLength(2);
+    expect(new Set(outsiders.map((row) => row.id)).size).toBe(2);
+    const publicPerson = outsiders.find((row) => row.host === "gitlab.com")!;
+    const expectedCurrent = {
+      merged_prs: 2,
+      prs_per_week: 2,
+      median_merge_hours: 6,
+      direct_authored: 1,
+      declared_agent_owned: 1,
+      spend_observation: "no_records",
+      recorded_spend_per_attributed_pr: null,
+    };
+    expect(publicPerson.periods.current).toMatchObject(expectedCurrent);
+    expect(publicPerson.periods.previous.merged_prs).toBe(1);
+    expect(outsiders.find((row) => row.host === "git.example.test")!.periods.current.median_merge_hours).toBeNull();
+    expect(filterObservedPulls(report, "current", false)).toContain(unassigned);
+  });
+
+  it("filters branch spend using matched change ownership and the full repository and branch key", () => {
+    const sample = createObservedDemo(7);
+    const own = sample.pulls.current[0];
+    const externalCost = { ...own.branch_cost, repo: "gitlab.com/outside/service", spend: 99 };
+    const external = {
+      ...own,
+      url: "https://gitlab.com/outside/service/-/merge_requests/999",
+      branch_cost: externalCost,
+    };
+    const shared = { repo: own.branch_cost.repo, branch: "shared", spend: 12, requests: 4 };
+    const ambiguous = {
+      ...own,
+      source_branch: shared.branch,
+      branch_cost: { ...shared, status: "ambiguous" as const },
+    };
+    const report = {
+      ...sample,
+      pulls: { ...sample.pulls, current: [ambiguous, external] },
+      unlinked_branches: [shared, { ...shared, branch: "unowned" }],
+    };
+    expect(recordedBranches(report, true)).toEqual([shared]);
+    expect(recordedBranches(report, false).map((row) => row.branch)).toEqual([
+      externalCost.branch,
+      "shared",
+      "unowned",
+    ]);
+  });
+
   it("does not claim infinite growth when the baseline is missing", () => {
     expect(change(12, 0)).toBeNull();
     expect(change(0, 0)).toBeNull();

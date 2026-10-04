@@ -43,6 +43,7 @@ from litellm.proxy.lens.models import (
     Worker,
     WorkerCreated,
 )
+from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_image
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
@@ -421,9 +422,20 @@ class WorkerName(WorkerBilling):
     name: str = Field(default="Lens worker", min_length=1)
 
 
+def configured_worker_image() -> str:
+    if image := worker_image():
+        return image
+    raise HTTPException(
+        503,
+        "This LiteLLM build has no release identity. Use a published release, make lens-dev, "
+        "or build the gateway and worker from the same commit with the same LITELLM_RELEASE_TAG.",
+    )
+
+
 @router.post("/workers/register", response_model=WorkerCreated)
 async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
     scope: Final = user_scope(auth, write=True)
+    image: Final = configured_worker_image()
     await validate_key(body.analysis_key_id)
     token: Final = "lens-" + secrets.token_urlsafe(40)
     worker: Final = Worker(
@@ -434,7 +446,7 @@ async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
         last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc),
     )
     await repository().save_worker(worker, hashlib.sha256(token.encode()).hexdigest())
-    return WorkerCreated(worker=worker, token=token)
+    return WorkerCreated(worker=worker, token=token, image=image)
 
 
 @router.put("/workers/{worker_id}/billing-key", response_model=Worker)
@@ -466,9 +478,11 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 
 
 @router.post("/worker/claim", response_model=Claim | None)
-async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
-    if protocol_version not in (2, 3):
-        raise HTTPException(409, "Upgrade the Lens worker using the current Connect worker command")
+async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: str = "") -> Claim | None:
+    image: Final = configured_worker_image()
+    expected: Final = release_tag()
+    if protocol_version != PROTOCOL_VERSION or worker_release != expected:
+        raise HTTPException(409, f"Upgrade the Lens worker to {image} and retry")
     if worker.analysis_key_id is None:
         raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)

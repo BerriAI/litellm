@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
 import { CheckCircle2, Copy, Loader2 } from "lucide-react";
@@ -25,6 +26,7 @@ export function WorkerInstall({
   onReady?: () => void;
   onClose: () => void;
 }) {
+  const [tokenCopied, setTokenCopied] = useState(false);
   return (
     <div className="min-w-0 space-y-5">
       {!connected && (
@@ -34,7 +36,7 @@ export function WorkerInstall({
             className="w-full gap-2"
             onClick={async () => {
               try {
-                await navigator.clipboard.writeText(workerSetupCommand(address, created.token));
+                await navigator.clipboard.writeText(workerSetupCommand(address, created.token, created.image));
                 setCopied(true);
               } catch {
                 setError("Clipboard access failed. Allow clipboard access and try again.");
@@ -51,8 +53,29 @@ export function WorkerInstall({
               aria-label="Docker command preview"
               className="mt-3 max-h-48 overflow-auto rounded-md bg-muted/40 p-3 text-xs leading-5"
             >
-              {workerSetupCommand(address, created.token)}
+              {workerSetupCommand(address, created.token, created.image)}
             </pre>
+          </details>
+          <details className="text-sm">
+            <summary className="cursor-pointer text-muted-foreground">Using Docker Compose or Helm?</summary>
+            <p className="mt-3 text-muted-foreground">
+              Save this private token as LENS_WORKER_TOKEN in Compose or in your Helm worker token secret. Keep it for
+              future upgrades.
+            </p>
+            <Button
+              variant="outline"
+              className="mt-3"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(created.token);
+                  setTokenCopied(true);
+                } catch {
+                  setError("Clipboard access failed. Allow clipboard access and try again.");
+                }
+              }}
+            >
+              {tokenCopied ? "Token copied" : "Copy worker token"}
+            </Button>
           </details>
         </>
       )}
