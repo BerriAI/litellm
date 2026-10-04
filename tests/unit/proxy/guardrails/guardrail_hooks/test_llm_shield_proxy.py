@@ -433,6 +433,40 @@ class TestRequestCoverage:
         assert data["input"][0]["name"] == "mail"
 
     @pytest.mark.asyncio
+    async def test_anthropic_text_documents_are_redacted(self):
+        """A document block carries text inline, as `source.data` or as `source.content`."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[NAME_1] notes", "[EMAIL_1]", "Reach [EMAIL_2]"]})
+
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "title": "Jane Doe notes",
+                            "source": {"type": "text", "media_type": "text/plain", "data": "alice@example.com"},
+                        },
+                        {
+                            "type": "document",
+                            "source": {"type": "content", "content": [{"type": "text", "text": "Reach bob@example.com"}]},
+                        },
+                        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0x"}},
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="anthropic_messages")
+
+        sent = mock.call_args_list[0].kwargs["json"]["texts"]
+        assert sent == ["Jane Doe notes", "alice@example.com", "Reach bob@example.com"]
+        blocks = data["messages"][0]["content"]
+        assert blocks[0]["source"]["data"] == "[EMAIL_1]"
+        assert blocks[1]["source"]["content"][0]["text"] == "Reach [EMAIL_2]"
+        assert blocks[2]["source"]["data"] == "JVBERi0x", "binary sources are not text"
+
+    @pytest.mark.asyncio
     async def test_responses_code_interpreter_code_is_redacted(self):
         """A replayed code_interpreter_call carries the code the model wrote, which the reply side restores."""
         guardrail = _guardrail()

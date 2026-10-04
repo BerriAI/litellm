@@ -303,6 +303,18 @@ def _collect_content(container: MutableRequest, slots: _SlotSink) -> None:
                 # same leaves when it restores one. Its own JSON bound applies, not the
                 # content one, and past it the request is refused.
                 _collect_json_leaves(part.get("input"), slots, strict=True)
+            source = _as_object(part.get("source")) if part.get("type") == "document" else None
+            if source is not None:
+                # An Anthropic document carries text inline: a `text` source holds it in
+                # `data`, a `content` source as a string or blocks, walked like any other
+                # content. Base64, URL and file sources are binary or remote, and pass
+                # untouched. Its `title` and `context` are caller text too.
+                _collect(part, "title", slots)
+                _collect(part, "context", slots)
+                if source.get("type") == "text":
+                    _collect(source, "data", slots)
+                elif source.get("type") == "content":
+                    pending.append((source, depth + 1))
             if "content" in part:
                 pending.append((part, depth + 1))
 
