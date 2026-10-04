@@ -5,15 +5,15 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useState } from "react";
 import { useInView } from "react-intersection-observer";
 
-import { PANEL_TRIGGER } from "@/components/shared/SidePanel";
+import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
-import { cn } from "@/lib/cva.config";
 
 import { SpanIcon } from "./SpanIcon";
 import { StatusMark } from "./StatusMark";
 import { FrameworkLogo, traceFramework } from "./TraceFramework";
 import type { TraceSummary } from "./traceTypes";
+import { traceRefOf } from "./traceRouting";
 import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "./traceUtils";
 
 interface AgentTracesTableProps {
@@ -24,8 +24,6 @@ interface AgentTracesTableProps {
   isFetching?: boolean;
   onRetry?: () => void;
   onLoadMore: () => void;
-  onOpenTrace: (trace: TraceSummary) => void;
-  selectedKey?: string | null;
   rangeEmpty?: boolean;
   onSetUpTracing: () => void;
 }
@@ -98,25 +96,16 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
   );
 }
 
-function RunRow({
-  run,
-  selected,
-  onOpen,
-}: {
-  run: TraceSummary;
-  selected: boolean;
-  onOpen: (run: TraceSummary) => void;
-}) {
+function RunRow({ run }: { run: TraceSummary }) {
   return (
-    <tr
-      data-testid="agent-trace-row"
-      {...PANEL_TRIGGER}
-      onClick={() => onOpen(run)}
-      aria-selected={selected}
-      className={cn(
-        "h-9 cursor-pointer border-b border-border/60 text-xs transition-colors duration-150 motion-reduce:transition-none",
-        selected ? "bg-trace-row-selected shadow-[inset_2px_0_0_var(--trace-brand)]" : "hover:bg-trace-row-hover",
-      )}
+    <Inspector.Row
+      item={traceRefOf(run)}
+      render={
+        <tr
+          data-testid="agent-trace-row"
+          className="h-9 cursor-pointer border-b border-border/60 text-xs transition-colors duration-150 hover:bg-trace-row-hover data-[state=selected]:bg-trace-row-selected data-[state=selected]:shadow-[inset_2px_0_0_var(--trace-brand)] data-[state=selected]:hover:bg-trace-row-selected motion-reduce:transition-none"
+        />
+      }
     >
       <td
         className="px-3 font-mono text-xs whitespace-nowrap tabular-nums text-muted-foreground"
@@ -158,7 +147,7 @@ function RunRow({
       <td>
         <ChevronRight className="size-3 text-muted-foreground/60" />
       </td>
-    </tr>
+    </Inspector.Row>
   );
 }
 
@@ -186,8 +175,6 @@ export function AgentTracesTable({
   isFetching = false,
   onRetry,
   onLoadMore,
-  onOpenTrace,
-  selectedKey = null,
   rangeEmpty = false,
   onSetUpTracing,
 }: AgentTracesTableProps) {
@@ -231,7 +218,7 @@ export function AgentTracesTable({
         <tbody>
           {padTop > 0 && <tr aria-hidden style={{ height: padTop }} />}
           {rows.map(({ index, key }) => (
-            <RunRow key={key} run={traces[index]} selected={selectedKey === key} onOpen={onOpenTrace} />
+            <RunRow key={key} run={traces[index]} />
           ))}
           {padBottom > 0 && <tr aria-hidden style={{ height: padBottom }} />}
           {autoContinue &&

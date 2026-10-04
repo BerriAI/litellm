@@ -442,6 +442,27 @@ describe("AgentTracesSection", () => {
     expect(screen.getByTestId("run-view")).toHaveTextContent(`run ${runs[1].trace_id}`);
   });
 
+  it("opens full screen from a shared link and drops it from the URL on close", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail={false}
+      />,
+      { searchParams: `?trace=${runs[0].trace_id}&fullscreen=true`, onUrlUpdate },
+    );
+    const drawer = await screen.findByRole("complementary", { name: "Trace details" });
+    expect(drawer).toHaveStyle({ width: "100%" });
+    fireEvent.click(screen.getByRole("button", { name: "Close trace (Esc)" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
+    expect(lastUrl(onUrlUpdate).has("fullscreen")).toBe(false);
+  });
+
   it("narrows the list to the zoom window named in the URL and clears it on request", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     const startMs = Date.parse(runs[0].start_time);
