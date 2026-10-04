@@ -1,4 +1,10 @@
-import { getCoreRowModel, getExpandedRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import {
+  getCoreRowModel,
+  getExpandedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type TableOptions,
+} from "@tanstack/react-table";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -33,7 +39,7 @@ const COLUMNS: ColumnDef<Node>[] = [
 
 function Tree() {
   const [selected, setSelected] = useState<Node | null>(null);
-  const table = useReactTable({
+  const tableOptions: TableOptions<Node> = {
     data: TREE,
     columns: COLUMNS,
     getRowId: (node) => node.id,
@@ -41,7 +47,8 @@ function Tree() {
     initialState: { expanded: true },
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
-  });
+  };
+  const table = useReactTable(tableOptions);
   return (
     <Inspector.Root
       items={table.getRowModel().rows.map((row) => row.original)}

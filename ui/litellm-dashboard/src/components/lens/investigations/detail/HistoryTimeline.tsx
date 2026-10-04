@@ -19,12 +19,15 @@ const affectedRuns = (job: Job): number => job.assessments.filter((a) => a.issue
 /** One column per check, oldest on the left, padded with empty slots so spacing stays stable as checks accrue. */
 export function checkColumns(jobs: readonly Job[], slots: number): readonly CheckColumn[] {
   const recent = jobs.slice(0, slots).reverse();
-  const padding = Array.from({ length: slots - recent.length }, (): CheckColumn => ({
-    job: null,
-    total: 0,
-    failed: 0,
-    series: [],
-  }));
+  const padding = Array.from(
+    { length: slots - recent.length },
+    (): CheckColumn => ({
+      job: null,
+      total: 0,
+      failed: 0,
+      series: [],
+    }),
+  );
   const checks = recent.map(
     (job): CheckColumn => ({
       job,

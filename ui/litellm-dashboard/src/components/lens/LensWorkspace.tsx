@@ -82,10 +82,11 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   const { dialog, openDialog } = useDialogRoute();
   const { openTrace } = useOpenTraceRouting();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
-  const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canViewInvestigations = isProxyAdminTierRole(userRole);
   const isAdmin = isProxyAdminRole(userRole);
   const canConfigure = canViewInvestigations && !readOnly;
+  const defaultTab = lensId ? "investigations" : "traces";
+  const activeTab = tab === "settings" && !canConfigure ? defaultTab : tab ?? defaultTab;
   const intro = useLensIntro({ demo, settingUp });
   const { activity, list } = useLensOverview(
     canViewInvestigations,

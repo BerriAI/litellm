@@ -1,9 +1,11 @@
 import { infiniteQueryOptions, keepPreviousData, queryOptions } from "@tanstack/react-query";
 import { hasActiveJob } from "../model/status";
-import type { Sample, Settings, ActivitySelection } from "../model/types";
+import type { Sample, Settings, ActivitySelection, Job } from "../model/types";
 import type { KeyPage, LensApi } from "./service";
 
 export type { Key } from "./service";
+
+type Activity = Awaited<ReturnType<LensApi["activity"]>>;
 
 export const lensKeys = {
   all: ["lens"] as const,
@@ -42,20 +44,24 @@ export const lensQueries = {
     return queryOptions({ queryKey: lensKeys.modelDetails(api.scope), queryFn: () => api.modelDetails() });
   },
   activity(api: LensApi, loaded: boolean) {
-    return queryOptions({
+    const options = {
       queryKey: lensKeys.activity(api.scope),
       queryFn: () => api.activity(),
       enabled: loaded,
-      refetchInterval: (query) => (query.state.data?.traces && query.state.data.requests ? false : 5000),
-    });
+      refetchInterval: ({ state }: { state: { data?: Activity } }) =>
+        state.data?.traces && state.data.requests ? false : 5000,
+    };
+    return queryOptions(options);
   },
   history(api: LensApi, { lensId, historyOffset }: { lensId: string | undefined; historyOffset: number }) {
-    return queryOptions({
+    const options = {
       queryKey: lensKeys.history(api.scope, lensId, historyOffset),
       enabled: !!lensId,
       queryFn: () => api.runs(lensId as string, historyOffset),
-      refetchInterval: (query) => (query.state.data && hasActiveJob(query.state.data) ? 10000 : false),
-    });
+      refetchInterval: ({ state }: { state: { data?: Job[] } }) =>
+        state.data && hasActiveJob(state.data) ? 10000 : false,
+    };
+    return queryOptions(options);
   },
   run(api: LensApi, lensId: string | undefined, batchId: string) {
     const options = {

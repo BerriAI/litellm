@@ -6,6 +6,7 @@ import {
   useReactTable,
   type CellContext,
   type ColumnDef,
+  type TableOptions,
 } from "@tanstack/react-table";
 import { createContext, useContext, type ReactNode } from "react";
 import {
@@ -258,7 +259,7 @@ export function InvestigationList({
   const [search, setSearch] = useListSearchRoute();
   const now = useNow(15000);
   const shown = filterInvestigations([...lenses], search);
-  const table = useReactTable({
+  const tableOptions: TableOptions<InvestigationRow> = {
     data: shown.map((lens): InvestigationRow => ({ kind: "investigation", lens })),
     columns: COLUMNS,
     getRowId: investigationRowKey,
@@ -267,7 +268,8 @@ export function InvestigationList({
     autoResetAll: false,
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
-  });
+  };
+  const table = useReactTable(tableOptions);
   const rows = table.getRowModel().rows.map((row) => row.original);
   const noun = selected?.kind ?? "investigation";
   return (

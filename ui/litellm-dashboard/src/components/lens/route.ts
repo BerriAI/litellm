@@ -118,10 +118,15 @@ export interface EvidenceRef {
   readonly span: string;
 }
 
+const NO_RESULT_OPEN = { finding: null, evidence: null, evidence_span: null } as const;
+
 export function useRunRoute() {
   const [{ run }, setParams] = useQueryStates(RESULT_PARSERS);
-  const selectRun = useCallback((id: string) => void setParams({ run: id, finding: null }), [setParams]);
-  const openRun = useCallback((id: string) => void setParams({ run: id, section: null, finding: null }), [setParams]);
+  const selectRun = useCallback((id: string) => void setParams({ run: id, ...NO_RESULT_OPEN }), [setParams]);
+  const openRun = useCallback(
+    (id: string) => void setParams({ run: id, section: null, ...NO_RESULT_OPEN }),
+    [setParams],
+  );
   return { batchId: run, selectRun, openRun };
 }
 

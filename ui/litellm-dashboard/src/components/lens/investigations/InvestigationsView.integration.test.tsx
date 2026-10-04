@@ -241,6 +241,30 @@ describe("Lens findings and runs", () => {
     expect(screen.getByTitle("trace-42")).toHaveTextContent("Release-42");
     expect(screen.getByText(/1 selected from 1 matching runs/)).toBeInTheDocument();
   });
+
+  it("closes the open run when the keyboard switches to another investigation run", async () => {
+    testQueryClient.clear();
+    const older = { ...lens.jobs[0], id: "older", created_at: "2026-09-29T10:00:00Z" };
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
+      if (path === "/lens/lens/runs") return [...lens.jobs, older];
+      return { data: [] };
+    });
+    const onUrlUpdate = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(<InvestigationsView readOnly />, {
+      searchParams: `?lens=lens&section=runs&evidence=${executionId}`,
+      onUrlUpdate,
+    });
+    expect(await screen.findByTestId("run-panel")).toBeInTheDocument();
+    const picker = screen.getByRole("combobox", { name: "Investigation run" });
+    await waitFor(() => expect(within(picker).getAllByRole("option")).toHaveLength(4));
+    fireEvent.change(picker, { target: { value: "older" } });
+    await waitFor(() => expect(screen.queryByTestId("run-panel")).not.toBeInTheDocument());
+    const url = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
+    expect(url.get("run")).toBe("older");
+    expect(url.has("evidence")).toBe(false);
+  });
 });
 
 it("runs with saved settings from Run now without opening setup, then accepts an agent and window", async () => {

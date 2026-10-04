@@ -399,9 +399,11 @@ it("appends the next preview page as the list scrolls near its end, then stops a
   let finishSecondPage = (): void => {};
   vi.mocked(apiClient.post).mockImplementation((_path, options) => {
     const { offset } = options?.body as { offset: number };
-    if (offset === 0) return Promise.resolve({ eligible: 2, selected: 2, executions: [run("one")], next_offset: 1 });
+    const firstPage = { eligible: 2, selected: 2, executions: [run("one")], next_offset: 1 };
+    const secondPage = { eligible: 2, selected: 2, executions: [run("two")], next_offset: null };
+    if (offset === 0) return Promise.resolve(firstPage);
     return new Promise((resolve) => {
-      finishSecondPage = () => resolve({ eligible: 2, selected: 2, executions: [run("two")], next_offset: null });
+      finishSecondPage = () => resolve(secondPage);
     });
   });
   renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);

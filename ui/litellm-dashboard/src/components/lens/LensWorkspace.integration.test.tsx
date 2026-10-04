@@ -385,6 +385,13 @@ describe("Lens interactive demo", () => {
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
   });
 
+  it("sends read-only sessions following a Settings link to the default tab", async () => {
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly />, {
+      searchParams: "?tab=settings",
+    });
+    expect(await screen.findByRole("tab", { name: "Traces", selected: true })).toBeVisible();
+  });
+
   it("turns the worker health dot off once heartbeats expire even when polling returns unchanged data", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

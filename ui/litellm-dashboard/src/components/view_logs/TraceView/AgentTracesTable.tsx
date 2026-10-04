@@ -1,6 +1,6 @@
 "use client";
 
-import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { getCoreRowModel, useReactTable, type ColumnDef, type TableOptions } from "@tanstack/react-table";
 import { ArrowDown, ChevronRight } from "lucide-react";
 import { useEffect } from "react";
 import { useInView } from "react-intersection-observer";
@@ -207,13 +207,14 @@ export function AgentTracesTable({
   const isEmpty = settled && !hasMore && traces.length === 0;
   const canContinue = settled && hasMore;
   const autoContinue = canContinue && traces.length > 0;
-  const table = useReactTable({
+  const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
     columns: RUN_COLUMNS,
     getRowId: runKey,
     autoResetAll: false,
     getCoreRowModel: getCoreRowModel(),
-  });
+  };
+  const table = useReactTable(tableOptions);
   return (
     <InspectorTable.Root table={table} data-testid="runs-table">
       <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">

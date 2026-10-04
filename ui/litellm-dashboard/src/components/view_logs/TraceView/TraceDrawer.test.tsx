@@ -413,7 +413,8 @@ describe("initialRunSelection", () => {
   it("folds other agent branches while revealing the failed step", () => {
     const first = child({ span_id: "first", type: "agent" });
     const second = child({ span_id: "second", type: "agent" });
-    const failure = child({ span_id: "failed", parent_span_id: "second", type: "tool", status: "error" });
+    const failureFields: Partial<Span> = { span_id: "failed", parent_span_id: "second", type: "tool", status: "error" };
+    const failure = child(failureFields);
     const { selectedId, state } = initialRunSelection({ ...research, spans: [base, first, second, failure] });
     expect(selectedId).toBe("failed");
     expect(state.collapsedSpanIds.has("first")).toBe(true);

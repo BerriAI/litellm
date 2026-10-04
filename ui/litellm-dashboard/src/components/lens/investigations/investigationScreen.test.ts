@@ -75,34 +75,29 @@ describe("investigationScreen", () => {
       kind: "setup",
       mode: "new",
     });
-    expect(investigationScreen({ ...route, list: ready([older]), lensId: "older", dialog: "edit" })).toEqual({
-      kind: "setup",
-      mode: "edit",
-      lens: older,
-      initial: older.settings,
-    });
-    expect(
-      investigationScreen({
-        ...route,
-        list: ready([older, newer]),
-        lensId: "older",
-        dialog: "duplicate",
-        target: "newer",
-      }),
-    ).toEqual({
+    const edit: ScreenInput = { ...route, list: ready([older]), lensId: "older", dialog: "edit" };
+    const editing = { kind: "setup", mode: "edit", lens: older, initial: older.settings };
+    expect(investigationScreen(edit)).toEqual(editing);
+    const duplicate: ScreenInput = {
+      ...route,
+      list: ready([older, newer]),
+      lensId: "older",
+      dialog: "duplicate",
+      target: "newer",
+    };
+    const duplicating = {
       kind: "setup",
       mode: "duplicate",
       lens: newer,
       initial: { ...newer.settings, name: "Lens newer copy", enabled: false },
-    });
+    };
+    expect(investigationScreen(duplicate)).toEqual(duplicating);
   });
 
   it("falls back to the plain screen when an edit names an investigation that is not loaded", () => {
-    expect(investigationScreen({ ...route, list: ready([older]), lensId: "gone", dialog: "edit" })).toEqual({
-      kind: "missing",
-    });
-    expect(investigationScreen({ ...route, list: ready([older]), dialog: "run_now", target: "older" })).toMatchObject({
-      kind: "list",
-    });
+    const editGone: ScreenInput = { ...route, list: ready([older]), lensId: "gone", dialog: "edit" };
+    expect(investigationScreen(editGone)).toEqual({ kind: "missing" });
+    const runNow: ScreenInput = { ...route, list: ready([older]), dialog: "run_now", target: "older" };
+    expect(investigationScreen(runNow)).toMatchObject({ kind: "list" });
   });
 });

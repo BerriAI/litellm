@@ -97,13 +97,14 @@ interface BodyProps<T> {
 function Body<T>({ rowHeight, children, after }: BodyProps<T>) {
   const { table, scroller } = useInspectorTable<T>();
   const rows = table.getRowModel().rows;
-  const virtualizer = useVirtualizer({
+  const virtualizerOptions = {
     count: rows.length,
     getScrollElement: () => scroller,
-    estimateSize: (index) => rowHeight(rows[index]),
+    estimateSize: (index: number) => rowHeight(rows[index]),
     overscan: OVERSCAN_ROWS,
-    getItemKey: (index) => rows[index].id,
-  });
+    getItemKey: (index: number) => rows[index].id,
+  };
+  const virtualizer = useVirtualizer(virtualizerOptions);
   const items = virtualizer.getVirtualItems();
   const padTop = items[0]?.start ?? 0;
   const padBottom = virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0);

@@ -22,7 +22,7 @@ const ensureTestLocalStorage = () => {
     return store;
   };
 
-  Object.defineProperties(storagePrototype, {
+  const storageMethods: PropertyDescriptorMap = {
     getItem: {
       configurable: true,
       writable: true,
@@ -64,7 +64,8 @@ const ensureTestLocalStorage = () => {
         return Array.from(store.keys())[index] ?? null;
       },
     },
-  });
+  };
+  Object.defineProperties(storagePrototype, storageMethods);
 
   const localStorage = Object.create(storagePrototype);
   storageStores.set(localStorage, new Map<string, string>());
