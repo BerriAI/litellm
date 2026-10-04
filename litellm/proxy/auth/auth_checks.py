@@ -6869,8 +6869,8 @@ def _vector_store_deny_by_default(general_settings: Mapping[str, object]) -> boo
         return True
 
 
-_VECTOR_STORE_IDS_ADAPTER: Final[TypeAdapter[list[str]]] = TypeAdapter(list[str])
-_TOOLS_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
+_VECTOR_STORE_IDS_ADAPTER: Final[TypeAdapter[Sequence[str]]] = TypeAdapter(Sequence[str])
+_TOOLS_ADAPTER: Final[TypeAdapter[Sequence[object]]] = TypeAdapter(Sequence[object])
 _TOOL_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
