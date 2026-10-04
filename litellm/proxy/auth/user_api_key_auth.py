@@ -1064,7 +1064,7 @@ async def _auto_register_jwt_mapping(
             if minted:
                 try:
                     async with db_span("delete_orphaned_jwt_key", "LiteLLM_VerificationToken"):
-                        await VerificationTokenRepository(prisma_client).table.delete(where={"token": token_hash})
+                        await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
                 except Exception as delete_err:
                     # Don't fail the request if cleanup fails — the orphan is
                     # unmapped and inert. Log so an operator can prune it later.
