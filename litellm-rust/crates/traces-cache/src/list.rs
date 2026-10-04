@@ -121,9 +121,15 @@ async fn resolve_runs<S: TraceStore>(
         }
         Err(error) => return Err(map_store_error(error)),
     };
-    let spend_rows = spend(store, access, &spans).await;
-    let spend_known = spend_rows.is_some();
-    let spend_rows = spend_rows.unwrap_or_default();
+    let Some(spend_rows) = spend(store, access, &spans).await else {
+        // The batch's combined spend read failed; a run's own narrower window may still
+        // resolve, so fall back per run instead of leaving every run in the batch costless.
+        let mut resolved = Vec::with_capacity(runs.len());
+        for row in runs {
+            resolved.push(resolve_run(reader, store, access, row).await?);
+        }
+        return Ok(resolved);
+    };
     let mut spans = spans;
     spans.sort_by(|left, right| {
         run_key(&left.team_id, &left.api_key_hash, &left.trace_id)
@@ -158,7 +164,7 @@ async fn resolve_runs<S: TraceStore>(
             resolve_trace(&row.trace_id, &row.trace_ref, spans, spend).map(|trace| {
                 ListedRun::Resolved(
                     Box::new(trace.summary),
-                    Freshness::of(spans, spend_known, snapshot_ms),
+                    Freshness::of(spans, true, snapshot_ms),
                 )
             })
         })

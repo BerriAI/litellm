@@ -45,7 +45,6 @@ trait Keyset: Serialize + Sized + Send + Sync {
     type Row: Serialize + DeserializeOwned + Send;
     const SQL: &'static str;
 
-    /// The position just after `last`.
     fn after(self, last: &Self::Row) -> Self;
 }
 

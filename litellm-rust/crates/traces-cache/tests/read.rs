@@ -53,6 +53,7 @@ struct State {
     span_error: Option<SpanErrorRow>,
     list_runs_too_large_above: Option<u32>,
     trace_too_large_refs: HashSet<String>,
+    spend_fails_above_response_ids: Option<usize>,
 }
 
 #[derive(Default)]
@@ -113,6 +114,12 @@ impl FakeStore {
             .unwrap()
             .trace_too_large_refs
             .insert(trace_ref.to_owned());
+    }
+
+    /// Fails `spend` only when the lookup covers more than `limit` response ids, so a batch
+    /// covering several runs fails while each run's own narrower lookup still succeeds.
+    fn set_spend_fails_above_response_ids(&self, limit: usize) {
+        self.state.lock().unwrap().spend_fails_above_response_ids = Some(limit);
     }
 
     fn calls(&self, operation: Operation) -> usize {
@@ -207,11 +214,17 @@ impl TraceStore for FakeStore {
 
     async fn spend(
         &self,
-        _: &SpendByResponseIdsParams,
+        params: &SpendByResponseIdsParams,
     ) -> Result<Vec<SpendByResponseIdsRow>, StoreError<Self::Error>> {
         self.calls.spend.fetch_add(1, Ordering::SeqCst);
         let state = self.state.lock().unwrap();
         Self::failure(&state, Operation::Spend)?;
+        if state
+            .spend_fails_above_response_ids
+            .is_some_and(|limit| params.response_ids.len() > limit)
+        {
+            return Err(StoreError::Failed(FakeError));
+        }
         Ok(state.spend.clone())
     }
 
@@ -500,6 +513,68 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
         .await
         .unwrap();
     assert_eq!(again.data, page.data);
+    assert_eq!(store.calls(Operation::RunSpans), 1);
+    assert_eq!(store.calls(Operation::TraceSpans), 2);
+}
+
+fn spend_row(response_id: &str, cost: f64) -> SpendByResponseIdsRow {
+    SpendByResponseIdsRow {
+        request_id: response_id.into(),
+        litellm_call_id: String::new(),
+        response_id: response_id.into(),
+        upstream_response_id: String::new(),
+        trace_id: String::new(),
+        span_id: String::new(),
+        team_id: "team".into(),
+        api_key: "key".into(),
+        user: "user".into(),
+        spend: Some(cost),
+        start_ms: START_NS / 1_000_000,
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn failed_batch_spend_lookup_falls_back_to_each_run_instead_of_losing_every_cost() {
+    let mut first = span(0);
+    first.trace_id = "trace-a".into();
+    first.kind = ObservationType::Llm;
+    first.litellm_request_id = "response-a".into();
+    first.call_keys = vec![CallKey::ProviderResponse("response-a".into())];
+    first.call_evidence = Some(CallEvidenceKind::Complete);
+    let mut second = span(0);
+    second.trace_id = "trace-b".into();
+    second.kind = ObservationType::Llm;
+    second.litellm_request_id = "response-b".into();
+    second.call_keys = vec![CallKey::ProviderResponse("response-b".into())];
+    second.call_evidence = Some(CallEvidenceKind::Complete);
+
+    let store = FakeStore::default();
+    store.set_list_runs(vec![run("trace-a", "ref-a"), run("trace-b", "ref-b")]);
+    store.set_run_spans(vec![first.clone(), second.clone()]);
+    {
+        let mut state = store.state.lock().unwrap();
+        state.trace_spans.insert("ref-a".to_owned(), vec![first]);
+        state.trace_spans.insert("ref-b".to_owned(), vec![second]);
+        state.spend = vec![spend_row("response-a", 1.5), spend_row("response-b", 2.5)];
+    }
+    // The batch covers both runs' response ids (2); each run resolved on its own only ever
+    // asks for its own (1), so this fails only the combined read, not the per-run fallback.
+    store.set_spend_fails_above_response_ids(1);
+
+    let page = TraceReader::new(usize::MAX)
+        .list_traces(&store, &access(), 0, i64::MAX, None, 8)
+        .await
+        .unwrap();
+
+    assert_eq!(page.data.len(), 2);
+    let by_ref: HashMap<&str, f64> = page
+        .data
+        .iter()
+        .map(|run| (run.trace_ref.as_str(), run.spend.expect("run's own spend read should have succeeded")))
+        .collect();
+    assert_eq!(by_ref["ref-a"], 1.5);
+    assert_eq!(by_ref["ref-b"], 2.5);
     assert_eq!(store.calls(Operation::RunSpans), 1);
     assert_eq!(store.calls(Operation::TraceSpans), 2);
 }

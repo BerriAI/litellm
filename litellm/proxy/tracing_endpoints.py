@@ -177,7 +177,7 @@ def read_failure(error: TraceChanged | ValueError | OverflowError | RuntimeError
                 headers={"Retry-After": str(TRACE_READ_RETRY_AFTER_SECONDS)},
             )
         case _:
-            assert_never(error)
+            return assert_never(error)
 
 
 @router.get("/v1/traces", response_model=TracePage)
