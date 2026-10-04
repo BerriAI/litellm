@@ -134,7 +134,7 @@ describe("Lens interactive demo", () => {
     await user.click(screen.getByRole("button", { name: "Preview sample" }));
     network.mockClear();
     await user.click(await screen.findByRole("row", { name: /Repeated lookups leave customers without an answer/ }));
-    const finding = screen.getByRole("dialog");
+    const finding = screen.getByRole("complementary", { name: "Finding details" });
     expect(within(finding).getByText(/The support agent retries/)).toBeVisible();
     const summaries = within(finding).getAllByText("support_agent", { exact: true });
     await user.click(summaries[0]);
@@ -150,7 +150,7 @@ describe("Lens interactive demo", () => {
     await user.click(
       within(screen.getByRole("dialog", { name: "Original run" })).getByRole("button", { name: "Close" }),
     );
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
+    await user.click(within(finding).getByRole("button", { name: "Close finding (Esc)" }));
     expect(await screen.findByRole("table", { name: "Investigations" })).toBeVisible();
     expect(network).not.toHaveBeenCalled();
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
