@@ -34,7 +34,7 @@ from litellm.proxy.lens.models import (
     ModelResult,
     Progress,
     Result,
-    Review,
+    ReviewPage,
     RunRequest,
     Sample,
     Scope,
@@ -353,10 +353,8 @@ async def read_run(lens_id: str, job_id: str, auth: Auth) -> Job:
     return job
 
 
-@router.get("/{lens_id}/runs/{job_id}/reviews", response_model=tuple[Review, ...])
-async def read_reviews(
-    lens_id: str, job_id: str, auth: Auth, after: Annotated[AwareDatetime | None, Query()] = None
-) -> tuple[Review, ...]:
+@router.get("/{lens_id}/runs/{job_id}/reviews", response_model=ReviewPage)
+async def read_reviews(lens_id: str, job_id: str, auth: Auth, after: int = Query(default=0, ge=0)) -> ReviewPage:
     return reviews_after(await read_run(lens_id, job_id, auth), after)
 
 
