@@ -13,8 +13,8 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import BaseModel, ValidationError
+from typing_extensions import NotRequired, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -119,12 +119,8 @@ class _PredibaseStreamData(TypedDict):
     error: str | None
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
 class _NlpCloudStreamData(TypedDict):
-    generated_text: ReadOnly[str]
-
-
-_NLP_CLOUD_STREAM_DATA: Final = TypeAdapter(_NlpCloudStreamData)
+    generated_text: str
 
 
 class _AlephAlphaStreamData(TypedDict):
@@ -561,7 +557,7 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json: Final = _NLP_CLOUD_STREAM_DATA.validate_python(json.loads(chunk))
+                data_json: Final[_NlpCloudStreamData] = json.loads(chunk)
                 chunk = data_json["generated_text"]
             text = chunk
             if "[DONE]" in text:

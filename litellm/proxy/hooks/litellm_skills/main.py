@@ -29,9 +29,6 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -82,14 +79,6 @@ class _ChatChoice(Protocol):
 class _ChatCompletion(Protocol):
     @property
     def choices(self) -> Sequence[_ChatChoice]: ...
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _CodeExecutionArgs(TypedDict):
-    code: ReadOnly[NotRequired[str]]
-
-
-_CODE_EXECUTION_ARGS: Final = TypeAdapter(_CodeExecutionArgs)
 
 
 def _first_choice(response: _ChatCompletion) -> _ChatChoice:
@@ -844,7 +833,7 @@ print('No executable skill module found')
     ) -> str:
         """Execute a litellm_code_execution tool call and return result string."""
         try:
-            args: Final = _CODE_EXECUTION_ARGS.validate_python(json.loads(tool_call.function.arguments))
+            args: Final[Mapping[str, str]] = json.loads(tool_call.function.arguments)
             code: Final[str] = args.get("code", "")
 
             verbose_proxy_logger.debug("SkillsInjectionHook: Executing code (%s chars)", len(code))
