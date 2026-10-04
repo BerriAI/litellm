@@ -512,7 +512,7 @@ export default function ObservedReport({
       </div>
       <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b">
-          <PageTabsList className="min-w-0 flex-1 gap-4 border-0">
+          <PageTabsList className="min-w-0 flex-1 basis-full gap-4 border-0 xl:basis-auto">
             <PageTabsTrigger value="people">
               Engineers <span className="ml-1.5 text-muted-foreground">{people.length}</span>
             </PageTabsTrigger>
