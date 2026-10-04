@@ -1,4 +1,4 @@
-import { screen, within, waitFor, act } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { focusManager, onlineManager } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import researchTrace from "./__fixtures__/research_trace.json";
 import swarmTrace from "./__fixtures__/swarm_trace.json";
-import { agentHandoffText, initialRunSelection, RunView } from "./TraceDrawer";
+import type { ComponentProps } from "react";
+import { initialRunSelection, RunView } from "./TraceDrawer";
+import { useOpenTraceRouting } from "./traceRouting";
+import { agentHandoffText } from "./tracesApi";
 import type { Span } from "./traceTypes";
 import type { Trace } from "./traceTypes";
 import { traceDisplayName } from "./traceUtils";
@@ -37,9 +40,14 @@ import { agentTraceCall } from "../../networking";
 const swarm = swarmTrace as Trace;
 const research = researchTrace as Trace;
 
+function RoutedRunView(props: Omit<ComponentProps<typeof RunView>, "selection">) {
+  const { selection } = useOpenTraceRouting();
+  return <RunView {...props} selection={selection} />;
+}
+
 const renderRun = (trace: Trace) => {
   vi.mocked(agentTraceCall).mockResolvedValue(trace);
-  return renderWithProviders(<RunView traceId={trace.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+  return renderWithProviders(<RoutedRunView traceId={trace.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
 };
 
 const rootSpanId = (trace: Trace): string => trace.spans.find((s) => s.parent_span_id === null)?.span_id ?? "";
@@ -113,7 +121,7 @@ describe("RunView", () => {
     const user = userEvent.setup();
     vi.mocked(agentTraceCall).mockResolvedValue(research);
     renderWithProviders(
-      <RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} embedded />,
+      <RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} embedded />,
     );
 
     const root = rootSpanId(research);
@@ -174,7 +182,7 @@ describe("RunView", () => {
       .mockResolvedValueOnce(first)
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(second);
-    renderWithProviders(<RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
 
     expect(await screen.findByText("Showing 1 of 2 steps")).toBeVisible();
     const before = screen.getByRole("banner").textContent;
@@ -216,7 +224,7 @@ describe("RunView", () => {
       .mockRejectedValueOnce(new Error("Trace changed while paging; refresh the trace"))
       .mockResolvedValueOnce(fresh)
       .mockResolvedValueOnce(freshSecond);
-    renderWithProviders(<RunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Load more steps" }));
     expect(await screen.findByText("old-snapshot-tool")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Load more steps" }));
@@ -256,7 +264,7 @@ describe("RunView", () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
     vi.mocked(agentTraceCall).mockRejectedValue(new Error("Traces are temporarily unavailable"));
-    renderWithProviders(<RunView traceId="big" accessToken="sk-test" onBack={onBack} />);
+    renderWithProviders(<RoutedRunView traceId="big" accessToken="sk-test" onBack={onBack} />);
 
     expect(await screen.findByText("Traces are temporarily unavailable")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /back to traces/i }));
@@ -281,7 +289,7 @@ describe("RunView", () => {
     );
     renderRun({ ...research, spans: [root, ...children] });
     const search = await screen.findByRole("textbox", { name: "Search steps" });
-    await user.type(search, "case 43");
+    fireEvent.change(search, { target: { value: "case 43" } });
     expect(screen.getAllByRole("treeitem")).toHaveLength(1);
     await user.click(screen.getByRole("treeitem"));
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", "case-43");
@@ -290,19 +298,32 @@ describe("RunView", () => {
     await user.click(screen.getByRole("button", { name: /^Errors/ }));
     expect(screen.getAllByRole("treeitem")).toHaveLength(1);
     expect(screen.getByRole("treeitem")).toHaveAttribute("data-row-id", "case-44");
-    await user.type(search, "not present");
+    fireEvent.change(search, { target: { value: "not present" } });
     expect(screen.getByText("No matching steps")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
   });
 
+  it("restores the step search and errors filter from a shared link", async () => {
+    vi.mocked(agentTraceCall).mockResolvedValue(research);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />, {
+      searchParams: "?steps_q=no+such+step&errors=true",
+    });
+    expect(await screen.findByRole("textbox", { name: "Search steps" })).toHaveValue("no such step");
+    expect(screen.getByText("No matching steps")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getAllByRole("treeitem").length).toBeGreaterThan(1);
+  });
+
   it("does not navigate steps while typing or moving the search cursor", async () => {
-    const user = userEvent.setup();
     renderRun(research);
     const search = await screen.findByRole("textbox", { name: "Search steps" });
     const selected = screen.getByTestId("detail-pane").getAttribute("data-row-id");
-    await user.type(search, "jk{ArrowDown}{ArrowUp}");
+    fireEvent.change(search, { target: { value: "jk" } });
     expect(search).toHaveValue("jk");
+    for (const key of ["j", "k", "ArrowDown", "ArrowUp"]) {
+      fireEvent.keyDown(search, { key });
+    }
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", selected);
   });
 

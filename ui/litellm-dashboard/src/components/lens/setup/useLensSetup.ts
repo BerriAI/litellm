@@ -19,8 +19,8 @@ export function useLensSetup(accessToken: string, enabled: boolean, canInvestiga
   const api = useLensApi(accessToken);
   const now = useNow(2000);
   const traces = useTraceAvailability(accessToken, enabled);
-  const list = useQuery({ ...lensQueries.list(api, false, settingUp), enabled: enabled && canInvestigate });
-  const activity = useQuery(lensQueries.activity(api, enabled && canInvestigate && list.isSuccess, false));
+  const list = useQuery({ ...lensQueries.list(api, settingUp), enabled: enabled && canInvestigate });
+  const activity = useQuery(lensQueries.activity(api, enabled && canInvestigate && list.isSuccess));
   const data = list.data ?? { lenses: [], workers: [], tracing_enabled: false };
   const traceState = traceSetupState(traces, data.tracing_enabled);
   const requestsReady = activity.data?.requests === true && !activity.error;

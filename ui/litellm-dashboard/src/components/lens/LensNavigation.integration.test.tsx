@@ -44,9 +44,9 @@ describe("Lens navigation", () => {
     expect(await screen.findByText("Trace polling active")).toBeVisible();
   });
 
-  it("opens existing lens links on findings", async () => {
+  it("opens existing lens links on investigations", async () => {
     renderWithProviders(<LensPage />, { searchParams: "?lens=saved-lens" });
-    expect(screen.getByRole("tab", { name: "Findings" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Investigations" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("Manage investigations")).toBeVisible();
   });
 

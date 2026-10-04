@@ -179,7 +179,7 @@ describe("Lens setup journey", () => {
     expect(await screen.findByRole("heading", { name: "My first review" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Get Lens running" })).not.toBeInTheDocument();
     expect(
-      within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Findings" }),
+      within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" }),
     ).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("setup")).toBeNull());
     const create = network.mock.calls.find(

@@ -15,7 +15,7 @@ export function InvestigationsWelcome({
   onConnect,
   onCreate,
   onRetry,
-  onDemo,
+  showPreview = false,
 }: {
   tracesReady: boolean;
   requestsReady?: boolean;
@@ -26,7 +26,7 @@ export function InvestigationsWelcome({
   onConnect: () => void;
   onCreate: () => void;
   onRetry: () => void;
-  onDemo?: () => void;
+  showPreview?: boolean;
 }) {
   const activityReady = tracesReady || requestsReady;
   const workerReady = activityReady && connected;
@@ -35,21 +35,26 @@ export function InvestigationsWelcome({
   const traceStatus = activityStatus(tracesReady, requestsReady, checking);
   const waitingForWorker = activityReady && !connected;
   const stepOffset = Number(!activityReady);
+  const introduction = activityReady
+    ? {
+        title: "Run your first investigation",
+        description: "Your recorded activity is ready. Connect a worker and choose what Lens should look for.",
+      }
+    : {
+        title: "Find what needs attention",
+        description: "Check how your agents behave. Get findings you can trace back to what happened.",
+      };
   const traceButtonClass = buttonVariants({
     variant: "default",
     className: "col-start-2 w-fit sm:col-start-auto",
   });
   return (
     <section aria-labelledby="lens-welcome" className="max-w-3xl pb-6">
-      {onDemo && <LensPreviewButton onClick={onDemo} />}
+      {showPreview && <LensPreviewButton />}
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
-        {activityReady ? "Run your first investigation" : "Find what needs attention"}
+        {introduction.title}
       </h2>
-      <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">
-        {activityReady
-          ? "Your recorded activity is ready. Connect a worker and choose what Lens should look for."
-          : "Check how your agents behave. Get findings you can trace back to what happened."}
-      </p>
+      <p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{introduction.description}</p>
       {activityReady && (
         <p role="status" className="mt-3 text-sm text-success">
           {traceStatus}
