@@ -316,6 +316,59 @@ describe("Lens interactive demo", () => {
     expect(panel.getByRole("button", { name: "Get install command" })).toBeVisible();
   });
 
+  it("keeps a pending worker install across tab switches and offers the first investigation once it connects", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    const token = "b".repeat(64);
+    const worker = {
+      id: "worker",
+      name: "Lens worker",
+      revoked: false,
+      analysis_key_id: token,
+      scope: { all_teams: true, api_key_hash: "", team_id: "" },
+      last_seen: "1970-01-01T00:00:00Z",
+    };
+    const workers = vi.fn((): (typeof worker)[] => []);
+    network.mockImplementation(async (input, init) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/lens") return Response.json({ lenses: [], workers: workers(), tracing_enabled: true });
+      if (path === "/lens/workers/register" && init?.method === "POST") {
+        workers.mockReturnValue([worker]);
+        return Response.json({ token: "lens-test-token", image: "lens-worker:v1", worker });
+      }
+      if (path === "/key/list") return Response.json({ keys: [{ token, key_alias: "Analysis" }], total_pages: 1 });
+      if (path === "/key/info") return Response.json({ info: { models: [], max_budget: null } });
+      if (path === "/lens/agents") return Response.json([]);
+      if (path.startsWith("/lens/preview")) return Response.json({ eligible: 0, selected: 0, executions: [] });
+      if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+      return Response.json({ data: [], traces: true, requests: false });
+    });
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?tab=settings",
+      onUrlUpdate,
+    });
+    const panel = within(await screen.findByRole("region", { name: "Settings" }));
+    await user.click(panel.getByText("Advanced options"));
+    await user.click(panel.getByRole("switch", { name: "Use an existing virtual key" }));
+    await user.click(panel.getByRole("combobox", { name: "Charge analysis to" }));
+    await user.click(await screen.findByRole("option", { name: "Analysis" }));
+    await user.click(panel.getByRole("button", { name: "Get install command" }));
+    expect(await panel.findByText("Waiting for your worker to connect…")).toBeInTheDocument();
+    const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
+    await user.click(tabs.getByRole("tab", { name: "Traces" }));
+    await waitFor(() => expect(panel.getByText("Waiting for your worker to connect…")).not.toBeVisible());
+    await user.click(tabs.getByRole("tab", { name: "Settings" }));
+    expect(panel.getByText("Waiting for your worker to connect…")).toBeVisible();
+    expect(panel.getByLabelText("Docker command preview")).toHaveTextContent("LENS_WORKER_TOKEN=lens-test-token");
+    workers.mockReturnValue([{ ...worker, last_seen: new Date().toISOString() }]);
+    await testQueryClient.refetchQueries({ queryKey: lensKeys.lists() });
+    expect(await panel.findByRole("heading", { name: "Worker connected" })).toBeVisible();
+    await user.click(panel.getByRole("button", { name: "New investigation" }));
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("investigations"));
+    expect(lastUrl(onUrlUpdate).get("dialog")).toBe("new");
+    expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
+  });
+
   it("hides the Settings tab for read-only sessions", async () => {
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly />);
     expect(await screen.findByRole("tablist", { name: "Lens" })).toBeVisible();

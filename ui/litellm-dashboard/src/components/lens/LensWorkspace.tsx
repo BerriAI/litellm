@@ -144,7 +144,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
             </LensPreviewContext.Provider>
           </TabsContent>
           {workers && list && (
-            <TabsContent value="settings" className={cn(PANEL, "p-6")}>
+            <TabsContent value="settings" keepMounted className={cn(PANEL, "p-6")}>
               <LensSettings
                 list={list}
                 workerReadyAction={
