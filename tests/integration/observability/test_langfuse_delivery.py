@@ -1328,50 +1328,26 @@ def test_audit_omit_policy_records_no_session(audit_omit_rig: _AuditRig, endpoin
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS)
 @pytest.mark.parametrize("bad_value", (123, ["x"]), ids=["int", "list"])
-def test_audit_non_string_caller_ids_are_ignored_consistently(
+def test_audit_non_string_caller_ids_fall_back_to_w3c(
     audit_rig: _AuditRig, endpoint: str, kind: str, expected_target: str, bad_value: JsonValue
 ) -> None:
     marker: Final = "auditbad" + uuid.uuid4().hex
     provider_secret: Final = "synthetic-provider-secret-" + marker
+    header_trace: Final = uuid.uuid4().hex
+    baggage_session: Final = "baggage-" + marker
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
 
     with wire_server(_audit_upstream(provider_secret, marker, targets)) as provider:
-        candidate: Final = audit_rig.candidate
-        destination: Final = audit_rig.destination
         model: Final = audit_rig.scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
-        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
-        outcomes: Final[list[tuple[str | None, str | None, str | None]]] = (
-            []
-        )  # mutable-ok: collects (span trace, span session, spend session) per leg
-        for attempt, headers in (
-            ("with_headers", _w3c_headers(uuid.uuid4().hex, "baggage-" + marker)),
-            ("no_headers", {}),
-        ):
-            response: Final = candidate.request(
-                "POST",
-                endpoint,
-                _trace_body(
-                    kind,
-                    model,
-                    f"{marker}-{attempt}",
-                    {"trace_id": bad_value, "session_id": bad_value},
-                ),
-                headers=headers,
-            )
-            assert response.status_code == 200, f"{attempt}: {response.text}"
-            call_id: Final = response.headers["x-litellm-call-id"]
-            span: Final = _await_span(received, destination, call_id)
-            row: Final = _await_spend_row(call_id)
-            outcomes.append(
-                (
-                    span.trace_id.hex(),
-                    str(_attribute(span.attributes, "session.id")),
-                    str(row["session_id"]),
-                )
-            )
-        assert outcomes[0] == outcomes[1], (
-            f"W3C headers must not change the outcome for caller {bad_value!r}: {outcomes}"
+        response: Final = audit_rig.candidate.request(
+            "POST",
+            endpoint,
+            _trace_body(kind, model, marker, {"trace_id": bad_value, "session_id": bad_value}),
+            headers=_w3c_headers(header_trace, baggage_session),
         )
+        assert response.status_code == 200, response.text
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+        _assert_call(response, received, audit_rig.destination, targets, expected_target, header_trace, baggage_session)
 
 
 @pytest.mark.parametrize(("endpoint", "kind", "expected_target"), _AUDIT_ENDPOINTS)
