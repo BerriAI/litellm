@@ -18,6 +18,7 @@ const LENS_PARSERS = {
   tab: parseAsStringLiteral(lensTabs),
   lens: parseAsString,
   demo: parseAsBoolean.withDefault(false),
+  setup: parseAsStringLiteral(["lens"]),
 };
 
 const ISSUE_PARSERS = { issue: parseAsString };
@@ -56,14 +57,16 @@ export interface LensRoute {
   readonly tab: LensTab | null;
   readonly lensId: string | null;
   readonly demo: boolean;
+  readonly settingUp: boolean;
   setTab(tab: LensTab): void;
   setLensId(lensId: string | null): void;
   setDemo(demo: boolean): void;
+  setSetup(settingUp: boolean): void;
 }
 
 /** Lens navigation lives in the URL, sample session included, so any view is a shareable link. */
 export function useLensRoute(): LensRoute {
-  const [{ tab, lens, demo }, setParams] = useQueryStates(SESSION_PARSERS, { history: "push" });
+  const [{ tab, lens, demo, setup }, setParams] = useQueryStates(SESSION_PARSERS, { history: "push" });
   const setTab = useCallback((next: LensTab) => void setParams({ tab: next }), [setParams]);
   const setLensId = useCallback(
     (next: string | null) => void setParams({ ...CLEARED_RESULTS, lens: next }),
@@ -73,7 +76,8 @@ export function useLensRoute(): LensRoute {
     (next: boolean) => void setParams(next ? { ...CLEARED_SESSION, demo: true } : CLEARED_SESSION),
     [setParams],
   );
-  return { tab, lensId: lens, demo, setTab, setLensId, setDemo };
+  const setSetup = useCallback((next: boolean) => void setParams({ setup: next ? "lens" : null }), [setParams]);
+  return { tab, lensId: lens, demo, settingUp: setup === "lens", setTab, setLensId, setDemo, setSetup };
 }
 
 export function useIssueRoute() {

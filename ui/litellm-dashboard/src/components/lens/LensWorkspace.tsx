@@ -3,7 +3,7 @@
 import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
-import { Activity, Aperture, ArrowUpRight, ScanSearch } from "lucide-react";
+import { Activity, Aperture, ArrowUpRight, Loader2, ScanSearch } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -17,6 +17,9 @@ import { useLensApi } from "./services";
 import { investigationActivity, type InvestigationActivity } from "./model/status";
 import { cn } from "@/lib/cva.config";
 import { LENS_TABS, useLensRoute, type LensTab } from "./route";
+import { Button } from "@/components/ui/button";
+import { LensGettingStarted } from "./setup/LensGettingStarted";
+import { useLensSetup, type LensSetupState } from "./setup/useLensSetup";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
@@ -144,15 +147,51 @@ const PANEL =
   "flex min-h-0 flex-1 flex-col overflow-y-auto animate-in fade-in-0 duration-300 motion-reduce:animate-none";
 
 function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
-  const { tab, lensId, demo, setTab, setDemo } = useLensRoute();
+  const { tab, lensId, demo, settingUp, setTab, setLensId, setDemo, setSetup } = useLensRoute();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
   const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canInvestigate = isProxyAdminTierRole(userRole);
+  const setupState = useLensSetup(accessToken, !demo, canInvestigate, settingUp);
+  const setupLocation = { tab: activeTab, canInvestigate, selected: !!lensId, requested: settingUp };
+  const showSetup = !demo && needsSetup(setupState, setupLocation);
+  const showSetupButton = !demo && !showSetup && isProxyAdminRole(userRole);
+  const startSetup = () => {
+    if (!settingUp) setSetup(true);
+  };
+  const showTraces = () => {
+    setSetup(false);
+    setTab(setupState.tracesReady ? "traces" : "investigations");
+  };
+  const showCreated = (id: string) => {
+    setSetup(false);
+    setLensId(id);
+    setTab("investigations");
+  };
   const activity = useInvestigationActivity(accessToken, canInvestigate);
   const preview = (view: LensTab) => ({
     target: previewTarget,
     open: !demo && activeTab === view ? () => setDemo(true) : undefined,
   });
+  const setupContent = setupState.loading ? (
+    <p role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+      <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+      Checking Lens setup…
+    </p>
+  ) : (
+    <TabsContent value={activeTab} keepMounted className={cn(PANEL, "p-4")}>
+      <LensGettingStarted
+        accessToken={accessToken}
+        state={setupState}
+        readOnly={readOnly}
+        canInvestigate={isProxyAdminRole(userRole)}
+        canMintTracingKey={isProxyAdminRole(userRole)}
+        onStart={startSetup}
+        onExit={showTraces}
+        onCreated={showCreated}
+        onDemo={() => setDemo(true)}
+      />
+    </TabsContent>
+  );
   return (
     <main className="flex h-full w-full min-w-0 flex-1 flex-col px-4 pt-3 pb-4">
       <Tabs value={activeTab} onValueChange={(value) => setTab(value as LensTab)} className="min-h-0 flex-1 gap-0">
@@ -177,38 +216,65 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
           </div>
           <LensModeSwitch activity={activity} demo={demo} />
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
+            {showSetupButton && (
+              <Button variant="outline" size="sm" onClick={startSetup}>
+                Set up Lens
+              </Button>
+            )}
             <div ref={setPreviewTarget} />
             <DemoToggle demo={demo} onChange={setDemo} />
           </div>
         </div>
         <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-card", frameOf(demo).card)}>
-          <TabsContent value="traces" keepMounted className={PANEL}>
-            <LensPreviewContext.Provider value={preview("traces")}>
-              <AgentTracesPage
-                accessToken={accessToken}
-                isActive={activeTab === "traces"}
-                readOnly={readOnly}
-                canMintTracingKey={isProxyAdminRole(userRole)}
-              />
-            </LensPreviewContext.Provider>
-          </TabsContent>
-          <TabsContent value="investigations" className={cn(PANEL, "p-4")}>
-            <LensPreviewContext.Provider value={preview("investigations")}>
-              {canInvestigate ? (
-                <InvestigationsView
-                  active={activeTab === "investigations"}
-                  accessToken={accessToken}
-                  readOnly={readOnly || !isProxyAdminRole(userRole)}
-                />
-              ) : (
-                <p className="py-6 text-sm text-muted-foreground">
-                  Investigations require proxy administrator access. You can still view your traces.
-                </p>
-              )}
-            </LensPreviewContext.Provider>
-          </TabsContent>
+          {showSetup ? (
+            setupContent
+          ) : (
+            <>
+              <TabsContent value="traces" keepMounted className={PANEL}>
+                <LensPreviewContext.Provider value={preview("traces")}>
+                  <AgentTracesPage
+                    accessToken={accessToken}
+                    isActive={activeTab === "traces"}
+                    readOnly={readOnly}
+                    canMintTracingKey={isProxyAdminRole(userRole)}
+                  />
+                </LensPreviewContext.Provider>
+              </TabsContent>
+              <TabsContent value="investigations" className={cn(PANEL, "p-4")}>
+                <LensPreviewContext.Provider value={preview("investigations")}>
+                  {canInvestigate ? (
+                    <InvestigationsView
+                      active={activeTab === "investigations"}
+                      accessToken={accessToken}
+                      readOnly={readOnly || !isProxyAdminRole(userRole)}
+                    />
+                  ) : (
+                    <p className="py-6 text-sm text-muted-foreground">
+                      Investigations require proxy administrator access. You can still view your traces.
+                    </p>
+                  )}
+                </LensPreviewContext.Provider>
+              </TabsContent>
+            </>
+          )}
         </div>
       </Tabs>
     </main>
   );
+}
+
+function needsSetup(
+  state: LensSetupState,
+  {
+    tab,
+    canInvestigate,
+    selected,
+    requested,
+  }: { tab: LensTab; canInvestigate: boolean; selected: boolean; requested: boolean },
+) {
+  if (requested) return true;
+  if (!state.missingTraces) return false;
+  if (tab === "traces") return true;
+  const hasActivity = state.hasInvestigations || state.hasRequests || selected;
+  return canInvestigate && !hasActivity;
 }

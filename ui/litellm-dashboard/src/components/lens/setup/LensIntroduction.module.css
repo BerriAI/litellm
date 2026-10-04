@@ -1,0 +1,114 @@
+.swarmRow {
+  animation: swarm-flow 5.2s linear infinite;
+}
+
+.organizedDots {
+  animation: organized-flow 1.6s linear infinite;
+}
+
+.gatewayGlow {
+  opacity: 0.7;
+  transition: opacity 300ms ease;
+}
+
+.flowGraphic:hover .gatewayGlow {
+  opacity: 1;
+}
+
+.sampleCard {
+  transition:
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.sampleCard:hover,
+.sampleCard:focus-within {
+  border-color: color-mix(in oklab, var(--color-indigo-500) 22%, var(--border));
+  box-shadow: 0 4px 20px -16px color-mix(in oklab, var(--color-indigo-500) 40%, transparent);
+}
+
+.examples {
+  --evidence-tint: color-mix(in oklab, var(--color-rose-400) 6%, transparent);
+  --evidence-outline: color-mix(in oklab, var(--color-rose-400) 32%, transparent);
+}
+
+.evidenceLink {
+  cursor: pointer;
+  border-radius: 4px;
+  outline-offset: 4px;
+  transition: background-color 200ms ease;
+}
+
+.evidenceLink:focus-visible {
+  outline: 2px solid var(--ring);
+}
+
+.evidenceLink:hover {
+  background: var(--evidence-tint);
+}
+
+.evidenceOutput,
+.evidenceFinding,
+.evidenceBar {
+  transition:
+    background-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.evidenceFinding {
+  border-radius: 6px;
+}
+
+.examples:is(
+    [data-evidence-active="true"],
+    :has([data-evidence-link]:hover),
+    :has([data-evidence-link]:focus-visible)
+  ) {
+  .evidenceOutput {
+    box-shadow: inset 0 0 0 1px var(--evidence-outline);
+  }
+
+  .evidenceFinding {
+    background: var(--evidence-tint);
+    box-shadow: 0 0 0 7px var(--evidence-tint);
+  }
+
+  .evidenceBar {
+    box-shadow: 0 0 10px 2px var(--evidence-outline);
+  }
+}
+
+@keyframes swarm-flow {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(240px);
+  }
+}
+
+@keyframes organized-flow {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(80px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swarmRow,
+  .organizedDots {
+    animation: none;
+    opacity: 0.75;
+  }
+
+  .gatewayGlow,
+  .sampleCard,
+  .evidenceLink,
+  .evidenceOutput,
+  .evidenceFinding,
+  .evidenceBar {
+    transition: none;
+  }
+}
