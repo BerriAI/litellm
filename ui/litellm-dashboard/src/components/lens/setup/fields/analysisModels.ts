@@ -1,8 +1,20 @@
-export interface AnalysisModelInfo {
-  model_group: string;
-  providers: string[];
-  mode?: string | null;
-  supported_openai_params?: string[] | null;
+import type { AnalysisModelInfo } from "../../model/types";
+import type { AnalysisModels } from "./useAnalysisModels";
+
+export interface ModelGate {
+  readonly modelValid: boolean;
+  readonly unavailable: boolean;
+  readonly unsupported: boolean;
+}
+
+/** An edit may keep its saved model while the model list is loading or failing; a new run needs a verified one. */
+export function modelGate(models: AnalysisModels, model: string, preservingSavedModel: boolean): ModelGate {
+  const unsupported = models.modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
+  const modelsReady = !models.modelsLoading && !models.modelsError;
+  const unavailable = !!model && modelsReady && !models.models.includes(model);
+  const supported = !unsupported && !unavailable;
+  const verified = modelsReady || preservingSavedModel;
+  return { modelValid: !!model && supported && verified, unavailable, unsupported };
 }
 
 export function analysisModelOptions(models: string[], details: AnalysisModelInfo[]) {

@@ -61,6 +61,16 @@ describe("createApiClient", () => {
     expect(init.body).toBe(JSON.stringify({ model_name: "gpt" }));
   });
 
+  it("reports a non-JSON success body as an ApiError naming the path instead of a parse error", async () => {
+    const html = new Response("<!DOCTYPE html><html></html>", { headers: { "Content-Type": "text/html" } });
+    const client = createApiClient({ getBaseUrl: () => "", fetchImpl: vi.fn(async () => html) });
+
+    const error = await client.get("/lens").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).message).toBe("Expected JSON from /lens but the server returned text/html");
+  });
+
   it("throws ApiError with the derived message and invokes onError on a non-2xx response", async () => {
     const fetchImpl = vi.fn(async () => errorResponse(403, { error: { message: "no access" } }));
     const onError = vi.fn();
