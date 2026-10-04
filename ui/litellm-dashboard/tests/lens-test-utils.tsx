@@ -1,6 +1,13 @@
 import type { ReactElement } from "react";
 import { LensServicesProvider, liveLensServices } from "@/components/lens/LensServices";
+import { LENS_INTRO_DISMISSED } from "@/components/lens/setup/LensIntroDialog";
+import { writeStorage } from "@/lib/storage";
 import { renderWithProviders } from "./test-utils";
+
+/** The Lens introduction opens on a first visit; tests about anything else start with it dismissed. */
+export function dismissLensIntro() {
+  writeStorage(LENS_INTRO_DISMISSED, true);
+}
 
 type LensRenderOptions = Parameters<typeof renderWithProviders>[1] & { accessToken?: string };
 

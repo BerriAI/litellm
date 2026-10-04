@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { dismissLensIntro } from "@/../tests/lens-test-utils";
 import LensPage from "@/app/(dashboard)/lens/page";
 
 const { auth } = vi.hoisted(() => ({ auth: vi.fn() }));
@@ -18,6 +19,9 @@ vi.mock("./investigations/InvestigationsView", () => ({
 describe("Lens navigation", () => {
   beforeEach(() => {
     testQueryClient.clear();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    dismissLensIntro();
     auth.mockReturnValue({ accessToken: "test-token", userRole: "Admin", isViewOnly: false });
     vi.stubGlobal(
       "fetch",

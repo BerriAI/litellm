@@ -48,7 +48,7 @@ export function LensGettingStarted({
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-8 py-3 sm:space-y-10 sm:py-4">
+    <div className="w-full space-y-6">
       <LensIntroduction onStart={start} onDemo={onDemo} />
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_280px] xl:gap-8">
         <section
