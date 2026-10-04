@@ -203,10 +203,12 @@ describe("AgentTracesSection", () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
     vi.mocked(apiClient.get).mockResolvedValue(traceList);
     renderSection();
-    expect(await screen.findByText("No runs match these filters.")).toBeVisible();
+    expect(await screen.findByText("No runs in this time range")).toBeVisible();
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/v1/traces", { accessToken: "sk-test", query: { start_ms: 0 } });
+    fireEvent.click(screen.getByRole("button", { name: "Set up tracing" }));
+    expect(await screen.findByRole("heading", { name: "Connect another agent" })).toBeVisible();
   });
 
   it("checks proxy readiness, waits for an agent, and confirms receipt using actual query results", async () => {
@@ -277,13 +279,13 @@ describe("AgentTracesSection", () => {
     vi.mocked(apiClient.get).mockRejectedValue(new ApiError("History unavailable", 503, {}));
     renderSection();
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not check earlier traces. History unavailable");
-    expect(screen.getByText("No runs match these filters.")).toBeVisible();
+    expect(screen.getByText("No runs in this time range")).toBeVisible();
     expect(screen.queryByText(/Could not load runs/)).not.toBeInTheDocument();
 
     vi.mocked(apiClient.get).mockResolvedValue(traceList);
     fireEvent.click(screen.getByRole("button", { name: "Retry trace check" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(screen.getByText("No runs match these filters.")).toBeVisible();
+    expect(screen.getByText("No runs in this time range")).toBeVisible();
     expect(agentTraceListCall).toHaveBeenCalledTimes(1);
   });
 
@@ -635,7 +637,7 @@ describe("AgentTracesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Time range" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last hour" }));
 
-    expect(await screen.findByText("No runs match these filters.")).toBeInTheDocument();
+    expect(await screen.findByText("No runs in this time range")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Time range" })).toBeInTheDocument();
     expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
   });

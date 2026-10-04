@@ -179,9 +179,7 @@ describe("Lens interactive demo", () => {
     await user.click(within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Traces" }));
     expect(await screen.findByText("Where is order #1042?")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Set up tracing" }));
-    expect(await screen.findByRole("heading", { name: "Connect another agent" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set up tracing" })).not.toBeInTheDocument();
   });
 
   it("shows the header preview only for the active tab that still needs setup", async () => {

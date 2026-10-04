@@ -25,6 +25,7 @@ interface AgentTracesTableProps {
   onLoadMore: () => void;
   onOpenTrace: (trace: TraceSummary) => void;
   selectedKey?: string | null;
+  onSetUpTracing?: () => void;
 }
 
 export const formatCost = (cost: number): string => {
@@ -71,6 +72,20 @@ function PlaceholderRow({ rowRef }: { rowRef?: (node: Element | null) => void })
   );
 }
 
+function EmptyRuns({ onSetUpTracing }: { onSetUpTracing?: () => void }) {
+  if (!onSetUpTracing)
+    return <div className="py-16 text-center text-xs text-muted-foreground">No runs match these filters.</div>;
+  return (
+    <div className="flex flex-col items-center gap-1 py-16 text-center">
+      <p className="text-sm font-medium">No runs in this time range</p>
+      <p className="text-xs text-muted-foreground">Connect an agent to start sending traces.</p>
+      <Button size="sm" className="mt-3" onClick={onSetUpTracing}>
+        Set up tracing
+      </Button>
+    </div>
+  );
+}
+
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
@@ -82,6 +97,7 @@ export function AgentTracesTable({
   onLoadMore,
   onOpenTrace,
   selectedKey = null,
+  onSetUpTracing,
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
@@ -203,7 +219,7 @@ export function AgentTracesTable({
           </Button>
         </div>
       )}
-      {isEmpty && <div className="py-16 text-center text-xs text-muted-foreground">No runs match these filters.</div>}
+      {isEmpty && <EmptyRuns onSetUpTracing={onSetUpTracing} />}
     </div>
   );
 }

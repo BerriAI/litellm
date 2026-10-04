@@ -3,7 +3,6 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
-import { HeaderActions } from "@/components/lens/HeaderActions";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
@@ -21,7 +20,6 @@ import type { TraceSummary } from "./traceTypes";
 import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
-import { ActiveDot } from "./ActiveDot";
 import { TracingSetupCard } from "./TracingSetupCard";
 import { useTracesLive } from "./tracesApi";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
@@ -187,7 +185,6 @@ export function AgentTracesSection({
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
       <TracesReceived received={setup.received} />
-      <TracingSetupAction live={live} isActive={isActive} onClick={() => setShowSetup(true)} />
       <RunDrawer
         trace={openTrace}
         runs={runs}
@@ -233,6 +230,7 @@ export function AgentTracesSection({
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}
         selectedKey={openTrace === null ? null : traceKey(openTrace)}
+        onSetUpTracing={live && traces.traces.length === 0 ? () => setShowSetup(true) : undefined}
       />
       <RunsFooter
         count={runs.length}
@@ -242,18 +240,6 @@ export function AgentTracesSection({
         onResetZoom={() => setZoom(null)}
       />
     </div>
-  );
-}
-
-function TracingSetupAction({ live, isActive, onClick }: { live: boolean; isActive: boolean; onClick: () => void }) {
-  if (!live || !isActive) return null;
-  return (
-    <HeaderActions>
-      <Button variant="outline" size="sm" onClick={onClick} className="shrink-0 gap-1.5">
-        <ActiveDot />
-        Set up tracing
-      </Button>
-    </HeaderActions>
   );
 }
 
