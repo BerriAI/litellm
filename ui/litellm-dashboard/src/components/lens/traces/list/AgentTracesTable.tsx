@@ -5,6 +5,8 @@ import { ArrowDown, ChevronRight } from "lucide-react";
 import { useEffect } from "react";
 import { useInView } from "react-intersection-observer";
 
+import { DataTableViewOptions } from "@/components/shared/DataTable/DataTableViewOptions";
+import { usePersistedColumnVisibility } from "@/components/shared/DataTable/usePersistedColumnVisibility";
 import { InspectorTable, useInspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -81,6 +83,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   {
     id: "time",
     size: 170,
+    enableHiding: false,
     header: () => (
       <span className="inline-flex items-center gap-1 whitespace-nowrap">
         Time <ArrowDown className="size-2.5" />
@@ -95,6 +98,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
       </span>
     ),
     meta: {
+      title: "Time",
       className: "font-mono tabular-nums text-muted-foreground",
       renderSkeleton: () => <Skeleton className="h-3 w-24" />,
     },
@@ -102,6 +106,7 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   {
     id: "agent",
     size: 160,
+    enableHiding: false,
     header: "Agent",
     cell: ({ row }) => <AgentCell run={row.original} />,
     meta: {
@@ -157,9 +162,10 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   {
     id: "open",
     size: 32,
-    header: "",
+    enableHiding: false,
+    header: ({ table }) => <DataTableViewOptions table={table} label="Columns" iconOnly />,
     cell: () => <ChevronRight className="size-3 text-muted-foreground/60" />,
-    meta: { className: "px-0", renderSkeleton: () => null },
+    meta: { className: "px-0", headerClassName: "px-1", renderSkeleton: () => null },
   },
 ];
 
@@ -214,11 +220,14 @@ export function AgentTracesTable({
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
   const autoContinue = settled && hasMore && traces.length > 0;
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
     columns: RUN_COLUMNS,
     getRowId: runKey,
     autoResetAll: false,
+    state: { columnVisibility },
+    onColumnVisibilityChange,
     getCoreRowModel: getCoreRowModel(),
   };
   const table = useReactTable(tableOptions);
