@@ -9321,3 +9321,19 @@ class TestRetrieveBatchReusesFetchedResultFiles:
 
         assert batch._hidden_params["response_cost"] == 1.5
         assert batch.usage.total_tokens == 15
+
+
+def test_caller_supplied_litellm_params_cannot_forge_logging_markers(logging_obj):
+    """A request body key `litellm_params` flows into optional_params; the logging
+    kwargs must keep the internal litellm_params or a caller could forge markers
+    (batch_parent_id) that spend sinks and router counters use to skip events."""
+    from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
+
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_group": "gpt-4o"}},
+        optional_params={"litellm_params": {"batch_parent_id": "fake-batch"}},
+    )
+
+    assert logging_obj.model_call_details["litellm_params"] is logging_obj.litellm_params
+    assert "batch_parent_id" not in logging_obj.model_call_details["litellm_params"]
+    assert not is_batch_line_item_event(logging_obj.model_call_details)

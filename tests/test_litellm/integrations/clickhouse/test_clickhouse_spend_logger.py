@@ -366,7 +366,26 @@ async def test_batch_line_item_success_event_does_not_write_spend(monkeypatch: p
         now,
     )
 
-    assert len(logger.log_queue) == 1
+    # The aggregate aretrieve_batch event bills the batch; it must still write one
+    # row with the batch's full cost even while line items are skipped.
+    await logger.async_log_success_event(
+        {
+            "standard_logging_object": {
+                **_minimal_payload("batch-1", status="success", cost=0.0001032),
+                "call_type": "aretrieve_batch",
+            },
+            "call_type": "aretrieve_batch",
+            "litellm_params": {},
+        },
+        None,
+        now,
+        now,
+    )
+
+    assert len(logger.log_queue) == 2
     assert logger.log_queue[0]["request_id"] == "chatcmpl-live-1"
+    assert logger.log_queue[1]["call_type"] == "aretrieve_batch"
+    assert logger.log_queue[1]["request_id"] == "batch-1"
+    assert logger.log_queue[1]["spend"] == 0.0001032
     if logger._flush_task is not None:
         logger._flush_task.cancel()
