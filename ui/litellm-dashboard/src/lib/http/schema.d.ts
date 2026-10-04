@@ -9259,6 +9259,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/{lens_id}/runs/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Reviews */
+        get: operations["read_reviews_lens__lens_id__runs__job_id__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/litellm/.well-known/litellm-ui-config": {
         parameters: {
             query?: never;
@@ -44111,6 +44128,13 @@ export interface components {
              */
             verdicts: components["schemas"]["ReviewVerdict"][];
         };
+        /** ReviewPage */
+        ReviewPage: {
+            /** Reviewed */
+            reviewed: number;
+            /** Reviews */
+            reviews: components["schemas"]["Review"][];
+        };
         /** ReviewSpan */
         ReviewSpan: {
             /**
@@ -63069,6 +63093,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_reviews_lens__lens_id__runs__job_id__reviews_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPage"];
                 };
             };
             /** @description Validation Error */
