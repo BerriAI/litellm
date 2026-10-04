@@ -243,9 +243,10 @@ async def test_anthropic_messages_with_mcp_hands_execution_the_requests_served_t
     only the name and arguments, leaving /v1/messages permanently colder than
     the other two bridges even though all three resolve the same definitions.
     """
+    from mcp.types import Tool
+
     from litellm.llms.anthropic.pass_through.messages import mcp_handler
     from litellm.responses.mcp.request_context import MCPRequestContext
-    from mcp.types import Tool
 
     served = [
         Tool(
