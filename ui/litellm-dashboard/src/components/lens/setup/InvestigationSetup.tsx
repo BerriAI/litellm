@@ -1,22 +1,21 @@
 "use client";
 
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
-import { useEffect, useState, type ReactNode } from "react";
-import { Check, ChevronLeft } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronLeft } from "lucide-react";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/cva.config";
 import {
   investigationSchema,
   investigationDefaults,
   investigationSettings,
   investigationStepFields,
-  SETUP_STEPS,
   type InvestigationInput,
   type InvestigationOutput,
-  type SetupStep,
+  type SetupStep as SetupStepId,
 } from "./investigationSchema";
+import { nextSetupStep, SetupStep, SetupSteps } from "./SetupSteps";
 import { ScopeFields } from "./fields/ScopeFields";
 import { SampleFields } from "./fields/SampleFields";
 import { ExpectationsFields } from "./fields/ExpectationsFields";
@@ -30,18 +29,11 @@ import { type Settings } from "../model/types";
 import { type AnalysisModelInfo } from "../model/types";
 
 type SetupMode = "new" | "edit" | "duplicate";
-type StepState = "done" | "current" | "upcoming";
 
 const TITLES: Record<SetupMode, string> = {
   new: "New investigation",
   edit: "Edit investigation",
   duplicate: "Duplicate investigation",
-};
-
-const STEPS: Readonly<Record<SetupStep, { title: string; description: string }>> = {
-  activity: { title: "Activity", description: "Which traces or requests to review" },
-  criteria: { title: "Criteria", description: "What the agent should do and what to watch for" },
-  run: { title: "Run", description: "Schedule, analysis model, and budget" },
 };
 
 interface ModelGate {
@@ -88,62 +80,9 @@ function criteriaSummary(values: Pick<InvestigationInput, "context" | "watching"
   return headline ? `${headline} · ${checksLabel}` : checksLabel;
 }
 
-const STEP_BADGE: Record<StepState, string> = {
-  done: "border-foreground text-foreground",
-  current: "border-foreground bg-foreground text-background",
-  upcoming: "border-border text-muted-foreground",
-};
-
-/** One row of the vertical stepper: finished steps collapse to a summary and reopen on click. */
-function SetupStepRow({
-  step,
-  index,
-  state,
-  summary,
-  onOpen,
-  children,
-}: {
-  step: SetupStep;
-  index: number;
-  state: StepState;
-  summary: string;
-  onOpen: () => void;
-  children: ReactNode;
-}) {
-  const { title, description } = STEPS[step];
-  const last = index === SETUP_STEPS.length - 1;
-  return (
-    <li className={cn("relative flex gap-4", !last && "pb-8")}>
-      {!last && <span aria-hidden="true" className="absolute top-7 bottom-0 left-3.5 w-px bg-border" />}
-      <span
-        aria-hidden="true"
-        className={cn(
-          "z-raised flex size-7 shrink-0 items-center justify-center rounded-full border bg-card text-xs font-medium",
-          STEP_BADGE[state],
-        )}
-      >
-        {state === "done" ? <Check className="size-3.5" /> : index + 1}
-      </span>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <button
-          type="button"
-          disabled={state !== "done"}
-          aria-current={state === "current" ? "step" : undefined}
-          onClick={onOpen}
-          className="flex w-full flex-col items-start gap-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default"
-        >
-          <span className={cn("text-sm font-semibold", state === "upcoming" && "text-muted-foreground")}>{title}</span>
-          <span className="text-xs text-muted-foreground">{state === "done" ? summary : description}</span>
-        </button>
-        {state === "current" && <div className="mt-4 space-y-5">{children}</div>}
-      </div>
-    </li>
-  );
-}
-
 interface SetupProps {
   initial?: Settings;
-  mode?: SetupMode;
+  mode: SetupMode;
   defaultSource?: Settings["source"];
   accessToken: string;
   ready?: boolean;
@@ -153,14 +92,14 @@ interface SetupProps {
 
 /** Replaces the Investigations tab body: a three-step setup on the left, the activity it matches on the right. */
 export function InvestigationSetup(props: SetupProps) {
-  const { initial, mode = initial ? "edit" : "new", defaultSource = "traces" } = props;
+  const { initial, mode, defaultSource = "traces" } = props;
   const form = useZodForm(investigationSchema, {
     defaultValues: investigationDefaults(initial, mode, defaultSource),
     mode: "onChange",
   });
   return (
     <FormProvider {...form}>
-      <SetupEditor {...props} mode={mode} form={form} />
+      <SetupEditor {...props} form={form} />
     </FormProvider>
   );
 }
@@ -173,9 +112,9 @@ function SetupEditor({
   onClose,
   onSave,
   form,
-}: SetupProps & { mode: SetupMode; form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
+}: SetupProps & { form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
   const { models, modelDetails, modelsLoading, modelsError, defaultModel } = useAnalysisModels();
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState<SetupStepId>("activity");
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
   const { control, register, setValue, subscribe, trigger, formState } = form;
@@ -204,7 +143,8 @@ function SetupEditor({
     [setValue, subscribe],
   );
   const next = async () => {
-    if (await trigger(investigationStepFields[SETUP_STEPS[step]])) setStep(step + 1);
+    const following = nextSetupStep(step);
+    if (following && (await trigger(investigationStepFields[step]))) setStep(following);
   };
   const save = form.handleSubmit(async (values) => {
     setError("");
@@ -221,36 +161,6 @@ function SetupEditor({
   const canSave = formReady && gate.modelValid && runReady;
   const saveLabel = saveLabelFor(mode, repeat);
   const offline = !ready && mode !== "edit";
-  const summaries = [activitySummary(selection), criteriaSummary({ context, watching, questions }), ""];
-  const stateOf = (index: number): StepState => {
-    if (index < step) return "done";
-    return index === step ? "current" : "upcoming";
-  };
-  const stepContent = (key: SetupStep) => {
-    if (key === "activity")
-      return (
-        <>
-          <label className="grid gap-2 text-sm font-medium">
-            Investigation name
-            <Input {...register("name")} placeholder="e.g. Support quality" />
-          </label>
-          <ScopeFields {...activity.scope} />
-          <SampleFields />
-        </>
-      );
-    if (key === "criteria") return <ExpectationsFields />;
-    return (
-      <RunFields
-        modelValid={gate.modelValid}
-        models={models}
-        modelDetails={modelDetails}
-        modelsLoading={modelsLoading}
-        modelsError={modelsError}
-        unavailable={gate.unavailable}
-        unsupported={gate.unsupported}
-      />
-    );
-  };
   return (
     <section aria-label={TITLES[mode]} className="flex min-w-0 flex-1 flex-col gap-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -282,34 +192,56 @@ function SetupEditor({
         </p>
       )}
       <div className="grid min-w-0 gap-8 lg:grid-cols-2">
-        <ol aria-label="Investigation setup" className="min-w-0">
-          {SETUP_STEPS.map((key, index) => (
-            <SetupStepRow
-              key={key}
-              step={key}
-              index={index}
-              state={stateOf(index)}
-              summary={summaries[index]}
-              onOpen={() => setStep(index)}
-            >
-              {stepContent(key)}
-              {error && key === "run" && (
-                <p role="alert" className="text-sm text-destructive">
-                  {error}
-                </p>
-              )}
-              <div className="flex justify-end pt-1">
-                {key !== "run" ? (
-                  <Button onClick={() => void next()}>Continue</Button>
-                ) : (
-                  <Button disabled={!canSave} onClick={() => void save()}>
-                    {formState.isSubmitting ? "Saving…" : saveLabel}
-                  </Button>
-                )}
-              </div>
-            </SetupStepRow>
-          ))}
-        </ol>
+        <SetupSteps aria-label="Investigation setup" current={step} onOpen={setStep}>
+          <SetupStep
+            id="activity"
+            heading="Activity"
+            description="Which traces or requests to review"
+            summary={activitySummary(selection)}
+          >
+            <label className="grid gap-2 text-sm font-medium">
+              Investigation name
+              <Input {...register("name")} placeholder="e.g. Support quality" />
+            </label>
+            <ScopeFields {...activity.scope} />
+            <SampleFields />
+            <div className="flex justify-end pt-1">
+              <Button onClick={() => void next()}>Continue</Button>
+            </div>
+          </SetupStep>
+          <SetupStep
+            id="criteria"
+            heading="Criteria"
+            description="What the agent should do and what to watch for"
+            summary={criteriaSummary({ context, watching, questions })}
+          >
+            <ExpectationsFields />
+            <div className="flex justify-end pt-1">
+              <Button onClick={() => void next()}>Continue</Button>
+            </div>
+          </SetupStep>
+          <SetupStep id="run" heading="Run" description="Schedule, analysis model, and budget" summary="">
+            <RunFields
+              modelValid={gate.modelValid}
+              models={models}
+              modelDetails={modelDetails}
+              modelsLoading={modelsLoading}
+              modelsError={modelsError}
+              unavailable={gate.unavailable}
+              unsupported={gate.unsupported}
+            />
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <div className="flex justify-end pt-1">
+              <Button disabled={!canSave} onClick={() => void save()}>
+                {formState.isSubmitting ? "Saving…" : saveLabel}
+              </Button>
+            </div>
+          </SetupStep>
+        </SetupSteps>
         <div className="min-w-0 space-y-3 lg:sticky lg:top-0 lg:self-start">
           <MatchingActivityPreview
             {...activity.preview}
