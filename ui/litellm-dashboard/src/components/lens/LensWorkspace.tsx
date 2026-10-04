@@ -142,7 +142,10 @@ function LensModeSwitch({
               aria-description={
                 view === "investigations" && activity !== "idle" ? ACTIVITY_DOT[activity].label : undefined
               }
-              className="relative z-raised inline-flex h-full items-center gap-2 rounded-full px-4 text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground"
+              className={cn(
+                "relative z-raised inline-flex h-full items-center gap-2 rounded-full text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground",
+                view === "settings" ? "px-2.5" : "px-4",
+              )}
             >
               <span className="relative inline-flex">
                 <Icon aria-hidden="true" className="size-4" />
@@ -153,7 +156,7 @@ function LensModeSwitch({
                   />
                 )}
               </span>
-              <span>{label}</span>
+              <span className={cn(view === "settings" && "sr-only")}>{label}</span>
               {view === "investigations" && setup && (
                 <span className="rounded-full bg-muted px-1.5 py-0.5 text-xs leading-none font-medium text-muted-foreground animate-in fade-in-0 duration-200">
                   {setup}
