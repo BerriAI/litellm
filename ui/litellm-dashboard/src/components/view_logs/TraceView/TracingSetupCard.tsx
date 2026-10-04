@@ -654,7 +654,6 @@ export function TracingSetupCard({
   checking = false,
   readOnly = false,
   canMintTracingKey = false,
-  onDemo,
 }: {
   detail: string | null;
   accessToken: string;
@@ -664,7 +663,6 @@ export function TracingSetupCard({
   checking?: boolean;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
-  onDemo?: () => void;
 }) {
   const [checked, setChecked] = useState(false);
   const enabled = detail === null;
@@ -675,7 +673,7 @@ export function TracingSetupCard({
 
   return (
     <div className="w-full max-w-3xl pb-8" data-testid="tracing-setup-card">
-      {onDemo && <LensPreviewButton onClick={onDemo} />}
+      {!connected && <LensPreviewButton />}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, connected)}</h2>
         <span role="status" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">

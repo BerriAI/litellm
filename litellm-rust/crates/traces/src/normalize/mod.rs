@@ -53,6 +53,7 @@ pub enum CallKey {
     ProviderResponse(String),
     /// The span is the HTTP request itself; LiteLLM logs its `traceparent` span id.
     Transport,
+    GatewayAttempt,
 }
 
 impl fmt::Display for CallKey {
@@ -61,6 +62,7 @@ impl fmt::Display for CallKey {
             Self::LiteLlmRequest(id) => write!(formatter, "litellm_request:{id}"),
             Self::ProviderResponse(id) => write!(formatter, "provider_response:{id}"),
             Self::Transport => formatter.write_str("transport:"),
+            Self::GatewayAttempt => formatter.write_str("gateway_attempt:"),
         }
     }
 }
@@ -77,6 +79,7 @@ impl FromStr for CallKey {
                 Ok(Self::LiteLlmRequest(id.to_owned()))
             }
             Some(("transport", "")) => Ok(Self::Transport),
+            Some(("gateway_attempt", "")) => Ok(Self::GatewayAttempt),
             _ => Err(crate::InvalidCallKey),
         }
     }

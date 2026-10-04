@@ -8,7 +8,7 @@ use serde::{
     ser::{SerializeMap, SerializeSeq},
 };
 
-use super::limits::{Budget, MAX_ATTRIBUTES};
+use super::limits::Budget;
 use crate::Error;
 
 struct AttributeWriter<'a> {
@@ -33,7 +33,7 @@ pub(super) fn attributes(
     values: Vec<KeyValue>,
     budget: &mut Budget,
 ) -> Result<BTreeMap<String, String>, Error> {
-    if values.len() > MAX_ATTRIBUTES {
+    if values.len() > budget.limits.attributes {
         return Err(Error::TooLarge);
     }
     values

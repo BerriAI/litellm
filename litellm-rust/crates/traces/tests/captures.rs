@@ -172,7 +172,7 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         .flatten()
         .find_map(|key| match key {
             CallKey::ProviderResponse(id) => Some(id.clone()),
-            CallKey::LiteLlmRequest(_) | CallKey::Transport => None,
+            CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => None,
         })
         .unwrap_or_default();
     TraceSpansRow {
@@ -330,9 +330,7 @@ fn append_response_id(document: &mut Value, trace_id: &str, span_id: &str, respo
 
 #[rstest]
 fn captured_trace_cost_matches_spend_logs(
-    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
-    #[exclude("deeplite_swarm")]
-    spend_logs: PathBuf,
+    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")] spend_logs: PathBuf,
 ) {
     let name = capture_name(&spend_logs);
     let (_, capture, rows, spends) = fixture(&spend_logs);
@@ -347,9 +345,7 @@ fn captured_trace_cost_matches_spend_logs(
 
 #[rstest]
 fn unrelated_sibling_transport_leaves_cost_unchanged(
-    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
-    #[exclude("deeplite_swarm")]
-    spend_logs: PathBuf,
+    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")] spend_logs: PathBuf,
 ) {
     let name = capture_name(&spend_logs);
     let (_, capture, rows, spends) = fixture(&spend_logs);
@@ -359,7 +355,11 @@ fn unrelated_sibling_transport_leaves_cost_unchanged(
     let calls: Vec<_> = rows
         .iter()
         .filter(|row| {
-            row.kind == ObservationType::Llm && !row.call_keys.contains(&CallKey::Transport)
+            row.kind == ObservationType::Llm
+                && !row
+                    .call_keys
+                    .iter()
+                    .any(|key| matches!(key, CallKey::Transport | CallKey::GatewayAttempt))
         })
         .cloned()
         .collect();
@@ -388,9 +388,7 @@ fn unrelated_sibling_transport_leaves_cost_unchanged(
 
 #[rstest]
 fn redundant_genai_response_id_keeps_call_evidence(
-    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")]
-    #[exclude("deeplite_swarm")]
-    spend_logs: PathBuf,
+    #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")] spend_logs: PathBuf,
 ) {
     let (data, capture, _, _) = fixture(&spend_logs);
     let name = capture.name;
@@ -408,7 +406,9 @@ fn redundant_genai_response_id_keeps_call_evidence(
                 .iter()
                 .filter_map(|key| match key {
                     CallKey::ProviderResponse(id) => Some(id.clone()),
-                    CallKey::LiteLlmRequest(_) | CallKey::Transport => None,
+                    CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => {
+                        None
+                    }
                 })
                 .collect();
             (!response_ids.is_empty()).then(|| {
