@@ -6992,6 +6992,20 @@ class TestMCPServerManager:
                 " eyJ.x.y",
                 id="bearer-credential-is-taken-verbatim-after-one-space",
             ),
+            pytest.param(
+                {"authorization": "Bearer sk-request-key", "Authorization": "Bearer eyJ.caller.jws"},
+                "sk-request-key",
+                "eyJ.caller.jws",
+                "eyJ.caller.jws",
+                id="responses-bridge-tool-authorization-overrides-the-request-key",
+            ),
+            pytest.param(
+                {"Authorization": "Bearer eyJ.caller.jws", "authorization": "Bearer sk-request-key"},
+                "sk-request-key",
+                "sk-request-key",
+                None,
+                id="last-duplicate-case-authorization-wins",
+            ),
         ],
     )
     async def test_pre_call_tool_check_separates_raw_bearer_from_subject(

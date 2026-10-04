@@ -6045,11 +6045,12 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
-        inbound_authorization: Final = _raw_header_value(raw_headers, "authorization") or ""
+        normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
+        inbound_authorization: Final = normalized_raw.get("authorization", "")
         incoming_bearer_token: Final = (
             inbound_authorization[len("bearer ") :] if inbound_authorization.lower().startswith("bearer ") else None
         )
-        incoming_subject_token: Final = self._caller_sign_in_subject_token(None, raw_headers)
+        incoming_subject_token: Final = self._caller_sign_in_subject_token(None, normalized_raw)
 
         pre_hook_kwargs: Final = {
             "guardrail_context": guardrail_context,
