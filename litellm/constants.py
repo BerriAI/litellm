@@ -1943,6 +1943,9 @@ END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
 # How long a failed registry load is remembered as "unusable", so a degraded Postgres
 # is not re-scanned on every request on top of the per-id lookups it falls back to.
 REGISTRY_ERROR_NEGATIVE_CACHE_TTL: Final = 30
+# Ceiling, in seconds, on each wait a registry load makes: for the single-flight lock and for the
+# scan itself. Past it the request falls back to per-id lookups instead of queueing behind a stuck load.
+REGISTRY_LOAD_TIMEOUT_SECONDS: Final = float(os.getenv("REGISTRY_LOAD_TIMEOUT_SECONDS", "5.0"))
 
 # Sentry Scrubbing Configuration
 SENTRY_DENYLIST: Final = [
