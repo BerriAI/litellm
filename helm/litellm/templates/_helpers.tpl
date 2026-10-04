@@ -481,7 +481,11 @@ or gateway.collector.address is a tcp://127.0.0.1:<port> address.
 {{- $backendTag := .Values.backend.image.tag | default .Chart.AppVersion -}}
 {{- $releaseTag := ternary (printf "v%s" $backendTag) $backendTag (regexMatch "^[0-9]" $backendTag) -}}
 {{- $tag := .Values.lensWorker.image.tag | default $releaseTag -}}
-{{- printf "%s:%s" .Values.lensWorker.image.repository $tag -}}
+{{- $repository := .Values.lensWorker.image.repository -}}
+{{- if and (hasPrefix "sha-" $tag) (eq $repository "ghcr.io/berriai/litellm-lens-worker") -}}
+{{- $repository = "ghcr.io/berriai/litellm-lens-worker-dev" -}}
+{{- end -}}
+{{- printf "%s:%s" $repository $tag -}}
 {{- end -}}
 {{- end -}}
 
