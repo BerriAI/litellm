@@ -4,11 +4,13 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
+    _increment_allowed_fails,
     _resolve_allowed_fails_from_policy,
     _should_cooldown_based_on_deployment_policy,
     should_cooldown_based_on_allowed_fails_policy,
@@ -630,3 +632,35 @@ def test_pass_through_selection_reads_only_its_group_and_skips_the_cooled_one():
 
     assert picked == {"group-a-1"}
     assert _read_keys(spy) == {CooldownCache.get_cooldown_cache_key(i) for i in ("group-a-0", "group-a-1")}
+
+
+class TestIncrementAllowedFailsServiceTarget:
+    def test_fail_counter_bump_declares_the_router_cooldowns_key_family(self):
+        """The allowed_fails INCR is cooldown bookkeeping, so its service span must read
+        ``redis.incr router_cooldowns`` rather than a bare ``redis.incr``."""
+        seen: list[str | None] = []
+        cache = MagicMock(spec=DualCache)
+
+        def _increment(**_kwargs):
+            seen.append(current_service_target())
+            return 2
+
+        cache.increment_cache.side_effect = _increment
+
+        assert _increment_allowed_fails(cache, "deployment:dep-1:fails", ttl=60.0) == 2
+        assert seen == ["router_cooldowns"]
+        assert current_service_target() is None
+
+    def test_in_memory_fallback_reads_under_the_same_target(self):
+        seen: list[str | None] = []
+        cache = MagicMock(spec=DualCache)
+        cache.increment_cache.side_effect = ConnectionError("redis down")
+
+        def _get(**_kwargs):
+            seen.append(current_service_target())
+            return 4
+
+        cache.get_cache.side_effect = _get
+
+        assert _increment_allowed_fails(cache, "deployment:dep-1:fails", ttl=60.0) == 4
+        assert seen == ["router_cooldowns"]

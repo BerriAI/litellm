@@ -13,6 +13,7 @@ import asyncio
 import functools
 import hashlib
 import inspect
+import itertools
 import json
 import logging
 import threading
@@ -21,12 +22,13 @@ from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
-from types import MappingProxyType
+from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._internal_context import current_service_caller
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
@@ -92,9 +94,37 @@ class _AsyncRedisCommands(Protocol):
     def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
 
 
-_BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
-    {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
+_GENERIC_CALLER_MODULES: Final = frozenset(
+    {
+        __name__,
+        "litellm.caching.redis_batch",
+        "litellm.caching.dual_cache",
+        "litellm.caching.caching",
+        "litellm.rust_bridge.lifecycle",
+        "litellm.rust_bridge.streams",
+        "contextlib",
+    }
 )
+_GENERIC_CALLER_FRAME_NAMES: Final = frozenset(
+    {
+        "<lambda>",
+        "wrapper",
+        "_run_under_circuit_breaker",
+        "_run_under_circuit_breaker_sync",
+        "run_alone",
+        "_settle_alone",
+        "get_cache",
+        "set_cache",
+        "async_get_cache",
+        "async_set_cache",
+        "async_batch_get_cache",
+        "async_batch_get_cache_shared",
+        "async_set_cache_pipeline",
+        "async_increment_cache",
+        "async_delete_cache",
+    }
+)
+_CALL_STACK_END_MODULES: Final = ("asyncio", "concurrent", "threading")
 
 _INCREMENT_WITH_FLOOR_LUA: Final = (
     "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
@@ -113,18 +143,39 @@ def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, .
     )
 
 
+def _is_generic_caller_frame(frame: FrameType) -> bool:
+    module: Final = frame.f_globals.get("__name__")
+    return module in _GENERIC_CALLER_MODULES or frame.f_code.co_name in _GENERIC_CALLER_FRAME_NAMES
+
+
+def _ends_call_stack(frame: FrameType) -> bool:
+    module: Final = frame.f_globals.get("__name__")
+    return isinstance(module, str) and module.startswith(_CALL_STACK_END_MODULES)
+
+
+def _caller_frames(first: FrameType) -> Iterator[FrameType]:
+    frame: FrameType | None = first
+    while frame is not None and not _ends_call_stack(frame):
+        yield frame
+        frame = frame.f_back
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
-    Get the function names from the previous 1-2 functions in the call stack.
+    Get the function names of the nearest meaningful callers of the cache method.
 
-    Frames belonging to this module's circuit-breaker guards are skipped so the
-    reported callers stay the real ones even on guarded methods.
+    Frames that merely forward the call (this module's circuit-breaker guards, the
+    cache facades, the batch pipeline's retry path, generic cache verbs) are
+    skipped, and the walk stops at the event loop, so the chain names the litellm
+    code that wanted the call. When nothing but forwarding frames is found (the call
+    runs in a task of its own, like a batch op retried on the flush) the chain the
+    declaring code threaded through ``service_caller`` is reported, else ``unknown``.
 
     Args:
         num_frames: Number of previous frames to include (default: 2)
 
     Returns:
-        A string with format "current_function <- caller_function [<- grandparent_function]"
+        A string with format "caller_function [<- grandparent_function]"
     """
     try:
         current_frame: Final = inspect.currentframe()
@@ -135,22 +186,23 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         f_back: Final = current_frame.f_back
         if f_back is None:
             return "unknown"
-        frame = f_back.f_back
-        if frame is None:
+        first: Final = f_back.f_back
+        if first is None:
             return "unknown"
-        function_names: Final = []
+        frames: Final = _caller_frames(first)
+        leading: Final = tuple(itertools.islice(frames, num_frames))
+        leading_names: Final = tuple(frame.f_code.co_name for frame in leading if not _is_generic_caller_frame(frame))
+        further_names: Final = tuple(
+            itertools.islice(
+                (frame.f_code.co_name for frame in frames if not _is_generic_caller_frame(frame)),
+                num_frames - len(leading_names),
+            )
+        )
+        function_names: Final = leading_names + further_names
 
-        while frame is not None and len(function_names) < num_frames:
-            if frame.f_code.co_name in _BREAKER_GUARD_FRAME_NAMES and frame.f_globals.get("__name__") == __name__:
-                frame = frame.f_back
-                continue
-            function_names.append(frame.f_code.co_name)
-            frame = frame.f_back
-
-        if not function_names:
-            return "unknown"
-
-        return " <- ".join(function_names)
+        if function_names:
+            return " <- ".join(function_names)
+        return current_service_caller() or "unknown"
     except Exception:
         return "unknown"
 
@@ -1141,7 +1193,6 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                    event_metadata={"key": key},
                 )
             )
             return result
@@ -1158,7 +1209,6 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                    event_metadata={"key": key},
                 )
             )
             log_redis_failure(
@@ -1669,7 +1719,6 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=parent_otel_span,
-                    event_metadata={"key": key},
                 )
             )
             return response
@@ -1686,7 +1735,6 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=parent_otel_span,
-                    event_metadata={"key": key},
                 )
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
