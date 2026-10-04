@@ -321,4 +321,33 @@ describe("Lens interactive demo", () => {
     await waitFor(() => expect(network).toHaveBeenCalled());
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
   });
+
+  it("turns the worker health dot off once heartbeats expire even when polling returns unchanged data", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const saved = createLensDemoData().lenses[0];
+      const worker = {
+        id: "worker",
+        name: "Worker",
+        revoked: false,
+        analysis_key_id: "a".repeat(64),
+        scope: saved.scope,
+        last_seen: new Date().toISOString(),
+      };
+      network.mockImplementation(async (input) => {
+        const path = new URL(String(input), "http://localhost").pathname;
+        if (path === "/lens") return Response.json({ lenses: [saved], workers: [worker], tracing_enabled: true });
+        if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+        return Response.json({ data: [], traces: true, requests: false });
+      });
+      renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
+      const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
+      const settings = await tabs.findByRole("tab", { name: "Settings" });
+      expect(settings).toHaveAttribute("title", "Worker connected");
+      await vi.advanceTimersByTimeAsync(130000);
+      await waitFor(() => expect(settings).toHaveAttribute("title", "Connect worker"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

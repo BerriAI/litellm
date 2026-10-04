@@ -8,6 +8,7 @@ import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { useNow } from "@/hooks/useNow";
 import { LensServicesProvider } from "./LensServicesProvider";
 import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
@@ -17,6 +18,7 @@ import { createLensDemo } from "./demo/createLensDemo";
 import { lensKeys, lensQueries } from "./api/queries";
 import { useLensApi } from "./services";
 import { investigationActivity, workerConnected, type InvestigationActivity } from "./model/status";
+import type { LensList } from "./model/types";
 import { cn } from "@/lib/cva.config";
 import { LENS_TABS, useDialogRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
 
@@ -107,22 +109,23 @@ function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) 
   );
 }
 
-type WorkerStatus = { connected: boolean } | null;
-
-const workerTitle = (worker: WorkerStatus) => (worker?.connected ? "Worker connected" : "Connect worker");
+const HEARTBEAT_TICK_MS = 10000;
 
 function LensModeSwitch({
   activity,
   demo,
-  worker,
+  workers,
   setup,
 }: {
   activity: InvestigationActivity;
   demo: boolean;
-  worker: WorkerStatus;
+  workers: LensList["workers"] | null;
   setup?: string;
 }) {
-  const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || worker);
+  const now = useNow(HEARTBEAT_TICK_MS);
+  const connected = workers?.some((candidate) => workerConnected(candidate, now)) ?? false;
+  const settingsTitle = connected ? "Worker connected" : "Connect worker";
+  const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
   return (
     <div className={cn("relative z-raised rounded-t-2xl bg-card px-1.5 pt-1.5 pb-[7px]", frameOf(demo).tab)}>
       <NotchCorner side="left" demo={demo} />
@@ -138,7 +141,7 @@ function LensModeSwitch({
             <TabsPrimitive.Tab
               key={view}
               value={view}
-              title={view === "settings" ? workerTitle(worker) : undefined}
+              title={view === "settings" ? settingsTitle : undefined}
               aria-description={
                 view === "investigations" && activity !== "idle" ? ACTIVITY_DOT[activity].label : undefined
               }
@@ -149,9 +152,9 @@ function LensModeSwitch({
             >
               <span className="relative inline-flex">
                 <Icon aria-hidden="true" className="size-4" />
-                {view === "settings" && worker && (
+                {view === "settings" && workers && (
                   <StatusDot
-                    state={worker.connected ? "ok" : "warn"}
+                    state={connected ? "ok" : "warn"}
                     className="absolute -top-0.5 -right-0.5 size-1.5 ring-2 ring-muted"
                   />
                 )}
@@ -197,8 +200,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
     canInvestigate,
     canConfigure && activeTab === "settings",
   );
-  const worker: WorkerStatus =
-    canConfigure && list ? { connected: list.workers.some((candidate) => workerConnected(candidate)) } : null;
+  const workers = canConfigure && list ? list.workers : null;
   const startFirstInvestigation = () => {
     setTab("investigations");
     openDialog("new");
@@ -232,7 +234,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
           <LensModeSwitch
             activity={activity}
             demo={demo}
-            worker={worker}
+            workers={workers}
             setup={activeTab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined}
           />
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
@@ -262,7 +264,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               )}
             </LensPreviewContext.Provider>
           </TabsContent>
-          {worker && list && (
+          {workers && list && (
             <TabsContent value="settings" className={cn(PANEL, "p-6")}>
               <LensSettings
                 accessToken={accessToken}
