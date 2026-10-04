@@ -1,344 +1,225 @@
 "use client";
+
+import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
+import { LensPreviewButton } from "@/components/view_logs/TraceView/LensPreviewButton";
+
+import { useInvalidateLenses } from "../data/mutations";
+import { lensQueries } from "../data/queries";
+import { useLensApi } from "../data/LensServices";
+import { findFinding, findingKey, type OwnedFinding } from "../model/inbox";
+import type { Finding, Lens, Settings } from "../model/types";
+import { useDialogRoute, useIssueRoute, useLensRoute } from "../route";
+import { InvestigationSetup } from "../setup/InvestigationSetup";
+import { MonitoringDialog } from "../setup/MonitoringDialog";
+import { useLensReadiness } from "../hooks/useLensReadiness";
+import { OnboardingSetup } from "../onboarding/OnboardingSetup";
+
+import { InvestigationDetail } from "./detail/InvestigationDetail";
+import { RunNowDialog } from "./detail/RunNowDialog";
+import { FindingPanelBody } from "./FindingDetails";
+import { InvestigationList, type InvestigationRow } from "./InvestigationList";
+import { investigationScreen, type Screen, type SetupScreen } from "./investigationScreen";
 import {
+  InvestigationError,
   InvestigationMissing,
   InvestigationsLoadFailed,
   InvestigationsLoading,
-  InvestigationError,
-} from "./InvestigationStatus";
-
-import { InvestigationNavigation } from "./InvestigationNavigation";
-import { useInvestigationResults } from "./useInvestigationResults";
-
-import { useLensUpdate, useSaveLens, type LensWrite } from "../api/mutations";
-import { lensKeys, lensQueries } from "../api/queries";
-import { useLensApi } from "../services";
-
-import { InvestigationDetail } from "./detail/InvestigationDetail";
+} from "./InvestigationStates";
 import { ReadinessBanner } from "./ReadinessBanner";
-import { RequestEvidenceSheet } from "./RequestEvidenceSheet";
-import { useNow } from "@/hooks/useNow";
-
-import { useDialogRoute, useIssueRoute, useLensRoute } from "../route";
-
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-
-import { FindingSheet } from "./FindingSheet";
-import { TraceSheet } from "./TraceSheet";
-import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
-import { WorkerDialog } from "../setup/worker/WorkerDialog";
-import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
-import { InvestigationList } from "./InvestigationList";
-import { HeaderActions } from "../HeaderActions";
-import { RunNowDialog } from "./detail/RunNowDialog";
-import { findFinding, findingAgents, findingKey, sampledExecutions } from "../model/inbox";
+import { useInvestigationActions } from "./useInvestigationActions";
 import { WatchAllBanner } from "./WatchAllBanner";
-import { MonitoringDialog } from "../setup/MonitoringDialog";
-import { InvestigationsWelcome } from "./InvestigationsWelcome";
-import { workerConnected, readiness } from "../model/status";
-import { type Finding, type Lens, type Settings } from "../model/types";
 
-export function InvestigationsView({
-  active = true,
-  accessToken,
-  readOnly = false,
-}: {
-  active?: boolean;
-  accessToken: string;
-  readOnly?: boolean;
-}) {
-  const api = useLensApi(accessToken);
-  const client = useQueryClient();
-  const updateLens = useLensUpdate(accessToken);
-  const saveLens = useSaveLens(accessToken);
-  const { dialog, target: dialogTarget, openDialog, closeDialog } = useDialogRoute();
-  const { issueKey, setIssueKey } = useIssueRoute();
-  const workerSetup = dialog === "workers";
-  const now = useNow(2000);
-  const query = useQuery(lensQueries.list(api, workerSetup));
-  const models = useQuery(lensQueries.models(api));
-  const modelDetails = useQuery(lensQueries.modelDetails(api));
-  const [agentsAsOf] = useState(() => new Date().toISOString());
-  const agents = useQuery(lensQueries.agents(api, agentsAsOf, "traces"));
-  const { lensId: selected, setLensId: setSelected } = useLensRoute();
-  const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const lenses = [...(query.data?.lenses ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  const showEmpty = !query.isLoading && !query.error && lenses.length === 0;
-  const loaded = !query.isLoading && !query.error;
-  const showActions = !readOnly && !!query.data && !showEmpty;
-  const showReadiness = loaded && !showEmpty && !readOnly;
-  const missingSelection = !!selected && loaded;
-  const lens = lenses.find((e) => e.id === selected);
-  const targetLens = dialogTarget ? lenses.find((e) => e.id === dialogTarget) : lens;
-  const editing = dialog === "new" || dialog === "edit" || dialog === "duplicate" ? dialog : null;
-  const setupMode = editing === "new" || targetLens ? editing : null;
-  const peeked = issueKey ? findFinding(lenses, issueKey) : undefined;
-  const resultsLens = peeked?.lens ?? lens;
-  const results = useInvestigationResults(accessToken, resultsLens);
-  const {
-    finding,
-    sampledRuns,
-    target,
-    evidence,
-    requestEvidenceData,
-    requestEvidenceError,
-    requestEvidenceLoading,
-    requestOffset,
-    setRequestOffset,
-    setEvidence,
-    setFindingId,
-    reset: resetResults,
-  } = results;
-  const selectLens = (id: string | null) => {
-    setSelected(id);
-    resetResults();
-  };
-  const setEditing = (mode: "new" | "edit" | "duplicate") => openDialog(mode);
-  const setWorkerSetup = (open: boolean) => (open ? openDialog("workers") : closeDialog());
-  const setMonitoring = (open: boolean) => (open ? openDialog("monitoring") : closeDialog());
-  const connected = query.data?.workers?.some((w) => workerConnected(w, now)) ?? false;
-  const activeWorkers = query.data?.workers.filter((worker) => !worker.revoked) ?? [];
-  const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
-  const analysisAccess = useAnalysisKeyInfo(accessToken, defaultKeyId ?? undefined);
-  const defaultModel = analysisAccess.data?.models.length === 1 ? analysisAccess.data.models[0] : undefined;
-  const activity = useQuery(lensQueries.activity(api, loaded));
-  const { tracesReady, requestsReady, activityReady, ready } = readiness(
-    activity.data,
-    activity.error,
-    connected,
-    query.error,
-  );
-  const setupSettings = () => {
-    if (editing === "new") return undefined;
-    if (editing === "duplicate" && targetLens)
-      return { ...targetLens.settings, name: `${targetLens.settings.name} copy`, enabled: false };
-    return targetLens?.settings;
-  };
-  const refresh = () => {
-    void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
-    void client.invalidateQueries({ queryKey: lensKeys.histories() });
-  };
-  const update = async (write: LensWrite): Promise<boolean> => {
-    setBusy(true);
-    setError("");
-    try {
-      await updateLens.mutateAsync(write);
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not update lens");
-      return false;
-    } finally {
-      await client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
-      setBusy(false);
-    }
-  };
-  const save = async (settings: Settings) => {
-    if (editing === "edit" && !targetLens) throw new Error("Reopen the investigation to edit its settings");
-    if (editing !== "edit" && !ready)
-      throw new Error("Wait for recorded activity and a connected worker before starting an investigation");
-    const saved = await saveLens.mutateAsync({ id: editing === "edit" ? targetLens?.id : undefined, settings });
-    closeDialog();
-    if (!dialogTarget) selectLens(saved.id);
-    refresh();
-  };
-  const openFinding = (owner: Lens, picked: Finding) => setIssueKey(findingKey(owner, picked));
-  const closeFinding = () => {
-    setFindingId(null);
-    setIssueKey(null);
-  };
-  const changeFinding = async (status: Finding["status"], reason: string) => {
-    if (peeked) {
-      const saved = await update((current) => current.reviewFinding(peeked.lens.id, peeked.finding.id, status, reason));
-      if (saved) closeFinding();
-      return;
-    }
-    if (!lens || !finding) return;
-    await update((current) => current.reviewFinding(lens.id, finding.id, status, reason));
-  };
-  const sheetFinding = peeked ? peeked.finding : finding;
-  const sheetRuns = peeked ? sampledExecutions(peeked.lens) : sampledRuns;
-  const detailAgents = lens && finding ? findingAgents(lens, finding) : [];
-  const sheetAgents = peeked ? findingAgents(peeked.lens, peeked.finding) : detailAgents;
+export interface InvestigationsViewProps {
+  readonly readOnly?: boolean;
+}
 
-  const onDetail = !!selected;
-  const showDetailNav = onDetail && !showEmpty;
-  const showTables = !onDetail && lenses.length > 0;
-  const showMissing = missingSelection && !lens;
+const assertNever = (value: never): never => {
+  throw new Error(`Unhandled screen ${JSON.stringify(value)}`);
+};
+
+interface BannersProps {
+  readonly error: Error | null | undefined;
+  readonly activityReady: boolean | null;
+  readonly flush: boolean;
+  readonly refresh: () => void;
+}
+
+function Banners({ error, activityReady, flush, refresh }: BannersProps) {
+  if (!error && activityReady === null) return null;
   return (
-    <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
-      {showDetailNav && (
-        <InvestigationNavigation
-          lens={lens}
-          showActions={showActions}
-          activityReady={activityReady}
-          connected={connected}
-          ready={ready}
-          selectLens={selectLens}
-          setWorkerSetup={setWorkerSetup}
-          setEditing={setEditing}
-        />
-      )}
-      {query.error && !query.data ? (
-        <InvestigationsLoadFailed queryError={query.error} refresh={refresh} />
-      ) : (
-        (error || query.error) && <InvestigationError message={error || query.error?.message || ""} refresh={refresh} />
-      )}
-      {query.isLoading && <InvestigationsLoading />}
-      {loaded && showEmpty && (
-        <InvestigationsWelcome
-          tracesReady={tracesReady}
-          requestsReady={requestsReady}
-          checking={activity.isPending}
-          traceError={activity.error?.message}
-          connected={connected}
-          readOnly={!!readOnly}
-          onRetry={() => {
-            void activity.refetch();
-            refresh();
-          }}
-          onConnect={() => setWorkerSetup(true)}
-          onCreate={() => setEditing("new")}
-          showPreview={activity.isSuccess && !ready}
-        />
-      )}
-      {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
-      {showTables && (
-        <div className="flex min-h-0 flex-1 flex-col gap-2">
-          {active && (
-            <HeaderActions>
-              {!readOnly && (
-                <WatchAllBanner
-                  lenses={lenses}
-                  busy={busy}
-                  skipped={skipped}
-                  onWatchAll={() =>
-                    update(async (api) => {
-                      const result = await api.watchAll();
-                      setSkipped(result.skipped);
-                    })
-                  }
-                />
-              )}
-              <InvestigationNavigation
-                lens={undefined}
-                showActions={showActions}
-                activityReady={activityReady}
-                connected={connected}
-                ready={ready}
-                selectLens={selectLens}
-                setWorkerSetup={setWorkerSetup}
-                setEditing={setEditing}
-              />
-            </HeaderActions>
-          )}
+    <div className={cn("flex flex-col gap-3", flush && "p-2 pb-0")}>
+      {error && <InvestigationError message={error.message} refresh={refresh} />}
+      {activityReady !== null && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
+    </div>
+  );
+}
+
+export function InvestigationsView({ readOnly = false }: InvestigationsViewProps) {
+  const api = useLensApi();
+  const invalidateLenses = useInvalidateLenses();
+  const actions = useInvestigationActions();
+  const { dialog, target, openDialog, closeDialog } = useDialogRoute();
+  const { issueKey, setIssueKey } = useIssueRoute();
+  const { lensId, setLensId } = useLensRoute();
+  const list = useQuery(lensQueries.list(api));
+  const status = useLensReadiness(true);
+  const { connected } = status;
+  const screenInput = { list, lensId, dialog, target };
+  const screen = investigationScreen(screenInput);
+  const lenses = list.data?.lenses ?? [];
+  const lens = lenses.find((candidate) => candidate.id === lensId);
+  const peeked = issueKey ? findFinding(lenses, issueKey) ?? null : null;
+  const selectedRow = (open: Lens | undefined): InvestigationRow | null => {
+    if (peeked) return { kind: "finding", ...peeked };
+    return open ? { kind: "investigation", lens: open } : null;
+  };
+  const selectRow = (row: InvestigationRow | null) => {
+    if (row?.kind === "finding") setIssueKey(findingKey(row.lens, row.finding));
+    else if (row) setLensId(row.lens.id);
+    else if (peeked) setIssueKey(null);
+    else setLensId(null);
+  };
+  const reviewPeeked = async (owned: OwnedFinding, status: Finding["status"], reason: string) => {
+    const saved = await actions.review(owned.lens, owned.finding, status, reason);
+    if (saved) setIssueKey(null);
+  };
+  const dialogLens = target ? lenses.find((candidate) => candidate.id === target) : lens;
+  const refresh = () => {
+    actions.reset();
+    void invalidateLenses();
+  };
+  const saveSetup = async (setup: SetupScreen, settings: Settings) => {
+    if (setup.mode !== "edit" && !status.ready)
+      throw new Error("Wait for recorded activity and a connected worker before starting an investigation");
+    const saved = await actions.save({ id: setup.mode === "edit" ? setup.lens.id : undefined, settings });
+    closeDialog();
+    if (!target) setLensId(saved.id);
+  };
+  const bannerError = screen.kind === "failed" ? undefined : actions.error ?? list.error;
+  const browsing = screen.kind === "list";
+  const showReadiness = browsing && !readOnly && !status.ready;
+
+  const content = (current: Screen): ReactNode => {
+    switch (current.kind) {
+      case "loading":
+        return <InvestigationsLoading />;
+      case "failed":
+        return <InvestigationsLoadFailed queryError={current.error} refresh={refresh} />;
+      case "missing":
+        return <InvestigationMissing selectLens={setLensId} />;
+      case "welcome":
+        if (status.loading) return <InvestigationsLoading />;
+        return (
+          <>
+            {!status.ready && <LensPreviewButton />}
+            <OnboardingSetup state={status} className="mx-auto w-full max-w-3xl py-6" />
+          </>
+        );
+      case "list":
+        return (
           <InvestigationList
-            lenses={lenses}
+            lenses={current.lenses}
             connected={connected}
             readOnly={readOnly}
-            onOpen={selectLens}
+            selected={selectedRow(current.lens)}
+            onSelect={selectRow}
             onEdit={(id) => openDialog("edit", id)}
             onRunNow={(id) => openDialog("run_now", id)}
-            onOpenFinding={openFinding}
+            actions={
+              !readOnly && (
+                <>
+                  <WatchAllBanner lenses={current.lenses} />
+                  <Button size="sm" className="h-8" disabled={!status.ready} onClick={() => openDialog("new")}>
+                    <Plus className="size-4" /> New investigation
+                  </Button>
+                </>
+              )
+            }
+          >
+            {(row) =>
+              row.kind === "finding" ? (
+                <FindingPanelBody
+                  owned={row}
+                  readOnly={readOnly}
+                  busy={actions.busy}
+                  onReview={(owned, reviewStatus, reason) => void reviewPeeked(owned, reviewStatus, reason)}
+                />
+              ) : (
+                <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                  <InvestigationDetail
+                    lens={row.lens}
+                    readOnly={readOnly}
+                    ready={status.ready}
+                    busy={actions.busy}
+                    connected={connected}
+                    onEdit={() => openDialog("edit")}
+                    onDuplicate={() => openDialog("duplicate")}
+                    onPause={() => void actions.pause(row.lens)}
+                    onEnableMonitoring={() => openDialog("monitoring")}
+                    onCancelRun={() => void actions.cancelRun(row.lens)}
+                    onRunNow={() => openDialog("run_now")}
+                    onReviewFinding={(owned, reviewStatus, reason) =>
+                      void actions.review(owned.lens, owned.finding, reviewStatus, reason)
+                    }
+                  />
+                </div>
+              )
+            }
+          </InvestigationList>
+        );
+      case "setup":
+        return (
+          <InvestigationSetup
+            ready={status.ready}
+            mode={current.mode}
+            initial={current.mode === "new" ? undefined : current.initial}
+            defaultSource={!status.tracesReady && status.requestsReady ? "requests" : "traces"}
+            onClose={closeDialog}
+            onSave={(settings) => saveSetup(current, settings)}
           />
-        </div>
-      )}
-      {showMissing && <InvestigationMissing selectLens={selectLens} />}
-      {lens && (
-        <InvestigationDetail
-          lens={lens}
-          readOnly={readOnly}
-          ready={ready}
-          busy={busy}
-          setEditing={setEditing}
-          setMonitoring={setMonitoring}
-          onRunNow={() => openDialog("run_now")}
-          update={update}
-          connected={connected}
-          results={results}
-        />
-      )}
-      {setupMode && (
-        <InvestigationSetupDialog
-          ready={ready}
-          mode={setupMode}
-          initial={setupSettings()}
-          defaultModel={defaultModel}
-          defaultSource={!tracesReady && requestsReady ? "requests" : "traces"}
-          models={models.data?.data.map((m) => m.id) ?? []}
-          modelDetails={modelDetails.data?.data ?? []}
-          modelsLoading={models.isLoading}
-          modelsError={models.error?.message}
-          accessToken={accessToken}
-          onClose={closeDialog}
-          onSave={save}
-        />
-      )}
-      {dialog === "run_now" && targetLens && (
+        );
+      default:
+        return assertNever(current);
+    }
+  };
+
+  return (
+    <section
+      aria-label="Investigations"
+      className={cn("flex w-full min-w-0 flex-1 flex-col", !browsing && "gap-3 p-4")}
+    >
+      <Banners
+        error={bannerError}
+        activityReady={showReadiness ? status.activityReady : null}
+        flush={browsing}
+        refresh={refresh}
+      />
+      {content(screen)}
+      {dialog === "run_now" && dialogLens && (
         <RunNowDialog
-          lens={targetLens}
-          agents={Array.isArray(agents.data) ? agents.data : []}
-          busy={busy}
+          lens={dialogLens}
+          busy={actions.busy}
           onClose={closeDialog}
           onRun={async (request) => {
-            await update((api) => api.startRun(targetLens.id, request));
+            await actions.startRun(dialogLens, request);
             closeDialog();
           }}
         />
       )}
-      {workerSetup && (
-        <WorkerDialog
-          accessToken={accessToken}
-          workers={query.data?.workers ?? []}
-          onClose={closeDialog}
-          onChanged={refresh}
-          onReady={ready && showEmpty ? () => openDialog("new") : undefined}
-        />
-      )}
-      {dialog === "monitoring" && lens && (
+      {dialog === "monitoring" && dialogLens && (
         <MonitoringDialog
-          settings={lens.settings}
-          ready={ready}
+          settings={dialogLens.settings}
+          ready={status.ready}
           onClose={closeDialog}
           onSave={async (settings) => {
-            await saveLens.mutateAsync({ id: lens.id, settings });
-            refresh();
+            await actions.save({ id: dialogLens.id, settings });
           }}
         />
       )}
-      <FindingSheet
-        finding={sheetFinding}
-        agents={sheetAgents}
-        sampledRuns={sheetRuns}
-        readOnly={readOnly}
-        busy={busy}
-        onClose={closeFinding}
-        changeFinding={changeFinding}
-        onEvidence={(value) => {
-          setRequestOffset(0);
-          setEvidence(value);
-        }}
-      />
-      {resultsLens && target?.source === "traces" && (
-        <TraceSheet
-          open={!!evidence}
-          traceId={target.id}
-          traceRef={target.traceRef}
-          initialSpanId={evidence?.span}
-          accessToken={accessToken}
-          onClose={() => setEvidence(null)}
-        />
-      )}
-      <RequestEvidenceSheet
-        target={target}
-        setEvidence={setEvidence}
-        requestEvidenceData={requestEvidenceData}
-        requestEvidenceError={requestEvidenceError}
-        requestEvidenceLoading={requestEvidenceLoading}
-        requestOffset={requestOffset}
-        setRequestOffset={setRequestOffset}
-      />
     </section>
   );
 }

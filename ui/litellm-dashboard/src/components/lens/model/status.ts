@@ -1,8 +1,23 @@
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
-import type { Lens, LensList } from "./types";
+import type { Job, Lens, LensList } from "./types";
 
 export function workerConnected(worker: LensList["workers"][number], now = Date.now()): boolean {
   return !worker.revoked && !!worker.analysis_key_id && now - Date.parse(worker.last_seen) < 120000;
+}
+
+export function activeJob(jobs: readonly Job[]): Job | undefined {
+  return jobs.find((job) => job.status === "queued" || job.status === "running");
+}
+
+export function hasActiveJob(jobs: readonly Job[]): boolean {
+  return activeJob(jobs) !== undefined;
+}
+
+/** One observer polls `/lens`: fast while work is in flight or a worker is being connected, slow otherwise. */
+export function listPollInterval(list: LensList | undefined, settingsOpen: boolean, now: number): number {
+  const running = list?.lenses.some((lens) => hasActiveJob(lens.jobs)) ?? false;
+  const connected = list?.workers.some((worker) => workerConnected(worker, now)) ?? false;
+  return running || (settingsOpen && !connected) ? 2000 : 10000;
 }
 
 export function lensStatus(lens: Lens, connected: boolean): string {
@@ -29,19 +44,6 @@ export function nextCheckStatus(lens: Lens, now: number): string | null {
   const relative = minutes === 1 ? "in less than a minute" : `in ${minutes} minutes`;
   const time = formatActivityTimestamp(lens.next_run_at);
   return `Next check ${time} · ${relative}`;
-}
-
-export function readiness(
-  activity: { traces: boolean; requests: boolean } | undefined,
-  activityError: unknown,
-  connected: boolean,
-  listError: unknown,
-) {
-  const tracesReady = activity?.traces === true && !activityError;
-  const requestsReady = activity?.requests === true && !activityError;
-  const activityReady = tracesReady || requestsReady;
-  const ready = activityReady && connected && !listError;
-  return { tracesReady, requestsReady, activityReady, ready };
 }
 
 export type InvestigationActivity = "running" | "queued" | "idle";

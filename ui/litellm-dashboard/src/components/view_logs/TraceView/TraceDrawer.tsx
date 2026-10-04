@@ -5,8 +5,9 @@ import { QueryErrorResetBoundary, useQueryClient, useSuspenseInfiniteQuery } fro
 import { ArrowLeft, Check, Copy } from "lucide-react";
 import { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
-import { useEventListener, useTimeout } from "usehooks-ts";
+import { useTimeout } from "usehooks-ts";
 
+import { useShortcut } from "@/components/shared/useShortcut";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -37,7 +38,6 @@ import {
   traceAgentNames,
   traceDisplayName,
 } from "./traceUtils";
-import { ignoresLetterShortcut } from "../letterShortcut";
 
 const INITIAL_STATE: SpanTreeState = {
   hideFramework: true,
@@ -175,17 +175,6 @@ function RunHeader({
   );
 }
 
-/** Tree + detail pane for one loaded run, with J/K/arrow keyboard navigation. */
-const SPAN_KEYS = { down: ["j", "J", "ArrowDown"], up: ["k", "K", "ArrowUp"] } as const;
-const EMBEDDED_SPAN_KEYS = { down: ["ArrowDown"], up: ["ArrowUp"] } as const;
-
-function ignoreStepKey(event: KeyboardEvent): boolean {
-  const control = (event.target as HTMLElement | null)?.closest(
-    "input, textarea, select, [contenteditable='true'], [role='combobox'], [role='tablist'], [role='menu'], [role='separator']",
-  );
-  return event.defaultPrevented || ignoresLetterShortcut(event) || Boolean(control);
-}
-
 interface RunBodyProps {
   trace: Trace;
   accessToken: string;
@@ -194,8 +183,8 @@ interface RunBodyProps {
   stale: boolean;
 }
 
+/** Tree + detail pane for one loaded run. Arrows move and fold steps; J/K also move unless the drawer owns them. */
 function RunBody({ trace, accessToken, selection, embedded, stale }: RunBodyProps) {
-  const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
   const { view, selectSpan, setView, stepQuery: query, setStepQuery: setQuery, errorsOnly, setErrorsOnly } = selection;
   const [initial] = useState(() => initialRunSelection(trace, selection.spanId ?? undefined));
   const [state, setState] = useState<SpanTreeState>(initial.state);
@@ -253,35 +242,24 @@ function RunBody({ trace, accessToken, selection, embedded, stale }: RunBodyProp
     if (row.kind === "span" && row.hasChildren && row.collapsed === expand) toggleSpan(row.id);
     if (row.kind === "group" && row.expanded !== expand) toggleGroup(row.id);
   };
-  useEventListener(
-    "keydown",
-    (event) => {
-      if (stale || view !== "steps" || ignoreStepKey(event)) return;
-      const index = rows.findIndex((row) => row.id === selectedRow?.id);
-      const row = rows[index];
-      if (event.key === "Escape" && detailOpen) {
-        event.preventDefault();
-        event.stopPropagation();
-        setDetailOpen(false);
-        return;
-      }
-      if ((spanKeys.down as readonly string[]).includes(event.key)) {
-        event.preventDefault();
-        const next = rows[Math.min(rows.length - 1, index + 1)];
-        if (next) select(next.id);
-      } else if ((spanKeys.up as readonly string[]).includes(event.key)) {
-        event.preventDefault();
-        const next = rows[Math.max(0, index - 1)];
-        if (next) select(next.id);
-      } else if (event.key === "ArrowLeft" && row) {
-        setRowExpanded(row, false);
-      } else if (event.key === "ArrowRight" && row) {
-        setRowExpanded(row, true);
-      }
-    },
-    undefined,
-    true,
-  );
+  const moveBy = (delta: number) => {
+    const index = rows.findIndex((row) => row.id === selectedRow?.id);
+    const next = rows[Math.min(rows.length - 1, Math.max(0, index + delta))];
+    if (next) select(next.id);
+  };
+  const fold = (expand: boolean) => {
+    const row = rows.find((candidate) => candidate.id === selectedRow?.id);
+    if (row) setRowExpanded(row, expand);
+  };
+  const active = !stale && view === "steps";
+  const pane = { layer: "pane", enabled: active } as const;
+  useShortcut("down", () => moveBy(1), { ...pane, description: "step" });
+  useShortcut("up", () => moveBy(-1), { ...pane, description: "step" });
+  useShortcut("j", () => moveBy(1), { ...pane, enabled: active && !embedded, description: "move" });
+  useShortcut("k", () => moveBy(-1), { ...pane, enabled: active && !embedded, description: "move" });
+  useShortcut("left", () => fold(false), { ...pane, description: "fold" });
+  useShortcut("right", () => fold(true), { ...pane, description: "fold" });
+  useShortcut("escape", () => setDetailOpen(false), { ...pane, enabled: active && detailOpen, description: "close" });
 
   if (view === "conversation")
     return (
@@ -318,7 +296,6 @@ function RunBody({ trace, accessToken, selection, embedded, stale }: RunBodyProp
         onToggleGroup={toggleGroup}
         onLoadMore={loadMore}
         onOpenDetails={detailOpen ? undefined : () => setDetailOpen(true)}
-        embedded={embedded}
         query={query}
         onQueryChange={setQuery}
         errorsOnly={errorsOnly}

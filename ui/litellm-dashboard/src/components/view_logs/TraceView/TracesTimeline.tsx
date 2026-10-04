@@ -2,12 +2,13 @@
 
 import { X } from "lucide-react";
 import moment from "moment";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { useMediaQuery, useResizeObserver } from "usehooks-ts";
+import { useMemo, useRef, useState, type RefObject } from "react";
+import { useResizeObserver } from "usehooks-ts";
 
+import { DotFieldCanvas, DotFieldRoot } from "@/components/shared/dotField/DotField";
+import type { DotBand, DotColumn } from "@/components/shared/dotField/dots";
 import { cn } from "@/lib/cva.config";
 
-import { FIELD_COLS, FIELD_ROWS, columnDots } from "./lensField";
 import type { TraceSummary } from "./traceTypes";
 import { traceAgentNames } from "./traceUtils";
 
@@ -23,12 +24,9 @@ export interface TimeWindow {
   endMs: number;
 }
 
-export interface Bucket {
+export interface Bucket extends DotColumn {
   startMs: number;
   endMs: number;
-  runs: number;
-  failed: number;
-  agents: readonly string[];
 }
 
 /** Run counts per equal-width time bucket across the window; runs outside it are dropped. */
@@ -44,9 +42,9 @@ export function bucketRuns(runs: readonly TraceSummary[], range: TimeWindow, buc
     return {
       startMs: range.startMs + i * width,
       endMs: range.startMs + (i + 1) * width,
-      runs: hits.length,
+      total: hits.length,
       failed: hits.filter((p) => p.failed).length,
-      agents: hits.filter((p) => !p.failed).map((p) => p.agent),
+      series: hits.filter((p) => !p.failed).map((p) => p.agent),
     };
   });
 }
@@ -80,114 +78,8 @@ interface TracesTimelineProps {
   onSelect: (selection: TimeWindow | null) => void;
 }
 
-const FAILED_RED = "#e5484d";
-const DOT_PITCH = 6;
-const FIELD_HEIGHT = FIELD_ROWS * DOT_PITCH;
-
-function fieldDotColor(lit: boolean, dot: ReturnType<typeof columnDots>[number], grid: string): string {
-  if (!lit) return grid;
-  if (dot.kind === "failed") return FAILED_RED;
-  return dot.kind === "run" ? dot.color : grid;
-}
-
-interface FieldFrame {
-  buckets: readonly Bucket[];
-  max: number;
-  band: Band | null;
-  hover: number | null;
-  progress: number;
-}
-
-function dotRadius(lit: boolean, hovered: boolean): number {
-  if (!lit) return 0.9;
-  return hovered ? 2.4 : 1.9;
-}
-
-function drawField(canvas: HTMLCanvasElement, { buckets, max, band, hover, progress }: FieldFrame) {
-  const context = canvas.getContext("2d");
-  const width = canvas.clientWidth;
-  if (!context || width === 0) return;
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(width * ratio);
-  canvas.height = Math.round(FIELD_HEIGHT * ratio);
-  context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.clearRect(0, 0, width, FIELD_HEIGHT);
-  const grid = document.documentElement.classList.contains("dark") ? "rgba(255,255,255,0.08)" : "rgba(15,23,42,0.08)";
-  const columnWidth = width / buckets.length;
-  const pitch = columnWidth / FIELD_COLS;
-  buckets.forEach((bucket, i) => {
-    const dots = columnDots(bucket, max, i * 7919 + bucket.runs);
-    const visible = Math.ceil(dots.length * progress);
-    const dimmed = band !== null && (i < band.lo || i > band.hi);
-    dots.forEach((dot, index) => {
-      const lit = dot.kind !== "grid" && index < visible;
-      context.globalAlpha = lit && dimmed ? 0.15 : 1;
-      context.fillStyle = fieldDotColor(lit, dot, grid);
-      context.beginPath();
-      context.arc(
-        i * columnWidth + pitch * ((index % FIELD_COLS) + 0.5),
-        FIELD_HEIGHT - DOT_PITCH * (Math.floor(index / FIELD_COLS) + 0.5),
-        dotRadius(lit, hover === i),
-        0,
-        Math.PI * 2,
-      );
-      context.fill();
-    });
-  });
-  context.globalAlpha = 1;
-}
-
-function useRiseIn(): number {
-  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const [progress, setProgress] = useState(0);
-  useEffect(() => {
-    if (reduceMotion) {
-      setProgress(1);
-      return;
-    }
-    const start = performance.now();
-    let frame = requestAnimationFrame(function rise(now) {
-      const t = Math.min(1, (now - start) / 700);
-      setProgress(1 - (1 - t) ** 3);
-      if (t < 1) frame = requestAnimationFrame(rise);
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [reduceMotion]);
-  return progress;
-}
-
-function DotField({
-  buckets,
-  max,
-  band,
-  hover,
-}: {
-  buckets: readonly Bucket[];
-  max: number;
-  band: Band | null;
-  hover: number | null;
-}) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const progress = useRiseIn();
-  const { width, height } = useResizeObserver({ ref: canvas as RefObject<HTMLCanvasElement> });
-  useEffect(() => {
-    if (canvas.current) {
-      const fieldFrame = { buckets, max, band, hover, progress };
-      drawField(canvas.current, fieldFrame);
-    }
-  }, [buckets, max, band, hover, progress, width, height]);
-  return (
-    <canvas
-      ref={canvas}
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-x-0 bottom-0 w-full"
-      style={{ height: FIELD_HEIGHT }}
-    />
-  );
-}
-
 function BucketBar({ bucket }: { bucket: Bucket }) {
-  return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-runs={bucket.runs} />;
+  return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-runs={bucket.total} />;
 }
 
 function NowEdge() {
@@ -216,7 +108,7 @@ function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
         {moment(bucket.startMs).format(EDGE_FORMAT)} to {moment(bucket.endMs).format("HH:mm")}
       </div>
       <div>
-        {bucket.runs} {bucket.runs === 1 ? "run" : "runs"}
+        {bucket.total} {bucket.total === 1 ? "run" : "runs"}
         {bucket.failed > 0 && `, ${bucket.failed} failed`}
       </div>
       <div className="text-info">drag to zoom</div>
@@ -226,11 +118,7 @@ function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
 
 const MIN_DURATION_LABEL_PX = 120;
 
-/** Bucket-index band [lo, hi], inclusive. */
-export interface Band {
-  lo: number;
-  hi: number;
-}
+export type Band = DotBand;
 
 export type DragMode = "select" | "move" | "resize-lo" | "resize-hi";
 
@@ -346,7 +234,6 @@ function TickAxis({ range }: { range: TimeWindow }) {
 /** Histogram of runs over the window. Drag to select; drag the bracket or its edges to adjust; Esc clears. */
 export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimelineProps) {
   const buckets = useMemo(() => bucketRuns(runs, range), [runs, range]);
-  const max = Math.max(1, ...buckets.map((b) => b.runs));
   const [hover, setHover] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [draft, setDraft] = useState<Band | null>(null);
@@ -408,12 +295,14 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
-      <div
+      <DotFieldRoot
         ref={areaRef}
+        columns={buckets}
+        band={band}
+        hover={hover}
         role="presentation"
         data-testid="timeline-area"
-        className="relative flex cursor-crosshair touch-none items-end"
-        style={{ height: FIELD_HEIGHT }}
+        className="flex cursor-crosshair touch-none items-end"
         onPointerDown={(e) => begin("select", e)}
         onPointerMove={onMove}
         onPointerUp={onUp}
@@ -427,7 +316,7 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
             data-testid="timeline-cursor"
           />
         )}
-        <DotField buckets={buckets} max={max} band={band} hover={hover} />
+        <DotFieldCanvas />
         <NowEdge />
         {buckets.map((b) => (
           <BucketBar key={b.startMs} bucket={b} />
@@ -441,7 +330,7 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
             onHandleDown={onHandleDown}
           />
         )}
-      </div>
+      </DotFieldRoot>
       <div className="mt-1">
         <TickAxis range={range} />
       </div>

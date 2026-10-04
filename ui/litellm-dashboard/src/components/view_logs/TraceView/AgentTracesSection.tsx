@@ -3,12 +3,12 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
-import { filterRuns } from "@/components/lens/runSearch/runQuery";
-import { RunsToolbar } from "@/components/lens/runSearch/RunsToolbar";
+import { filterRuns } from "./runSearch/runQuery";
+import { RunsToolbar } from "./runSearch/RunsToolbar";
+import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
-import { RunDrawer } from "./RunDrawer";
 import {
   type TraceRef,
   traceKey,
@@ -18,11 +18,14 @@ import {
   useZoomRouting,
 } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
+import { RunView } from "./TraceDrawer";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { TracingSetupCard } from "./TracingSetupCard";
 import { useTracesLive } from "./tracesApi";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
+
+const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -113,6 +116,7 @@ export function AgentTracesSection({
   );
   const filtered = useMemo(() => filterRuns(traces.traces, query), [traces.traces, query]);
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
+  const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
     setZoom(null);
@@ -154,57 +158,59 @@ export function AgentTracesSection({
     );
   }
 
-  const toggleRun = (trace: TraceSummary | null) => {
-    const ref: TraceRef | null = trace && traceRefOf(trace);
-    openRun(ref !== null && openTrace !== null && traceKey(ref) === traceKey(openTrace) ? null : ref);
-  };
-
   return (
-    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
-      {checkHistory && <TraceHistoryError history={history} />}
-      <TracesReceived received={setup.received} />
-      <RunDrawer
-        trace={openTrace}
-        runs={runs}
-        accessToken={accessToken}
-        selection={selection}
-        onSelect={openRun}
-        fullScreen={fullScreen}
-        onFullScreenChange={setFullScreen}
-      />
-      <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces}>
-        {timeControls && (
-          <TimeRangeControls
-            range={zoom ?? range}
-            rangeHours={timeControls.rangeHours}
-            onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
-            live={isLiveTail}
-            showLive={live}
-            onLiveChange={timeControls.onLiveChange}
-            onRefresh={() => {
-              setZoom(null);
-              checkTraces();
-            }}
-            refreshing={traces.isFetching}
-          />
-        )}
-      </RunsToolbar>
-      <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
-      <AgentTracesTable
-        traces={runs}
-        isLoading={traces.isLoading || (checkHistory && history.isLoading)}
-        error={traces.error}
-        hasMore={traces.hasMore}
-        isFetching={traces.isFetching}
-        onRetry={traces.retry}
-        retryLabel={traces.retryLabel}
-        onLoadMore={traces.loadMore}
-        onOpenTrace={toggleRun}
-        selectedKey={openTrace === null ? null : traceKey(openTrace)}
-        rangeEmpty={traces.traces.length === 0}
-        onSetUpTracing={() => setShowSetup(true)}
-      />
-    </div>
+    <Inspector.Root
+      items={runRefs}
+      itemKey={traceKey}
+      selected={openTrace}
+      onSelectedChange={openRun}
+      noun="trace"
+      storageKey={DRAWER_WIDTH_KEY}
+      fullScreen={fullScreen}
+      onFullScreenChange={setFullScreen}
+    >
+      <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
+        {checkHistory && <TraceHistoryError history={history} />}
+        <TracesReceived received={setup.received} />
+        <Inspector.Panel label="Trace details" testId="run-drawer">
+          {(shown: TraceRef) => (
+            <RunView
+              traceId={shown.traceId}
+              traceRef={shown.traceRef}
+              selection={selection}
+              accessToken={accessToken}
+              onBack={() => openRun(null)}
+              embedded
+            />
+          )}
+        </Inspector.Panel>
+        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? range}>
+          {timeControls && (
+            <TimeRangeControls
+              fixedRange={zoom ?? (isLiveTail ? null : range)}
+              rangeHours={timeControls.rangeHours}
+              onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
+              live={isLiveTail}
+              showLive={live}
+              onLiveChange={timeControls.onLiveChange}
+            />
+          )}
+        </RunsToolbar>
+        <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
+        <AgentTracesTable
+          traces={runs}
+          isLoading={traces.isLoading || (checkHistory && history.isLoading)}
+          error={traces.error}
+          hasMore={traces.hasMore}
+          isFetching={traces.isFetching}
+          onRetry={traces.retry}
+          retryLabel={traces.retryLabel}
+          onLoadMore={traces.loadMore}
+          rangeEmpty={traces.traces.length === 0}
+          onSetUpTracing={() => setShowSetup(true)}
+        />
+      </div>
+    </Inspector.Root>
   );
 }
 
