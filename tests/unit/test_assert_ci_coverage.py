@@ -196,6 +196,28 @@ def test_shards_are_credited_only_from_explicit_test_paths() -> None:
     assert coverage._invoked_test_tokens(scalars) == frozenset({"tests/unit/wired", "tests/unit/also_wired"})
 
 
+def test_an_ignored_path_is_not_credited_as_invoked() -> None:
+    scalars: Final = (
+        coverage.Scalar(key="test-path", value="tests/unit/a\n--ignore=tests/unit/b/test_x.py"),
+    )
+    assert coverage._invoked_test_tokens(scalars) == frozenset({"tests/unit/a"})
+
+
+def test_a_file_its_only_shard_ignores_is_not_covered_by_that_shards_glob() -> None:
+    selections: Final = coverage._invoked_selections(
+        (
+            coverage.Scalar(
+                key="test-path",
+                value="tests/unit/proxy/test_*.py --ignore=tests/unit/proxy/test_update_spend.py",
+            ),
+        )
+    )
+    assert len(selections) == 1
+    selection: Final = selections[0]
+    assert selection.covers("tests/unit/proxy/test_other.py") is True
+    assert selection.covers("tests/unit/proxy/test_update_spend.py") is False
+
+
 def test_check_shards_passes_on_the_repo_as_it_stands(capsys):
     assert coverage._check_shards() == 0
 

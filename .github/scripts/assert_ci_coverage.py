@@ -26,6 +26,7 @@ DOCKERFILE_INPUT_KEYS = frozenset({"file", "dockerfile"})
 TEST_RUNNER_RE = re.compile(r"\bpytest\b|\bcircleci tests\b|\bhelm unittest\b|\bplaywright test\b|\bpython[0-9.]*\s")
 IMAGE_BUILD_RE = re.compile(r"\bdocker\s+(?:buildx\s+)?build\b")
 TEST_TOKEN_RE = re.compile(r"tests/[A-Za-z0-9_./*?-]+")
+IGNORE_ARG_RE: Final = re.compile(r"--ignore(?:-glob)?[= ](\S+)")
 DOCKERFILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*Dockerfile[A-Za-z0-9_.-]*")
 COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 GLOB_CHARS = frozenset("*?")
@@ -72,6 +73,17 @@ class Scalar:
 
 
 @dataclass(frozen=True, slots=True)
+class Selection:
+    included: frozenset[str]
+    ignored: frozenset[str]
+
+    def covers(self, relative_path: str) -> bool:
+        return any(_token_covers(token, relative_path) for token in self.included) and not any(
+            _token_covers(token, relative_path) for token in self.ignored
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Finding:
     subject: str
     detail: str
@@ -110,13 +122,32 @@ def _uncommented(value: str) -> str:
     return COMMENT_RE.sub("", value)
 
 
-def _invoked_test_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
-    return frozenset(
-        match.group(0).rstrip("/")
+def _selection_for_scalar(scalar: Scalar) -> Selection:
+    text: Final = _uncommented(scalar.value)
+    ignored: Final = frozenset().union(
+        *(
+            frozenset(token.rstrip("/") for token in TEST_TOKEN_RE.findall(ignored_argument))
+            for ignored_argument in IGNORE_ARG_RE.findall(text)
+        )
+    )
+    included: Final = frozenset(
+        match.group(0).rstrip("/") for match in TEST_TOKEN_RE.finditer(IGNORE_ARG_RE.sub("", text))
+    )
+    return Selection(included=included, ignored=ignored)
+
+
+def _invoked_selections(scalars: Iterable[Scalar]) -> tuple[Selection, ...]:
+    selected_scalars: Final = tuple(
+        scalar
         for scalar in scalars
         if scalar.key in TEST_PATH_KEYS or TEST_RUNNER_RE.search(scalar.value)
-        for match in TEST_TOKEN_RE.finditer(_uncommented(scalar.value))
     )
+    selections: Final = tuple(_selection_for_scalar(scalar) for scalar in selected_scalars)
+    return tuple(selection for selection in selections if selection.included)
+
+
+def _invoked_test_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
+    return frozenset().union(*(selection.included for selection in _invoked_selections(scalars)))
 
 
 def _built_dockerfile_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
@@ -179,11 +210,12 @@ def _dockerfiles() -> tuple[str, ...]:
     )
 
 
-def _uncovered_tests(allowlist: Allowlist, tokens: frozenset[str]) -> tuple[Finding, ...]:
+def _uncovered_tests(allowlist: Allowlist, selections: tuple[Selection, ...]) -> tuple[Finding, ...]:
     uncovered = tuple(
         relative_path
         for relative_path in _test_files()
-        if not any(_token_covers(token, relative_path) for token in tokens) and not allowlist.covers_test(relative_path)
+        if not any(selection.covers(relative_path) for selection in selections)
+        and not allowlist.covers_test(relative_path)
     )
     directories = tuple(dict.fromkeys(path.rsplit("/", 1)[0] for path in uncovered))
     return tuple(
@@ -643,7 +675,11 @@ def main() -> int:
 
     integration_paths, ownership_findings = _integration_ownership()
     test_findings = (
-        _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | integration_paths)
+        _uncovered_tests(
+            allowlist,
+            _invoked_selections(scalars)
+            + (Selection(included=integration_paths, ignored=frozenset()),),
+        )
         + ownership_findings
     )
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
