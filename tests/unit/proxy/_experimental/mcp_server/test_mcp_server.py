@@ -963,6 +963,8 @@ async def test_get_tools_from_mcp_servers():
                 user_api_key_auth=None,
                 oauth2_headers=None,
                 proxy_logging_obj=None,
+                catalog_auth_header=None,
+                record_listing=True,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1998,6 +2000,7 @@ async def test_get_tools_for_single_server():
             client_ip=None,
             user_api_key_auth=None,
             proxy_logging_obj=ANY,
+            record_listing=False,
         )
 
         # Verify the result

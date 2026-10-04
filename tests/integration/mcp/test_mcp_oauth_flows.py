@@ -1,16 +1,20 @@
 import base64
 import hashlib
+import re
 import secrets
+import textwrap
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import jwt
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
@@ -27,6 +31,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
+from integration._support.process import owned_proxy
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -503,3 +508,70 @@ def test_resource_scoped_session_bearer_opens_a_team_toolset_inside_its_server_a
         refused: Final = _toolset_rpc(gateway, bearer, outside_name, "tools/list", {})
         assert refused.status == 403, refused.raw
         assert tool_calls(peer.drain()) == ()
+
+
+_PROBE: Final = "catalog-probe"
+_ECHO: Final = "catalog-echo"
+_UNLISTED: Final = ""
+_GUARDRAIL_CODE: Final = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
+    "        return allow()\n"
+    '    function = inputs.get("tools", [{}])[0].get("function", {})\n'
+    f'    return block("{_ECHO}[" + function.get("description") + "]")\n'
+)
+
+
+_ECHO_GUARDRAIL_YAML: Final = (
+    "guardrails:\n"
+    "  - guardrail_name: catalog-echo\n"
+    "    litellm_params:\n"
+    "      guardrail: custom_code\n"
+    "      mode: pre_mcp_call\n"
+    "      default_on: true\n"
+    "      custom_code: |\n" + textwrap.indent(_GUARDRAIL_CODE, 8 * " ")
+)
+
+
+@pytest.fixture(scope="module")
+def echo_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("catalog-echo")
+    path: Final = directory / "catalog_echo.yaml"
+    path.write_text((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text() + _ECHO_GUARDRAIL_YAML)
+    with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path, workers=2) as rig:
+        yield rig
+
+
+def _echoed_description(outcome: Outcome) -> str:
+    found: Final = re.search(rf"{_ECHO}\[(.*?)\]", outcome.raw)
+    assert found is not None, outcome.raw
+    return found.group(1)
+
+
+def test_token_exchange_callers_with_different_subject_tokens_own_separate_listings(echo_rig: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, echo_rig.scenario() as scenario:
+        alias: Final = "te" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2_token_exchange",
+            token_exchange_endpoint=auth.issuer + "/token",
+            credentials={"client_id": "te-client", "client_secret": "te-secret"},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        first_subject: Final = "subject-" + uuid.uuid4().hex
+        first: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": f"Bearer {first_subject}"})
+        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"Authorization": "Bearer subject-" + uuid.uuid4().hex})
+        auth.drain()
+        assert first.list_tools().ok
+        assert [request["subject_token"] for request in auth.token_requests()] == [first_subject]
+        probe: Final = {"probe": _PROBE}
+        own: Final = _echoed_description(first.call(f"{alias}-add", probe))
+        other: Final = _echoed_description(second.call(f"{alias}-add", probe))
+        assert (own, other) == ("Add two integers", _UNLISTED), (
+            "the caller bearer is part of the identity on a token-exchange server: one subject, one slot"
+        )
+        assert second.list_tools().ok
+        assert _echoed_description(second.call(f"{alias}-add", probe)) == "Add two integers"
+        assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"

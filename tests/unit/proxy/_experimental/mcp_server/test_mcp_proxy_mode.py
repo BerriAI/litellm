@@ -1,17 +1,29 @@
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
+import asyncio
 import json
 from datetime import datetime
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
 from mcp.shared.exceptions import MCPError
+from mcp.types import CallToolResult, TextContent
+from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server import server
 from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_proxy_mode
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+from litellm.proxy._experimental.mcp_server.tool_search import (
+    handle_mcp_proxy_tool,
+    mcp_proxy_tool_id,
+    with_mcp_proxy_identity,
+)
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 AUTH = UserAPIKeyAuth(api_key="key")
 
@@ -130,3 +142,46 @@ async def test_proxy_scope_exception_emits_failure_log(monkeypatch: pytest.Monke
     assert hook_payload["arguments"] == arguments
     assert "raw_headers" not in hook_payload
     assert "raw-scope-secret" not in recorder.events[1][1]
+
+
+@pytest.mark.asyncio
+async def test_proxy_call_tool_on_a_never_listed_tool_hands_the_pre_hook_no_listed_tool() -> None:
+    """/mcp/proxy tools/list serves only the meta-tools, so the catalog call_tool reads to resolve its
+    tool_id was never served: it must not fill the caller's listed-tools slot, and the pre-call hook
+    must see no listed tool for the call."""
+    manager = mcp_operations.global_mcp_server_manager
+    server = MCPServer(server_id="proxy-meta", name="proxy-meta", transport=MCPTransport.http, url="http://meta")
+    auth = UserAPIKeyAuth(api_key="sk-proxy-meta", user_id="proxy-caller")
+    upstream = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
+    served_as = with_mcp_proxy_identity(MCPTool(name="proxy-meta-echo", inputSchema={}), server.server_id)
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    async def call_regular_mcp_tool(*, tasks: list[asyncio.Task[object]], **_: object) -> CallToolResult:
+        await asyncio.gather(*tasks)
+        return CallToolResult(content=[TextContent(type="text", text="echoed")])
+
+    with (
+        patch.dict(manager.registry, {server.server_id: server}),
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+        patch.object(manager, "pre_call_tool_check", pre_call_tool_check),
+        patch.object(manager, "_call_regular_mcp_tool", call_regular_mcp_tool),
+    ):
+        try:
+            result = await handle_mcp_proxy_tool(
+                name="call_tool",
+                arguments={"tool_id": mcp_proxy_tool_id(served_as), "arguments": {}},
+                user_api_key_dict=auth,
+            )
+            listed = manager.get_listed_tool(server, "echo", ListedToolsCaller(user_api_key_auth=auth))
+        finally:
+            manager._drop_listed_tools(server.server_id)
+
+    assert result.is_error is False
+    assert result.content[0].text == "echoed"
+    pre_call_tool_check.assert_awaited_once()
+    assert pre_call_tool_check.await_args.kwargs["name"] == "echo"
+    assert pre_call_tool_check.await_args.kwargs["tool"] is None
+    assert listed is None

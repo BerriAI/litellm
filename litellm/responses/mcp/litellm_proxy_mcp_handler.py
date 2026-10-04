@@ -696,6 +696,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: str | None = None,
         request_tags: list[str] | None = None,
         guardrail_context: Mapping[str, object] | None = None,
+        served_tools: Sequence[MCPTool] | None = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -860,6 +861,11 @@ class LiteLLM_Proxy_MCP_Handler:
                     proxy_logging_obj=proxy_logging_obj,
                     litellm_logging_obj=litellm_logging_obj,
                     guardrail_context=guardrail_context,
+                    listed_tool=(
+                        next((tool for tool in served_tools if tool.name == tool_name), None)
+                        if served_tools is not None
+                        else ...
+                    ),
                 )
 
                 if proxy_logging_obj:
@@ -1152,6 +1158,7 @@ class LiteLLM_Proxy_MCP_Handler:
         call_params: Mapping[str, object],
         previous_response_id: str | None,
         tool_server_map: dict[str, str],
+        served_tools: Sequence[MCPTool] | None = None,
         **kwargs,
     ) -> Any:
         """
@@ -1181,6 +1188,7 @@ class LiteLLM_Proxy_MCP_Handler:
             base_iterator=None,  # Will be created internally
             mcp_events=mcp_discovery_events,  # Pre-generated MCP discovery events
             tool_server_map=tool_server_map,
+            served_tools=served_tools,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
             user_api_key_auth=kwargs.get("user_api_key_auth")
             or kwargs.get("litellm_metadata", {}).get("user_api_key_auth"),

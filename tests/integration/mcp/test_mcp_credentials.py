@@ -1,21 +1,32 @@
 import base64
+import re
+import textwrap
 import uuid
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
     EntryPoint,
     McpCaller,
     McpPeer,
+    Outcome,
+    ScriptedTool,
     call_tool,
     mcp_peer,
     register_mcp,
+    scripted_peer,
+    text_result,
     tool_calls,
     tool_names,
 )
+from integration._support.oauth_server import oauth_server
+from integration._support.process import owned_proxy
+from pydantic import TypeAdapter
 
 ADD: Final = {"a": 2, "b": 3}
 STATIC_MODES: Final = (
@@ -192,3 +203,288 @@ def test_byok_server_uses_the_calling_users_stored_credential_and_fails_closed_w
         assert removed.status_code in (200, 204), removed.text
         eventually(lambda: call_tool(gateway, owner_key, identity, name, ADD), lambda value: value.status_code == 401)
         assert tool_calls(peer.drain()) == ()
+
+
+def _listings(peer: McpPeer) -> tuple[dict[str, object], ...]:
+    return tuple(
+        item
+        for item in peer.drain()
+        if isinstance(item.get("body"), dict) and item["body"].get("method") == "tools/list"
+    )
+
+
+def test_oauth2_byok_listing_sends_the_minted_token_not_the_users_stored_secret(gateway: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "cc" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="client_credentials",
+            is_byok=True,
+            token_url=auth.issuer + "/token",
+            credentials={"client_id": "cc-client", "client_secret": "cc-secret-" + uuid.uuid4().hex},
+        )
+        owner: Final = scenario.user()
+        owner_key: Final = scenario.key(user_id=owner, object_permission={"mcp_servers": [identity]})
+        secret: Final = "byok-" + uuid.uuid4().hex
+        stored: Final = gateway.client.post(
+            f"/v1/mcp/server/{identity}/user-credential",
+            json={"credential": secret},
+            headers={"x-litellm-api-key": owner_key},
+        )
+        assert stored.status_code in (200, 201), stored.text
+        scenario.cleanups.callback(
+            gateway.client.delete,
+            f"/v1/mcp/server/{identity}/user-credential",
+            headers={"x-litellm-api-key": owner_key},
+        )
+        peer.drain()
+        auth.drain()
+        response: Final = gateway.client.get(
+            "/mcp-rest/tools/list", params={"server_id": identity}, headers={"x-litellm-api-key": owner_key}
+        )
+        assert response.status_code == 200, response.text
+        assert "add" in {tool["name"] for tool in response.json()["tools"]}, response.text
+        assert [request["grant_type"] for request in auth.token_requests()] == ["client_credentials"]
+        listings: Final = _listings(peer)
+        assert len(listings) == 1, listings
+        sent: Final = _header(listings[0], b"authorization")
+        assert sent is not None and auth.is_live(sent.decode().removeprefix("Bearer ")), sent
+        assert secret.encode() not in sent, "stored BYOK secret replaced the minted token on tools/list"
+
+
+@pytest.mark.parametrize(("auth_type", "header", "shape"), STATIC_MODES[:2])
+def test_byok_rest_listing_sends_the_servers_static_credential_not_the_users_stored_secret(
+    gateway: Gateway, auth_type: str, header: bytes, shape: str
+) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "byok" + uuid.uuid4().hex[:8]
+        static: Final = "static-" + uuid.uuid4().hex
+        identity: Final = register_mcp(
+            scenario, peer, alias, auth_type=auth_type, is_byok=True, credentials={"auth_value": static}
+        )
+        owner: Final = scenario.user()
+        owner_key: Final = scenario.key(user_id=owner, object_permission={"mcp_servers": [identity]})
+        secret: Final = "byok-" + uuid.uuid4().hex
+        stored: Final = gateway.client.post(
+            f"/v1/mcp/server/{identity}/user-credential",
+            json={"credential": secret},
+            headers={"x-litellm-api-key": owner_key},
+        )
+        assert stored.status_code in (200, 201), stored.text
+        scenario.cleanups.callback(
+            gateway.client.delete,
+            f"/v1/mcp/server/{identity}/user-credential",
+            headers={"x-litellm-api-key": owner_key},
+        )
+        peer.drain()
+        response: Final = gateway.client.get(
+            "/mcp-rest/tools/list", params={"server_id": identity}, headers={"x-litellm-api-key": owner_key}
+        )
+        assert response.status_code == 200, response.text
+        assert "add" in {tool["name"] for tool in response.json()["tools"]}, response.text
+        listings: Final = _listings(peer)
+        assert len(listings) == 1, listings
+        assert _header(listings[0], header) == shape.format(secret=static, basic="").encode(), listings[0]["headers"]
+        peer.drain()
+        called: Final = call_tool(gateway, owner_key, identity, f"{alias}-add", ADD)
+        assert called.status_code == 200, called.text
+        assert _header(_one_call(peer), header) == shape.format(secret=secret, basic="").encode()
+
+
+def test_deprecated_string_x_mcp_auth_lists_a_byok_server_for_a_key_without_a_user(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "byok" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type="bearer_token", is_byok=True)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        peer.drain()
+        response: Final = gateway.client.get(
+            "/mcp-rest/tools/list",
+            params={"server_id": identity},
+            headers={"x-litellm-api-key": key, "x-mcp-auth": "Bearer hdr"},
+        )
+        assert response.status_code == 200, response.text
+        names: Final = {tool["name"] for tool in response.json()["tools"]}
+        assert "add" in names, names
+        listings: Final = _listings(peer)
+        assert len(listings) == 1, listings
+        assert listings[0]["headers"].get(b"authorization") == b"Bearer hdr"
+
+
+_PROBE: Final = "catalog-probe"
+_ECHO: Final = "catalog-echo"
+_UNLISTED: Final = ""
+_GUARDRAIL_CODE: Final = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    f'    if "{_PROBE}" not in list(inputs.get("texts") or []):\n'
+    "        return allow()\n"
+    '    function = inputs.get("tools", [{}])[0].get("function", {})\n'
+    f'    return block("{_ECHO}[" + function.get("description") + "]")\n'
+)
+
+
+_ECHO_GUARDRAIL_YAML: Final = (
+    "guardrails:\n"
+    "  - guardrail_name: catalog-echo\n"
+    "    litellm_params:\n"
+    "      guardrail: custom_code\n"
+    "      mode: pre_mcp_call\n"
+    "      default_on: true\n"
+    "      custom_code: |\n" + textwrap.indent(_GUARDRAIL_CODE, 8 * " ")
+)
+
+
+@pytest.fixture(scope="module")
+def echo_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("catalog-echo")
+    path: Final = directory / "catalog_echo.yaml"
+    path.write_text((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text() + _ECHO_GUARDRAIL_YAML)
+    with gateway_from_environment() as gateway, owned_proxy(gateway, directory, {}, config=path, workers=2) as rig:
+        yield rig
+
+
+def _echoed_description(outcome: Outcome) -> str:
+    found: Final = re.search(rf"{_ECHO}\[(.*?)\]", outcome.raw)
+    assert found is not None, outcome.raw
+    return found.group(1)
+
+
+_PROBE_ARGUMENTS: Final = {"probe": _PROBE}
+_HEADERS: Final = TypeAdapter(dict[str, str])
+
+
+def _store_byok_credential(scenario: Scenario, identity: str, key: str, secret: str) -> None:
+    stored: Final = scenario.gateway.client.post(
+        f"/v1/mcp/server/{identity}/user-credential", json={"credential": secret}, headers={"x-litellm-api-key": key}
+    )
+    assert stored.status_code in (200, 201), stored.text
+    scenario.cleanups.callback(
+        scenario.gateway.client.delete, f"/v1/mcp/server/{identity}/user-credential", headers={"x-litellm-api-key": key}
+    )
+
+
+def test_rotating_the_credential_drops_the_callers_listing_until_it_lists_again(echo_rig: Gateway) -> None:
+    with mcp_peer() as peer, echo_rig.scenario() as scenario:
+        first: Final = "cred-" + uuid.uuid4().hex
+        second: Final = "cred-" + uuid.uuid4().hex
+        alias: Final = "rot" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario, peer, alias, auth_type="bearer_token", credentials={"auth_value": first}
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(echo_rig, key, "mcp", alias)
+        assert caller.list_tools().ok
+        assert _echoed_description(caller.call(f"{alias}-add", _PROBE_ARGUMENTS)) == "Add two integers"
+        rotated: Final = echo_rig.request(
+            "PUT", "/v1/mcp/server", {"server_id": identity, "credentials": {"auth_value": second}}
+        )
+        assert rotated.status_code == 202, rotated.text
+        eventually(
+            lambda: _echoed_description(caller.call(f"{alias}-add", _PROBE_ARGUMENTS)), lambda seen: seen == _UNLISTED
+        )
+        peer.drain()
+        assert caller.list_tools().ok
+        assert _echoed_description(caller.call(f"{alias}-add", _PROBE_ARGUMENTS)) == "Add two integers"
+        relisted: Final = _listings(peer)
+        assert len(relisted) == 1, relisted
+        assert _header(relisted[0], b"authorization") == f"Bearer {second}".encode(), relisted[0]["headers"]
+
+
+def test_byok_callers_are_evaluated_against_their_own_listing_and_the_stored_secret_never_keys_the_slot(
+    echo_rig: Gateway,
+) -> None:
+    with mcp_peer() as peer, echo_rig.scenario() as scenario:
+        alias: Final = "byok" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type="api_key", is_byok=True)
+        owner_key: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        stranger_key: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        owner_secret: Final = "byok-" + uuid.uuid4().hex
+        replacement: Final = "byok-" + uuid.uuid4().hex
+        _store_byok_credential(scenario, identity, owner_key, owner_secret)
+        _store_byok_credential(scenario, identity, stranger_key, "byok-" + uuid.uuid4().hex)
+        owner: Final = McpCaller(echo_rig, owner_key, "mcp", alias)
+        stranger: Final = McpCaller(echo_rig, stranger_key, "mcp", alias)
+        peer.drain()
+        assert owner.list_tools().ok
+        listings: Final = _listings(peer)
+        assert [_header(item, b"x-api-key") for item in listings] == [owner_secret.encode()], listings
+        own: Final = _echoed_description(owner.call(f"{alias}-add", _PROBE_ARGUMENTS))
+        other: Final = _echoed_description(stranger.call(f"{alias}-add", _PROBE_ARGUMENTS))
+        assert (own, other) == ("Add two integers", _UNLISTED), (own, other)
+        _store_byok_credential(scenario, identity, owner_key, replacement)
+        assert _echoed_description(owner.call(f"{alias}-add", _PROBE_ARGUMENTS)) == "Add two integers", (
+            "the slot is keyed by the client-supplied header, never by the stored credential"
+        )
+        sent: Final = eventually(
+            lambda: (owner.call(f"{alias}-add", ADD).ok, tool_calls(peer.drain())),
+            lambda value: any(_header(call, b"x-api-key") == replacement.encode() for call in value[1]),
+        )
+        assert sent[0], sent
+
+
+def test_callers_with_different_server_scoped_auth_headers_are_evaluated_against_their_own_listings(
+    echo_rig: Gateway,
+) -> None:
+    tool: Final = ScriptedTool(
+        "add",
+        lambda _: text_result("3"),
+        description=lambda headers: "Adds for " + headers.get("authorization", "nobody"),
+    )
+    with scripted_peer(tool) as peer, echo_rig.scenario() as scenario:
+        alias: Final = "scoped" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        acme_token: Final = "acme-" + uuid.uuid4().hex
+        globex_token: Final = "globex-" + uuid.uuid4().hex
+        acme: Final = McpCaller(echo_rig, key, "mcp", alias, {f"x-mcp-{alias}-authorization": f"Bearer {acme_token}"})
+        globex: Final = McpCaller(
+            echo_rig, key, "mcp", alias, {f"x-mcp-{alias}-authorization": f"Bearer {globex_token}"}
+        )
+        assert acme.list_tools().ok and globex.list_tools().ok
+        seen: Final = (
+            _echoed_description(acme.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+            _echoed_description(globex.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+        )
+        assert seen == (f"Adds for Bearer {acme_token}", f"Adds for Bearer {globex_token}"), seen
+        assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
+
+
+def test_deprecated_string_x_mcp_auth_callers_on_a_user_less_key_own_separate_listings(echo_rig: Gateway) -> None:
+    tool: Final = ScriptedTool(
+        "add",
+        lambda _: text_result("3"),
+        description=lambda headers: "Adds for " + headers.get("authorization", "nobody"),
+    )
+    with scripted_peer(tool) as peer, echo_rig.scenario() as scenario:
+        alias: Final = "legacy" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type="bearer_token")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        first_token: Final = "first-" + uuid.uuid4().hex
+        second_token: Final = "second-" + uuid.uuid4().hex
+        first: Final = McpCaller(echo_rig, key, "mcp", alias, {"x-mcp-auth": f"Bearer {first_token}"})
+        second: Final = McpCaller(echo_rig, key, "mcp", alias, {"x-mcp-auth": f"Bearer {second_token}"})
+        assert _echoed_description(first.call(f"{alias}-add", _PROBE_ARGUMENTS)) == _UNLISTED
+        peer.drain()
+        assert first.list_tools().ok
+        listings: Final = _listings(peer)
+        assert len(listings) == 1, listings
+        listed_with: Final = _HEADERS.validate_python(listings[0]["headers"])
+        assert listed_with.get("authorization") == f"Bearer {first_token}", listed_with
+        warm: Final = eventually(
+            lambda: _echoed_description(first.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+            lambda seen: seen != _UNLISTED,
+        )
+        assert warm == f"Adds for Bearer {first_token}", warm
+        assert _echoed_description(second.call(f"{alias}-add", _PROBE_ARGUMENTS)) == _UNLISTED
+        assert second.list_tools().ok
+        seen: Final = eventually(
+            lambda: (
+                _echoed_description(first.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+                _echoed_description(second.call(f"{alias}-add", _PROBE_ARGUMENTS)),
+            ),
+            lambda pair: _UNLISTED not in pair,
+        )
+        assert seen == (f"Adds for Bearer {first_token}", f"Adds for Bearer {second_token}"), seen
+        assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"

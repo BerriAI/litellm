@@ -216,6 +216,16 @@ JsonRpc = Mapping[str, object]
 class ScriptedTool:
     name: str
     respond: Callable[[JsonRpc], Reply | JsonRpc]
+    description: str | Callable[[Mapping[str, str]], str] | None = None
+    input_schema: JsonRpc = field(default_factory=lambda: {"type": "object"})
+
+    def listing(self, headers: Mapping[str, str]) -> JsonRpc:
+        described: Final = self.description(headers) if callable(self.description) else self.description
+        return {
+            "name": self.name,
+            "inputSchema": self.input_schema,
+            **({} if described is None else {"description": described}),
+        }
 
 
 def jsonrpc_reply(identity: object, result: JsonRpc) -> Reply:
@@ -253,9 +263,7 @@ def scripted_peer(*tools: ScriptedTool) -> Iterator[McpPeer]:
                 },
             )
         if method == "tools/list":
-            return jsonrpc_reply(
-                identity, {"tools": [{"name": name, "inputSchema": {"type": "object"}} for name in by_name]}
-            )
+            return jsonrpc_reply(identity, {"tools": [tool.listing(request.headers) for tool in by_name.values()]})
         if method != "tools/call":
             return jsonrpc_error(identity, -32601, f"unsupported method {method}")
         tool: Final = by_name.get(body["params"]["name"])

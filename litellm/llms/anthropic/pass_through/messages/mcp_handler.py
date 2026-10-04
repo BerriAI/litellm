@@ -147,6 +147,7 @@ async def anthropic_messages_with_mcp(
 
         tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
             tool_server_map=tool_server_map,
+            served_tools=deduplicated_mcp_tools,
             tool_calls=list(tool_use_blocks),
             user_api_key_auth=context.user_api_key_auth,
             mcp_auth_header=context.mcp_auth_header,
