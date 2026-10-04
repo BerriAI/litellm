@@ -28,4 +28,24 @@ describe("RunSearch", () => {
     await user.click(within(listbox()).getByRole("option", { name: "researcher" }));
     expect(box()).toHaveTextContent(/^agent:researcher $/, { normalizeWhitespace: false });
   });
+
+  it("mirrors the filters as trace SQL bounded to the shown range, ready to copy as curl", async () => {
+    const user = userEvent.setup();
+    const range = { startMs: 1_700_000_000_000, endMs: 1_700_003_600_000 };
+    render(<RunSearch value="" onChange={vi.fn()} runs={runs} range={range} />);
+    await user.click(box());
+    const sql = () => screen.getByLabelText("SQL equivalent").textContent;
+    expect(sql()).toBe(
+      "min(StartTs) >= fromUnixTimestamp64Milli(1700000000000) AND min(StartTs) < fromUnixTimestamp64Milli(1700003600000)",
+    );
+    await user.keyboard("agent:res");
+    expect(sql()).toBe("arrayExists(x -> x ILIKE 'res', agents)");
+    await user.click(screen.getByRole("button", { name: "Copy as curl" }));
+    const command = await navigator.clipboard.readText();
+    expect(command).toContain('/v1/traces/query"');
+    expect(command).toContain("fromUnixTimestamp64Milli(1700000000000)");
+    expect(command).toContain("arrayExists(x -> x ILIKE 'res', agents)");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeVisible();
+    expect(box()).toHaveAttribute("aria-expanded", "true");
+  });
 });

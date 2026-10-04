@@ -4,15 +4,17 @@ import "prosemirror-view/style/prosemirror.css";
 
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { ProseMirror, ProseMirrorDoc, reactKeys, useEditorEventCallback } from "@handlewithcare/react-prosemirror";
-import { CornerDownLeft, type LucideIcon, Search } from "lucide-react";
+import { Check, Copy, CornerDownLeft, type LucideIcon, Search } from "lucide-react";
 import { Schema } from "prosemirror-model";
 import { EditorState, Plugin, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet, type EditorView } from "prosemirror-view";
 import { type ComponentProps, createContext, type ReactNode, useContext, useId, useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 
-import { parseQuery, type QueryLanguage } from "./language";
+import { parseQuery, type QueryClause, type QueryLanguage } from "./language";
+import { type SearchQuery, toSearchQuery } from "./searchQuery";
 import { completingField, completingPrefix, suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
 import { NO_VALUES, type ValueSource } from "./valueSource";
 
@@ -68,6 +70,7 @@ function applySuggestion(view: EditorView, item: Suggestion<string>) {
 interface SearchBoxState {
   readonly listId: string;
   readonly text: string;
+  readonly clauses: readonly QueryClause<string>[];
   /** The menu while it is open, or null when closed. */
   readonly menu: SuggestionMenu<string> | null;
   readonly activeId: string | undefined;
@@ -124,6 +127,7 @@ function Root<F extends string>({
 
   const { selection } = state;
   const text = state.doc.textContent;
+  const clauses = useMemo(() => parseQuery(language, text), [language, text]);
   const completing = selection.empty ? completingField(language, text, selection.head) : null;
   const fetched = values.useValues(completing, completingPrefix(language, text, selection.head));
   const menu = useMemo(() => {
@@ -138,11 +142,12 @@ function Root<F extends string>({
     () => ({
       listId,
       text,
+      clauses,
       menu: shownMenu,
       activeId: activeItem?.id,
       icon: (field) => language.fields[field as F].icon,
     }),
-    [listId, text, shownMenu, activeItem, language],
+    [listId, text, clauses, shownMenu, activeItem, language],
   );
 
   const emit = useDebouncedCallback(
@@ -252,8 +257,11 @@ function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
 
 export type SearchBoxSuggestionsProps = ComponentProps<"div">;
 
-/** The autocomplete listbox under the input: fields, then values, with operator help and key hints. */
-function Suggestions({ className, ...props }: SearchBoxSuggestionsProps) {
+/**
+ * The autocomplete listbox under the input: fields, then values, with operator help and key hints.
+ * `children` render in the footer beside the key hints, e.g. an `ApiHint`.
+ */
+function Suggestions({ className, children, ...props }: SearchBoxSuggestionsProps) {
   const { listId, menu, activeId, icon } = useSearchBox();
   const pick = useEditorEventCallback((view, item: Suggestion<string>) => applySuggestion(view, item));
   if (!menu) return null;
@@ -308,7 +316,67 @@ function Suggestions({ className, ...props }: SearchBoxSuggestionsProps) {
           </Kbd>
           Select
         </span>
+        {children}
       </div>
+    </div>
+  );
+}
+
+export interface ApiEquivalent {
+  /** The part worth reading at a glance, like the SQL predicates the filters became. */
+  readonly preview: string;
+  /** The complete, runnable call that gets copied. */
+  readonly command: string;
+}
+
+export type SearchBoxApiHintProps<F extends string> = {
+  /** The API's dialect, shown as a chip: "SQL". */
+  dialect: string;
+  /** Explains what the API offers beyond the box; shown on hover. */
+  title: string;
+  /** How the current query reads as a call to the API behind this list. */
+  translate: (query: SearchQuery<F>) => ApiEquivalent;
+};
+
+type CopyOutcome = { readonly command: string; readonly outcome: "copied" | "failed" } | null;
+
+const copyLabel = (last: CopyOutcome, command: string): string => {
+  if (last?.command !== command) return "Copy as curl";
+  return last.outcome === "copied" ? "Copied" : "Copy failed";
+};
+
+/** Mirrors the query as the equivalent API call in the suggestions footer, one click from the clipboard. */
+function ApiHint<F extends string>({ dialect, title, translate }: SearchBoxApiHintProps<F>) {
+  const { clauses } = useSearchBox();
+  const [last, setLast] = useState<CopyOutcome>(null);
+  const equivalent = useMemo(
+    () => translate(toSearchQuery(clauses as readonly QueryClause<F>[])),
+    [translate, clauses],
+  );
+  const { command } = equivalent;
+  const copy = () =>
+    navigator.clipboard.writeText(command).then(
+      () => setLast({ command, outcome: "copied" }),
+      () => setLast({ command, outcome: "failed" }),
+    );
+  const label = copyLabel(last, command);
+  return (
+    <div data-slot="search-box-api-hint" title={title} className="ml-auto flex min-w-0 items-center gap-2">
+      <span className="shrink-0 rounded border border-border px-1 font-mono text-xs leading-4">{dialect}</span>
+      <code aria-label={`${dialect} equivalent`} className="truncate font-mono">
+        {equivalent.preview}
+      </code>
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        className="shrink-0"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => void copy()}
+      >
+        {label === "Copied" ? <Check /> : <Copy />}
+        {label}
+      </Button>
     </div>
   );
 }
@@ -335,4 +403,4 @@ function Kbd({ children }: { children: ReactNode }) {
   );
 }
 
-export const SearchBox = { Root, Input, Suggestions } as const;
+export const SearchBox = { Root, Input, Suggestions, ApiHint } as const;

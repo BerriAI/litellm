@@ -184,7 +184,7 @@ export function AgentTracesSection({
             />
           )}
         </Inspector.Panel>
-        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces}>
+        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? range}>
           {timeControls && (
             <TimeRangeControls
               fixedRange={zoom ?? (isLiveTail ? null : range)}
