@@ -240,6 +240,13 @@ class ReviewPage(Record):
     reviewed: int
 
 
+class InFlight(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    started_at: datetime
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
@@ -262,6 +269,7 @@ class Job(Record):
     steps: tuple[Step, ...] = ()
     reviews: tuple[Review, ...] = ()
     reviewed: int = 0
+    reading: tuple[InFlight, ...] = ()
     trigger: Literal["schedule", "manual"] = "schedule"
 
 
@@ -342,6 +350,7 @@ class Progress(Record):
     stage: str = Field()
     coverage: Coverage = Coverage()
     review: Review | None = None
+    reading: tuple[InFlight, ...] | None = None
 
 
 class Result(Record):
