@@ -26,7 +26,7 @@ from datadog_reader import DdLogEvent, DdLogsReader
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
-from models import LiteLLMParamsBody
+from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
 from pydantic import BaseModel, ConfigDict
 
 pytestmark = pytest.mark.e2e
@@ -423,7 +423,6 @@ class TestDataDogFailureDelivery:
                 model="anthropic/claude-haiku-4-5",
                 api_key=INVALID_UPSTREAM_API_KEY,
                 api_base="http://localhost:1",
-                num_retries=2,
             ),
         )
         resources.defer(lambda: client.delete_model(model_id))
@@ -432,8 +431,16 @@ class TestDataDogFailureDelivery:
 
         deadline = time.monotonic() + client.proxy.poll_timeout
         while True:
-            outcome = client.chat_raw(
-                key, model_name, "trigger an upstream connect failure", stream=True, max_tokens=16
+            outcome = client.proxy.transport.stream(
+                "/chat/completions",
+                headers=client.proxy.transport.bearer(key),
+                json=ReliabilityChatBody(
+                    model=model_name,
+                    messages=[ChatMessage(role="user", content="trigger an upstream connect failure")],
+                    stream=True,
+                    max_tokens=16,
+                    router_settings_override=RouterSettingsOverride(num_retries=2),
+                ),
             )
             assert not outcome.ok, "the call must fail; the deployment's upstream is unreachable"
             assert outcome.status_code != -1, (
