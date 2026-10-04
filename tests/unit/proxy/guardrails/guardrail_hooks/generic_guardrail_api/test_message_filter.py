@@ -160,6 +160,23 @@ async def test_a_skipped_call_records_one_not_run_entry_on_each_side(
 
 
 @pytest.mark.asyncio
+async def test_both_skipped_sides_reach_the_spend_log_record():
+    guardrail: Final = _guardrail(_Endpoint(), skip_if_system_prompt_matches=[MARKER])
+    logging_obj: Final = _logging_obj()
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    request_data: Final = {**_system_marked_chat(), "litellm_logging_obj": logging_obj}
+
+    await _request(guardrail, request_data, logging_obj=logging_obj)
+    await _response(guardrail, logging_obj=logging_obj, request_data=request_data)
+
+    spend_log_entries: Final = logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+    assert [(entry["guardrail_status"], entry["guardrail_response"]) for entry in spend_log_entries] == [
+        ("not_run", "skipped: skip_if_system_prompt_matches"),
+        ("not_run", "skipped: skip_if_system_prompt_matches"),
+    ], "the spend log drops an entry equal to one it already has, so each side needs its own timestamps"
+
+
+@pytest.mark.asyncio
 async def test_a_scanned_call_still_records_success():
     guardrail: Final = _guardrail(_Endpoint(), skip_if_system_prompt_matches=[MARKER])
     logging_obj: Final = _logging_obj()
