@@ -377,6 +377,21 @@ def test_reviews_keep_the_newest_window_while_counting_every_review() -> None:
     assert grown.reviews[-1].execution_id == f"run-{MAX_REVIEWS + 2}"
 
 
+def test_reclaimed_run_starts_its_review_history_over() -> None:
+    queued: Final = queue_job(lens(), NOW, "job")
+    first: Final = claim_job(queued, worker(), NOW)
+    reviewed: Final = replace_job(first, reduce(add_review, (review(0), review(1)), first.jobs[0]))
+    stalled: Final = reviewed.jobs[0].model_copy(
+        update={"reading": (InFlight(execution_id="run-2", trace_id="t", agent="support", started_at=NOW),)}
+    )
+    reclaimed: Final = claim_job(replace_job(reviewed, stalled), worker(identity="other"), NOW + timedelta(minutes=6))
+    job: Final = reclaimed.jobs[0]
+    assert job.worker_id == "other"
+    assert (job.reviews, job.reviewed, job.reading) == ((), 0, ())
+    replayed: Final = reduce(add_review, (review(0), review(1)), job)
+    assert replayed.reviewed == len(replayed.reviews) == 2
+
+
 def test_progress_without_a_review_leaves_the_review_history_alone() -> None:
     job: Final = add_review(queue_job(lens(), NOW, "job").jobs[0], review(0))
     assert add_review(job, None) == job

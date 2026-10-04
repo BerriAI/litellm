@@ -149,6 +149,9 @@ def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
                     "worker_id": worker.id,
                     "lease_until": now + timedelta(minutes=5),
                     "attempts": job.attempts + 1,
+                    "reviews": (),
+                    "reviewed": 0,
+                    "reading": (),
                 }
             )
         ),
