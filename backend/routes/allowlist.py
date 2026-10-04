@@ -22,6 +22,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/customer/",
     "/end_user/",
     "/sso/",
+    "/liteadmin/slack/connect/",
     "/login",
     "/v2/login",
     "/v3/login",
