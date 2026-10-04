@@ -3,23 +3,6 @@ import type { Finding, Job, Lens } from "./types";
 export type Step = Job["steps"][number];
 export type Priority = NonNullable<Finding["priority"]>;
 
-export interface InboxRow {
-  key: string;
-  title: string;
-  agents: readonly string[];
-  priority: Priority;
-  suggestion: string;
-  runs: number;
-  lastSeen: string;
-  sources: readonly { lens: Lens; finding: Finding }[];
-}
-
-export interface InboxFilter {
-  agent: string;
-  priority: Priority | "all";
-}
-
-export const ALL_AGENTS = "all";
 export const UNKNOWN_AGENT = "unknown agent";
 
 const priorityRank = { high: 0, medium: 1, low: 2 } as const;
@@ -43,42 +26,22 @@ function groupBy<T>(items: readonly T[], key: (item: T) => string): Map<string, 
   }, new Map<string, T[]>());
 }
 
-export function inboxRows(lenses: readonly Lens[]): InboxRow[] {
-  const open = lenses.flatMap((lens) =>
-    lens.findings
-      .filter((f) => f.status === "open" && f.kind === "issue")
-      .map((finding) => ({ lens, finding, agents: findingAgents(lens, finding) })),
-  );
-  const grouped = groupBy(open, ({ agents, finding }) => `${agents.join(",")}::${finding.title.trim().toLowerCase()}`);
-  return [...grouped.entries()]
-    .map(([key, sources]): InboxRow => {
-      const best = sources.reduce((a, b) =>
-        priorityRank[a.finding.priority ?? "medium"] <= priorityRank[b.finding.priority ?? "medium"] ? a : b,
-      );
-      return {
-        key,
-        title: best.finding.title,
-        agents: best.agents,
-        priority: best.finding.priority ?? "medium",
-        suggestion: best.finding.suggestion,
-        runs: new Set(sources.flatMap((s) => s.finding.occurrences)).size,
-        lastSeen: sources.map((s) => s.finding.last_seen).reduce((a, b) => (Date.parse(a) > Date.parse(b) ? a : b)),
-        sources: sources.map(({ lens, finding }) => ({ lens, finding })),
-      };
-    })
+export function openFindings(lens: Lens): Finding[] {
+  return lens.findings
+    .filter((f) => f.status === "open" && f.kind === "issue")
     .sort(
-      (a, b) => priorityRank[a.priority] - priorityRank[b.priority] || Date.parse(b.lastSeen) - Date.parse(a.lastSeen),
+      (a, b) =>
+        priorityRank[a.priority ?? "medium"] - priorityRank[b.priority ?? "medium"] ||
+        Date.parse(b.last_seen) - Date.parse(a.last_seen),
     );
 }
 
-export function filterInbox(rows: readonly InboxRow[], { agent, priority }: InboxFilter): InboxRow[] {
-  const agentMatches = (row: InboxRow) => agent === ALL_AGENTS || row.agents.includes(agent);
-  const priorityMatches = (row: InboxRow) => priority === "all" || row.priority === priority;
-  return rows.filter((row) => agentMatches(row) && priorityMatches(row));
-}
+export const findingKey = (lens: Lens, finding: Finding) => `${lens.id}:${finding.id}`;
 
-export function inboxAgents(rows: readonly InboxRow[]): string[] {
-  return [...new Set(rows.flatMap((row) => row.agents))].sort();
+export function findFinding(lenses: readonly Lens[], key: string) {
+  return lenses
+    .flatMap((lens) => lens.findings.map((finding) => ({ lens, finding })))
+    .find(({ lens, finding }) => findingKey(lens, finding) === key);
 }
 
 export function stepLine(step: Step): string {

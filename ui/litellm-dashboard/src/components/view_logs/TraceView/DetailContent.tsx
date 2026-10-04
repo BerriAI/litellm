@@ -1,5 +1,5 @@
 "use client";
-import { useTracesApi } from "@/components/lens/services";
+import { useTracesApi } from "./tracesApi";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { useState } from "react";

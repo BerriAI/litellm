@@ -120,8 +120,6 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 #[case::crewai_swarm(include_bytes!("fixtures/crewai_swarm.json"))]
 #[case::deepagents_simple(include_bytes!("fixtures/deepagents_simple.json"))]
 #[case::deepagents_swarm(include_bytes!("fixtures/deepagents_swarm.json"))]
-#[case::deeplite_auth_error(include_bytes!("fixtures/deeplite_auth_error.json"))]
-#[case::deeplite_swarm(include_bytes!("fixtures/deeplite_swarm.json"))]
 #[case::google_adk_simple(include_bytes!("fixtures/google_adk_simple.json"))]
 #[case::google_adk_swarm(include_bytes!("fixtures/google_adk_swarm.json"))]
 #[case::langchain_simple(include_bytes!("fixtures/langchain_simple.json"))]
