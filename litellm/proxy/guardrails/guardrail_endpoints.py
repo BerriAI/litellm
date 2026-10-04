@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -1494,12 +1494,10 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
         # above; it only runs on pre_call.
         {SupportedGuardrailIntegrations.HIDE_SECRETS.value: [GuardrailEventHooks.pre_call.value]}
     )
-    providers_without_directional_logging_only_scope: Final = TypeAdapter(list[str]).validate_python(
-        tuple(
-            provider
-            for provider, guardrail_class in guardrail_class_registry.items()
-            if not guardrail_class.supports_logging_only_scope()
-        )
+    providers_without_directional_logging_only_scope: Final = tuple(
+        provider
+        for provider, guardrail_class in guardrail_class_registry.items()
+        if not guardrail_class.supports_logging_only_scope()
     )
 
     return GuardrailUIAddGuardrailSettings(
