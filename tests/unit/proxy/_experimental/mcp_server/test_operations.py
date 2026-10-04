@@ -665,3 +665,44 @@ async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
         )
     assert result.tools == []
     assert listing.await_args.kwargs["log_list_tools_to_spendlogs"] is log_enabled
+
+
+@pytest.mark.asyncio
+async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(monkeypatch):
+    from mcp.types import (
+        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        ListResourceTemplatesResult,
+    )
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    original = MCPServer(server_id="catalog-server", name="before", transport=MCPTransport.http)
+    updated = original.model_copy(update={"name": "after"})
+    manager.registry = {original.server_id: original}
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    observed = []
+    responses = (ListToolsResult(tools=[]), ListPromptsResult(prompts=[]),
+                 ListResourcesResult(resources=[]), ListResourceTemplatesResult(resource_templates=[]))
+
+    def listing(index):
+        async def run(*args, **kwargs):
+            async with manager.catalog.operation():
+                observed.append(manager.get_mcp_server_by_id(original.server_id).name)
+                manager.registry = {updated.server_id: updated}
+                return responses[index]
+        return run
+
+    with (
+        patch.object(operations, "_execute_handle_list_tools", side_effect=listing(0)),
+        patch.object(operations, "_execute_list_prompts", side_effect=listing(1)),
+        patch.object(operations, "_execute_list_resources", side_effect=listing(2)),
+        patch.object(operations, "_execute_list_resource_templates", side_effect=listing(3)),
+    ):
+        result = await GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped")))
+    assert result.capabilities.model_dump(exclude_none=True) == {}
+    assert observed == ["before"] * 4
+    async with manager.catalog.operation():
+        assert manager.get_mcp_server_by_id(original.server_id).name == "after"

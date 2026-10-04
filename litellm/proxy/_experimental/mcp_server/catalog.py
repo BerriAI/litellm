@@ -85,7 +85,7 @@ class TargetCatalog:
         self._applied_revision: int | None = None
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
         self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
-        self._operation: ContextVar[tuple[CatalogSnapshot, asyncio.Event, int] | None] = ContextVar(
+        self._operation: ContextVar[tuple[CatalogSnapshot, asyncio.Event] | None] = ContextVar(
             "mcp_catalog_snapshot", default=None
         )
         self._staged_routing: ContextVar[tuple[dict[str, str], asyncio.Event] | None] = ContextVar(
@@ -161,8 +161,7 @@ class TargetCatalog:
     @asynccontextmanager
     async def operation(self) -> AsyncGenerator[CatalogSnapshot]:
         current: Final = self.current()
-        scoped: Final = self._operation.get()
-        if current is not None and scoped is not None and scoped[2] == id(asyncio.current_task()):
+        if current is not None:
             yield current
             return
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
@@ -174,7 +173,7 @@ class TargetCatalog:
             routing=dict(shared.routing),
         )
         closed: Final = asyncio.Event()
-        token: Final = self._operation.set((snapshot, closed, id(asyncio.current_task())))
+        token: Final = self._operation.set((snapshot, closed))
         try:
             with global_mcp_tool_registry.catalog_scope(snapshot.tools):
                 yield snapshot
