@@ -151,11 +151,3 @@ export function timeline(spans: readonly Span[]): TimelineItem[] {
   ];
   return items.length ? items : fallback(spans);
 }
-
-export function spanPreviewLines(preview: string): { label: string; text: string; error: boolean }[] {
-  const { input, output } = parts(preview);
-  return [
-    { label: "in", text: compact(input), error: false },
-    { label: "out", text: compact(output), error: !!stepFailure(preview) },
-  ].filter((line) => line.text);
-}

@@ -1,8 +1,10 @@
 import { Loader2 } from "lucide-react";
 
+import { agoLabel } from "@/components/view_logs/TraceView/lensField";
+import { useNow } from "@/hooks/useNow";
 import { cn } from "@/lib/cva.config";
 
-import { outcome, queueRows, reviewKey, type Playback } from "../../model/live";
+import { inGroup, outcome, queueRows, reviewKey, shortVerdict, type Playback } from "../../model/live";
 import type { Review } from "../../model/types";
 
 const LIMIT = 60;
@@ -11,28 +13,33 @@ export function ReviewQueue({
   playback,
   live,
   focused,
+  group,
   onPick,
 }: {
   playback: Pick<Playback, "played" | "current">;
   live: boolean;
   focused: Review | null;
+  group: string | null;
   onPick: (review: Review) => void;
 }) {
+  const now = useNow(5000);
+  const rows = queueRows(playback, LIMIT).filter((review) => inGroup(review, group));
+  if (!rows.length) return <p className="py-2 text-[12px] text-muted-foreground">No traces in this group yet.</p>;
   return (
-    <ol aria-label="Reviewed traces" className="divide-y divide-border/60">
-      {queueRows(playback, LIMIT).map((review) => {
+    <ol aria-label="Reviewed traces" className="flex flex-col">
+      {rows.map((review) => {
         const reading = live && review === playback.current;
         const result = outcome(review);
         const selected = review === focused;
         return (
-          <li key={reviewKey(review)} className={review === playback.current ? "motion-safe:animate-in motion-safe:fade-in" : ""}>
+          <li key={reviewKey(review)} className={reading ? "motion-safe:animate-in motion-safe:fade-in" : ""}>
             <button
               type="button"
               aria-current={selected ? "true" : undefined}
               onClick={() => onPick(review)}
               className={cn(
-                "grid h-8 w-full grid-cols-[1.25rem_minmax(0,1fr)_auto] items-center gap-2 px-4 text-left text-[12px] hover:bg-trace-row-hover",
-                selected && "bg-trace-row-hover",
+                "grid w-full grid-cols-[0.75rem_minmax(0,7.5rem)_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-muted",
+                selected && "bg-background ring-[1.5px] ring-inset ring-foreground",
               )}
             >
               {reading ? (
@@ -44,7 +51,12 @@ export function ReviewQueue({
                 />
               )}
               <span className="truncate text-foreground">{review.agent || review.name}</span>
-              <span className="font-mono text-[11px] text-muted-foreground">{review.trace_id.slice(0, 8)}</span>
+              <span className={cn("truncate", result === "issue" ? "text-[#e5484d]" : "text-muted-foreground")}>
+                {reading ? "reading…" : shortVerdict(review)}
+              </span>
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {agoLabel(Date.parse(review.at), now)}
+              </span>
             </button>
           </li>
         );
