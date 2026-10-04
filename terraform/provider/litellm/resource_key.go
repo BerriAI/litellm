@@ -294,6 +294,10 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	} else if v := d.Get("key").(string); v != "" {
 		key.Key = v
 	}
+	// /key/generate upserts a config-supplied key value: when the value
+	// already exists it updates that credential instead of minting one, so
+	// a later cleanup must never delete it.
+	proxyMintedKey := key.Key == ""
 
 	createdKey, err := c.CreateKey(key)
 	if err != nil {
@@ -308,22 +312,20 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	// second apply).
 	if keyTypePresetsRoutes(key.KeyType) && len(key.AllowedRoutes) > 0 &&
 		!slices.Equal(createdKey.AllowedRoutes, key.AllowedRoutes) {
-		// Re-send the full create payload (minus the key value, plus the
-		// stored hash as the update target): /key/update validates the base
-		// fields (permissions, model_max_budget, ...) as non-null, which a
-		// minimal body would trip.
-		restore := *key
-		restore.Key = createdKey.TokenID
-		if _, err := c.UpdateKey(&restore); err != nil {
-			// The key already exists server-side; nothing is in state yet, so
-			// returning without cleanup would orphan an active key terraform
-			// cannot see or delete, and a retried apply would mint another
-			// one. Delete it so the retry starts clean; if even that fails,
-			// name the key so an operator can remove it manually.
-			if delErr := c.DeleteKey(createdKey.TokenID); delErr != nil {
-				return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset: %s; cleanup failed too, key %s must be deleted manually: %s", err, createdKey.TokenID, delErr))
+		if _, err := c.RestoreKeyRoutes(createdKey.TokenID, key.AllowedRoutes); err != nil {
+			// For a proxy-minted key nothing is in state yet, so returning
+			// without cleanup would orphan an active key terraform cannot see
+			// or delete, and a retried apply would mint another one. Delete it
+			// so the retry starts clean; a config-supplied key may predate
+			// this apply, so it is never deleted here. Name the hash either
+			// way so an operator can finish by hand if cleanup fails.
+			if proxyMintedKey {
+				if delErr := c.DeleteKey(createdKey.TokenID); delErr != nil {
+					return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset: %s; cleanup failed too, key %s must be deleted manually: %s", err, createdKey.TokenID, delErr))
+				}
+				return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset (created key deleted, retry the apply): %s", err))
 			}
-			return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset (created key deleted, retry the apply): %s", err))
+			return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset on config-supplied key %s; the key was left in place: %s", createdKey.TokenID, err))
 		}
 	}
 

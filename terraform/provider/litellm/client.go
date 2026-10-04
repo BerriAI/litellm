@@ -121,6 +121,27 @@ func hoistKeyFieldsStoredInMetadata(info map[string]interface{}) {
 	}
 }
 
+// RestoreKeyRoutes re-applies a declared allowed_routes to a freshly
+// generated key, whose key_type preset replaced the declared list.
+// /key/update validates permissions and model_max_budget as non-null and
+// keeps the stored value for every field absent from the body, so this
+// carries exactly the routes plus those two required objects: re-sending
+// the full create payload would also overwrite server-applied values the
+// config never declared, such as team-inherited model rate limits.
+func (c *Client) RestoreKeyRoutes(keyID string, routes []string) (*Key, error) {
+	updateData := map[string]interface{}{
+		"key":              keyID,
+		"allowed_routes":   routes,
+		"permissions":      map[string]interface{}{},
+		"model_max_budget": map[string]interface{}{},
+	}
+	resp, err := c.sendRequest("POST", "/key/update", updateData)
+	if err != nil {
+		return nil, err
+	}
+	return c.parseKeyResponse(resp)
+}
+
 func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	// Create a new map with only the fields that can be updated
 	updateData := map[string]interface{}{

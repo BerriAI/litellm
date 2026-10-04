@@ -3,6 +3,7 @@ package litellm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -428,19 +429,25 @@ func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
 
 // /key/generate replaces declared routes with the key_type preset while
 // /key/update stores them verbatim, so create must re-assert the declared
-// list when the proxy overrode it. A generate that already honored the
-// declared routes must not trigger the follow-up update, and a restore the
-// proxy rejects must delete the just-created key so a retried apply does not
-// orphan it.
+// list when the proxy overrode it. The restore body stays surgical (routes
+// plus the two fields /key/update requires non-null) so server-applied
+// values the config never declared survive it. A generate that already
+// honored the declared routes must not trigger the restore, a rejected
+// restore must delete a proxy-minted key so a retried apply does not orphan
+// it, and a config-supplied key (which /key/generate upserts, possibly an
+// existing credential) is never deleted.
 func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 	cases := map[string]struct {
 		generateRoutes []interface{}
+		suppliedKey    string
 		restoreFails   bool
 		wantUpdate     bool
 	}{
-		"preset overwrote declared": {generateRoutes: []interface{}{"llm_api_routes"}, wantUpdate: true},
-		"generate honored declared": {generateRoutes: []interface{}{"/v1/models"}, wantUpdate: false},
-		"restore update rejected":   {generateRoutes: []interface{}{"llm_api_routes"}, restoreFails: true, wantUpdate: true},
+		"preset overwrote declared":        {generateRoutes: []interface{}{"llm_api_routes"}, wantUpdate: true},
+		"generate honored declared":        {generateRoutes: []interface{}{"/v1/models"}, wantUpdate: false},
+		"restore update rejected":          {generateRoutes: []interface{}{"llm_api_routes"}, restoreFails: true, wantUpdate: true},
+		"rejected restore keeps supplied":  {generateRoutes: []interface{}{"llm_api_routes"}, suppliedKey: "sk-custom", restoreFails: true, wantUpdate: true},
+		"supplied key still gets restored": {generateRoutes: []interface{}{"llm_api_routes"}, suppliedKey: "sk-custom", wantUpdate: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -472,15 +479,25 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			d := newKeyResourceData(t, map[string]interface{}{
+			raw := map[string]interface{}{
 				"key_alias":      "typed",
 				"key_type":       "llm_api",
 				"allowed_routes": []interface{}{"/v1/models"},
-			})
+			}
+			if tc.suppliedKey != "" {
+				raw["key"] = tc.suppliedKey
+			}
+			d := newKeyResourceData(t, raw)
 			diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", true))
 			if tc.restoreFails {
 				if !diags.HasError() {
 					t.Fatal("create succeeded although the restore update was rejected")
+				}
+				if tc.suppliedKey != "" {
+					if deleteCalled {
+						t.Fatal("failed restore deleted a config-supplied key, which /key/generate may have upserted onto an existing credential")
+					}
+					return
 				}
 				if !deleteCalled {
 					t.Fatal("failed restore did not delete the created key; a retried apply would orphan it")
@@ -503,15 +520,25 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				if !updateCalled {
 					t.Fatal("create did not re-assert declared allowed_routes after the preset overwrote them")
 				}
-				if updateBody["key"] != "hash-1" {
-					t.Errorf("update payload key = %v, want hash-1", updateBody["key"])
+				wantBody := map[string]interface{}{
+					"key":              "hash-1",
+					"allowed_routes":   []interface{}{"/v1/models"},
+					"permissions":      map[string]interface{}{},
+					"model_max_budget": map[string]interface{}{},
 				}
-				got, _ := updateBody["allowed_routes"].([]interface{})
-				if len(got) != 1 || got[0] != "/v1/models" {
-					t.Errorf("update payload allowed_routes = %v, want [/v1/models]", updateBody["allowed_routes"])
+				if len(updateBody) != len(wantBody) {
+					t.Fatalf("restore payload = %v, want exactly %v (anything else rewrites fields the config did not declare)", updateBody, wantBody)
+				}
+				for k, v := range wantBody {
+					if fmt.Sprint(updateBody[k]) != fmt.Sprint(v) {
+						t.Errorf("restore payload %s = %v (%T), want %v (%T)", k, updateBody[k], updateBody[k], v, v)
+					}
 				}
 			} else if updateCalled {
 				t.Fatal("create re-asserted routes although the generate already stored the declared list")
+			}
+			if deleteCalled {
+				t.Fatal("create deleted a key although nothing failed")
 			}
 			if got := d.Get("allowed_routes").([]interface{}); len(got) != 1 || got[0] != "/v1/models" {
 				t.Errorf("state allowed_routes = %v, want [/v1/models]", got)
