@@ -39,7 +39,47 @@ export function ConclusionsPanel({
   if (!groups.length) return <p className="text-[12px] text-muted-foreground">Nothing concluded yet.</p>;
   return (
     <div className="flex flex-col gap-1.5">
-      <ol aria-label="Conclusions" className="flex flex-col gap-1.5">
+      {SECTIONS.map(({ issue, title }) => (
+        <GroupList
+          key={title}
+          title={title}
+          groups={groups.filter((group) => group.issue === issue)}
+          total={total}
+          selected={selected}
+          flashing={flashing}
+          onSelect={onSelect}
+        />
+      ))}
+      {scope && <p className="text-[11px] text-muted-foreground">{scope}</p>}
+    </div>
+  );
+}
+
+const SECTIONS = [
+  { issue: true, title: "Issues" },
+  { issue: false, title: "Patterns" },
+] as const;
+
+function GroupList({
+  title,
+  groups,
+  total,
+  selected,
+  flashing,
+  onSelect,
+}: {
+  title: string;
+  groups: readonly Conclusion[];
+  total: number;
+  selected: string | null;
+  flashing: ReadonlySet<string>;
+  onSelect: (key: string | null) => void;
+}) {
+  if (!groups.length) return null;
+  return (
+    <>
+      <h3 className="pt-1 text-[11px] text-muted-foreground">{title}</h3>
+      <ol aria-label={title} className="flex flex-col gap-1.5">
         {groups.map((group) => {
           const active = selected === group.key;
           return (
@@ -84,7 +124,6 @@ export function ConclusionsPanel({
           );
         })}
       </ol>
-      {scope && <p className="text-[11px] text-muted-foreground">{scope}</p>}
-    </div>
+    </>
   );
 }
