@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
 import { LiveRun } from "../live/LiveRun";
+import { type QueueContext } from "../useQueueReason";
 import { liveJob } from "../../model/live";
 import { RunNowDialog } from "./RunNowDialog";
 import { useState } from "react";
@@ -32,6 +33,7 @@ export function InvestigationDetail({
   connected,
   results,
   agents = [],
+  queue,
 }: {
   lens: Lens;
   readOnly: boolean;
@@ -43,6 +45,7 @@ export function InvestigationDetail({
   connected: boolean;
   results: ReturnType<typeof useInvestigationResults>;
   agents?: readonly string[];
+  queue?: QueueContext;
 }) {
   const [runNow, setRunNow] = useState(false);
   const {
@@ -102,10 +105,11 @@ export function InvestigationDetail({
           <InvestigationProgress
             key={active.id}
             job={active}
+            queue={queue}
             onCancel={readOnly ? undefined : () => void update((api) => api.cancelRun(lens.id))}
           />
         )}
-        {live && <LiveRun key={live.id} job={live} reviews={live.reviews} name={lens.settings.name} />}
+        {live && <LiveRun key={live.id} job={live} reviews={live.reviews} name={lens.settings.name} queue={queue} />}
         {runNow && (
           <RunNowDialog
             lens={lens}

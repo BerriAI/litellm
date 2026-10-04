@@ -281,6 +281,12 @@ export function InvestigationsView({
           connected={connected}
           results={results}
           agents={Array.isArray(agents.data) ? agents.data : []}
+          queue={{
+            lenses,
+            workers: query.data?.workers ?? [],
+            onConnect: () => setWorkerSetup(true),
+            onOpenLens: selectLens,
+          }}
         />
       )}
       {editing && (

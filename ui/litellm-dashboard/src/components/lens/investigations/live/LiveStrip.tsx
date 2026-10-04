@@ -1,6 +1,7 @@
 "use client";
 
 import { PanelRight, X } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { agoLabel } from "@/components/view_logs/TraceView/lensField";
@@ -63,11 +64,13 @@ export function LiveStrip({
   selected,
   issues,
   cost,
+  waiting,
   onOpen,
   onClose,
 }: {
   model: string;
   state: StripState;
+  waiting?: ReactNode;
   playback: Pick<Playback, "played" | "current">;
   reviewed: number;
   selected: number;
@@ -96,9 +99,9 @@ export function LiveStrip({
           </p>
         )}
         {state.kind === "waiting" && (
-          <p role="status" className="py-0.5">
-            {state.message}
-          </p>
+          <div role="status" className="flex flex-col gap-0.5 py-0.5">
+            {waiting ?? state.message}
+          </div>
         )}
         {recent.length > 0 && state.kind !== "waiting" && (
           <ol aria-label="Recently reviewed traces" className="flex flex-col">

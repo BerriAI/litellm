@@ -13,14 +13,28 @@ import {
   shownCount,
   stripState,
 } from "../../model/live";
+import { queueReasonText } from "../../model/status";
 import type { Job, Review } from "../../model/types";
+import { QueueReasonText, WorkerTasks } from "../QueueReasonText";
+import { useQueueReason, type QueueContext } from "../useQueueReason";
 import { LiveDrawer } from "./LiveDrawer";
 import { LiveStrip } from "./LiveStrip";
 import { useStripOpen } from "./useLivePanels";
 import { useReviewPlayback } from "./useReviewPlayback";
 
-export function LiveRun({ job, reviews, name }: { job: Job; reviews: readonly Review[]; name: string }) {
+export function LiveRun({
+  job,
+  reviews,
+  name,
+  queue,
+}: {
+  job: Job;
+  reviews: readonly Review[];
+  name: string;
+  queue?: QueueContext;
+}) {
   const live = job.status === "queued" || job.status === "running";
+  const reason = useQueueReason(job, queue);
   const [stripOpen, setStripOpen] = useStripOpen();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [pinned, setPinned] = useState<string | null>(null);
@@ -42,7 +56,15 @@ export function LiveRun({ job, reviews, name }: { job: Job; reviews: readonly Re
       {stripOpen ? (
         <LiveStrip
           model={model}
-          state={stripState(withReviews, model)}
+          state={stripState(withReviews, model, reason ? queueReasonText(reason) : undefined)}
+          waiting={
+            reason && (
+              <>
+                <QueueReasonText reason={reason} onConnect={queue?.onConnect} />
+                <WorkerTasks reason={reason} queue={queue} />
+              </>
+            )
+          }
           playback={playback}
           reviewed={reviewed}
           selected={job.coverage.selected}
