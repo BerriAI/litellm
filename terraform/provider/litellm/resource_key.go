@@ -294,9 +294,6 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	} else if v := d.Get("key").(string); v != "" {
 		key.Key = v
 	}
-	// /key/generate upserts a config-supplied key value: when the value
-	// already exists it updates that credential instead of minting one, so
-	// a later cleanup must never delete it.
 	proxyMintedKey := key.Key == ""
 
 	createdKey, err := c.CreateKey(key)

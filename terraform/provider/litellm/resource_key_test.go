@@ -442,11 +442,13 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 		suppliedKey    string
 		permissions    map[string]interface{}
 		generateStores bool
+		generateBudget map[string]interface{}
 		restoreFails   bool
 		wantUpdate     bool
 	}{
 		"preset overwrote declared":        {generateRoutes: []interface{}{"llm_api_routes"}, wantUpdate: true},
 		"declared permissions are echoed":  {generateRoutes: []interface{}{"llm_api_routes"}, permissions: map[string]interface{}{"get_server_info": "true"}, generateStores: true, wantUpdate: true},
+		"declared budgets are echoed":      {generateRoutes: []interface{}{"llm_api_routes"}, generateBudget: map[string]interface{}{"x": true}, wantUpdate: true},
 		"generate honored declared":        {generateRoutes: []interface{}{"/v1/models"}, wantUpdate: false},
 		"restore update rejected":          {generateRoutes: []interface{}{"llm_api_routes"}, restoreFails: true, wantUpdate: true},
 		"rejected restore keeps supplied":  {generateRoutes: []interface{}{"llm_api_routes"}, suppliedKey: "sk-custom", restoreFails: true, wantUpdate: true},
@@ -465,6 +467,9 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 					extra := ""
 					if tc.generateStores {
 						extra = `, "permissions": {"get_server_info": true}`
+					}
+					if tc.generateBudget != nil {
+						extra += `, "model_max_budget": {"gpt-4o-mini": {"budget_limit": 5, "time_period": "30d"}}`
 					}
 					w.Write([]byte(`{"key": "sk-new", "token_id": "hash-1", "allowed_routes": ["` + tc.generateRoutes[0].(string) + `"]` + extra + `}`))
 				case "/key/update":
@@ -493,6 +498,9 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 			}
 			if tc.permissions != nil {
 				raw["permissions"] = tc.permissions
+			}
+			if tc.generateBudget != nil {
+				raw["model_max_budget"] = ` + '"{"gpt-4o-mini": {"budget_limit": 5, "time_period": "30d"}}"' + `
 			}
 			if tc.suppliedKey != "" {
 				raw["key"] = tc.suppliedKey
@@ -534,11 +542,15 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				if tc.generateStores {
 					wantPerms = map[string]interface{}{"get_server_info": true}
 				}
+				wantBudget := map[string]interface{}{}
+				if tc.generateBudget != nil {
+					wantBudget = map[string]interface{}{"gpt-4o-mini": map[string]interface{}{"budget_limit": float64(5), "time_period": "30d"}}
+				}
 				wantBody := map[string]interface{}{
 					"key":              "hash-1",
 					"allowed_routes":   []interface{}{"/v1/models"},
 					"permissions":      wantPerms,
-					"model_max_budget": map[string]interface{}{},
+					"model_max_budget": wantBudget,
 				}
 				if len(updateBody) != len(wantBody) {
 					t.Fatalf("restore payload = %v, want exactly %v (anything else rewrites fields the config did not declare)", updateBody, wantBody)
